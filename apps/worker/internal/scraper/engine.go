@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,7 +24,7 @@ func NewEngine(db *database.Store, pm *proxy.Manager) *Engine {
 	return &Engine{db: db, proxy: pm}
 }
 
-func (e *Engine) MonitorTask(m model.Monitor) {
+func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	currentProxy := e.proxy.Next()
 	client, err := NewClient(currentProxy)
 	if err != nil {
@@ -51,10 +52,17 @@ func (e *Engine) MonitorTask(m model.Monitor) {
 	checks := 0
 
 	for {
+		select {
+		case <-ctx.Done():
+			fmt.Printf("\nMonitor [%d] stopped gracefully.\n", m.ID)
+			return
+		default:
+		}
+
 		checks++
 		req, err := http.NewRequest("GET", apiURL, nil)
 		if err != nil {
-			fmt.Printf("ERROR: [%d] Req Build Error: %v\n", m.ID, err)
+			fmt.Printf("\nERROR: [%d] Req Build Error: %v\n", m.ID, err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -68,10 +76,10 @@ func (e *Engine) MonitorTask(m model.Monitor) {
 
 		resp, err := client.HttpClient.Do(req)
 		if err != nil {
-			fmt.Printf("ERROR: [%d] Net Error: %v\n", m.ID, err)
+			fmt.Printf("\nERROR: [%d] Net Error: %v\n", m.ID, err)
 			consecutiveErrors++
 			if consecutiveErrors > 3 {
-				fmt.Printf("ERROR: [%d] Too many errors. Rotating Proxy.\n", m.ID)
+				fmt.Printf("\n [%d] Too many errors. Rotating Proxy.\n", m.ID)
 				client, _ = NewClient(e.proxy.Next())
 				consecutiveErrors = 0
 			}
@@ -80,7 +88,7 @@ func (e *Engine) MonitorTask(m model.Monitor) {
 		}
 
 		if resp.StatusCode == 401 || resp.StatusCode == 403 {
-			fmt.Printf("ERROR: [%d] Blocked (%d). Rotating...\n", m.ID, resp.StatusCode)
+			fmt.Printf("\nERROR: [%d] Blocked (%d). Rotating...\n", m.ID, resp.StatusCode)
 			client, _ = NewClient(e.proxy.Next())
 			resp.Body.Close()
 			time.Sleep(2 * time.Second)
@@ -88,7 +96,7 @@ func (e *Engine) MonitorTask(m model.Monitor) {
 		}
 
 		if resp.StatusCode != 200 {
-			fmt.Printf("WARNING: [%d] Status %d\n", m.ID, resp.StatusCode)
+			fmt.Printf("\nWARNING: [%d] Status %d\n", m.ID, resp.StatusCode)
 			resp.Body.Close()
 			time.Sleep(5 * time.Second)
 			continue
@@ -105,16 +113,20 @@ func (e *Engine) MonitorTask(m model.Monitor) {
 			if len(preview) > 100 {
 				preview = preview[:100]
 			}
-			fmt.Printf("WARNING: [%d] JSON Parse Error: %v | Body: %s...\n", m.ID, err, preview)
-
+			fmt.Printf("\nWARNING: [%d] JSON Parse Error: %v | Body: %s...\n", m.ID, err, preview)
 			time.Sleep(2 * time.Second)
 			continue
 		}
 
-		fmt.Printf("\r [%d] Check #%d | Items: %d | Parsing...", m.ID, checks, len(data.Items))
+		fmt.Printf("\r[%d] Check #%d | Items: %d | Parsing...", m.ID, checks, len(data.Items))
+
 		newCount := 0
 		for _, vItem := range data.Items {
 			if e.db.IsNew(vItem.ID) {
+				if newCount == 0 {
+					fmt.Println()
+				}
+
 				price := vItem.Price.Amount + " " + vItem.Price.Currency
 
 				item := model.Item{
@@ -135,11 +147,21 @@ func (e *Engine) MonitorTask(m model.Monitor) {
 			}
 		}
 
+		if newCount > 0 {
+			fmt.Println()
+		}
+
 		intervalStr := os.Getenv("CHECK_INTERVAL_MS")
 		interval := 1500
 		if val, err := strconv.Atoi(intervalStr); err == nil {
 			interval = val
 		}
-		time.Sleep(time.Duration(interval) * time.Millisecond)
+
+		select {
+		case <-ctx.Done():
+			fmt.Printf("\nMonitor [%d] stopped gracefully during sleep.\n", m.ID)
+			return
+		case <-time.After(time.Duration(interval) * time.Millisecond):
+		}
 	}
 }
