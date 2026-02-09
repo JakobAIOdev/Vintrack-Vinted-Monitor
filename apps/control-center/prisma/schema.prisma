@@ -1,0 +1,32 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model monitors {
+  id         Int       @id @default(autoincrement())
+  query      String    @db.VarChar(255)
+  price_min  Int?
+  price_max  Int?
+  size_id    String?   @db.VarChar(50)
+  status     String?   @default("active") @db.VarChar(50)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  items      items[]
+}
+
+model items {
+  id         BigInt    @id
+  monitor_id Int?
+  title      String?   @db.VarChar(500)
+  price      String?   @db.VarChar(50)
+  size       String?   @db.VarChar(100)
+  condition  String?   @db.VarChar(100)
+  url        String?
+  image_url  String?
+  found_at   DateTime? @default(now()) @db.Timestamp(6)
+  monitors   monitors? @relation(fields: [monitor_id], references: [id], onDelete: Cascade)
+}
