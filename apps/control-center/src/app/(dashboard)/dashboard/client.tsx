@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { Activity, PauseCircle, PlayCircle, Plus, StopCircle, Webhook } from "lucide-react";
@@ -29,6 +29,7 @@ export function DashboardClient({ initialMonitors, userName }: { initialMonitors
     const [webhookInput, setWebhookInput] = useState("");
     const [isWebhookOpen, setIsWebhookOpen] = useState(false);
     const [isWebhookActive, setIsWebhookActive] = useState(true);
+    const [monitors, setMonitors] = useState<Monitor[]>(initialMonitors);
 
     const openWebhookDialog = (monitor: Monitor) => {
         setSelectedMonitor(monitor);
@@ -37,7 +38,18 @@ export function DashboardClient({ initialMonitors, userName }: { initialMonitors
         setIsWebhookOpen(true);
     };
 
+    const sortedMonitors = useMemo(() => {
+        return [...monitors].sort((a, b) => {
+            if (a.status === 'active' && b.status !== 'active') return -1;
+            if (a.status !== 'active' && b.status === 'active') return 1;
+            
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        });
+    }, [monitors]);
+
     const handleStopAll = async () => {
+        setMonitors(prev => prev.map(m => ({ ...m, status: 'paused' })));
+
         toast.promise(stopAllMonitors(), {
             loading: 'Stopping all monitors...',
             success: 'All monitors stopped!',
@@ -45,17 +57,32 @@ export function DashboardClient({ initialMonitors, userName }: { initialMonitors
         });
     };
 
-    const handleToggle = async (id: number, status: string) => {
-        const action = status === 'active' ? 'Paused' : 'Resumed';
-        toast.promise(toggleMonitor(id, status), {
+    const handleToggle = async (id: number, currentStatus: string) => {
+        const newStatus = currentStatus === 'active' ? 'paused' : 'active';
+        const actionText = newStatus === 'active' ? 'Resumed' : 'Paused';
+
+        setMonitors(prev => prev.map(m => 
+            m.id === id ? { ...m, status: newStatus } : m
+        ));
+
+        toast.promise(toggleMonitor(id, currentStatus), {
             loading: 'Switching state...',
-            success: `Monitor ${action}!`,
-            error: "Failed to update monitor"
+            success: `Monitor ${actionText}!`,
+            error: (err) => {
+                setMonitors(prev => prev.map(m => 
+                    m.id === id ? { ...m, status: currentStatus } : m
+                ));
+                return "Failed to update monitor";
+            }
         });
     };
 
     const handleSaveWebhook = async () => {
         if (!selectedMonitor) return;
+
+        setMonitors(prev => prev.map(m => 
+            m.id === selectedMonitor.id ? { ...m, discord_webhook: webhookInput } : m
+        ));
         
         toast.promise(updateMonitorWebhook(selectedMonitor.id, webhookInput), {
             loading: 'Saving webhook...',
@@ -67,7 +94,7 @@ export function DashboardClient({ initialMonitors, userName }: { initialMonitors
         });
     };
 
-    const activeCount = initialMonitors.filter(m => m.status === 'active').length;
+    const activeCount = monitors.filter(m => m.status === 'active').length;
 
     return (
         <div className="p-8 space-y-6 max-w-[1600px] mx-auto">
@@ -100,7 +127,7 @@ export function DashboardClient({ initialMonitors, userName }: { initialMonitors
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {initialMonitors.map((m) => (
+                {sortedMonitors.map((m) => (
                     <Card key={m.id} className={`relative group transition-all hover:shadow-lg border-l-4 ${m.status === 'active' ? 'border-l-green-500' : 'border-l-slate-300'}`}>
                         <CardHeader className="flex flex-row items-start justify-between pb-2">
                             <div className="w-full">
