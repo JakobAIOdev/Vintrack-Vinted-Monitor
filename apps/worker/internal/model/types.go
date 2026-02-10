@@ -29,13 +29,17 @@ type VintedResponse struct {
 }
 
 type VintedItem struct {
-	ID        int64       `json:"id"`
-	Title     string      `json:"title"`
-	Price     VintedPrice `json:"price"`
-	Url       string      `json:"url"`
-	Photo     VintedPhoto `json:"photo"`
-	SizeTitle string      `json:"size_title"`
-	Status    string      `json:"status"`
+	ID    int64       `json:"id"`
+	Title string      `json:"title"`
+	Price VintedPrice `json:"price"`
+	Url   string      `json:"url"`
+	Photo VintedPhoto `json:"photo"`
+
+	SizeTitle string `json:"size_title"`
+	Size      string `json:"size"`
+
+	Status    string `json:"status"`
+	Condition string `json:"condition"`
 }
 
 type VintedPrice struct {

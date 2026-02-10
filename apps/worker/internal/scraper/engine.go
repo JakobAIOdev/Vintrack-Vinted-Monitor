@@ -24,25 +24,34 @@ func NewEngine(db *database.Store, pm *proxy.Manager) *Engine {
 	return &Engine{db: db, proxy: pm}
 }
 
-func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
+func (e *Engine) createWarmClient(monitorID int) (*Client, error) {
 	currentProxy := e.proxy.Next()
 	client, err := NewClient(currentProxy)
 	if err != nil {
-		fmt.Printf("ERROR: [%d] Init Error: %v\n", m.ID, err)
-		return
+		return nil, err
 	}
 
-	fmt.Printf("[%d] Warming up cookies...\n", m.ID)
-	reqWarmup, _ := http.NewRequest("GET", "https://www.vinted.de/", nil)
-	reqWarmup.Header = http.Header{
+	req, _ := http.NewRequest("GET", "https://www.vinted.de/", nil)
+	req.Header = http.Header{
 		"User-Agent": {"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
 		"Accept":     {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"},
 	}
-	respWarmup, err := client.HttpClient.Do(reqWarmup)
+
+	resp, err := client.HttpClient.Do(req)
 	if err == nil {
-		respWarmup.Body.Close()
+		resp.Body.Close()
 	} else {
-		fmt.Printf("WARNING: [%d] Warmup failed (Proxy might be dead): %v\n", m.ID, err)
+		fmt.Printf("WARNING: [%d] Warmup Warning: %v\n", monitorID, err)
+	}
+
+	return client, nil
+}
+
+func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
+	client, err := e.createWarmClient(m.ID)
+	if err != nil {
+		fmt.Printf("ERROR: [%d] Init Error: %v\n", m.ID, err)
+		return
 	}
 
 	apiURL := BuildVintedURL(m)
@@ -54,7 +63,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("\nMonitor [%d] stopped gracefully.\n", m.ID)
+			fmt.Printf("\nERROR: Monitor [%d] stopped gracefully.\n", m.ID)
 			return
 		default:
 		}
@@ -62,7 +71,6 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		checks++
 		req, err := http.NewRequest("GET", apiURL, nil)
 		if err != nil {
-			fmt.Printf("\nERROR: [%d] Req Build Error: %v\n", m.ID, err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -75,28 +83,29 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		resp, err := client.HttpClient.Do(req)
+
 		if err != nil {
-			fmt.Printf("\nERROR: [%d] Net Error: %v\n", m.ID, err)
 			consecutiveErrors++
-			if consecutiveErrors > 3 {
-				fmt.Printf("\n [%d] Too many errors. Rotating Proxy.\n", m.ID)
-				client, _ = NewClient(e.proxy.Next())
-				consecutiveErrors = 0
+			if consecutiveErrors > 2 {
+				if newClient, err := e.createWarmClient(m.ID); err == nil {
+					client = newClient
+					consecutiveErrors = 0
+				}
 			}
 			time.Sleep(2 * time.Second)
 			continue
 		}
 
 		if resp.StatusCode == 401 || resp.StatusCode == 403 {
-			fmt.Printf("\nERROR: [%d] Blocked (%d). Rotating...\n", m.ID, resp.StatusCode)
-			client, _ = NewClient(e.proxy.Next())
 			resp.Body.Close()
-			time.Sleep(2 * time.Second)
+			if newClient, err := e.createWarmClient(m.ID); err == nil {
+				client = newClient
+			}
+			time.Sleep(5 * time.Second)
 			continue
 		}
 
 		if resp.StatusCode != 200 {
-			fmt.Printf("\nWARNING: [%d] Status %d\n", m.ID, resp.StatusCode)
 			resp.Body.Close()
 			time.Sleep(5 * time.Second)
 			continue
@@ -109,11 +118,6 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 		var data model.VintedResponse
 		if err := json.Unmarshal(body, &data); err != nil {
-			preview := string(body)
-			if len(preview) > 100 {
-				preview = preview[:100]
-			}
-			fmt.Printf("\nWARNING: [%d] JSON Parse Error: %v | Body: %s...\n", m.ID, err, preview)
 			time.Sleep(2 * time.Second)
 			continue
 		}
@@ -127,21 +131,29 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 					fmt.Println()
 				}
 
-				price := vItem.Price.Amount + " " + vItem.Price.Currency
+				size := vItem.SizeTitle
+				if size == "" {
+					size = vItem.Size
+				}
+
+				condition := vItem.Status
+				if condition == "" {
+					condition = vItem.Condition
+				}
 
 				item := model.Item{
 					ID:        vItem.ID,
 					MonitorID: m.ID,
 					Title:     vItem.Title,
-					Price:     price,
-					Size:      vItem.SizeTitle,
-					Condition: vItem.Status,
+					Price:     vItem.Price.Amount + " " + vItem.Price.Currency,
+					Size:      size,
+					Condition: condition,
 					URL:       vItem.Url,
 					ImageURL:  vItem.Photo.Url,
 				}
 
 				if err := e.db.SaveItem(item); err == nil {
-					fmt.Printf("NEW [%d]: %s (%s)\n", m.ID, item.Title, item.Price)
+					fmt.Printf("NEW [%d]: %s (%s) [%s]\n", m.ID, item.Title, item.Price, item.Size)
 					newCount++
 				}
 			}
@@ -159,7 +171,6 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 		select {
 		case <-ctx.Done():
-			fmt.Printf("\nMonitor [%d] stopped gracefully during sleep.\n", m.ID)
 			return
 		case <-time.After(time.Duration(interval) * time.Millisecond):
 		}

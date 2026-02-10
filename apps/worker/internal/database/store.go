@@ -2,15 +2,15 @@ package database
 
 import (
 	"database/sql"
-	"sync"
+	"fmt"
+	"time"
 	"vintrack-worker/internal/model"
 
 	_ "github.com/lib/pq"
 )
 
 type Store struct {
-	db        *sql.DB
-	seenItems sync.Map
+	db *sql.DB
 }
 
 func NewStore(connStr string) (*Store, error) {
@@ -23,23 +23,37 @@ func NewStore(connStr string) (*Store, error) {
 		return nil, err
 	}
 
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
 	return &Store{db: db}, nil
 }
 
 func (s *Store) SaveItem(item model.Item) error {
-	s.seenItems.Store(item.ID, true)
+	if item.Size == "" {
+		item.Size = "N/A"
+	}
+	if item.Condition == "" {
+		item.Condition = "N/A"
+	}
 
-	query := `
-		INSERT INTO items (id, monitor_id, title, price, url, image_url, found_at)
-		VALUES ($1, $2, $3, $4, $5, $6, NOW())
-		ON CONFLICT (id) DO NOTHING`
+	_, err := s.db.Exec(`
+		INSERT INTO items (id, monitor_id, title, price, size, condition, url, image_url, found_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (id) DO NOTHING
+	`, item.ID, item.MonitorID, item.Title, item.Price, item.Size, item.Condition, item.URL, item.ImageURL, time.Now())
 
-	_, err := s.db.Exec(query, item.ID, item.MonitorID, item.Title, item.Price, item.URL, item.ImageURL)
 	return err
 }
 
 func (s *Store) IsNew(itemID int64) bool {
-	_, exists := s.seenItems.Load(itemID)
+	var exists bool
+	err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM items WHERE id = $1)", itemID).Scan(&exists)
+	if err != nil {
+		fmt.Println("WARNING: DB Error in IsNew:", err)
+		return false
+	}
 	return !exists
 }
 
