@@ -7,8 +7,60 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+  
+  monitors      monitors[] 
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+
 model monitors {
   id         Int       @id @default(autoincrement())
+  
+  userId     String    
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   query      String    @db.VarChar(255)
   price_min  Int?
   price_max  Int?
@@ -16,6 +68,8 @@ model monitors {
   status     String?   @default("active") @db.VarChar(50)
   created_at DateTime? @default(now()) @db.Timestamp(6)
   items      items[]
+  discord_webhook String?
+  webhook_active  Boolean  @default(true)
 }
 
 model items {
@@ -25,6 +79,7 @@ model items {
   price      String?   @db.VarChar(50)
   size       String?   @db.VarChar(100)
   condition  String?   @db.VarChar(100)
+  location    String?
   url        String?
   image_url  String?
   found_at   DateTime? @default(now()) @db.Timestamp(6)

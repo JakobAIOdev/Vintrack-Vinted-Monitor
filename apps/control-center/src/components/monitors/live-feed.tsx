@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ExternalLink, ImageOff } from "lucide-react";
@@ -19,14 +19,21 @@ type Item = {
 export function LiveFeed({ monitorId }: { monitorId: number }) {
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  const lastDataRef = useRef<string>("");
 
   useEffect(() => {
     const fetchItems = async () => {
       try {
         const res = await fetch(`/api/monitors/${monitorId}/items?t=${Date.now()}`);
         if (res.ok) {
-          const data = await res.json();
-          setItems(data);
+          const data: Item[] = await res.json();
+          const dataString = JSON.stringify(data);
+          
+          if (dataString !== lastDataRef.current) {
+             setItems(data);
+             lastDataRef.current = dataString;
+          }
         }
       } catch (err) {
         console.error("Polling error", err);
@@ -36,63 +43,85 @@ export function LiveFeed({ monitorId }: { monitorId: number }) {
     };
 
     fetchItems();
-
     const interval = setInterval(fetchItems, 1000);
-
     return () => clearInterval(interval);
   }, [monitorId]);
 
-  if (loading && items.length === 0) return <div className="p-10 text-center">Lade Feed...</div>;
-
   return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center">
-         <h2 className="text-xl font-bold">Live Feed ({items.length})</h2>
-         <Badge variant="outline" className="animate-pulse bg-green-50 text-green-700">● Live Updates</Badge>
+    <div className="space-y-6">
+      <div className="flex justify-between items-center bg-slate-50 p-3 rounded-lg border">
+         <h2 className="font-semibold flex items-center gap-2">
+            Live Feed <Badge variant="secondary" className="rounded-full px-2">{items.length}</Badge>
+         </h2>
+         <div className="flex items-center gap-2">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500"></span>
+            </span>
+            <span className="text-xs font-mono text-green-700 font-bold uppercase">Connected</span>
+         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4">
-        {items.map((item) => (
-          <div key={item.id} className="bg-white border rounded-lg p-4 shadow-sm flex gap-4 hover:shadow-md transition-shadow animate-in slide-in-from-top-2 duration-300">
-            <div className="w-24 h-24 flex-shrink-0 bg-gray-100 rounded-md overflow-hidden border">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        {loading && items.length === 0 ? (
+            [...Array(4)].map((_, i) => (
+                <div key={i} className="h-64 bg-slate-100 rounded-xl animate-pulse" />
+            ))
+        ) : items.map((item) => (
+          <div 
+            key={item.id} 
+            className="group relative bg-white border border-slate-200 rounded-xl overflow-hidden hover:shadow-lg transition-all duration-300 flex flex-col"
+          >
+
+            <div className="relative aspect-square bg-slate-100 overflow-hidden">
               {item.image_url ? (
-                <img src={item.image_url} alt="Item" className="w-full h-full object-cover" />
+                <img 
+                    src={item.image_url} 
+                    alt="Item" 
+                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" 
+                    loading="lazy"
+                />
               ) : (
-                <div className="w-full h-full flex items-center justify-center text-gray-400"><ImageOff size={20} /></div>
+                <div className="w-full h-full flex items-center justify-center text-gray-300"><ImageOff size={24} /></div>
               )}
-            </div>
-
-            <div className="flex-1 min-w-0 flex flex-col justify-between">
-              <div>
-                <h3 className="font-semibold text-lg truncate" title={item.title || ""}>{item.title}</h3>
-                <div className="flex gap-2 mt-1 text-sm text-gray-500">
-                   {item.size && <Badge variant="secondary">{item.size}</Badge>}
-                   {item.condition && <span className="text-xs border px-2 py-0.5 rounded">{item.condition}</span>}
-                </div>
-              </div>
               
-              <div className="flex justify-between items-end mt-2">
-                 <div className="text-xl font-bold text-green-600">{item.price}</div>
-                 <div className="text-xs text-gray-400">
-                    {new Date(item.found_at).toLocaleTimeString()}
-                 </div>
+              <div className="absolute bottom-2 right-2 bg-white/90 backdrop-blur shadow-sm text-slate-900 font-bold px-2 py-0.5 rounded text-sm border">
+                  {item.price}
               </div>
             </div>
 
-            <div className="flex items-center">
-               <a href={item.url || "#"} target="_blank" rel="noopener noreferrer">
-                  <Button size="sm" className="gap-2">
-                    Kaufen <ExternalLink size={14} />
-                  </Button>
-               </a>
+            <div className="p-3 flex flex-col flex-1 gap-1.5">
+              <h3 className="font-semibold text-sm leading-tight line-clamp-2 text-slate-900" title={item.title || ""}>
+                  {item.title || "Untitled Item"}
+              </h3>
+              
+              <div className="flex flex-wrap gap-1 mt-auto">
+                 {item.size && <Badge variant="secondary" className="text-[10px] px-1.5 h-5 font-normal border-0 bg-slate-100">{item.size}</Badge>}
+                 {item.condition && <span className="text-[10px] px-1.5 h-5 flex items-center rounded border border-slate-100 text-slate-500 bg-white">{item.condition}</span>}
+              </div>
+
+              <div className="text-[10px] text-gray-400 font-mono text-right mt-1">
+                 {new Date(item.found_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}
+              </div>
             </div>
+            <a 
+                href={item.url || "#"} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="block bg-slate-900 text-white text-center py-2.5 text-xs font-semibold uppercase tracking-wide hover:bg-blue-600 transition-colors"
+            >
+                View on Vinted <ExternalLink className="inline-block w-3 h-3 mb-0.5 ml-1" />
+            </a>
           </div>
         ))}
 
-        {items.length === 0 && (
-            <div className="text-center py-20 bg-slate-50 rounded border border-dashed">
-                <p className="text-muted-foreground">Warte auf neue Items...</p>
-                <p className="text-xs text-gray-400 mt-1">Der Worker scannt im Hintergrund.</p>
+        {items.length === 0 && !loading && (
+            <div className="col-span-full text-center py-24 bg-slate-50/50 rounded-xl border-2 border-dashed">
+                <p className="text-muted-foreground font-medium">Waiting for new items...</p>
+                <div className="flex justify-center mt-4 mb-2">
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-slate-400"></div>
+                </div>
+                <p className="text-xs text-gray-400">Worker is scanning in background.</p>
             </div>
         )}
       </div>
