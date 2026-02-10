@@ -1,15 +1,21 @@
 package model
 
-import "time"
+import (
+	"database/sql"
+	"strings"
+	"time"
+)
 
 type Monitor struct {
-	ID        int
-	Query     string
-	PriceMin  *int
-	PriceMax  *int
-	SizeID    *string
-	Status    string
-	CreatedAt time.Time
+	ID             int
+	Query          string
+	PriceMin       *int
+	PriceMax       *int
+	SizeID         *string
+	Status         string
+	DiscordWebhook sql.NullString
+	WebhookActive  bool
+	CreatedAt      time.Time
 }
 
 type Item struct {
@@ -21,6 +27,7 @@ type Item struct {
 	Condition string    `json:"condition"`
 	URL       string    `json:"url"`
 	ImageURL  string    `json:"image_url"`
+	Location  string    `json:"location"`
 	FoundAt   time.Time `json:"found_at"`
 }
 
@@ -29,17 +36,14 @@ type VintedResponse struct {
 }
 
 type VintedItem struct {
-	ID    int64       `json:"id"`
-	Title string      `json:"title"`
-	Price VintedPrice `json:"price"`
-	Url   string      `json:"url"`
-	Photo VintedPhoto `json:"photo"`
-
-	SizeTitle string `json:"size_title"`
-	Size      string `json:"size"`
-
-	Status    string `json:"status"`
-	Condition string `json:"condition"`
+	ID        int64       `json:"id"`
+	Title     string      `json:"title"`
+	Price     VintedPrice `json:"price"`
+	Url       string      `json:"url"`
+	Photo     VintedPhoto `json:"photo"`
+	SizeTitle string      `json:"size_title"`
+	Size      string      `json:"size"`
+	Condition string      `json:"status"`
 }
 
 type VintedPrice struct {
@@ -49,4 +53,40 @@ type VintedPrice struct {
 
 type VintedPhoto struct {
 	Url string `json:"url"`
+}
+
+func GetRegion(url string) string {
+	url = strings.ToLower(url)
+	if strings.Contains(url, ".de/") {
+		return "🇩🇪 DE"
+	}
+	if strings.Contains(url, ".fr/") {
+		return "🇫🇷 FR"
+	}
+	if strings.Contains(url, ".it/") {
+		return "🇮🇹 IT"
+	}
+	if strings.Contains(url, ".es/") {
+		return "🇪🇸 ES"
+	}
+	if strings.Contains(url, ".pl/") {
+		return "🇵🇱 PL"
+	}
+	if strings.Contains(url, ".nl/") {
+		return "🇳🇱 NL"
+	}
+	if strings.Contains(url, ".co.uk/") {
+		return "🇬🇧 UK"
+	}
+	if strings.Contains(url, ".at/") {
+		return "🇦🇹 AT"
+	}
+	if strings.Contains(url, ".be/") {
+		return "🇧🇪 BE"
+	}
+	return "🇪🇺 EU"
+}
+
+func (v VintedItem) GetPriceString() string {
+	return v.Price.Amount + " " + v.Price.Currency
 }

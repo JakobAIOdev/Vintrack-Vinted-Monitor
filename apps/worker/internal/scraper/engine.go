@@ -8,7 +8,9 @@ import (
 	"os"
 	"strconv"
 	"time"
+
 	"vintrack-worker/internal/database"
+	"vintrack-worker/internal/discord"
 	"vintrack-worker/internal/model"
 	"vintrack-worker/internal/proxy"
 
@@ -69,6 +71,20 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		checks++
+
+		if checks%10 == 0 {
+			updatedMonitor, err := e.db.GetMonitorByID(m.ID)
+			if err == nil {
+				m.DiscordWebhook = updatedMonitor.DiscordWebhook
+				m.WebhookActive = updatedMonitor.WebhookActive
+				m.Status = updatedMonitor.Status
+
+				if m.Status != "active" {
+					fmt.Printf("Monitor [%d] paused via Dashboard.\n", m.ID)
+					return
+				}
+			}
+		}
 		req, err := http.NewRequest("GET", apiURL, nil)
 		if err != nil {
 			time.Sleep(5 * time.Second)
@@ -136,10 +152,9 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 					size = vItem.Size
 				}
 
-				condition := vItem.Status
-				if condition == "" {
-					condition = vItem.Condition
-				}
+				condition := vItem.Condition
+
+				region := model.GetRegion(vItem.Url)
 
 				item := model.Item{
 					ID:        vItem.ID,
@@ -150,11 +165,23 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 					Condition: condition,
 					URL:       vItem.Url,
 					ImageURL:  vItem.Photo.Url,
+					Location:  region,
 				}
 
 				if err := e.db.SaveItem(item); err == nil {
 					fmt.Printf("NEW [%d]: %s (%s) [%s]\n", m.ID, item.Title, item.Price, item.Size)
 					newCount++
+
+					if m.DiscordWebhook.Valid && m.DiscordWebhook.String != "" {
+						if m.WebhookActive {
+							go discord.SendWebhook(
+								m.DiscordWebhook.String,
+								item,
+								m.Query,
+								region,
+							)
+						}
+					}
 				}
 			}
 		}

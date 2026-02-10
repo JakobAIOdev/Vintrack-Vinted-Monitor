@@ -38,11 +38,24 @@ func (s *Store) SaveItem(item model.Item) error {
 		item.Condition = "N/A"
 	}
 
+	location := model.GetRegion(item.URL)
+
 	_, err := s.db.Exec(`
-		INSERT INTO items (id, monitor_id, title, price, size, condition, url, image_url, found_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO items (id, monitor_id, title, price, size, condition, url, image_url, location, found_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (id) DO NOTHING
-	`, item.ID, item.MonitorID, item.Title, item.Price, item.Size, item.Condition, item.URL, item.ImageURL, time.Now())
+	`,
+		item.ID,
+		item.MonitorID,
+		item.Title,
+		item.Price,
+		item.Size,
+		item.Condition,
+		item.URL,
+		item.ImageURL,
+		location,
+		time.Now(),
+	)
 
 	return err
 }
@@ -58,7 +71,11 @@ func (s *Store) IsNew(itemID int64) bool {
 }
 
 func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {
-	query := `SELECT id, query, price_min, price_max, size_id, status FROM monitors WHERE status = 'active'`
+	query := `
+        SELECT id, query, price_min, price_max, size_id, status, discord_webhook, webhook_active 
+        FROM monitors 
+        WHERE status = 'active'
+    `
 
 	rows, err := s.db.Query(query)
 	if err != nil {
@@ -69,11 +86,46 @@ func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {
 	var monitors []model.Monitor
 	for rows.Next() {
 		var m model.Monitor
-		err := rows.Scan(&m.ID, &m.Query, &m.PriceMin, &m.PriceMax, &m.SizeID, &m.Status)
+		err := rows.Scan(
+			&m.ID,
+			&m.Query,
+			&m.PriceMin,
+			&m.PriceMax,
+			&m.SizeID,
+			&m.Status,
+			&m.DiscordWebhook,
+			&m.WebhookActive,
+		)
 		if err != nil {
 			return nil, err
 		}
 		monitors = append(monitors, m)
 	}
 	return monitors, nil
+}
+
+func (s *Store) GetMonitorByID(id int) (model.Monitor, error) {
+	query := `
+        SELECT id, query, price_min, price_max, size_id, status, discord_webhook, webhook_active 
+        FROM monitors 
+        WHERE id = $1
+    `
+
+	var m model.Monitor
+	err := s.db.QueryRow(query, id).Scan(
+		&m.ID,
+		&m.Query,
+		&m.PriceMin,
+		&m.PriceMax,
+		&m.SizeID,
+		&m.Status,
+		&m.DiscordWebhook,
+		&m.WebhookActive,
+	)
+
+	if err != nil {
+		return model.Monitor{}, err
+	}
+
+	return m, nil
 }
