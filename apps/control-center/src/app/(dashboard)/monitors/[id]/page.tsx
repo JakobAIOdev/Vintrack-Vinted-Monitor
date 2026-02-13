@@ -27,7 +27,7 @@ export default async function MonitorPage({
   const deleteAction = deleteMonitor.bind(null, monitor.id);
 
   return (
-    <div className="max-w-[1600px] mx-auto space-y-8 p-8">
+    <div className="max-w-400 mx-auto space-y-8 p-8">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b pb-6">
          <div className="flex items-center gap-4">
             <Link href="/dashboard">
@@ -56,7 +56,7 @@ export default async function MonitorPage({
             <form action={toggleAction}>
                 <Button 
                     variant={monitor.status === 'active' ? 'outline' : 'default'} 
-                    className={monitor.status === 'active' ? "text-amber-600 hover:text-amber-700 hover:bg-amber-50 border-amber-200" : "bg-green-600 hover:bg-green-500"}
+                    className={monitor.status === 'active' ? "text-blue-600 hover:text-blue-700 hover:bg-blue-50 border-blue-200" : "bg-green-600 hover:bg-green-500"}
                 >
                     {monitor.status === 'active' ? <><PauseCircle className="mr-2 h-4 w-4"/> Pause Monitor</> : <><PlayCircle className="mr-2 h-4 w-4"/> Start Monitor</>}
                 </Button>
@@ -71,7 +71,6 @@ export default async function MonitorPage({
       <div className="space-y-4">
           <div className="flex items-center justify-between">
               <h2 className="text-xl font-semibold">Latest Results</h2>
-              <div className="text-xs text-muted-foreground">Auto-refreshing every 2s</div>
           </div>
           <LiveFeed monitorId={monitor.id} />
       </div>

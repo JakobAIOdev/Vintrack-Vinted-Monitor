@@ -11,19 +11,19 @@ export default async function Home() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center p-24 bg-gradient-to-br from-slate-900 to-slate-800 text-white">
+    <div className="flex min-h-screen flex-col items-center justify-center p-24 bg-linear-to-br from-slate-900 to-slate-800 text-white">
       <div className="text-center space-y-6">
         <h1 className="text-6xl font-extrabold tracking-tight">
-          Vinted<span className="text-blue-500">Track</span>
+          Vin<span className="text-blue-500">Track</span>
         </h1>
         <p className="text-xl text-slate-300 max-w-lg mx-auto">
-          Der schnellste Vinted Monitor für Reseller. Finde Steals bevor es andere tun.
+          The fastest Vinted monitor for resellers. Find steals before others do.
         </p>
         
         <div className="flex gap-4 justify-center mt-8">
             <Link href="/api/auth/signin">
                 <Button size="lg" className="bg-blue-600 hover:bg-blue-500 text-lg px-8">
-                    Jetzt Starten
+                    Start Now
                 </Button>
             </Link>
             

@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { ExternalLink, ImageOff, Search } from "lucide-react";
 
 type Item = {
   id: string;
+  monitor_id: number;
   title: string | null;
   price: string | null;
   size: string | null;
@@ -13,36 +14,66 @@ type Item = {
   url: string | null;
   image_url: string | null;
   found_at: string;
+  isLive?: boolean;
 };
 
 export function LiveFeed({ monitorId }: { monitorId: number }) {
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
-  const lastDataRef = useRef<string>("");
 
   useEffect(() => {
     const fetchItems = async () => {
       try {
-        const res = await fetch(`/api/monitors/${monitorId}/items?t=${Date.now()}`);
+        const res = await fetch(`/api/monitors/${monitorId}/items`);
         if (res.ok) {
           const data: Item[] = await res.json();
-          const dataString = JSON.stringify(data);
-          
-          if (dataString !== lastDataRef.current) {
-             setItems(data);
-             lastDataRef.current = dataString;
-          }
+          const historicItems = data.map((i) => ({ ...i, isLive: false }));
+          setItems(historicItems);
         }
       } catch (err) {
-        console.error("Polling error", err);
+        console.error("Fetch error", err);
       } finally {
         setLoading(false);
       }
     };
 
     fetchItems();
-    const interval = setInterval(fetchItems, 2000);
-    return () => clearInterval(interval);
+  }, [monitorId]);
+
+  useEffect(() => {
+    const eventSource = new EventSource("/api/stream");
+
+    eventSource.onmessage = (event) => {
+      try {
+        const newItem: Item = JSON.parse(event.data);
+
+        if (newItem.monitor_id === monitorId) {
+          const liveItem = { ...newItem, isLive: true };
+          
+          setItems((prev) => {
+            if (prev.some((i) => i.id === newItem.id)) return prev;
+            return [liveItem, ...prev];
+          });
+
+          setTimeout(() => {
+            setItems((currentItems) =>
+              currentItems.map((item) =>
+                item.id === newItem.id ? { ...item, isLive: false } : item
+              )
+            );
+          }, 10000);
+        }
+      } catch (e) {
+        console.error("SSE Parse Error", e);
+      }
+    };
+
+    eventSource.onerror = () => {
+    };
+
+    return () => {
+      eventSource.close();
+    };
   }, [monitorId]);
 
   return (
@@ -51,12 +82,12 @@ export function LiveFeed({ monitorId }: { monitorId: number }) {
         
         {loading && items.length === 0 ? (
             [...Array(5)].map((_, i) => (
-                <div key={i} className="h-[300px] bg-slate-100 rounded-xl animate-pulse" />
+                <div key={i} className="h-75 bg-slate-100 rounded-xl animate-pulse" />
             ))
         ) : items.map((item) => (
           <div 
             key={item.id} 
-            className="group relative bg-white border border-slate-200 rounded-xl overflow-hidden hover:shadow-xl hover:-translate-y-1 transition-all duration-300 flex flex-col"
+            className={`group relative bg-white border border-slate-200 rounded-xl overflow-hidden hover:shadow-xl hover:-translate-y-1 transition-all duration-300 flex flex-col ${item.isLive ? 'animate-in fade-in zoom-in duration-500 ring-2 ring-red-500/20' : ''}`}
           >
             <div className="relative aspect-square bg-slate-50 overflow-hidden">
                 {item.image_url ? (
@@ -72,9 +103,15 @@ export function LiveFeed({ monitorId }: { monitorId: number }) {
                     </div>
                 )}
                 
-                <div className="absolute bottom-2 right-2 bg-white/95 backdrop-blur-sm shadow-sm text-slate-900 font-bold px-2 py-1 rounded-lg text-sm border">
+                <div className="absolute bottom-2 right-2 bg-white/95 backdrop-blur-sm shadow-sm text-slate-900 font-bold px-2 py-1 rounded-lg text-sm border border-slate-100/50">
                     {item.price}
                 </div>
+                
+                {item.isLive && (
+                   <div className="absolute top-2 left-2 z-10 bg-red-600 text-white text-[10px] font-bold px-2 py-0.5 rounded shadow-lg animate-pulse uppercase tracking-wider">
+                     LIVE NEW
+                   </div>
+                )}
             </div>
 
             <div className="p-3 flex flex-col flex-1 gap-2">
@@ -87,7 +124,7 @@ export function LiveFeed({ monitorId }: { monitorId: number }) {
                     </span>
                 </div>
 
-                <h3 className="font-semibold text-sm leading-tight line-clamp-2 text-slate-800 min-h-[2.5rem]" title={item.title || ""}>
+                <h3 className="font-semibold text-sm leading-tight line-clamp-2 text-slate-800 min-h-10" title={item.title || ""}>
                     {item.title || "Untitled Item"}
                 </h3>
 
@@ -104,6 +141,7 @@ export function LiveFeed({ monitorId }: { monitorId: number }) {
                     )}
                 </div>
             </div>
+            
             <a 
                 href={item.url || "#"} 
                 target="_blank" 
@@ -114,15 +152,14 @@ export function LiveFeed({ monitorId }: { monitorId: number }) {
             </a>
           </div>
         ))}
-
         {items.length === 0 && !loading && (
              <div className="col-span-full py-24 flex flex-col items-center justify-center text-center border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50/50">
-                <div className="bg-white p-4 rounded-full shadow-sm mb-4">
+                <div className="bg-white p-4 rounded-full shadow-sm mb-4 animate-bounce">
                     <Search className="w-8 h-8 text-slate-300" />
                 </div>
-                <h3 className="text-lg font-semibold text-slate-900">Waiting for items...</h3>
+                <h3 className="text-lg font-semibold text-slate-900">Waiting for live items...</h3>
                 <p className="text-slate-500 text-sm max-w-sm mt-1">
-                    Worker is running. New items will appear here automatically.
+                    Worker is running. New items will appear here instantly via WebSocket.
                 </p>
              </div>
         )}

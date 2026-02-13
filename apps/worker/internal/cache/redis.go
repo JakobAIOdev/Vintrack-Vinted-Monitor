@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -73,4 +74,12 @@ func (r *RedisCache) Close() error {
 
 func (r *RedisCache) Ping() error {
 	return r.client.Ping(r.ctx).Err()
+}
+
+func (r *RedisCache) PublishNewItem(item interface{}) error {
+	payload, err := json.Marshal(item)
+	if err != nil {
+		return err
+	}
+	return r.client.Publish(r.ctx, "vinted:new_items", payload).Err()
 }

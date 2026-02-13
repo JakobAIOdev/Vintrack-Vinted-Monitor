@@ -207,6 +207,10 @@ func (e *Engine) processItem(m model.Monitor, vItem model.VintedItem) bool {
 		return false
 	}
 
+	if err := e.db.PublishItem(item); err != nil {
+		fmt.Printf("Pub/Sub Error: %v\n", err)
+	}
+
 	fmt.Printf("\nNEW [%d]: %s (%s) [%s]", m.ID, item.Title, item.Price, item.Size)
 
 	if m.DiscordWebhook.Valid && m.DiscordWebhook.String != "" {

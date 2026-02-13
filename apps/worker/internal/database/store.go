@@ -166,3 +166,10 @@ func (s *Store) Close() error {
 	}
 	return s.db.Close()
 }
+
+func (s *Store) PublishItem(item model.Item) error {
+	if s.cache != nil {
+		return s.cache.PublishNewItem(item)
+	}
+	return nil
+}
