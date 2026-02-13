@@ -57,7 +57,7 @@ func main() {
 	}
 	defer store.Close()
 
-	fmt.Println("🔒 Loading proxies...")
+	fmt.Println("Loading proxies...")
 	proxyManager, err := proxy.Load(proxyFile)
 	if err != nil {
 		fmt.Printf("Proxy loading failed: %v (Continuing without proxies)\n", err)

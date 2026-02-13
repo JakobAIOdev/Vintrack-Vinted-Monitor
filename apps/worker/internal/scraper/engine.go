@@ -215,7 +215,6 @@ func (e *Engine) processItem(m model.Monitor, vItem model.VintedItem) bool {
 				m.DiscordWebhook.String,
 				item,
 				m.Query,
-				region,
 			)
 		}
 	}
