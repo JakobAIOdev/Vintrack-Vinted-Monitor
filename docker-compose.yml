@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15-alpine
@@ -12,13 +10,47 @@ services:
       - "5435:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vinuser -d vintrack"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
 
   redis:
     image: redis:7-alpine
     container_name: vintrack_redis
     ports:
       - "6379:6379"
-    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  worker:
+    build:
+      context: ./apps/worker
+      dockerfile: Dockerfile
+    container_name: vintrack_worker
+    environment:
+      - DATABASE_URL=postgres://vinuser:vinpassword@postgres:5432/vintrack?sslmode=disable
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - CHECK_INTERVAL_MS=1500
+      - PROXY_FILE=/app/proxies.txt
+    volumes:
+      - ./apps/worker/proxies.txt:/app/proxies.txt
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   postgres_data:
+  redis_data:

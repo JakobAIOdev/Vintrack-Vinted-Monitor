@@ -3,17 +3,20 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"runtime"
 	"time"
+	"vintrack-worker/internal/cache"
 	"vintrack-worker/internal/model"
 
 	_ "github.com/lib/pq"
 )
 
 type Store struct {
-	db *sql.DB
+	db    *sql.DB
+	cache *cache.RedisCache
 }
 
-func NewStore(connStr string) (*Store, error) {
+func NewStore(connStr string, redisCache *cache.RedisCache) (*Store, error) {
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return nil, err
@@ -23,17 +26,41 @@ func NewStore(connStr string) (*Store, error) {
 		return nil, err
 	}
 
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	numCPU := runtime.NumCPU()
+	db.SetMaxOpenConns(numCPU * 4)
+	db.SetMaxIdleConns(numCPU * 2)
+	db.SetConnMaxLifetime(10 * time.Minute)
+	db.SetConnMaxIdleTime(5 * time.Minute)
 
-	return &Store{db: db}, nil
+	fmt.Printf("PostgreSQL connected (Pool: %d max, %d idle)\n",
+		numCPU*4, numCPU*2)
+
+	return &Store{
+		db:    db,
+		cache: redisCache,
+	}, nil
+}
+
+func (s *Store) IsNew(itemID int64) bool {
+	if s.cache != nil {
+		return s.cache.IsNew(itemID)
+	}
+
+	var exists bool
+	err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM items WHERE id = $1)", itemID).Scan(&exists)
+	if err != nil {
+		fmt.Println("DB Error in IsNew:", err)
+		return false
+	}
+
+	return !exists
 }
 
 func (s *Store) SaveItem(item model.Item) error {
 	if item.Size == "" {
 		item.Size = "N/A"
 	}
+
 	if item.Condition == "" {
 		item.Condition = "N/A"
 	}
@@ -57,30 +84,31 @@ func (s *Store) SaveItem(item model.Item) error {
 		time.Now(),
 	)
 
-	return err
-}
-
-func (s *Store) IsNew(itemID int64) bool {
-	var exists bool
-	err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM items WHERE id = $1)", itemID).Scan(&exists)
 	if err != nil {
-		fmt.Println("WARNING: DB Error in IsNew:", err)
-		return false
+		return err
 	}
-	return !exists
+
+	if s.cache != nil {
+		if err := s.cache.MarkAsSeen(item.ID); err != nil {
+			fmt.Printf("Redis cache update failed: %v\n", err)
+		}
+	}
+
+	return nil
 }
 
 func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {
 	query := `
-        SELECT id, query, price_min, price_max, size_id, status, discord_webhook, webhook_active 
-        FROM monitors 
-        WHERE status = 'active'
-    `
+		SELECT id, query, price_min, price_max, size_id, status, discord_webhook, webhook_active
+		FROM monitors
+		WHERE status = 'active'
+	`
 
 	rows, err := s.db.Query(query)
 	if err != nil {
 		return nil, err
 	}
+
 	defer rows.Close()
 
 	var monitors []model.Monitor
@@ -99,17 +127,19 @@ func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		monitors = append(monitors, m)
 	}
+
 	return monitors, nil
 }
 
 func (s *Store) GetMonitorByID(id int) (model.Monitor, error) {
 	query := `
-        SELECT id, query, price_min, price_max, size_id, status, discord_webhook, webhook_active 
-        FROM monitors 
-        WHERE id = $1
-    `
+		SELECT id, query, price_min, price_max, size_id, status, discord_webhook, webhook_active
+		FROM monitors
+		WHERE id = $1
+	`
 
 	var m model.Monitor
 	err := s.db.QueryRow(query, id).Scan(
@@ -128,4 +158,11 @@ func (s *Store) GetMonitorByID(id int) (model.Monitor, error) {
 	}
 
 	return m, nil
+}
+
+func (s *Store) Close() error {
+	if s.cache != nil {
+		s.cache.Close()
+	}
+	return s.db.Close()
 }

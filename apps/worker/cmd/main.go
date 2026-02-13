@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
-	"strconv"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
+	"vintrack-worker/internal/cache"
 	"vintrack-worker/internal/database"
 	"vintrack-worker/internal/proxy"
 	"vintrack-worker/internal/scraper"
@@ -16,70 +18,116 @@ import (
 )
 
 func main() {
-	godotenv.Load()
+	fmt.Println("Vinted Worker starting...")
+	_ = godotenv.Load()
 
-	connStr := os.Getenv("DATABASE_URL")
-	if connStr == "" {
-		log.Fatal("DATABASE_URL missing")
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		panic("DATABASE_URL not set")
 	}
 
-	db, err := database.NewStore(connStr)
-	if err != nil {
-		log.Fatal(err)
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
 	}
-	fmt.Println("DB Connected")
+
+	redisPassword := os.Getenv("REDIS_PASSWORD")
 
 	proxyFile := os.Getenv("PROXY_FILE")
 	if proxyFile == "" {
 		proxyFile = "proxies.txt"
 	}
-	pm, _ := proxy.Load(proxyFile)
-	if pm == nil {
-		pm = &proxy.Manager{}
+
+	fmt.Printf("Connecting to Redis (%s)...\n", redisAddr)
+	redisCache, err := cache.NewRedisCache(redisAddr, redisPassword, 0)
+	if err != nil {
+		panic(fmt.Sprintf("Redis connection failed: %v", err))
+	}
+	defer redisCache.Close()
+
+	if err := redisCache.Ping(); err != nil {
+		panic(fmt.Sprintf("Redis ping failed: %v", err))
+	}
+	fmt.Println("Redis connected")
+
+	fmt.Println("Connecting to PostgreSQL...")
+	store, err := database.NewStore(dbURL, redisCache)
+	if err != nil {
+		panic(fmt.Sprintf("Database connection failed: %v", err))
+	}
+	defer store.Close()
+
+	fmt.Println("🔒 Loading proxies...")
+	proxyManager, err := proxy.Load(proxyFile)
+	if err != nil {
+		fmt.Printf("Proxy loading failed: %v (Continuing without proxies)\n", err)
+		proxyManager = &proxy.Manager{}
 	}
 
-	engine := scraper.NewEngine(db, pm)
+	fmt.Println("Initializing scraper engine...")
+	engine := scraper.NewEngine(store, proxyManager)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	runningMonitors := make(map[int]context.CancelFunc)
+	var mu sync.Mutex
 
-	fmt.Println("Worker Manager running...")
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 
-	pollInterval := 5
-	if val, err := strconv.Atoi(os.Getenv("DB_POLL_INTERVAL_SEC")); err == nil {
-		pollInterval = val
-	}
-
-	for {
-		activeMonitors, err := db.GetActiveMonitors()
+	updateMonitors := func() {
+		activeMonitors, err := store.GetActiveMonitors()
 		if err != nil {
-			log.Println("DB Poll Error:", err)
-			time.Sleep(time.Duration(pollInterval) * time.Second)
-			continue
+			fmt.Printf("Error fetching monitors from DB: %v\n", err)
+			return
 		}
+
+		mu.Lock()
+		defer mu.Unlock()
 
 		activeIDs := make(map[int]bool)
 
 		for _, m := range activeMonitors {
 			activeIDs[m.ID] = true
 
-			if _, isRunning := runningMonitors[m.ID]; !isRunning {
+			if _, exists := runningMonitors[m.ID]; !exists {
 				fmt.Printf("Starting Monitor [%d]: %s\n", m.ID, m.Query)
 
-				ctx, cancel := context.WithCancel(context.Background())
-				runningMonitors[m.ID] = cancel
+				monitorCtx, monitorCancel := context.WithCancel(ctx)
+				runningMonitors[m.ID] = monitorCancel
 
-				go engine.MonitorTask(ctx, m)
+				go engine.MonitorTask(monitorCtx, m)
 			}
 		}
 
 		for id, cancelFunc := range runningMonitors {
 			if !activeIDs[id] {
-				fmt.Printf("Stopping Monitor [%d] (removed from active list)\n", id)
+				fmt.Printf("Stopping Monitor [%d] (removed or paused)\n", id)
 				cancelFunc()
 				delete(runningMonitors, id)
 			}
 		}
+	}
 
-		time.Sleep(time.Duration(pollInterval) * time.Second)
+	updateMonitors()
+
+	fmt.Println("Worker running. Waiting for monitors / updates...")
+
+	for {
+		select {
+		case <-sigChan:
+			fmt.Println("\nShutdown signal received. Stopping all monitors...")
+			cancel()
+
+			time.Sleep(1 * time.Second)
+			return
+
+		case <-ticker.C:
+			updateMonitors()
+		}
 	}
 }
