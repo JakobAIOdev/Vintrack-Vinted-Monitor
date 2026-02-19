@@ -2,7 +2,6 @@ package model
 
 import (
 	"database/sql"
-	"strings"
 	"time"
 )
 
@@ -28,6 +27,7 @@ type Item struct {
 	URL       string    `json:"url"`
 	ImageURL  string    `json:"image_url"`
 	Location  string    `json:"location"`
+	Rating    string    `json:"rating,omitempty"`
 	FoundAt   time.Time `json:"found_at"`
 }
 
@@ -44,6 +44,12 @@ type VintedItem struct {
 	SizeTitle string      `json:"size_title"`
 	Size      string      `json:"size"`
 	Condition string      `json:"status"`
+	User      VintedUser  `json:"user"`
+}
+
+type VintedUser struct {
+	ID    int64  `json:"id"`
+	Login string `json:"login"`
 }
 
 type VintedPrice struct {
@@ -55,36 +61,15 @@ type VintedPhoto struct {
 	Url string `json:"url"`
 }
 
-func GetRegion(url string) string {
-	url = strings.ToLower(url)
-	if strings.Contains(url, ".de/") {
-		return "🇩🇪 DE"
-	}
-	if strings.Contains(url, ".fr/") {
-		return "🇫🇷 FR"
-	}
-	if strings.Contains(url, ".it/") {
-		return "🇮🇹 IT"
-	}
-	if strings.Contains(url, ".es/") {
-		return "🇪🇸 ES"
-	}
-	if strings.Contains(url, ".pl/") {
-		return "🇵🇱 PL"
-	}
-	if strings.Contains(url, ".nl/") {
-		return "🇳🇱 NL"
-	}
-	if strings.Contains(url, ".co.uk/") {
-		return "🇬🇧 UK"
-	}
-	if strings.Contains(url, ".at/") {
-		return "🇦🇹 AT"
-	}
-	if strings.Contains(url, ".be/") {
-		return "🇧🇪 BE"
-	}
-	return "🇪🇺 EU"
+type VintedItemDetail struct {
+	ID   int64                `json:"id"`
+	User VintedItemDetailUser `json:"user"`
+}
+
+type VintedItemDetailUser struct {
+	ID           int64  `json:"id"`
+	City         string `json:"city"`
+	CountryTitle string `json:"country_title"`
 }
 
 func (v VintedItem) GetPriceString() string {

@@ -15,6 +15,8 @@ type Item = {
   image_url: string | null;
   found_at: string;
   isLive?: boolean;
+  location: string;
+  rating: string | null;
 };
 
 export function LiveFeed({ monitorId }: { monitorId: number }) {
@@ -137,6 +139,16 @@ export function LiveFeed({ monitorId }: { monitorId: number }) {
                     {item.condition && (
                         <span className="text-[10px] px-1.5 h-5 flex items-center rounded border border-slate-100 text-slate-500 bg-white">
                             {item.condition}
+                        </span>
+                    )}
+                    {item.location && (
+                        <span className="text-[10px] px-1.5 h-5 flex items-center rounded border border-slate-100 text-slate-500 bg-white">
+                            {item.location}
+                        </span>
+                    )}
+                    {item.rating && (
+                        <span className="text-[10px] px-1.5 h-5 flex items-center rounded border border-amber-200 text-amber-600 bg-amber-50">
+                            {item.rating}
                         </span>
                     )}
                 </div>

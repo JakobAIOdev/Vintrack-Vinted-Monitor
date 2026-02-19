@@ -17,6 +17,8 @@ type Item = {
   found_at: string;
   monitor_name?: string;
   isLive?: boolean;
+  location: string | null;
+  rating: string | null;
 };
 
 export default function FeedPage() {
@@ -151,6 +153,16 @@ export default function FeedPage() {
                         <Badge variant="secondary" className="text-[10px] px-1.5 h-5 font-normal bg-slate-100 text-slate-600 hover:bg-slate-200 border-0">
                             {item.size}
                         </Badge>
+                    )}
+                    {item.location && (
+                        <span className="text-[10px] px-1.5 h-5 flex items-center rounded border border-slate-100 text-slate-500 bg-white">
+                            {item.location}
+                        </span>
+                    )}
+                    {item.rating && (
+                        <span className="text-[10px] px-1.5 h-5 flex items-center rounded border border-amber-200 text-amber-600 bg-amber-50">
+                            {item.rating}
+                        </span>
                     )}
                 </div>
             </div>

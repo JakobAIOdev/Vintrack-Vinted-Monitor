@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 	"strconv"
-	"sync"
+	"strings"
 	"time"
 	"vintrack-worker/internal/database"
 	"vintrack-worker/internal/discord"
@@ -56,6 +56,8 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		return
 	}
 
+	scraper := NewHTMLScraper(e.proxy, e.db)
+
 	apiURL := BuildVintedURL(m)
 	fmt.Printf("Starting Monitor [%d]: %s\n URL: %s\n", m.ID, m.Query, apiURL)
 
@@ -71,12 +73,13 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("\nERROR: Monitor [%d] stopped gracefully.\n", m.ID)
+			fmt.Printf("\nMonitor [%d] stopped gracefully.\n", m.ID)
 			return
 		default:
 		}
 
 		checks++
+
 		if checks%10 == 0 {
 			updatedMonitor, err := e.db.GetMonitorByID(m.ID)
 			if err == nil {
@@ -141,54 +144,50 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			continue
 		}
 
-		fmt.Printf("\r[%d] Check #%d | Items: %d | Processing...", m.ID, checks, len(data.Items))
-
-		var wg sync.WaitGroup
-		newItemsCount := 0
-		var mu sync.Mutex
-		sem := make(chan struct{}, 10)
-
-		for _, vItem := range data.Items {
-			wg.Add(1)
-			sem <- struct{}{}
-
-			go func(item model.VintedItem) {
-				defer wg.Done()
-				defer func() { <-sem }()
-
-				if e.processItem(m, item) {
-					mu.Lock()
-					newItemsCount++
-					mu.Unlock()
-				}
-			}(vItem)
+		itemIDs := make([]int64, len(data.Items))
+		for i, item := range data.Items {
+			itemIDs[i] = item.ID
 		}
 
-		wg.Wait()
+		newMap := e.db.BatchIsNew(itemIDs)
 
-		if newItemsCount > 0 {
-			fmt.Println()
+		var newItems []model.VintedItem
+		for _, item := range data.Items {
+			if newMap[item.ID] {
+				newItems = append(newItems, item)
+			}
 		}
 
-		if newItemsCount > 0 {
-			time.Sleep(500 * time.Millisecond)
-		} else {
+		fmt.Printf("\r[%d] Check #%d | Items: %d | New: %d", m.ID, checks, len(data.Items), len(newItems))
+
+		if len(newItems) == 0 {
 			time.Sleep(time.Duration(interval) * time.Millisecond)
+			continue
 		}
+
+		for _, vItem := range newItems {
+			e.processNewItem(m, vItem, scraper)
+		}
+		fmt.Println()
+
+		time.Sleep(300 * time.Millisecond)
 	}
 }
 
-func (e *Engine) processItem(m model.Monitor, vItem model.VintedItem) bool {
-	if !e.db.IsNew(vItem.ID) {
-		return false
-	}
-
+func (e *Engine) processNewItem(m model.Monitor, vItem model.VintedItem, scraper *HTMLScraper) {
 	size := vItem.SizeTitle
 	if size == "" {
 		size = vItem.Size
 	}
+
 	condition := vItem.Condition
-	region := model.GetRegion(vItem.Url)
+
+	itemURL := vItem.Url
+	if !strings.HasPrefix(itemURL, "http") {
+		itemURL = "https://www.vinted.de" + itemURL
+	}
+
+	sellerInfo := scraper.FetchSellerInfo(itemURL, vItem.User.ID)
 
 	item := model.Item{
 		ID:        vItem.ID,
@@ -197,31 +196,28 @@ func (e *Engine) processItem(m model.Monitor, vItem model.VintedItem) bool {
 		Price:     vItem.Price.Amount + " " + vItem.Price.Currency,
 		Size:      size,
 		Condition: condition,
-		URL:       vItem.Url,
+		URL:       itemURL,
 		ImageURL:  vItem.Photo.Url,
-		Location:  region,
+		Location:  sellerInfo.Region,
+		Rating:    sellerInfo.Rating,
 	}
 
 	if err := e.db.SaveItem(item); err != nil {
 		fmt.Printf("ERROR saving item %d: %v\n", item.ID, err)
-		return false
+		return
 	}
 
 	if err := e.db.PublishItem(item); err != nil {
 		fmt.Printf("Pub/Sub Error: %v\n", err)
 	}
 
-	fmt.Printf("\nNEW [%d]: %s (%s) [%s]", m.ID, item.Title, item.Price, item.Size)
-
-	if m.DiscordWebhook.Valid && m.DiscordWebhook.String != "" {
-		if m.WebhookActive {
-			go discord.SendWebhook(
-				m.DiscordWebhook.String,
-				item,
-				m.Query,
-			)
-		}
+	ratingStr := ""
+	if item.Rating != "" {
+		ratingStr = " " + item.Rating
 	}
+	fmt.Printf("\nNEW [%d]: %s (%s) [%s] %s%s", m.ID, item.Title, item.Price, item.Size, item.Location, ratingStr)
 
-	return true
+	if m.DiscordWebhook.Valid && m.DiscordWebhook.String != "" && m.WebhookActive {
+		go discord.SendWebhook(m.DiscordWebhook.String, item, m.Query)
+	}
 }

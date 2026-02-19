@@ -56,6 +56,35 @@ func (s *Store) IsNew(itemID int64) bool {
 	return !exists
 }
 
+func (s *Store) BatchIsNew(itemIDs []int64) map[int64]bool {
+	if s.cache != nil {
+		result, err := s.cache.BatchIsNew(itemIDs)
+		if err == nil {
+			return result
+		}
+		fmt.Printf("Redis batch check error: %v, falling back to individual checks\n", err)
+	}
+
+	result := make(map[int64]bool, len(itemIDs))
+	for _, id := range itemIDs {
+		result[id] = s.IsNew(id)
+	}
+	return result
+}
+
+func (s *Store) GetUserRegion(userID int64) (string, bool) {
+	if s.cache != nil {
+		return s.cache.GetUserRegion(userID)
+	}
+	return "", false
+}
+
+func (s *Store) SetUserRegion(userID int64, region string) {
+	if s.cache != nil {
+		s.cache.SetUserRegion(userID, region)
+	}
+}
+
 func (s *Store) SaveItem(item model.Item) error {
 	if item.Size == "" {
 		item.Size = "N/A"
@@ -65,11 +94,9 @@ func (s *Store) SaveItem(item model.Item) error {
 		item.Condition = "N/A"
 	}
 
-	location := model.GetRegion(item.URL)
-
 	_, err := s.db.Exec(`
-		INSERT INTO items (id, monitor_id, title, price, size, condition, url, image_url, location, found_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO items (id, monitor_id, title, price, size, condition, url, image_url, location, rating, found_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (id) DO NOTHING
 	`,
 		item.ID,
@@ -80,7 +107,8 @@ func (s *Store) SaveItem(item model.Item) error {
 		item.Condition,
 		item.URL,
 		item.ImageURL,
-		location,
+		item.Location,
+		item.Rating,
 		time.Now(),
 	)
 

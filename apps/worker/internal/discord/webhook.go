@@ -35,28 +35,7 @@ func SendWebhook(webhookUrl string, item model.Item, monitorQuery string) {
 				"thumbnail": map[string]interface{}{
 					"url": item.ImageURL,
 				},
-				"fields": []map[string]interface{}{
-					{
-						"name":   "Price",
-						"value":  fmt.Sprintf("`%s`", item.Price),
-						"inline": true,
-					},
-					{
-						"name":   "Size",
-						"value":  fmt.Sprintf("**%s**", item.Size),
-						"inline": true,
-					},
-					{
-						"name":   "Condition",
-						"value":  fmt.Sprintf("`%s`", item.Condition),
-						"inline": true,
-					},
-					{
-						"name":   "Time",
-						"value":  fmt.Sprintf("<t:%d:R>", time.Now().Unix()),
-						"inline": true,
-					},
-				},
+				"fields": buildFields(item),
 				"footer": map[string]interface{}{
 					"text":     fmt.Sprintf("Vintrack • Monitor #%d", item.MonitorID),
 					"icon_url": "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
@@ -85,4 +64,45 @@ func SendWebhook(webhookUrl string, item model.Item, monitorQuery string) {
 		}
 		defer resp.Body.Close()
 	}()
+}
+
+func buildFields(item model.Item) []map[string]interface{} {
+	fields := []map[string]interface{}{
+		{
+			"name":   "Region",
+			"value":  fmt.Sprintf("**%s**", item.Location),
+			"inline": true,
+		},
+		{
+			"name":   "Price",
+			"value":  fmt.Sprintf("`%s`", item.Price),
+			"inline": true,
+		},
+		{
+			"name":   "Size",
+			"value":  fmt.Sprintf("**%s**", item.Size),
+			"inline": true,
+		},
+		{
+			"name":   "Condition",
+			"value":  fmt.Sprintf("`%s`", item.Condition),
+			"inline": true,
+		},
+	}
+
+	if item.Rating != "" {
+		fields = append(fields, map[string]interface{}{
+			"name":   "Rating",
+			"value":  fmt.Sprintf("**%s**", item.Rating),
+			"inline": true,
+		})
+	}
+
+	fields = append(fields, map[string]interface{}{
+		"name":   "Time",
+		"value":  fmt.Sprintf("<t:%d:R>", time.Now().Unix()),
+		"inline": true,
+	})
+
+	return fields
 }
