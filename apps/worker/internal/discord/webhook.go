@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"time"
+
 	"vintrack-worker/internal/model"
 )
 
-func SendWebhook(webhookUrl string, item model.Item, monitorQuery string) {
-	if webhookUrl == "" {
+var httpClient = &http.Client{Timeout: 5 * time.Second}
+
+func SendWebhook(webhookURL string, item model.Item, query string) {
+	if webhookURL == "" {
 		return
 	}
 
@@ -20,9 +24,9 @@ func SendWebhook(webhookUrl string, item model.Item, monitorQuery string) {
 		baseURL = "http://localhost:3000"
 	}
 
-	dashboardLink := fmt.Sprintf("%s/monitors/%d", baseURL, item.MonitorID)
+	dashLink := fmt.Sprintf("%s/monitors/%d", baseURL, item.MonitorID)
+	links := fmt.Sprintf("[[🛒 BUY NOW]](%s) • [[📱 APP]](%s) • [[📊 DASHBOARD]](%s)", item.URL, item.URL, dashLink)
 
-	color := 0x007782
 	payload := map[string]interface{}{
 		"username":   "Vintrack Monitor",
 		"avatar_url": "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
@@ -30,13 +34,11 @@ func SendWebhook(webhookUrl string, item model.Item, monitorQuery string) {
 			{
 				"title":       item.Title,
 				"url":         item.URL,
-				"color":       color,
-				"description": fmt.Sprintf("**%s** • \nFound for query: `%s`", item.Price, monitorQuery),
-				"thumbnail": map[string]interface{}{
-					"url": item.ImageURL,
-				},
-				"fields": buildFields(item),
-				"footer": map[string]interface{}{
+				"color":       0x007782,
+				"description": fmt.Sprintf("%s\n\n**%s** • \nFound for query: `%s`", links, item.Price, query),
+				"thumbnail":   map[string]string{"url": item.ImageURL},
+				"fields":      buildFields(item),
+				"footer": map[string]string{
 					"text":     fmt.Sprintf("Vintrack • Monitor #%d", item.MonitorID),
 					"icon_url": "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
 				},
@@ -44,64 +46,37 @@ func SendWebhook(webhookUrl string, item model.Item, monitorQuery string) {
 			},
 		},
 	}
-	links := fmt.Sprintf(
-		"[[🛒 BUY NOW]](%s) • [[📱 APP]](%s) • [[📊 DASHBOARD]](%s)",
-		item.URL,
-		item.URL,
-		dashboardLink,
-	)
 
-	payload["embeds"].([]map[string]interface{})[0]["description"] = links + "\n\n" +
-		payload["embeds"].([]map[string]interface{})[0]["description"].(string)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("webhook marshal error: %v", err)
+		return
+	}
 
-	jsonPayload, _ := json.Marshal(payload)
-	go func() {
-		client := &http.Client{Timeout: 5 * time.Second}
-		resp, err := client.Post(webhookUrl, "application/json", bytes.NewBuffer(jsonPayload))
-		if err != nil {
-			fmt.Printf("Webhook Error: %v\n", err)
-			return
-		}
-		defer resp.Body.Close()
-	}()
+	resp, err := httpClient.Post(webhookURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Printf("webhook error: %v", err)
+		return
+	}
+	resp.Body.Close()
 }
 
 func buildFields(item model.Item) []map[string]interface{} {
 	fields := []map[string]interface{}{
-		{
-			"name":   "Region",
-			"value":  fmt.Sprintf("**%s**", item.Location),
-			"inline": true,
-		},
-		{
-			"name":   "Price",
-			"value":  fmt.Sprintf("`%s`", item.Price),
-			"inline": true,
-		},
-		{
-			"name":   "Size",
-			"value":  fmt.Sprintf("**%s**", item.Size),
-			"inline": true,
-		},
-		{
-			"name":   "Condition",
-			"value":  fmt.Sprintf("`%s`", item.Condition),
-			"inline": true,
-		},
+		{"name": "Region", "value": fmt.Sprintf("**%s**", item.Location), "inline": true},
+		{"name": "Price", "value": fmt.Sprintf("`%s`", item.Price), "inline": true},
+		{"name": "Size", "value": fmt.Sprintf("**%s**", item.Size), "inline": true},
+		{"name": "Condition", "value": fmt.Sprintf("`%s`", item.Condition), "inline": true},
 	}
 
 	if item.Rating != "" {
 		fields = append(fields, map[string]interface{}{
-			"name":   "Rating",
-			"value":  fmt.Sprintf("**%s**", item.Rating),
-			"inline": true,
+			"name": "Rating", "value": fmt.Sprintf("**%s**", item.Rating), "inline": true,
 		})
 	}
 
 	fields = append(fields, map[string]interface{}{
-		"name":   "Time",
-		"value":  fmt.Sprintf("<t:%d:R>", time.Now().Unix()),
-		"inline": true,
+		"name": "Time", "value": fmt.Sprintf("<t:%d:R>", time.Now().Unix()), "inline": true,
 	})
 
 	return fields

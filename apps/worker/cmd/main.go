@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"sync"
@@ -18,53 +18,32 @@ import (
 )
 
 func main() {
-	fmt.Println("Vinted Worker starting...")
+	log.SetFlags(log.Ltime)
+	log.Println("Vintrack Worker starting...")
 	_ = godotenv.Load()
 
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		panic("DATABASE_URL not set")
-	}
+	dbURL := mustEnv("DATABASE_URL")
+	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
+	proxyFile := getEnv("PROXY_FILE", "proxies.txt")
 
-	redisAddr := os.Getenv("REDIS_ADDR")
-	if redisAddr == "" {
-		redisAddr = "localhost:6379"
-	}
-
-	redisPassword := os.Getenv("REDIS_PASSWORD")
-
-	proxyFile := os.Getenv("PROXY_FILE")
-	if proxyFile == "" {
-		proxyFile = "proxies.txt"
-	}
-
-	fmt.Printf("Connecting to Redis (%s)...\n", redisAddr)
-	redisCache, err := cache.NewRedisCache(redisAddr, redisPassword, 0)
+	redisCache, err := cache.NewRedisCache(redisAddr, os.Getenv("REDIS_PASSWORD"), 0)
 	if err != nil {
-		panic(fmt.Sprintf("Redis connection failed: %v", err))
+		log.Fatalf("Redis: %v", err)
 	}
 	defer redisCache.Close()
 
-	if err := redisCache.Ping(); err != nil {
-		panic(fmt.Sprintf("Redis ping failed: %v", err))
-	}
-	fmt.Println("Redis connected")
-
-	fmt.Println("Connecting to PostgreSQL...")
 	store, err := database.NewStore(dbURL, redisCache)
 	if err != nil {
-		panic(fmt.Sprintf("Database connection failed: %v", err))
+		log.Fatalf("PostgreSQL: %v", err)
 	}
 	defer store.Close()
 
-	fmt.Println("Loading proxies...")
 	proxyManager, err := proxy.Load(proxyFile)
 	if err != nil {
-		fmt.Printf("Proxy loading failed: %v (Continuing without proxies)\n", err)
+		log.Printf("Proxies: %v (continuing without)", err)
 		proxyManager = &proxy.Manager{}
 	}
 
-	fmt.Println("Initializing scraper engine...")
 	engine := scraper.NewEngine(store, proxyManager)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -73,61 +52,72 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	runningMonitors := make(map[int]context.CancelFunc)
-	var mu sync.Mutex
+	var (
+		running = make(map[int]context.CancelFunc)
+		mu      sync.Mutex
+	)
 
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	updateMonitors := func() {
-		activeMonitors, err := store.GetActiveMonitors()
+	syncMonitors := func() {
+		monitors, err := store.GetActiveMonitors()
 		if err != nil {
-			fmt.Printf("Error fetching monitors from DB: %v\n", err)
+			log.Printf("Error fetching monitors: %v", err)
 			return
 		}
 
 		mu.Lock()
 		defer mu.Unlock()
 
-		activeIDs := make(map[int]bool)
+		activeIDs := make(map[int]bool, len(monitors))
 
-		for _, m := range activeMonitors {
+		for _, m := range monitors {
 			activeIDs[m.ID] = true
-
-			if _, exists := runningMonitors[m.ID]; !exists {
-				fmt.Printf("Starting Monitor [%d]: %s\n", m.ID, m.Query)
-
-				monitorCtx, monitorCancel := context.WithCancel(ctx)
-				runningMonitors[m.ID] = monitorCancel
-
-				go engine.MonitorTask(monitorCtx, m)
+			if _, exists := running[m.ID]; !exists {
+				mCtx, mCancel := context.WithCancel(ctx)
+				running[m.ID] = mCancel
+				go engine.MonitorTask(mCtx, m)
 			}
 		}
 
-		for id, cancelFunc := range runningMonitors {
+		for id, cancelFn := range running {
 			if !activeIDs[id] {
-				fmt.Printf("Stopping Monitor [%d] (removed or paused)\n", id)
-				cancelFunc()
-				delete(runningMonitors, id)
+				log.Printf("Stopping monitor [%d] (removed/paused)", id)
+				cancelFn()
+				delete(running, id)
 			}
 		}
 	}
 
-	updateMonitors()
+	syncMonitors()
 
-	fmt.Println("Worker running. Waiting for monitors / updates...")
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	log.Println("Worker running. Polling for monitor changes every 5s...")
 
 	for {
 		select {
 		case <-sigChan:
-			fmt.Println("\nShutdown signal received. Stopping all monitors...")
+			log.Println("Shutdown signal received, stopping all monitors...")
 			cancel()
-
-			time.Sleep(1 * time.Second)
+			time.Sleep(time.Second)
 			return
-
 		case <-ticker.C:
-			updateMonitors()
+			syncMonitors()
 		}
 	}
+}
+
+func mustEnv(key string) string {
+	val := os.Getenv(key)
+	if val == "" {
+		log.Fatalf("Required env var %s not set", key)
+	}
+	return val
+}
+
+func getEnv(key, fallback string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	return fallback
 }

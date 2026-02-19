@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// Monitor represents a user-configured search monitor.
 type Monitor struct {
 	ID             int
 	Query          string
@@ -17,6 +18,7 @@ type Monitor struct {
 	CreatedAt      time.Time
 }
 
+// Item represents a found Vinted listing stored in the database.
 type Item struct {
 	ID        int64     `json:"id"`
 	MonitorID int       `json:"monitor_id"`
@@ -30,6 +32,8 @@ type Item struct {
 	Rating    string    `json:"rating,omitempty"`
 	FoundAt   time.Time `json:"found_at"`
 }
+
+// --- Vinted API response types ---
 
 type VintedResponse struct {
 	Items []VintedItem `json:"items"`
@@ -59,19 +63,4 @@ type VintedPrice struct {
 
 type VintedPhoto struct {
 	Url string `json:"url"`
-}
-
-type VintedItemDetail struct {
-	ID   int64                `json:"id"`
-	User VintedItemDetailUser `json:"user"`
-}
-
-type VintedItemDetailUser struct {
-	ID           int64  `json:"id"`
-	City         string `json:"city"`
-	CountryTitle string `json:"country_title"`
-}
-
-func (v VintedItem) GetPriceString() string {
-	return v.Price.Amount + " " + v.Price.Currency
 }

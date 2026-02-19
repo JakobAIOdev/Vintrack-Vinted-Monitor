@@ -1,8 +1,8 @@
 package scraper
 
 import (
-	"fmt"
 	"io"
+	"log"
 	"regexp"
 	"strings"
 	"sync"
@@ -126,24 +126,14 @@ func NewHTMLScraper(pm *proxy.Manager, db *database.Store) *HTMLScraper {
 }
 
 func (s *HTMLScraper) warmUp() {
-	prx := s.pm.Next()
-	client, err := NewClient(prx)
+	client, err := NewClient(s.pm.Next())
 	if err != nil {
-		fmt.Printf("Scraper warmup: client creation failed: %v\n", err)
+		log.Printf("scraper warmup: %v", err)
 		return
 	}
-
-	req, _ := http.NewRequest("GET", "https://www.vinted.de/", nil)
-	req.Header = http.Header{
-		"User-Agent": {"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
-		"Accept":     {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"},
+	if err := client.WarmUp(); err != nil {
+		log.Printf("scraper warmup request: %v", err)
 	}
-
-	resp, err := client.HttpClient.Do(req)
-	if err == nil {
-		resp.Body.Close()
-	}
-
 	s.client = client
 }
 
@@ -224,21 +214,7 @@ func (s *HTMLScraper) fetchHTML(targetURL string) ([]byte, int) {
 			return nil, 0
 		}
 
-		req.Header = http.Header{
-			"authority":                 {"www.vinted.de"},
-			"accept":                    {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"},
-			"accept-language":           {"de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"},
-			"cache-control":             {"max-age=0"},
-			"sec-ch-ua":                 {`"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`},
-			"sec-ch-ua-mobile":          {"?0"},
-			"sec-ch-ua-platform":        {`"macOS"`},
-			"sec-fetch-dest":            {"document"},
-			"sec-fetch-mode":            {"navigate"},
-			"sec-fetch-site":            {"same-origin"},
-			"sec-fetch-user":            {"?1"},
-			"upgrade-insecure-requests": {"1"},
-			"user-agent":                {"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
-		}
+		req.Header = browserHeaders
 
 		resp, err := s.client.HttpClient.Do(req)
 		if err != nil {

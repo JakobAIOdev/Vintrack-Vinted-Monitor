@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
 	"vintrack-worker/internal/database"
 	"vintrack-worker/internal/discord"
 	"vintrack-worker/internal/model"
@@ -26,54 +28,39 @@ func NewEngine(db *database.Store, pm *proxy.Manager) *Engine {
 	return &Engine{db: db, proxy: pm}
 }
 
-func (e *Engine) createWarmClient(monitorID int) (*Client, error) {
-	currentProxy := e.proxy.Next()
-	client, err := NewClient(currentProxy)
+func (e *Engine) newWarmClient(monitorID int) (*Client, error) {
+	client, err := NewClient(e.proxy.Next())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("client creation failed: %w", err)
 	}
 
-	req, _ := http.NewRequest("GET", "https://www.vinted.de/", nil)
-	req.Header = http.Header{
-		"User-Agent": {"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
-		"Accept":     {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"},
-	}
-
-	resp, err := client.HttpClient.Do(req)
-	if err == nil {
-		resp.Body.Close()
-	} else {
-		fmt.Printf("WARNING: [%d] Warmup Warning: %v\n", monitorID, err)
+	if err := client.WarmUp(); err != nil {
+		log.Printf("[%d] warmup warning: %v", monitorID, err)
 	}
 
 	return client, nil
 }
 
 func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
-	client, err := e.createWarmClient(m.ID)
+	client, err := e.newWarmClient(m.ID)
 	if err != nil {
-		fmt.Printf("ERROR: [%d] Init Error: %v\n", m.ID, err)
+		log.Printf("[%d] init error: %v", m.ID, err)
 		return
 	}
 
 	scraper := NewHTMLScraper(e.proxy, e.db)
-
 	apiURL := BuildVintedURL(m)
-	fmt.Printf("Starting Monitor [%d]: %s\n URL: %s\n", m.ID, m.Query, apiURL)
 
+	interval := getEnvInt("CHECK_INTERVAL_MS", 1500)
 	consecutiveErrors := 0
 	checks := 0
 
-	intervalStr := os.Getenv("CHECK_INTERVAL_MS")
-	interval := 1500
-	if val, err := strconv.Atoi(intervalStr); err == nil {
-		interval = val
-	}
+	log.Printf("[%d] started | query=%q | url=%s", m.ID, m.Query, apiURL)
 
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("\nMonitor [%d] stopped gracefully.\n", m.ID)
+			log.Printf("[%d] stopped gracefully", m.ID)
 			return
 		default:
 		}
@@ -81,36 +68,22 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		checks++
 
 		if checks%10 == 0 {
-			updatedMonitor, err := e.db.GetMonitorByID(m.ID)
-			if err == nil {
-				m.DiscordWebhook = updatedMonitor.DiscordWebhook
-				m.WebhookActive = updatedMonitor.WebhookActive
-				m.Status = updatedMonitor.Status
+			if updated, err := e.db.GetMonitorByID(m.ID); err == nil {
+				m.DiscordWebhook = updated.DiscordWebhook
+				m.WebhookActive = updated.WebhookActive
+				m.Status = updated.Status
 				if m.Status != "active" {
-					fmt.Printf("Monitor [%d] paused via Dashboard.\n", m.ID)
+					log.Printf("[%d] paused via dashboard", m.ID)
 					return
 				}
 			}
 		}
 
-		req, err := http.NewRequest("GET", apiURL, nil)
-		if err != nil {
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
-		req.Header = http.Header{
-			"User-Agent":       {"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
-			"Accept":           {"application/json, text/plain, */*"},
-			"X-Requested-With": {"XMLHttpRequest"},
-			"Referer":          {"https://www.vinted.de/"},
-		}
-
-		resp, err := client.HttpClient.Do(req)
+		items, err := e.fetchCatalog(client, apiURL)
 		if err != nil {
 			consecutiveErrors++
 			if consecutiveErrors > 2 {
-				if newClient, err := e.createWarmClient(m.ID); err == nil {
+				if newClient, err := e.newWarmClient(m.ID); err == nil {
 					client = newClient
 					consecutiveErrors = 0
 				}
@@ -119,46 +92,31 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			continue
 		}
 
-		if resp.StatusCode == 401 || resp.StatusCode == 403 {
-			resp.Body.Close()
-			if newClient, err := e.createWarmClient(m.ID); err == nil {
+		if items == nil { // 401/403 — re-warm
+			if newClient, err := e.newWarmClient(m.ID); err == nil {
 				client = newClient
 			}
 			time.Sleep(5 * time.Second)
 			continue
 		}
 
-		if resp.StatusCode != 200 {
-			resp.Body.Close()
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
 		consecutiveErrors = 0
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
 
-		var data model.VintedResponse
-		if err := json.Unmarshal(body, &data); err != nil {
-			time.Sleep(2 * time.Second)
-			continue
+		ids := make([]int64, len(items))
+		for i, item := range items {
+			ids[i] = item.ID
 		}
 
-		itemIDs := make([]int64, len(data.Items))
-		for i, item := range data.Items {
-			itemIDs[i] = item.ID
-		}
-
-		newMap := e.db.BatchIsNew(itemIDs)
+		newMap := e.db.BatchIsNew(ids)
 
 		var newItems []model.VintedItem
-		for _, item := range data.Items {
+		for _, item := range items {
 			if newMap[item.ID] {
 				newItems = append(newItems, item)
 			}
 		}
 
-		fmt.Printf("\r[%d] Check #%d | Items: %d | New: %d", m.ID, checks, len(data.Items), len(newItems))
+		fmt.Printf("\r[%d] #%d | %d items | %d new", m.ID, checks, len(items), len(newItems))
 
 		if len(newItems) == 0 {
 			time.Sleep(time.Duration(interval) * time.Millisecond)
@@ -174,14 +132,41 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	}
 }
 
-func (e *Engine) processNewItem(m model.Monitor, vItem model.VintedItem, scraper *HTMLScraper) {
-	size := vItem.SizeTitle
-	if size == "" {
-		size = vItem.Size
+func (e *Engine) fetchCatalog(client *Client, apiURL string) ([]model.VintedItem, error) {
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = apiHeaders
+
+	resp, err := client.HttpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		return nil, nil // signal to re-warm
 	}
 
-	condition := vItem.Condition
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("catalog returned %d", resp.StatusCode)
+	}
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var data model.VintedResponse
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, fmt.Errorf("json decode: %w", err)
+	}
+
+	return data.Items, nil
+}
+
+func (e *Engine) processNewItem(m model.Monitor, vItem model.VintedItem, scraper *HTMLScraper) {
 	itemURL := vItem.Url
 	if !strings.HasPrefix(itemURL, "http") {
 		itemURL = "https://www.vinted.de" + itemURL
@@ -189,13 +174,18 @@ func (e *Engine) processNewItem(m model.Monitor, vItem model.VintedItem, scraper
 
 	sellerInfo := scraper.FetchSellerInfo(itemURL, vItem.User.ID)
 
+	size := vItem.SizeTitle
+	if size == "" {
+		size = vItem.Size
+	}
+
 	item := model.Item{
 		ID:        vItem.ID,
 		MonitorID: m.ID,
 		Title:     vItem.Title,
 		Price:     vItem.Price.Amount + " " + vItem.Price.Currency,
 		Size:      size,
-		Condition: condition,
+		Condition: vItem.Condition,
 		URL:       itemURL,
 		ImageURL:  vItem.Photo.Url,
 		Location:  sellerInfo.Region,
@@ -203,21 +193,28 @@ func (e *Engine) processNewItem(m model.Monitor, vItem model.VintedItem, scraper
 	}
 
 	if err := e.db.SaveItem(item); err != nil {
-		fmt.Printf("ERROR saving item %d: %v\n", item.ID, err)
+		log.Printf("[%d] save error for item %d: %v", m.ID, item.ID, err)
 		return
 	}
 
 	if err := e.db.PublishItem(item); err != nil {
-		fmt.Printf("Pub/Sub Error: %v\n", err)
+		log.Printf("[%d] publish error: %v", m.ID, err)
 	}
 
 	ratingStr := ""
 	if item.Rating != "" {
 		ratingStr = " " + item.Rating
 	}
-	fmt.Printf("\nNEW [%d]: %s (%s) [%s] %s%s", m.ID, item.Title, item.Price, item.Size, item.Location, ratingStr)
+	fmt.Printf("\n  NEW [%d]: %s (%s) [%s] %s%s", m.ID, item.Title, item.Price, item.Size, item.Location, ratingStr)
 
 	if m.DiscordWebhook.Valid && m.DiscordWebhook.String != "" && m.WebhookActive {
 		go discord.SendWebhook(m.DiscordWebhook.String, item, m.Query)
 	}
+}
+
+func getEnvInt(key string, fallback int) int {
+	if val, err := strconv.Atoi(os.Getenv(key)); err == nil {
+		return val
+	}
+	return fallback
 }
