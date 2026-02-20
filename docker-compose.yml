@@ -55,10 +55,10 @@ services:
     build:
       context: ./apps/control-center
       dockerfile: Dockerfile
+      target: migrate
     container_name: vintrack_migrate
     environment:
       - DATABASE_URL=postgresql://vinuser:vinpassword@postgres:5432/vintrack
-    command: npx prisma migrate deploy
     depends_on:
       postgres:
         condition: service_healthy
