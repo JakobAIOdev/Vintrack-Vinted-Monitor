@@ -15,8 +15,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NODE_OPTIONS="--max-old-space-size=1536"
+ENV NEXT_DISABLE_TURBOPACK=1
 RUN npx prisma generate
-RUN npx next build --no-turbopack
+RUN npm run build
 
 # --- Migrate ---
 FROM node:20-slim AS migrate
