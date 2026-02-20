@@ -183,12 +183,6 @@ func (s *HTMLScraper) scrapeWithRetry(itemURL string) SellerInfo {
 		}
 	}
 
-	s.warmUp()
-	info, _ = s.doScrape(itemURL)
-	if info.Region != "" {
-		return info
-	}
-
 	return SellerInfo{Region: "NaN"}
 }
 
@@ -214,7 +208,7 @@ func (s *HTMLScraper) fetchHTML(targetURL string) ([]byte, int) {
 			return nil, 0
 		}
 
-		req.Header = browserHeaders
+		req.Header = newPageHeaders()
 
 		resp, err := s.client.HttpClient.Do(req)
 		if err != nil {

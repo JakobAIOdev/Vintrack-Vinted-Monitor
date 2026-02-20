@@ -20,12 +20,15 @@ import (
 )
 
 type Engine struct {
-	db    *database.Store
-	proxy *proxy.Manager
+	db           *database.Store
+	proxy        *proxy.Manager
+	enrichSeller bool
 }
 
 func NewEngine(db *database.Store, pm *proxy.Manager) *Engine {
-	return &Engine{db: db, proxy: pm}
+	enrich := os.Getenv("ENRICH_SELLER_INFO") != "false"
+	log.Printf("Seller enrichment (region/rating): %v", enrich)
+	return &Engine{db: db, proxy: pm, enrichSeller: enrich}
 }
 
 func (e *Engine) newWarmClient(monitorID int) (*Client, error) {
@@ -48,12 +51,17 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		return
 	}
 
-	scraper := NewHTMLScraper(e.proxy, e.db)
+	var scraper *HTMLScraper
+	if e.enrichSeller {
+		scraper = NewHTMLScraper(e.proxy, e.db)
+	}
+
 	apiURL := BuildVintedURL(m)
 
 	interval := getEnvInt("CHECK_INTERVAL_MS", 1500)
 	consecutiveErrors := 0
 	checks := 0
+	firstRun := true
 
 	log.Printf("[%d] started | query=%q | url=%s", m.ID, m.Query, apiURL)
 
@@ -79,23 +87,36 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			}
 		}
 
-		items, err := e.fetchCatalog(client, apiURL)
+		items, status, err := e.fetchCatalog(client, apiURL)
+
 		if err != nil {
 			consecutiveErrors++
+			log.Printf("[%d] #%d network error (%d consecutive): %v", m.ID, checks, consecutiveErrors, err)
 			if consecutiveErrors > 2 {
 				if newClient, err := e.newWarmClient(m.ID); err == nil {
 					client = newClient
 					consecutiveErrors = 0
+				} else {
+					log.Printf("[%d] client rotation failed: %v", m.ID, err)
 				}
 			}
 			time.Sleep(2 * time.Second)
 			continue
 		}
 
-		if items == nil { // 401/403 — re-warm
+		if status == 401 || status == 403 {
+			log.Printf("[%d] #%d got %d, re-warming...", m.ID, checks, status)
 			if newClient, err := e.newWarmClient(m.ID); err == nil {
 				client = newClient
+			} else {
+				log.Printf("[%d] re-warm failed: %v", m.ID, err)
 			}
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		if status != 200 {
+			log.Printf("[%d] #%d catalog returned %d, waiting...", m.ID, checks, status)
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -123,60 +144,70 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			continue
 		}
 
+		skipEnrich := firstRun && len(newItems) > 5
+		if skipEnrich {
+			log.Printf("[%d] bulk import: %d items, skipping seller enrichment", m.ID, len(newItems))
+		}
+
 		for _, vItem := range newItems {
-			e.processNewItem(m, vItem, scraper)
+			e.processNewItem(m, vItem, scraper, skipEnrich)
 		}
 		fmt.Println()
 
-		time.Sleep(300 * time.Millisecond)
+		firstRun = false
+		time.Sleep(time.Duration(interval) * time.Millisecond)
 	}
 }
 
-func (e *Engine) fetchCatalog(client *Client, apiURL string) ([]model.VintedItem, error) {
+func (e *Engine) fetchCatalog(client *Client, apiURL string) ([]model.VintedItem, int, error) {
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	req.Header = apiHeaders
+	req.Header = newAPIHeaders()
 
 	resp, err := client.HttpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return nil, nil // signal to re-warm
-	}
-
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("catalog returned %d", resp.StatusCode)
+		return nil, resp.StatusCode, nil
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var data model.VintedResponse
 	if err := json.Unmarshal(body, &data); err != nil {
-		return nil, fmt.Errorf("json decode: %w", err)
+		return nil, 0, fmt.Errorf("json decode: %w", err)
 	}
 
-	return data.Items, nil
+	return data.Items, 200, nil
 }
 
-func (e *Engine) processNewItem(m model.Monitor, vItem model.VintedItem, scraper *HTMLScraper) {
+func (e *Engine) processNewItem(m model.Monitor, vItem model.VintedItem, scraper *HTMLScraper, skipEnrich bool) {
 	itemURL := vItem.Url
 	if !strings.HasPrefix(itemURL, "http") {
 		itemURL = "https://www.vinted.de" + itemURL
 	}
 
-	sellerInfo := scraper.FetchSellerInfo(itemURL, vItem.User.ID)
-
 	size := vItem.SizeTitle
 	if size == "" {
 		size = vItem.Size
+	}
+
+	var region, rating string
+
+	if e.enrichSeller && !skipEnrich && scraper != nil {
+		sellerInfo := scraper.FetchSellerInfo(itemURL, vItem.User.ID)
+		if sellerInfo.Region != "" && sellerInfo.Region != "NaN" {
+			region = sellerInfo.Region
+			rating = sellerInfo.Rating
+		}
 	}
 
 	item := model.Item{
@@ -188,8 +219,9 @@ func (e *Engine) processNewItem(m model.Monitor, vItem model.VintedItem, scraper
 		Condition: vItem.Condition,
 		URL:       itemURL,
 		ImageURL:  vItem.Photo.Url,
-		Location:  sellerInfo.Region,
-		Rating:    sellerInfo.Rating,
+		Location:  region,
+		Rating:    rating,
+		FoundAt:   time.Now(),
 	}
 
 	if err := e.db.SaveItem(item); err != nil {

@@ -88,7 +88,7 @@ func (s *Store) SaveItem(item model.Item) error {
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (id) DO NOTHING`,
 		item.ID, item.MonitorID, item.Title, item.Price, item.Size, item.Condition,
-		item.URL, item.ImageURL, item.Location, item.Rating, time.Now(),
+		item.URL, item.ImageURL, item.Location, item.Rating, item.FoundAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert item %d: %w", item.ID, err)
@@ -108,6 +108,14 @@ func (s *Store) PublishItem(item model.Item) error {
 		return s.cache.PublishNewItem(item)
 	}
 	return nil
+}
+
+func (s *Store) UpdateItemSellerInfo(itemID int64, location, rating string) error {
+	_, err := s.db.Exec(
+		`UPDATE items SET location = $1, rating = $2 WHERE id = $3`,
+		location, rating, itemID,
+	)
+	return err
 }
 
 func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {
