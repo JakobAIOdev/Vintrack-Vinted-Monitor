@@ -20,7 +20,9 @@ RUN npm run build
 # --- Migrate ---
 FROM node:20-slim AS migrate
 WORKDIR /app
-# Prisma works natively on Debian-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssl \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
