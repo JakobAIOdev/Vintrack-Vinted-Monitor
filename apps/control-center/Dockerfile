@@ -39,6 +39,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssl \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system --gid=1001 nodejs
 RUN useradd --system --uid=1001 --gid nodejs nextjs
 
