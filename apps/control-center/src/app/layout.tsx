@@ -6,7 +6,7 @@ import { Toaster } from "@/components/ui/sonner";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Vintrack Pro",
+  title: "Vintrack",
   description: "High-Performance Vinted Monitoring",
 };
 
@@ -17,7 +17,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${inter.className} bg-slate-50 text-slate-900 min-h-screen`}>
+      <body
+        className={`${inter.className} antialiased bg-white text-slate-900 min-h-screen`}
+      >
         {children}
         <Toaster position="top-right" richColors theme="light" />
       </body>

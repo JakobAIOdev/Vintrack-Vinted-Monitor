@@ -35,7 +35,7 @@ export async function createMonitor(formData: FormData) {
 }
 
 export async function toggleMonitorStatus(id: number, currentStatus: string) {
-  const newStatus = currentStatus === "active" ? "stopped" : "active";
+  const newStatus = currentStatus === "active" ? "paused" : "active";
   
   await db.monitors.update({
     where: { id },
