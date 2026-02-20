@@ -31,6 +31,39 @@ services:
       timeout: 3s
       retries: 5
 
+  control-center:
+    build:
+      context: ./apps/control-center
+      dockerfile: Dockerfile
+    container_name: vintrack_control_center
+    environment:
+      - DATABASE_URL=postgresql://vinuser:vinpassword@postgres:5432/vintrack
+      - AUTH_SECRET=${AUTH_SECRET}
+      - AUTH_DISCORD_ID=${AUTH_DISCORD_ID}
+      - AUTH_DISCORD_SECRET=${AUTH_DISCORD_SECRET}
+      - AUTH_TRUST_HOST=true
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      control-center-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  control-center-migrate:
+    build:
+      context: ./apps/control-center
+      dockerfile: Dockerfile
+    container_name: vintrack_migrate
+    environment:
+      - DATABASE_URL=postgresql://vinuser:vinpassword@postgres:5432/vintrack
+    command: npx prisma migrate deploy
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   worker:
     build:
       context: ./apps/worker
@@ -49,6 +82,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      control-center-migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:
