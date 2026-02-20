@@ -5,28 +5,17 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ArrowLeft, Check, Plus } from "lucide-react";
+import { CategoryPicker } from "@/components/monitors/category-picker";
+import { BrandPicker } from "@/components/monitors/brand-picker";
+import { SizePicker } from "@/components/monitors/size-picker";
+import { ArrowLeft, Plus } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import { cn } from "@/lib/utils";
-
-const SIZES = [
-  { label: "XS", id: "206" },
-  { label: "S", id: "207" },
-  { label: "M", id: "208" },
-  { label: "L", id: "209" },
-  { label: "XL", id: "210" },
-  { label: "XXL", id: "211" },
-];
 
 export default function NewMonitorPage() {
   const [selectedSizes, setSelectedSizes] = useState<string[]>([]);
-
-  const toggleSize = (id: string) => {
-    setSelectedSizes((prev) =>
-      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
-    );
-  };
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [selectedBrands, setSelectedBrands] = useState<string[]>([]);
 
   return (
     <div className="max-w-xl mx-auto py-8 px-6 space-y-6">
@@ -59,6 +48,27 @@ export default function NewMonitorPage() {
               />
               <p className="text-[12px] text-muted-foreground">
                 This text will be searched on Vinted exactly as entered.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-[13px]">
+                Category Filter{" "}
+                <span className="text-muted-foreground font-normal">
+                  (optional)
+                </span>
+              </Label>
+              <CategoryPicker
+                selected={selectedCategories}
+                onChange={setSelectedCategories}
+              />
+              <input
+                type="hidden"
+                name="catalog_ids"
+                value={selectedCategories.join(",")}
+              />
+              <p className="text-[12px] text-muted-foreground">
+                Limit results to specific Vinted categories.
               </p>
             </div>
 
@@ -97,37 +107,42 @@ export default function NewMonitorPage() {
               </div>
             </div>
 
-            <div className="space-y-2.5">
-              <Label className="text-[13px]">Size Filter</Label>
-              <div className="flex flex-wrap gap-2">
-                {SIZES.map((size) => {
-                  const isSelected = selectedSizes.includes(size.id);
-                  return (
-                    <button
-                      key={size.id}
-                      type="button"
-                      onClick={() => toggleSize(size.id)}
-                      className={cn(
-                        "h-8 px-3.5 rounded-lg text-[13px] font-medium border transition-colors flex items-center gap-1.5",
-                        isSelected
-                          ? "bg-slate-900 text-white border-slate-900"
-                          : "bg-white hover:bg-slate-50 border-slate-200 text-slate-600"
-                      )}
-                    >
-                      {size.label}
-                      {isSelected && <Check className="w-3 h-3" />}
-                    </button>
-                  );
-                })}
-              </div>
+            <div className="space-y-2">
+              <Label className="text-[13px]">
+                Brand Filter{" "}
+                <span className="text-muted-foreground font-normal">
+                  (optional)
+                </span>
+              </Label>
+              <BrandPicker
+                selected={selectedBrands}
+                onChange={setSelectedBrands}
+              />
+              <input
+                type="hidden"
+                name="brand_ids"
+                value={selectedBrands.join(",")}
+              />
+              <p className="text-[12px] text-muted-foreground">
+                Limit results to specific brands.
+              </p>
+            </div>
 
-              <Input
+            <div className="space-y-2.5">
+              <Label className="text-[13px]">
+                Size Filter{" "}
+                <span className="text-muted-foreground font-normal">
+                  (optional)
+                </span>
+              </Label>
+              <SizePicker
+                selected={selectedSizes}
+                onChange={setSelectedSizes}
+              />
+              <input
+                type="hidden"
                 name="size_id"
-                id="size_id"
                 value={selectedSizes.join(",")}
-                onChange={(e) => setSelectedSizes(e.target.value.split(","))}
-                placeholder="Or enter custom size IDs (comma separated)"
-                className="text-[13px] font-mono placeholder:font-sans"
               />
             </div>
 

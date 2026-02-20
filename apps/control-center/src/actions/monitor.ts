@@ -16,6 +16,8 @@ export async function createMonitor(formData: FormData) {
   const priceMin = formData.get("price_min") ? Number(formData.get("price_min")) : null;
   const priceMax = formData.get("price_max") ? Number(formData.get("price_max")) : null;
   const sizeId = formData.get("size_id") as string;
+  const catalogIds = (formData.get("catalog_ids") as string) || null;
+  const brandIds = (formData.get("brand_ids") as string) || null;
 
   if (!query) return;
 
@@ -26,6 +28,8 @@ export async function createMonitor(formData: FormData) {
       price_min: priceMin,
       price_max: priceMax,
       size_id: sizeId,
+      catalog_ids: catalogIds || null,
+      brand_ids: brandIds || null,
       status: "active",
     },
   });

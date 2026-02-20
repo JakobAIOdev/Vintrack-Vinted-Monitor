@@ -34,12 +34,18 @@ import {
   updateMonitorWebhook,
   toggleWebhookStatus,
 } from "@/actions/dashboard-actions";
+import { getCategoryLabels } from "@/lib/categories";
+import { getBrandLabels } from "@/lib/brands";
+import { getSizeLabels } from "@/lib/sizes";
 
 export type Monitor = {
   id: number;
   query: string;
   status: string;
   price_max: number | null;
+  catalog_ids: string | null;
+  brand_ids: string | null;
+  size_id: string | null;
   discord_webhook: string | null;
   webhook_active: boolean;
   _count: { items: number };
@@ -215,10 +221,10 @@ export function DashboardClient({
           {sortedMonitors.map((m) => (
             <Card
               key={m.id}
-              className="group bg-white border-slate-200/60 hover:border-slate-300 transition-colors overflow-hidden"
+              className="group bg-white border-slate-200/60 hover:border-slate-300 transition-colors overflow-hidden flex flex-col"
             >
-              <CardContent className="p-5">
-                <div className="flex items-start justify-between gap-3 mb-4">
+              <CardContent className="p-5 flex flex-col flex-1">
+                <div className="flex items-start justify-between gap-3 mb-3">
                   <div className="min-w-0 flex-1">
                     <h3
                       className="font-semibold text-[15px] text-slate-900 truncate"
@@ -267,6 +273,40 @@ export function DashboardClient({
                     />
                   </button>
                 </div>
+
+                {(m.catalog_ids || m.brand_ids || m.size_id) && (
+                  <div className="flex flex-wrap gap-1 mb-3">
+                    {m.catalog_ids &&
+                      getCategoryLabels(m.catalog_ids).map((label) => (
+                        <span
+                          key={`cat-${label}`}
+                          className="inline-flex items-center rounded-md bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 border border-violet-200"
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    {m.brand_ids &&
+                      getBrandLabels(m.brand_ids).map((label) => (
+                        <span
+                          key={`brand-${label}`}
+                          className="inline-flex items-center rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 border border-blue-200"
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    {m.size_id &&
+                      getSizeLabels(m.size_id).map((label) => (
+                        <span
+                          key={`size-${label}`}
+                          className="inline-flex items-center rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200"
+                        >
+                          {label}
+                        </span>
+                      ))}
+                  </div>
+                )}
+
+                <div className="flex-1" />
 
                 <div className="flex items-center gap-1.5 text-[13px] text-slate-500 mb-4">
                   <Package className="w-3.5 h-3.5 text-slate-400" />

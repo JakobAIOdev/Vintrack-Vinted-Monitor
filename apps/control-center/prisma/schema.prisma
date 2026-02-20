@@ -65,6 +65,8 @@ model monitors {
   price_min  Int?
   price_max  Int?
   size_id    String?   @db.VarChar(50)
+  catalog_ids String?  @db.VarChar(500)
+  brand_ids  String?   @db.VarChar(500)
   status     String?   @default("active") @db.VarChar(50)
   created_at DateTime? @default(now()) @db.Timestamp(6)
   items      items[]

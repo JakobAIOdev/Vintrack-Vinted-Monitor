@@ -6,6 +6,9 @@ import { toggleMonitorStatus, deleteMonitor } from "@/actions/monitor";
 import { ArrowLeft, PauseCircle, PlayCircle, Trash2, Tag } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
+import { getCategoryLabels } from "@/lib/categories";
+import { getBrandLabels } from "@/lib/brands";
+import { getSizeLabels } from "@/lib/sizes";
 
 export default async function MonitorPage({
   params,
@@ -81,6 +84,45 @@ export default async function MonitorPage({
               <span className="text-slate-300">·</span>
               <span>{monitor._count.items.toLocaleString()} items</span>
             </div>
+
+            {monitor.catalog_ids && (
+              <div className="flex flex-wrap gap-1 mt-2">
+                {getCategoryLabels(monitor.catalog_ids).map((label) => (
+                  <span
+                    key={label}
+                    className="inline-flex items-center rounded-md bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 border border-violet-200"
+                  >
+                    {label}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {monitor.brand_ids && (
+              <div className="flex flex-wrap gap-1 mt-2">
+                {getBrandLabels(monitor.brand_ids).map((label) => (
+                  <span
+                    key={label}
+                    className="inline-flex items-center rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 border border-blue-200"
+                  >
+                    {label}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {monitor.size_id && (
+              <div className="flex flex-wrap gap-1 mt-2">
+                {getSizeLabels(monitor.size_id).map((label) => (
+                  <span
+                    key={label}
+                    className="inline-flex items-center rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200"
+                  >
+                    {label}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 

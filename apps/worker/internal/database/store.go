@@ -120,7 +120,7 @@ func (s *Store) UpdateItemSellerInfo(itemID int64, location, rating string) erro
 
 func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {
 	rows, err := s.db.Query(`
-		SELECT id, query, price_min, price_max, size_id, status, discord_webhook, webhook_active
+		SELECT id, query, price_min, price_max, size_id, catalog_ids, brand_ids, status, discord_webhook, webhook_active
 		FROM monitors WHERE status = 'active'`)
 	if err != nil {
 		return nil, err
@@ -130,7 +130,7 @@ func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {
 	var monitors []model.Monitor
 	for rows.Next() {
 		var m model.Monitor
-		if err := rows.Scan(&m.ID, &m.Query, &m.PriceMin, &m.PriceMax, &m.SizeID, &m.Status, &m.DiscordWebhook, &m.WebhookActive); err != nil {
+		if err := rows.Scan(&m.ID, &m.Query, &m.PriceMin, &m.PriceMax, &m.SizeID, &m.CatalogIDs, &m.BrandIDs, &m.Status, &m.DiscordWebhook, &m.WebhookActive); err != nil {
 			return nil, err
 		}
 		monitors = append(monitors, m)
@@ -141,9 +141,9 @@ func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {
 func (s *Store) GetMonitorByID(id int) (model.Monitor, error) {
 	var m model.Monitor
 	err := s.db.QueryRow(`
-		SELECT id, query, price_min, price_max, size_id, status, discord_webhook, webhook_active
+		SELECT id, query, price_min, price_max, size_id, catalog_ids, brand_ids, status, discord_webhook, webhook_active
 		FROM monitors WHERE id = $1`, id,
-	).Scan(&m.ID, &m.Query, &m.PriceMin, &m.PriceMax, &m.SizeID, &m.Status, &m.DiscordWebhook, &m.WebhookActive)
+	).Scan(&m.ID, &m.Query, &m.PriceMin, &m.PriceMax, &m.SizeID, &m.CatalogIDs, &m.BrandIDs, &m.Status, &m.DiscordWebhook, &m.WebhookActive)
 	if err != nil {
 		return model.Monitor{}, err
 	}

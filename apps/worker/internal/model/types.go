@@ -12,6 +12,8 @@ type Monitor struct {
 	PriceMin       *int
 	PriceMax       *int
 	SizeID         *string
+	CatalogIDs     *string
+	BrandIDs       *string
 	Status         string
 	DiscordWebhook sql.NullString
 	WebhookActive  bool

@@ -32,5 +32,25 @@ func BuildVintedURL(m model.Monitor) string {
 		}
 	}
 
+	if m.CatalogIDs != nil && *m.CatalogIDs != "" {
+		cats := strings.Split(*m.CatalogIDs, ",")
+		for _, c := range cats {
+			c = strings.TrimSpace(c)
+			if c != "" {
+				params.Add("catalog_ids[]", c)
+			}
+		}
+	}
+
+	if m.BrandIDs != nil && *m.BrandIDs != "" {
+		brands := strings.Split(*m.BrandIDs, ",")
+		for _, b := range brands {
+			b = strings.TrimSpace(b)
+			if b != "" {
+				params.Add("brand_ids[]", b)
+			}
+		}
+	}
+
 	return fmt.Sprintf("%s?%s", baseURL, params.Encode())
 }
