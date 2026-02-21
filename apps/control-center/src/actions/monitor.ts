@@ -39,10 +39,13 @@ export async function createMonitor(formData: FormData) {
 }
 
 export async function toggleMonitorStatus(id: number, currentStatus: string) {
+  const session = await auth();
+  if (!session?.user?.id) throw new Error("Unauthorized");
+
   const newStatus = currentStatus === "active" ? "paused" : "active";
   
   await db.monitors.update({
-    where: { id },
+    where: { id, userId: session.user.id },
     data: { status: newStatus },
   });
 
