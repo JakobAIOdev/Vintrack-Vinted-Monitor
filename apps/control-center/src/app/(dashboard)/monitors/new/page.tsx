@@ -10,12 +10,33 @@ import { BrandPicker } from "@/components/monitors/brand-picker";
 import { SizePicker } from "@/components/monitors/size-picker";
 import { ArrowLeft, Plus } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+
+type ProxyGroupOption = {
+  id: number;
+  name: string;
+  proxyCount: number;
+};
 
 export default function NewMonitorPage() {
   const [selectedSizes, setSelectedSizes] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedBrands, setSelectedBrands] = useState<string[]>([]);
+  const [proxyGroups, setProxyGroups] = useState<ProxyGroupOption[]>([]);
+  const [userRole, setUserRole] = useState<string>("free");
+  const [selectedProxyGroup, setSelectedProxyGroup] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/proxy-groups")
+      .then((res) => res.json())
+      .then((data) => {
+        setProxyGroups(data.groups || []);
+        setUserRole(data.role || "free");
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
 
   return (
     <div className="max-w-xl mx-auto py-8 px-6 space-y-6">
@@ -160,8 +181,62 @@ export default function NewMonitorPage() {
               />
             </div>
 
+            <div className="space-y-2">
+              <Label className="text-[13px]">Proxy Group</Label>
+              {loading ? (
+                <div className="h-10 bg-slate-50 rounded-md animate-pulse" />
+              ) : (
+                <>
+                  <select
+                    name="proxy_group_id"
+                    value={selectedProxyGroup}
+                    onChange={(e) => setSelectedProxyGroup(e.target.value)}
+                    className="w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-[13px] text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-1"
+                    required={userRole === "free"}
+                  >
+                    {userRole === "premium" && (
+                      <option value="server">⚡ Server Proxies (Premium)</option>
+                    )}
+                    {proxyGroups.length === 0 && userRole === "free" && (
+                      <option value="" disabled>
+                        No proxy groups — create one first
+                      </option>
+                    )}
+                    {proxyGroups.map((g) => (
+                      <option key={g.id} value={g.id.toString()}>
+                        {g.name} ({g.proxyCount} proxies)
+                      </option>
+                    ))}
+                  </select>
+                  {userRole === "free" && proxyGroups.length === 0 && (
+                    <p className="text-[12px] text-amber-600">
+                      You need to{" "}
+                      <Link href="/proxies" className="underline font-medium">
+                        create a proxy group
+                      </Link>{" "}
+                      before creating a monitor.
+                    </p>
+                  )}
+                  {userRole === "free" && (
+                    <p className="text-[12px] text-muted-foreground">
+                      Select your proxy group to use for scraping.
+                    </p>
+                  )}
+                  {userRole === "premium" && (
+                    <p className="text-[12px] text-muted-foreground">
+                      Use server proxies or select your own group.
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+
             <div className="pt-2">
-              <Button type="submit" className="w-full gap-1.5">
+              <Button
+                type="submit"
+                className="w-full gap-1.5"
+                disabled={userRole === "free" && proxyGroups.length === 0}
+              >
                 <Plus className="w-4 h-4" /> Create Monitor
               </Button>
             </div>

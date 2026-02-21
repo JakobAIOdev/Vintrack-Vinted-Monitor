@@ -13,6 +13,8 @@ import {
   Package,
   ArrowRight,
   MoreHorizontal,
+  Globe,
+  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -48,6 +50,7 @@ export type Monitor = {
   size_id: string | null;
   discord_webhook: string | null;
   webhook_active: boolean;
+  proxy_group_name: string | null;
   _count: { items: number };
   created_at: string;
 };
@@ -308,12 +311,30 @@ export function DashboardClient({
 
                 <div className="flex-1" />
 
-                <div className="flex items-center gap-1.5 text-[13px] text-slate-500 mb-4">
+                <div className="flex items-center gap-1.5 text-[13px] text-slate-500 mb-1.5">
                   <Package className="w-3.5 h-3.5 text-slate-400" />
                   <span className="font-medium text-slate-700">
                     {m._count.items.toLocaleString()}
                   </span>
                   items found
+                </div>
+
+                <div className="flex items-center gap-1.5 text-[13px] text-slate-500 mb-4">
+                  {m.proxy_group_name ? (
+                    <>
+                      <Globe className="w-3.5 h-3.5 text-slate-400" />
+                      <span className="font-medium text-slate-700 truncate" title={m.proxy_group_name}>
+                        {m.proxy_group_name}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-3.5 h-3.5 text-amber-400" />
+                      <span className="font-medium text-amber-600">
+                        Server Proxies
+                      </span>
+                    </>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2 pt-3 border-t border-slate-100">

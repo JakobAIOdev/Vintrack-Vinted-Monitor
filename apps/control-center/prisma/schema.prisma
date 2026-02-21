@@ -41,10 +41,12 @@ model User {
   email         String?   @unique
   emailVerified DateTime?
   image         String?
+  role          String    @default("free") @db.VarChar(20)
   accounts      Account[]
   sessions      Session[]
   
-  monitors      monitors[] 
+  monitors      monitors[]
+  proxy_groups  proxy_groups[]
 }
 
 model VerificationToken {
@@ -73,6 +75,9 @@ model monitors {
   items      items[]
   discord_webhook String?
   webhook_active  Boolean  @default(true)
+
+  proxy_group_id Int?
+  proxy_group    proxy_groups? @relation(fields: [proxy_group_id], references: [id], onDelete: SetNull)
 }
 
 model items {
@@ -88,4 +93,16 @@ model items {
   image_url  String?
   found_at   DateTime? @default(now()) @db.Timestamp(6)
   monitors   monitors? @relation(fields: [monitor_id], references: [id], onDelete: Cascade)
+}
+
+model proxy_groups {
+  id         Int       @id @default(autoincrement())
+  
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name       String    @db.VarChar(100)
+  proxies    String    @db.Text
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  monitors   monitors[]
 }

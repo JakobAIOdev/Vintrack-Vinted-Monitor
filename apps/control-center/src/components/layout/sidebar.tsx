@@ -2,16 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, PlusCircle, Radio, LogOut } from "lucide-react";
+import { LayoutDashboard, PlusCircle, Radio, LogOut, Globe } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/dashboard", label: "Monitors", icon: LayoutDashboard },
   { href: "/feed", label: "Live Feed", icon: Radio },
+  { href: "/proxies", label: "Proxy Groups", icon: Globe },
 ];
 
 interface SidebarProps {
-  user?: { name?: string | null; image?: string | null; email?: string | null };
+  user?: { name?: string | null; image?: string | null; email?: string | null; role?: string };
 }
 
 export function Sidebar({ user }: SidebarProps) {
@@ -95,9 +96,16 @@ export function Sidebar({ user }: SidebarProps) {
             </div>
           )}
           <div className="flex-1 min-w-0">
-            <p className="text-[13px] font-medium text-slate-800 truncate">
-              {user?.name || "User"}
-            </p>
+            <div className="flex items-center gap-1.5">
+              <p className="text-[13px] font-medium text-slate-800 truncate">
+                {user?.name || "User"}
+              </p>
+              {user?.role === "premium" && (
+                <span className="text-[9px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full uppercase tracking-wide">
+                  Pro
+                </span>
+              )}
+            </div>
           </div>
           <Link
             href="/api/auth/signout"

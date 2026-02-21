@@ -17,6 +17,9 @@ type Monitor struct {
 	Status         string
 	DiscordWebhook sql.NullString
 	WebhookActive  bool
+	ProxyGroupID   *int
+	ProxyGroupName sql.NullString
+	Proxies        sql.NullString
 	CreatedAt      time.Time
 }
 

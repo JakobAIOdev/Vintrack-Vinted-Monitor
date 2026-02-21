@@ -13,7 +13,8 @@ export default async function DashboardPage() {
     where: { userId: session.user.id },
     orderBy: { created_at: "desc" },
     include: {
-      _count: { select: { items: true } }
+      _count: { select: { items: true } },
+      proxy_group: { select: { name: true } },
     }
   });
 
@@ -27,6 +28,7 @@ export default async function DashboardPage() {
     size_id: m.size_id ?? null,
     discord_webhook: m.discord_webhook ?? null,
     webhook_active: m.webhook_active ?? true, 
+    proxy_group_name: m.proxy_group?.name ?? null,
     _count: m._count,
     created_at: m.created_at ? m.created_at.toISOString() : new Date().toISOString()
   }));

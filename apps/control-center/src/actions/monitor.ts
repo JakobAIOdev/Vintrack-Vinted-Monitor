@@ -18,8 +18,39 @@ export async function createMonitor(formData: FormData) {
   const sizeId = formData.get("size_id") as string;
   const catalogIds = (formData.get("catalog_ids") as string) || null;
   const brandIds = (formData.get("brand_ids") as string) || null;
+  const proxyGroupRaw = formData.get("proxy_group_id") as string;
 
   if (!query) return;
+
+  let proxyGroupId: number | null = null;
+
+  if (proxyGroupRaw && proxyGroupRaw !== "server") {
+    const pgId = parseInt(proxyGroupRaw);
+    if (!isNaN(pgId)) {
+      const group = await db.proxy_groups.findFirst({
+        where: { id: pgId, userId: session.user.id },
+      });
+      if (!group) throw new Error("Invalid proxy group");
+      proxyGroupId = pgId;
+    }
+  } else if (proxyGroupRaw === "server") {
+    const user = await db.user.findUnique({
+      where: { id: session.user.id },
+      select: { role: true },
+    });
+    if (user?.role !== "premium") {
+      throw new Error("Server proxies require a premium account");
+    }
+    proxyGroupId = null;
+  } else {
+    const user = await db.user.findUnique({
+      where: { id: session.user.id },
+      select: { role: true },
+    });
+    if (user?.role === "free") {
+      throw new Error("You must select a proxy group");
+    }
+  }
 
   await db.monitors.create({
     data: {
@@ -30,6 +61,7 @@ export async function createMonitor(formData: FormData) {
       size_id: sizeId,
       catalog_ids: catalogIds || null,
       brand_ids: brandIds || null,
+      proxy_group_id: proxyGroupId,
       status: "active",
     },
   });

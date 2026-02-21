@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { LiveFeed } from "@/components/monitors/live-feed";
 import { Button } from "@/components/ui/button";
 import { toggleMonitorStatus, deleteMonitor } from "@/actions/monitor";
-import { ArrowLeft, PauseCircle, PlayCircle, Trash2, Tag } from "lucide-react";
+import { ArrowLeft, PauseCircle, PlayCircle, Trash2, Tag, Globe, Zap } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { getCategoryLabels } from "@/lib/categories";
@@ -22,7 +22,10 @@ export default async function MonitorPage({
 
   const monitor = await db.monitors.findUnique({
     where: { id: monitorId },
-    include: { _count: { select: { items: true } } },
+    include: {
+      _count: { select: { items: true } },
+      proxy_group: { select: { name: true } },
+    },
   });
 
   if (!monitor) return notFound();
@@ -83,6 +86,16 @@ export default async function MonitorPage({
               )}
               <span className="text-slate-300">·</span>
               <span>{monitor._count.items.toLocaleString()} items</span>
+              <span className="text-slate-300">·</span>
+              {monitor.proxy_group ? (
+                <span className="flex items-center gap-1">
+                  <Globe className="h-3 w-3" /> {monitor.proxy_group.name}
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-amber-600">
+                  <Zap className="h-3 w-3" /> Server Proxies
+                </span>
+              )}
             </div>
 
             {monitor.catalog_ids && (

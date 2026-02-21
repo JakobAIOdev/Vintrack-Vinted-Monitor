@@ -21,18 +21,25 @@ import (
 
 type Engine struct {
 	db           *database.Store
-	proxy        *proxy.Manager
+	serverProxy  *proxy.Manager
 	enrichSeller bool
 }
 
 func NewEngine(db *database.Store, pm *proxy.Manager) *Engine {
 	enrich := os.Getenv("ENRICH_SELLER_INFO") != "false"
 	log.Printf("Seller enrichment (region/rating): %v", enrich)
-	return &Engine{db: db, proxy: pm, enrichSeller: enrich}
+	return &Engine{db: db, serverProxy: pm, enrichSeller: enrich}
 }
 
-func (e *Engine) newWarmClient(monitorID int) (*Client, error) {
-	client, err := NewClient(e.proxy.Next())
+func (e *Engine) getProxyManager(m model.Monitor) *proxy.Manager {
+	if m.Proxies.Valid && m.Proxies.String != "" {
+		return proxy.FromString(m.Proxies.String)
+	}
+	return e.serverProxy
+}
+
+func (e *Engine) newWarmClient(monitorID int, pm *proxy.Manager) (*Client, error) {
+	client, err := NewClient(pm.Next())
 	if err != nil {
 		return nil, fmt.Errorf("client creation failed: %w", err)
 	}
@@ -45,7 +52,20 @@ func (e *Engine) newWarmClient(monitorID int) (*Client, error) {
 }
 
 func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
-	client, err := e.newWarmClient(m.ID)
+	pm := e.getProxyManager(m)
+
+	proxySource := "server"
+	if m.ProxyGroupName.Valid && m.ProxyGroupName.String != "" {
+		proxySource = fmt.Sprintf("group:%s", m.ProxyGroupName.String)
+	}
+
+	if pm.Count() == 0 {
+		log.Printf("[%d] ❌ ERROR: no valid proxies available (source: %s) — skipping monitor", m.ID, proxySource)
+		return
+	}
+	log.Printf("[%d] proxy source: %s (%d proxies)", m.ID, proxySource, pm.Count())
+
+	client, err := e.newWarmClient(m.ID, pm)
 	if err != nil {
 		log.Printf("[%d] init error: %v", m.ID, err)
 		return
@@ -53,7 +73,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 	var scraper *HTMLScraper
 	if e.enrichSeller {
-		scraper = NewHTMLScraper(e.proxy, e.db)
+		scraper = NewHTMLScraper(pm, e.db)
 	}
 
 	apiURL := BuildVintedURL(m)
@@ -93,7 +113,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			consecutiveErrors++
 			log.Printf("[%d] #%d network error (%d consecutive): %v", m.ID, checks, consecutiveErrors, err)
 			if consecutiveErrors > 2 {
-				if newClient, err := e.newWarmClient(m.ID); err == nil {
+				if newClient, err := e.newWarmClient(m.ID, pm); err == nil {
 					client = newClient
 					consecutiveErrors = 0
 				} else {
@@ -106,7 +126,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 		if status == 401 || status == 403 {
 			log.Printf("[%d] #%d got %d, re-warming...", m.ID, checks, status)
-			if newClient, err := e.newWarmClient(m.ID); err == nil {
+			if newClient, err := e.newWarmClient(m.ID, pm); err == nil {
 				client = newClient
 			} else {
 				log.Printf("[%d] re-warm failed: %v", m.ID, err)
@@ -150,7 +170,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		for _, vItem := range newItems {
-			e.processNewItem(m, vItem, scraper, skipEnrich)
+			e.processNewItem(m, vItem, scraper, skipEnrich, proxySource)
 		}
 		fmt.Println()
 
@@ -189,7 +209,7 @@ func (e *Engine) fetchCatalog(client *Client, apiURL string) ([]model.VintedItem
 	return data.Items, 200, nil
 }
 
-func (e *Engine) processNewItem(m model.Monitor, vItem model.VintedItem, scraper *HTMLScraper, skipEnrich bool) {
+func (e *Engine) processNewItem(m model.Monitor, vItem model.VintedItem, scraper *HTMLScraper, skipEnrich bool, proxySource string) {
 	itemURL := vItem.Url
 	if !strings.HasPrefix(itemURL, "http") {
 		itemURL = "https://www.vinted.de" + itemURL
@@ -240,7 +260,7 @@ func (e *Engine) processNewItem(m model.Monitor, vItem model.VintedItem, scraper
 	fmt.Printf("\n  NEW [%d]: %s (%s) [%s] %s%s", m.ID, item.Title, item.Price, item.Size, item.Location, ratingStr)
 
 	if m.DiscordWebhook.Valid && m.DiscordWebhook.String != "" && m.WebhookActive {
-		go discord.SendWebhook(m.DiscordWebhook.String, item, m.Query)
+		go discord.SendWebhook(m.DiscordWebhook.String, item, m.Query, proxySource)
 	}
 }
 

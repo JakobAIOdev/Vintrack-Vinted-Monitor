@@ -14,7 +14,7 @@ import (
 
 var httpClient = &http.Client{Timeout: 5 * time.Second}
 
-func SendWebhook(webhookURL string, item model.Item, query string) {
+func SendWebhook(webhookURL string, item model.Item, query string, proxySource string) {
 	if webhookURL == "" {
 		return
 	}
@@ -26,6 +26,11 @@ func SendWebhook(webhookURL string, item model.Item, query string) {
 
 	dashLink := fmt.Sprintf("%s/monitors/%d", baseURL, item.MonitorID)
 	links := fmt.Sprintf("[[🛒 BUY NOW]](%s) • [[📱 APP]](%s) • [[📊 DASHBOARD]](%s)", item.URL, item.URL, dashLink)
+
+	footerText := fmt.Sprintf("Vintrack • Monitor #%d", item.MonitorID)
+	if proxySource != "" {
+		footerText = fmt.Sprintf("Vintrack • Monitor #%d • %s", item.MonitorID, proxySource)
+	}
 
 	payload := map[string]interface{}{
 		"username":   "Vintrack Monitor",
@@ -39,7 +44,7 @@ func SendWebhook(webhookURL string, item model.Item, query string) {
 				"thumbnail":   map[string]string{"url": item.ImageURL},
 				"fields":      buildFields(item),
 				"footer": map[string]string{
-					"text":     fmt.Sprintf("Vintrack • Monitor #%d", item.MonitorID),
+					"text":     footerText,
 					"icon_url": "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
 				},
 				"timestamp": time.Now().Format(time.RFC3339),
