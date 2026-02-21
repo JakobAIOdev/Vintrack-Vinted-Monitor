@@ -1,4 +1,19 @@
 services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: vintrack_caddy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - control-center
+    restart: unless-stopped
+
   postgres:
     image: postgres:15-alpine
     container_name: vintrack_db
@@ -43,9 +58,9 @@ services:
       - AUTH_DISCORD_ID=${AUTH_DISCORD_ID}
       - AUTH_DISCORD_SECRET=${AUTH_DISCORD_SECRET}
       - AUTH_TRUST_HOST=true
-      - AUTH_URL=${AUTH_URL}
-    ports:
-      - "3000:3000"
+      - AUTH_URL=https://vintrack.jakobaio.dev
+    expose:
+      - "3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -91,3 +106,5 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  caddy_data:
+  caddy_config:
