@@ -1,129 +1,241 @@
 <p align="center">
-  <img src="https://cdn-icons-png.flaticon.com/512/8266/8266540.png" width="80" alt="Vintrack Logo" />
+  <img src="https://cdn-icons-png.flaticon.com/512/8266/8266540.png" width="90" alt="Vintrack" />
 </p>
 
 <h1 align="center">Vintrack</h1>
 
 <p align="center">
-  <strong>The fastest Vinted monitor for resellers.</strong><br/>
-  Real-time scraping, instant Discord alerts, and a sleek control center.
+  <b>Open-source Vinted monitoring platform for resellers.</b><br/>
+  Real-time scraping · Instant Discord alerts · Proxy rotation · Beautiful dashboard
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Next.js-16-black?logo=next.js" alt="Next.js" />
-  <img src="https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white" alt="Go" />
-  <img src="https://img.shields.io/badge/PostgreSQL-15-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL" />
-  <img src="https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white" alt="Redis" />
-  <img src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white" alt="Docker" />
+  <a href="#features"><img src="https://img.shields.io/badge/monitors-unlimited-22c55e?style=flat-square" alt="Monitors" /></a>
+  <a href="#tech-stack"><img src="https://img.shields.io/badge/Next.js-16-000?style=flat-square&logo=next.js" alt="Next.js" /></a>
+  <a href="#tech-stack"><img src="https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go" /></a>
+  <a href="#tech-stack"><img src="https://img.shields.io/badge/PostgreSQL-15-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL" /></a>
+  <a href="#tech-stack"><img src="https://img.shields.io/badge/Redis-7-DC382D?style=flat-square&logo=redis&logoColor=white" alt="Redis" /></a>
+  <a href="#getting-started"><img src="https://img.shields.io/badge/deploy-one_command-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker" /></a>
+</p>
+
+<p align="center">
+  <a href="#getting-started">Getting Started</a> •
+  <a href="#features">Features</a> •
+  <a href="#architecture">Architecture</a> •
+  <a href="#screenshots">Screenshots</a> •
+  <a href="#self-hosting">Self-Hosting</a> •
+  <a href="#contributing">Contributing</a>
 </p>
 
 ---
 
-## Overview
+## Why Vintrack?
 
-Vintrack monitors Vinted listings in real-time and notifies you the moment a matching item appears — before anyone else sees it. Built for resellers who need speed.
+Vinted doesn't have a proper notification system — you either refresh manually or miss the deal. Vintrack solves this by monitoring listings **every 1.5 seconds** and sending alerts to Discord **before anyone else** can see the item.
 
-**Control Center** — A Next.js dashboard to create monitors, view found items, and manage Discord webhooks.  
-**Worker** — A high-performance Go scraper that polls the Vinted API with proxy rotation, deduplication via Redis, and seller enrichment (region & rating).
+Built for resellers who need speed. Open-sourced for the community.
+
+- **Sub-2s detection** — catch items faster than any other tool
+- **Anti-detection** — TLS fingerprint rotation with proxy support
+- **Granular filters** — price, size, category, brand, and more
+- **Full dashboard** — no CLI needed, everything from the browser
+- **One-command deploy** — `docker compose up` and you're live
+
+---
+
+## Features
+
+### Real-Time Monitoring
+Create unlimited monitors with custom search queries. Each monitor polls the Vinted API independently with configurable intervals (default: 1.5s). Results are deduplicated via Redis — you'll never see the same item twice.
+
+### Advanced Filters
+Fine-tune every monitor with:
+- **Search query** — keyword-based filtering
+- **Price range** — min/max price boundaries
+- **Categories** — over 900+ Vinted categories supported
+- **Brands** — filter by specific brands
+- **Sizes** — clothing size filtering
+
+### Discord Notifications
+Rich embed webhooks sent instantly when a new item is found:
+- Item image, title, price, size, condition
+- Seller region & rating (enriched via HTML scraping)
+- Direct buy link + app deep link + dashboard link
+- Per-webhook toggle — pause without deleting
+
+### Live Feed
+Server-Sent Events (SSE) stream items directly to the dashboard in real-time. See every new listing appear the moment it's detected — no manual refresh needed.
+
+### Proxy System
+Two-tier proxy architecture designed for scale:
+- **Server proxies** — shared pool for premium users
+- **User proxy groups** — BYOP (Bring Your Own Proxies) for free users
+- Automatic rotation with `tls-client` TLS fingerprint spoofing
+- Input validation — garbage lines are silently skipped
+- Supports `http://`, `https://`, `socks4://`, `socks5://`, and `host:port:user:pass` formats
+
+### Multi-User & Roles
+Built-in role system with Discord OAuth:
+| Role | Server Proxies | Own Proxies | Admin Panel |
+|------|:-:|:-:|:-:|
+| **Free** | ❌ | ✅ | ❌ |
+| **Premium** | ✅ | ✅ | ❌ |
+| **Admin** | ✅ | ✅ | ✅ |
+
+### Admin Dashboard
+Manage all users from a dedicated admin panel:
+- View all registered users with stats
+- Change roles (Free → Premium → Admin) in one click
+- Monitor and proxy group counts per user
+
+---
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/preview.gif" width="720" alt="Preview" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/overview.webp" width="49%" alt="Dashboard" />
+  <img src="docs/screenshots/live-feed.webp" width="49%" alt="Live Feed" />
+</p>
+<p align="center">
+  <img src="docs/screenshots/create.webp" width="49%" alt="Create Monitor" />
+  <img src="docs/screenshots/user-management.webp" width="49%" alt="Admin Panel" />
+</p>
+<p align="center">
+  <img src="docs/screenshots/discord-embed.webp" width="49%" alt="Discord Alert" />
+</p>
+
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                      Caddy                          │
-│              (HTTPS / Reverse Proxy)                │
-└──────────────────────┬──────────────────────────────┘
-                       │
-              ┌────────▼────────┐
-              │  Control Center │
-              │   (Next.js 16)  │
-              └────────┬────────┘
-                       │
-          ┌────────────┼────────────┐
-          │            │            │
-   ┌──────▼──────┐ ┌──▼───┐ ┌─────▼─────┐
-   │  PostgreSQL  │ │Redis │ │   Worker   │
-   │   (Storage)  │ │(Cache)│ │   (Go)    │
-   └──────────────┘ └──────┘ └─────┬─────┘
-                                   │
-                          ┌────────▼────────┐
-                          │   Vinted API    │
-                          │  (via Proxies)  │
-                          └────────┬────────┘
-                                   │
-                          ┌────────▼────────┐
-                          │ Discord Webhooks│
-                          └─────────────────┘
+                         ┌──────────────────┐
+                         │     Internet      │
+                         └────────┬─────────┘
+                                  │
+                         ┌────────▼─────────┐
+                         │      Caddy        │
+                         │  (Auto HTTPS)     │
+                         └────────┬─────────┘
+                                  │
+                    ┌─────────────▼──────────────┐
+                    │      Control Center         │
+                    │  Next.js 16 · React 19      │
+                    │  Prisma · NextAuth · SSE     │
+                    └──────┬──────────┬──────────┘
+                           │          │
+              ┌────────────▼──┐  ┌────▼────────────┐
+              │  PostgreSQL   │  │     Redis        │
+              │   (Storage)   │  │ (Cache + Pub/Sub)│
+              └────────────▲──┘  └────▲────────────┘
+                           │          │
+                    ┌──────┴──────────┴──────────┐
+                    │         Go Worker           │
+                    │  tls-client · goroutines    │
+                    │  proxy rotation · enrichment│
+                    └──────┬──────────┬──────────┘
+                           │          │
+                  ┌────────▼──┐  ┌────▼────────────┐
+                  │ Vinted API │  │    Discord       │
+                  │ (Proxied)  │  │   (Webhooks)     │
+                  └────────────┘  └─────────────────┘
 ```
 
-## Features
+**Data flow:**
+1. User creates a monitor via the dashboard
+2. Go Worker detects the new monitor within 5s and starts a goroutine
+3. Goroutine polls Vinted API through rotating proxies
+4. New items are deduplicated via Redis, stored in PostgreSQL, published via SSE
+5. Discord webhooks fire immediately for configured monitors
 
-- **Real-time monitoring** — Configurable polling interval (default 1.5s per monitor)
-- **Advanced filters** — Search query, price range, sizes, categories, brands
-- **Multi-region scraping** — Seller location & rating enrichment via HTML scraping
-- **Proxy rotation** — TLS fingerprint spoofing with `tls-client` to avoid detection
-- **Redis deduplication** — Never get duplicate alerts for the same item
-- **Discord webhooks** — Rich embed notifications with buy links, images, and metadata
-- **Auth via Discord** — OAuth2 login through NextAuth.js
-- **Live feed** — Server-Sent Events (SSE) stream for real-time item updates in the dashboard
-- **Dockerized** — One command to deploy everything with `docker compose`
+---
 
 ## Tech Stack
 
-| Component | Technology |
-|-----------|-----------|
-| Dashboard | Next.js 16, React 19, Tailwind CSS 4, shadcn/ui |
-| Worker | Go 1.25, tls-client, goroutines |
-| Database | PostgreSQL 15 + Prisma ORM |
-| Cache | Redis 7 (deduplication & rate limiting) |
-| Auth | NextAuth.js v5 (Discord OAuth2) |
-| Reverse Proxy | Caddy (automatic HTTPS) |
-| Deployment | Docker Compose |
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| **Frontend** | Next.js 16, React 19, Tailwind CSS 4, shadcn/ui | Dashboard & UI |
+| **Backend** | Next.js Server Actions, App Router | API & auth |
+| **Worker** | Go 1.25, tls-client, goroutines | High-perf scraping |
+| **Database** | PostgreSQL 15 + Prisma ORM | Persistent storage |
+| **Cache** | Redis 7 | Deduplication & SSE pub/sub |
+| **Auth** | NextAuth.js v5 (Discord OAuth2) | Authentication |
+| **Proxy** | tls-client with SOCKS4/5 & HTTP(S) | Anti-detection |
+| **Reverse Proxy** | Caddy 2 | Auto HTTPS via Let's Encrypt |
+| **Deployment** | Docker Compose | One-command orchestration |
+
+---
 
 ## Getting Started
 
 ### Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/) & Docker Compose
-- Discord OAuth2 app ([create one here](https://discord.com/developers/applications))
+- [Docker](https://docs.docker.com/get-docker/) & Docker Compose v2
+- [Discord Developer App](https://discord.com/developers/applications) (for OAuth2 login)
+- Proxies (residential recommended)
 
-### 1. Clone the repo
+### Quick Start
 
 ```bash
-git clone https://github.com/your-username/vintrack-v2.git
-cd vintrack-v2
+# 1. Clone
+git clone https://github.com/YOUR_USERNAME/vintrack.git
+cd vintrack
+
+# 2. Configure
+cp .env.example .env
+# Edit .env with your Discord OAuth credentials
+
+# 3. Add proxies
+nano apps/worker/proxies.txt
+# One proxy per line: http://user:pass@host:port
+
+# 4. Launch
+docker compose up -d --build
+
+# 5. Open dashboard
+open http://localhost:3000
 ```
 
-### 2. Configure environment
+### Environment Variables
 
 Create a `.env` file in the project root:
 
 ```env
-AUTH_SECRET=your-random-secret-here        # openssl rand -base64 32
+# Required — generate with: openssl rand -base64 32
+AUTH_SECRET=your-random-secret
+
+# Required — from Discord Developer Portal
 AUTH_DISCORD_ID=your-discord-client-id
 AUTH_DISCORD_SECRET=your-discord-client-secret
 ```
 
-### 3. Add proxies
+### Proxy Formats
 
-Add your proxies (one per line) to `apps/worker/proxies.txt`:
+Vintrack accepts multiple proxy formats (one per line in `apps/worker/proxies.txt`):
 
 ```
 http://user:pass@host:port
 socks5://user:pass@host:port
+host:port:user:pass
+host:port
 ```
 
-### 4. Deploy
+Invalid lines are automatically skipped with a warning in logs.
 
-```bash
-docker compose up -d --build
-```
+---
 
-The app will be available at `http://localhost:3000`.
+## Self-Hosting
 
-### Production (with HTTPS)
+### Production with HTTPS
 
-The included Caddy reverse proxy handles automatic HTTPS via Let's Encrypt. Point your domain's A record to your server IP and update the `Caddyfile`:
+Vintrack includes Caddy for automatic HTTPS via Let's Encrypt:
+
+1. Point your domain's **A record** to your server IP
+2. Update the `Caddyfile`:
 
 ```
 yourdomain.com {
@@ -131,45 +243,153 @@ yourdomain.com {
 }
 ```
 
+3. Update `AUTH_URL` in `docker-compose.yml`:
+
+```yaml
+- AUTH_URL=https://yourdomain.com
+```
+
+4. Set the Discord OAuth2 callback URL to:
+
+```
+https://yourdomain.com/api/auth/callback/discord
+```
+
+5. Deploy:
+
+```bash
+docker compose up -d --build
+```
+
+### Making Yourself Admin
+
+After first login, promote your user:
+
+```bash
+docker exec -it vintrack_db psql -U vinuser -d vintrack \
+  -c "UPDATE \"User\" SET role = 'admin' WHERE email = 'your@email.com';"
+```
+
+---
+
 ## Project Structure
 
 ```
-vintrack-v2/
-├── docker-compose.yml          # Full stack orchestration
-├── Caddyfile                   # Reverse proxy config
+vintrack/
+├── docker-compose.yml            # Stack orchestration
+├── Caddyfile                     # HTTPS reverse proxy
+├── .env                          # Secrets (not committed)
 │
 ├── apps/
-│   ├── control-center/         # Next.js dashboard
-│   │   ├── prisma/             # Database schema & migrations
+│   ├── control-center/           # Next.js 16 dashboard
+│   │   ├── prisma/
+│   │   │   ├── schema.prisma     # Database models
+│   │   │   └── migrations/       # Auto-generated migrations
 │   │   └── src/
-│   │       ├── actions/        # Server actions (monitor CRUD)
-│   │       ├── app/            # App router pages
-│   │       ├── components/     # UI components (shadcn/ui)
-│   │       └── lib/            # Utilities, DB client, constants
+│   │       ├── auth.ts           # NextAuth config
+│   │       ├── actions/          # Server actions
+│   │       │   ├── admin.ts      #   User management (admin)
+│   │       │   ├── dashboard-actions.ts
+│   │       │   ├── monitor.ts    #   Monitor CRUD
+│   │       │   └── proxy-groups.ts
+│   │       ├── app/
+│   │       │   ├── (auth)/       # OAuth routes
+│   │       │   ├── (dashboard)/  # Protected pages
+│   │       │   │   ├── admin/    #   Admin panel
+│   │       │   │   ├── dashboard/#   Monitor overview
+│   │       │   │   ├── feed/     #   Real-time feed
+│   │       │   │   ├── monitors/ #   Monitor detail + creation
+│   │       │   │   └── proxies/  #   Proxy group management
+│   │       │   └── api/          # API routes (SSE, items)
+│   │       ├── components/       # React components
+│   │       └── lib/              # Utils, DB, constants
 │   │
-│   └── worker/                 # Go scraping engine
+│   └── worker/                   # Go scraping engine
+│       ├── cmd/main.go           # Entrypoint
 │       └── internal/
-│           ├── cache/          # Redis client
-│           ├── database/       # PostgreSQL store
-│           ├── discord/        # Webhook sender
-│           ├── model/          # Shared types
-│           ├── pipeline/       # Monitor lifecycle manager
-│           ├── proxy/          # Proxy rotation
-│           └── scraper/        # Vinted API client & HTML scraper
+│           ├── cache/            # Redis dedup + pub/sub
+│           ├── database/         # PostgreSQL queries
+│           ├── discord/          # Webhook sender
+│           ├── model/            # Shared types
+│           ├── pipeline/         # Monitor lifecycle
+│           ├── proxy/            # Rotation + validation
+│           └── scraper/          # Vinted API + HTML scraper
 ```
+
+---
 
 ## How It Works
 
-1. **Create a monitor** via the dashboard — set a search query, optional filters (price, size, category, brand), and a Discord webhook URL.
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant D as Dashboard
+    participant DB as PostgreSQL
+    participant W as Worker
+    participant V as Vinted API
+    participant R as Redis
+    participant DC as Discord
 
-2. The **Go worker** picks up the monitor and starts polling the Vinted API at the configured interval using the built URL with all filter parameters.
+    U->>D: Create monitor (query, filters)
+    D->>DB: Save monitor (status: active)
+    W->>DB: Poll for active monitors (every 5s)
+    W->>V: Fetch listings (via proxy)
+    V-->>W: Return items
+    W->>R: Check dedup cache
+    R-->>W: New item IDs
+    W->>DB: Store new items
+    W->>R: Publish via SSE channel
+    R-->>D: Push to live feed
+    W->>DC: Send webhook embed
+    DC-->>U: Discord notification
+```
 
-3. Each result is checked against **Redis** to avoid duplicates. New items get stored in **PostgreSQL**.
+---
 
-4. If the monitor has a webhook configured, a **rich Discord embed** is sent immediately with the item's title, price, image, size, condition, seller location, and direct buy link.
+## Roadmap
 
-5. The dashboard shows a **live feed** via SSE and per-monitor item history.
+- [ ] Vinted Account Linking
+- [ ] Auto Chat Module
+- [ ] Auto Buy Module
+- [ ] Price history tracking & charts
+- [ ] Saved searches / favorites
+- [ ] Rate limiting per user
+- [ ] API tokens for external integrations
+- [ ] Multi-language Vinted region support
+- [ ] Mobile app (React Native)
+
+---
+
+## Contributing
+
+Contributions are welcome! Here's how:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+Please make sure to:
+- Follow existing code style
+- Test your changes with `docker compose up --build`
+- Update documentation if needed
+
+---
+
+## Acknowledgements
+
+- [vinted-dataset](https://github.com/teddy-vltn/vinted-dataset) by [@teddy-vltn](https://github.com/teddy-vltn) — Categories, brands, and sizes data used in the filter system
+
+---
 
 ## License
 
-This project is for personal use.
+This project is licensed under the [MIT License](LICENSE).
+
+---
+
+<p align="center">
+  <sub>Built with ❤️ for the reselling community</sub><br/>
+  <sub>If Vintrack helped you catch a deal, consider giving it a ⭐</sub>
+</p>
