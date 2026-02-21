@@ -194,7 +194,7 @@ export default function NewMonitorPage() {
                     className="w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-[13px] text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-1"
                     required={userRole === "free"}
                   >
-                    {userRole === "premium" && (
+                    {(userRole === "premium" || userRole === "admin") && (
                       <option value="server">⚡ Server Proxies (Premium)</option>
                     )}
                     {proxyGroups.length === 0 && userRole === "free" && (
@@ -222,7 +222,7 @@ export default function NewMonitorPage() {
                       Select your proxy group to use for scraping.
                     </p>
                   )}
-                  {userRole === "premium" && (
+                  {(userRole === "premium" || userRole === "admin") && (
                     <p className="text-[12px] text-muted-foreground">
                       Use server proxies or select your own group.
                     </p>

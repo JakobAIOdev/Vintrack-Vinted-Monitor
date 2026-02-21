@@ -2,13 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, PlusCircle, Radio, LogOut, Globe } from "lucide-react";
+import { LayoutDashboard, PlusCircle, Radio, LogOut, Globe, Shield } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/dashboard", label: "Monitors", icon: LayoutDashboard },
   { href: "/feed", label: "Live Feed", icon: Radio },
   { href: "/proxies", label: "Proxy Groups", icon: Globe },
+];
+
+const adminNavItems = [
+  { href: "/admin", label: "User Management", icon: Shield },
 ];
 
 interface SidebarProps {
@@ -80,6 +84,38 @@ export function Sidebar({ user }: SidebarProps) {
             New Monitor
           </Link>
         </div>
+
+        {user?.role === "admin" && (
+          <div className="pt-4">
+            <p className="px-3 mb-2 text-[11px] font-medium text-slate-400 uppercase tracking-widest">
+              Admin
+            </p>
+            {adminNavItems.map((item) => {
+              const isActive =
+                pathname === item.href || pathname.startsWith(item.href + "/");
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn(
+                    "flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors",
+                    isActive
+                      ? "bg-slate-900 text-white"
+                      : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+                  )}
+                >
+                  <item.icon
+                    className={cn(
+                      "w-4 h-4",
+                      isActive ? "text-white" : "text-slate-400"
+                    )}
+                  />
+                  {item.label}
+                </Link>
+              );
+            })}
+          </div>
+        )}
       </nav>
 
       <div className="p-3 border-t border-slate-100">
@@ -103,6 +139,11 @@ export function Sidebar({ user }: SidebarProps) {
               {user?.role === "premium" && (
                 <span className="text-[9px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full uppercase tracking-wide">
                   Pro
+                </span>
+              )}
+              {user?.role === "admin" && (
+                <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full uppercase tracking-wide">
+                  Admin
                 </span>
               )}
             </div>

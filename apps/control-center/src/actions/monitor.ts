@@ -38,7 +38,7 @@ export async function createMonitor(formData: FormData) {
       where: { id: session.user.id },
       select: { role: true },
     });
-    if (user?.role !== "premium") {
+    if (user?.role !== "premium" && user?.role !== "admin") {
       throw new Error("Server proxies require a premium account");
     }
     proxyGroupId = null;
