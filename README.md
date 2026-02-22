@@ -178,6 +178,14 @@ Manage all users from a dedicated admin panel:
 - [Discord Developer App](https://discord.com/developers/applications) (for OAuth2 login)
 - Proxies (residential recommended)
 
+### Proxy Recommendation (Referral)
+
+If you need affordable proxies, I can recommend **IPv6 proxies from Proxy6** — they are low-cost and come with **no data limit**.
+
+- Referral link: https://proxy6.net/?r=864123
+- Alternative referral link: https://proxy6.net/a/864123
+- Affiliate code: `DHCenDeFUI`
+
 ### Quick Start
 
 ```bash
