@@ -19,6 +19,7 @@
 </p>
 
 <p align="center">
+  <a href="#live-demo">Live Demo</a> •
   <a href="#getting-started">Getting Started</a> •
   <a href="#features">Features</a> •
   <a href="#architecture">Architecture</a> •
@@ -26,6 +27,18 @@
   <a href="#self-hosting">Self-Hosting</a> •
   <a href="#contributing">Contributing</a>
 </p>
+
+---
+
+## Live Demo
+
+You can test Vintrack live at:
+
+- **URL:** https://vintrack.jakobaio.dev
+- **Login:** Anyone can sign up via Discord OAuth
+- **Default role:** New accounts are assigned **Free**
+- **Important:** Persistent server proxies are not guaranteed on the demo instance, so reliability may vary over time
+
 
 ---
 
@@ -81,6 +94,8 @@ Built-in role system with Discord OAuth:
 | **Free** | ❌ | ✅ | ❌ |
 | **Premium** | ✅ | ✅ | ❌ |
 | **Admin** | ✅ | ✅ | ✅ |
+
+On the public demo (`vintrack.jakobaio.dev`), signups are currently limited to the **Free** role.
 
 ### Admin Dashboard
 Manage all users from a dedicated admin panel:
