@@ -1,6 +1,7 @@
 # --- System ---
 .DS_Store
 Thumbs.db
+.vscode
 
 # --- Environment & Secrets ---
 .env

@@ -86,6 +86,46 @@ func (r *RedisCache) PublishNewItem(item interface{}) error {
 	return r.client.Publish(r.ctx, "vinted:new_items", payload).Err()
 }
 
+func (r *RedisCache) SetMonitorHealth(monitorID int, data []byte) error {
+	key := fmt.Sprintf("monitor:health:%d", monitorID)
+	return r.client.Set(r.ctx, key, data, 10*time.Minute).Err()
+}
+
+func (r *RedisCache) GetMonitorHealth(monitorID int) ([]byte, error) {
+	key := fmt.Sprintf("monitor:health:%d", monitorID)
+	return r.client.Get(r.ctx, key).Bytes()
+}
+
+func (r *RedisCache) GetMonitorHealthBatch(monitorIDs []int) (map[int][]byte, error) {
+	if len(monitorIDs) == 0 {
+		return make(map[int][]byte), nil
+	}
+
+	pipe := r.client.Pipeline()
+	cmds := make(map[int]*redis.StringCmd, len(monitorIDs))
+
+	for _, id := range monitorIDs {
+		key := fmt.Sprintf("monitor:health:%d", id)
+		cmds[id] = pipe.Get(r.ctx, key)
+	}
+
+	pipe.Exec(r.ctx)
+
+	result := make(map[int][]byte, len(monitorIDs))
+	for id, cmd := range cmds {
+		val, err := cmd.Bytes()
+		if err == nil {
+			result[id] = val
+		}
+	}
+	return result, nil
+}
+
+func (r *RedisCache) DeleteMonitorHealth(monitorID int) error {
+	key := fmt.Sprintf("monitor:health:%d", monitorID)
+	return r.client.Del(r.ctx, key).Err()
+}
+
 func (r *RedisCache) Close() error {
 	return r.client.Close()
 }

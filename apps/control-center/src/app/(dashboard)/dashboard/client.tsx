@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
@@ -15,6 +15,7 @@ import {
   MoreHorizontal,
   Globe,
   Zap,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -40,6 +41,15 @@ import { getCategoryLabels } from "@/lib/categories";
 import { getBrandLabels } from "@/lib/brands";
 import { getSizeLabels } from "@/lib/sizes";
 
+type MonitorHealth = {
+  monitor_id: number;
+  total_checks: number;
+  total_errors: number;
+  consecutive_errors: number;
+  last_error?: string;
+  updated_at: string;
+};
+
 export type Monitor = {
   id: number;
   query: string;
@@ -55,6 +65,12 @@ export type Monitor = {
   created_at: string;
 };
 
+function hasProxyWarning(h?: MonitorHealth): boolean {
+  if (!h) return false;
+  if (h.consecutive_errors === -1 || h.consecutive_errors >= 3) return true;
+  return false;
+}
+
 export function DashboardClient({
   initialMonitors,
   userName,
@@ -67,6 +83,23 @@ export function DashboardClient({
   const [isWebhookOpen, setIsWebhookOpen] = useState(false);
   const [isWebhookActive, setIsWebhookActive] = useState(true);
   const [monitors, setMonitors] = useState<Monitor[]>(initialMonitors);
+  const [healthMap, setHealthMap] = useState<Record<number, MonitorHealth>>({});
+
+  const fetchHealth = useCallback(async () => {
+    try {
+      const res = await fetch("/api/monitors/health");
+      if (res.ok) {
+        const data = await res.json();
+        setHealthMap(data);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    fetchHealth();
+    const interval = setInterval(fetchHealth, 10_000);
+    return () => clearInterval(interval);
+  }, [fetchHealth]);
 
   const openWebhookDialog = (monitor: Monitor) => {
     setSelectedMonitor(monitor);
@@ -243,13 +276,20 @@ export function DashboardClient({
                         className={`text-[10px] font-medium ${
                           m.status === "active"
                             ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
-                            : "bg-slate-100 text-slate-500"
+                            : m.status === "error"
+                              ? "bg-red-50 text-red-700 border-red-200"
+                              : "bg-slate-100 text-slate-500"
                         }`}
                       >
                         {m.status === "active" ? (
                           <span className="flex items-center gap-1">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                             Running
+                          </span>
+                        ) : m.status === "error" ? (
+                          <span className="flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3" />
+                            Proxy Error
                           </span>
                         ) : (
                           "Paused"
@@ -319,7 +359,7 @@ export function DashboardClient({
                   items found
                 </div>
 
-                <div className="flex items-center gap-1.5 text-[13px] text-slate-500 mb-4">
+                <div className="flex items-center gap-1.5 text-[13px] text-slate-500 mb-2">
                   {m.proxy_group_name ? (
                     <>
                       <Globe className="w-3.5 h-3.5 text-slate-400" />
@@ -334,6 +374,12 @@ export function DashboardClient({
                         Server Proxies
                       </span>
                     </>
+                  )}
+                  {m.status === "active" && hasProxyWarning(healthMap[m.id]) && (
+                    <span className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium border bg-red-50 text-red-700 border-red-200">
+                      <AlertTriangle className="w-3 h-3" />
+                      Proxy Warning
+                    </span>
                   )}
                 </div>
 

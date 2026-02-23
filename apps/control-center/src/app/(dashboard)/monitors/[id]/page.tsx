@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { getCategoryLabels } from "@/lib/categories";
 import { getBrandLabels } from "@/lib/brands";
 import { getSizeLabels } from "@/lib/sizes";
+import { ProxyHealthCard } from "@/components/monitors/proxy-health";
 
 export default async function MonitorPage({
   params,
@@ -173,6 +174,10 @@ export default async function MonitorPage({
           </form>
         </div>
       </div>
+
+      {monitor.status === "active" && (
+        <ProxyHealthCard monitorId={monitor.id} />
+      )}
 
       <div>
         <h2 className="text-lg font-semibold mb-4">Latest Results</h2>

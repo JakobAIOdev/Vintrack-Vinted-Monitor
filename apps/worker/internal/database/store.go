@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"runtime"
@@ -159,4 +160,32 @@ func (s *Store) Close() error {
 		s.cache.Close()
 	}
 	return s.db.Close()
+}
+
+func (s *Store) UpdateMonitorHealth(health model.MonitorHealth) {
+	if s.cache == nil {
+		return
+	}
+	data, err := json.Marshal(health)
+	if err != nil {
+		log.Printf("marshal health for monitor %d: %v", health.MonitorID, err)
+		return
+	}
+	if err := s.cache.SetMonitorHealth(health.MonitorID, data); err != nil {
+		log.Printf("set health for monitor %d: %v", health.MonitorID, err)
+	}
+}
+
+func (s *Store) ClearMonitorHealth(monitorID int) {
+	if s.cache == nil {
+		return
+	}
+	s.cache.DeleteMonitorHealth(monitorID)
+}
+
+func (s *Store) SetMonitorStatus(monitorID int, status string) {
+	_, err := s.db.Exec(`UPDATE monitors SET status = $1 WHERE id = $2`, status, monitorID)
+	if err != nil {
+		log.Printf("set monitor %d status to %s: %v", monitorID, status, err)
+	}
 }

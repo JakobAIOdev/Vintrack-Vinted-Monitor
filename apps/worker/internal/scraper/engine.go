@@ -61,6 +61,12 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 	if pm.Count() == 0 {
 		log.Printf("[%d] ❌ ERROR: no valid proxies available (source: %s) — skipping monitor", m.ID, proxySource)
+		e.db.UpdateMonitorHealth(model.MonitorHealth{
+			MonitorID:       m.ID,
+			ConsecutiveErrs: -1,
+			LastError:       "no valid proxies available",
+			UpdatedAt:       time.Now().UTC().Format(time.RFC3339),
+		})
 		return
 	}
 	log.Printf("[%d] proxy source: %s (%d proxies)", m.ID, proxySource, pm.Count())
@@ -79,11 +85,31 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	apiURL := BuildVintedURL(m)
 
 	interval := getEnvInt("CHECK_INTERVAL_MS", 1500)
+	maxConsecutiveErrors := getEnvInt("MAX_CONSECUTIVE_ERRORS", 50)
 	consecutiveErrors := 0
 	checks := 0
+	var totalErrors int64
 	firstRun := true
 
 	log.Printf("[%d] started | query=%q | url=%s", m.ID, m.Query, apiURL)
+
+	reportHealth := func(lastErr string) {
+		h := model.MonitorHealth{
+			MonitorID:       m.ID,
+			TotalChecks:     int64(checks),
+			TotalErrors:     totalErrors,
+			ConsecutiveErrs: consecutiveErrors,
+			UpdatedAt:       time.Now().UTC().Format(time.RFC3339),
+		}
+		if lastErr != "" {
+			h.LastError = lastErr
+		}
+		e.db.UpdateMonitorHealth(h)
+	}
+
+	defer func() {
+		e.db.ClearMonitorHealth(m.ID)
+	}()
 
 	for {
 		select {
@@ -111,11 +137,23 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 		if err != nil {
 			consecutiveErrors++
+			totalErrors++
+			errMsg := err.Error()
+			if len(errMsg) > 200 {
+				errMsg = errMsg[:200]
+			}
 			log.Printf("[%d] #%d network error (%d consecutive): %v", m.ID, checks, consecutiveErrors, err)
+			reportHealth(errMsg)
+			if consecutiveErrors >= maxConsecutiveErrors {
+				log.Printf("[%d] ❌ auto-stopping: %d consecutive errors", m.ID, consecutiveErrors)
+				e.db.SetMonitorStatus(m.ID, "error")
+				return
+			}
 			if consecutiveErrors > 2 {
 				if newClient, err := e.newWarmClient(m.ID, pm); err == nil {
 					client = newClient
 					consecutiveErrors = 0
+					reportHealth("")
 				} else {
 					log.Printf("[%d] client rotation failed: %v", m.ID, err)
 				}
@@ -125,7 +163,15 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		if status == 401 || status == 403 {
+			consecutiveErrors++
+			totalErrors++
+			reportHealth(fmt.Sprintf("HTTP %d", status))
 			log.Printf("[%d] #%d got %d, re-warming...", m.ID, checks, status)
+			if consecutiveErrors >= maxConsecutiveErrors {
+				log.Printf("[%d] ❌ auto-stopping: %d consecutive errors", m.ID, consecutiveErrors)
+				e.db.SetMonitorStatus(m.ID, "error")
+				return
+			}
 			if newClient, err := e.newWarmClient(m.ID, pm); err == nil {
 				client = newClient
 			} else {
@@ -136,12 +182,23 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		if status != 200 {
+			consecutiveErrors++
+			totalErrors++
+			reportHealth(fmt.Sprintf("HTTP %d", status))
 			log.Printf("[%d] #%d catalog returned %d, waiting...", m.ID, checks, status)
+			if consecutiveErrors >= maxConsecutiveErrors {
+				log.Printf("[%d] ❌ auto-stopping: %d consecutive errors", m.ID, consecutiveErrors)
+				e.db.SetMonitorStatus(m.ID, "error")
+				return
+			}
 			time.Sleep(5 * time.Second)
 			continue
 		}
 
 		consecutiveErrors = 0
+		if checks%5 == 0 || checks <= 3 {
+			reportHealth("")
+		}
 
 		ids := make([]int64, len(items))
 		for i, item := range items {

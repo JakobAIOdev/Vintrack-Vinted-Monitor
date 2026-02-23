@@ -38,6 +38,15 @@ type Item struct {
 	FoundAt   time.Time `json:"found_at"`
 }
 
+type MonitorHealth struct {
+	MonitorID       int    `json:"monitor_id"`
+	TotalChecks     int64  `json:"total_checks"`
+	TotalErrors     int64  `json:"total_errors"`
+	ConsecutiveErrs int    `json:"consecutive_errors"`
+	LastError       string `json:"last_error,omitempty"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
 // --- Vinted API response types ---
 
 type VintedResponse struct {
