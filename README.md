@@ -50,7 +50,7 @@ Built for resellers who need speed. Open-sourced for the community.
 
 - **Sub-2s detection** — catch items faster than any other tool
 - **Anti-detection** — TLS fingerprint rotation with proxy support
-- **Granular filters** — price, size, category, brand, and more
+- **Granular filters** — price, size, category, brand, country/region, and more
 - **Full dashboard** — no CLI needed, everything from the browser
 - **One-command deploy** — `docker compose up` and you're live
 
@@ -68,6 +68,15 @@ Fine-tune every monitor with:
 - **Categories** — over 900+ Vinted categories supported
 - **Brands** — filter by specific brands
 - **Sizes** — clothing size filtering
+- **Country / Region** — choose the Vinted market per monitor (e.g. `vinted.de`, `vinted.hu`, `vinted.fr`)
+
+### Country / Region Monitoring
+Vintrack now supports per-monitor Vinted country selection. Instead of being limited to `vinted.de`, each monitor can target a specific Vinted domain.
+
+- Region is selected in monitor creation
+- Worker uses region-aware API base URLs and headers
+- Supports major Vinted EU markets (including Hungary / `vinted.hu`)
+- Existing monitors default to `de` for backward compatibility
 
 ### Discord Notifications
 Rich embed webhooks sent instantly when a new item is found:
@@ -353,7 +362,7 @@ sequenceDiagram
     participant R as Redis
     participant DC as Discord
 
-    U->>D: Create monitor (query, filters)
+    U->>D: Create monitor (query, filters, region)
     D->>DB: Save monitor (status: active)
     W->>DB: Poll for active monitors (every 5s)
     W->>V: Fetch listings (via proxy)
@@ -378,7 +387,7 @@ sequenceDiagram
 - [ ] Saved searches / favorites
 - [ ] Rate limiting per user
 - [ ] API tokens for external integrations
-- [ ] Multi-language Vinted region support
+- [ ] Region presets and custom domain overrides
 - [ ] Mobile app (React Native)
 
 ---

@@ -8,7 +8,8 @@ import (
 )
 
 func BuildVintedURL(m model.Monitor) string {
-	baseURL := "https://www.vinted.de/api/v2/catalog/items"
+	domain := model.RegionDomain(m.Region)
+	baseURL := fmt.Sprintf("https://%s/api/v2/catalog/items", domain)
 	params := url.Values{}
 
 	params.Add("search_text", m.Query)

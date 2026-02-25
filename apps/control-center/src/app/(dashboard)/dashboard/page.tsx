@@ -26,6 +26,7 @@ export default async function DashboardPage() {
     catalog_ids: m.catalog_ids ?? null,
     brand_ids: m.brand_ids ?? null,
     size_id: m.size_id ?? null,
+    region: m.region ?? "de",
     discord_webhook: m.discord_webhook ?? null,
     webhook_active: m.webhook_active ?? true, 
     proxy_group_name: m.proxy_group?.name ?? null,
