@@ -3,6 +3,7 @@ package scraper
 import (
 	"io"
 	"log"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -202,13 +203,19 @@ func (s *HTMLScraper) doScrape(itemURL string) (SellerInfo, int) {
 func (s *HTMLScraper) fetchHTML(targetURL string) ([]byte, int) {
 	currentURL := targetURL
 
+	// Extract domain from URL for headers
+	domain := "www.vinted.de"
+	if parsed, err := url.Parse(targetURL); err == nil && parsed.Host != "" {
+		domain = parsed.Host
+	}
+
 	for redirects := 0; redirects < 3; redirects++ {
 		req, err := http.NewRequest("GET", currentURL, nil)
 		if err != nil {
 			return nil, 0
 		}
 
-		req.Header = newPageHeaders()
+		req.Header = newPageHeaders(domain)
 
 		resp, err := s.client.HttpClient.Do(req)
 		if err != nil {
@@ -222,7 +229,7 @@ func (s *HTMLScraper) fetchHTML(targetURL string) ([]byte, int) {
 				return nil, resp.StatusCode
 			}
 			if strings.HasPrefix(location, "/") {
-				location = "https://www.vinted.de" + location
+				location = "https://" + domain + location
 			}
 			currentURL = location
 			continue

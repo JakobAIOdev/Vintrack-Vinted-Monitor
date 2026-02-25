@@ -40,6 +40,7 @@ import {
 import { getCategoryLabels } from "@/lib/categories";
 import { getBrandLabels } from "@/lib/brands";
 import { getSizeLabels } from "@/lib/sizes";
+import { getRegionLabel } from "@/lib/regions";
 
 type MonitorHealth = {
   monitor_id: number;
@@ -58,6 +59,7 @@ export type Monitor = {
   catalog_ids: string | null;
   brand_ids: string | null;
   size_id: string | null;
+  region: string;
   discord_webhook: string | null;
   webhook_active: boolean;
   proxy_group_name: string | null;
@@ -298,6 +300,11 @@ export function DashboardClient({
                       {m.price_max && (
                         <span className="text-[11px] text-slate-400">
                           Max {m.price_max}€
+                        </span>
+                      )}
+                      {m.region && m.region !== "de" && (
+                        <span className="text-[11px] text-slate-400">
+                          {getRegionLabel(m.region)}
                         </span>
                       )}
                     </div>

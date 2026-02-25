@@ -1,6 +1,8 @@
 package scraper
 
 import (
+	"fmt"
+
 	http "github.com/bogdanfinn/fhttp"
 	tls_client "github.com/bogdanfinn/tls-client"
 	"github.com/bogdanfinn/tls-client/profiles"
@@ -13,9 +15,9 @@ func newWarmupHeaders() http.Header {
 	}
 }
 
-func newPageHeaders() http.Header {
+func newPageHeaders(domain string) http.Header {
 	return http.Header{
-		"Authority":                 {"www.vinted.de"},
+		"Authority":                 {domain},
 		"User-Agent":                {"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
 		"Accept":                    {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"},
 		"Accept-Language":           {"de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"},
@@ -31,12 +33,12 @@ func newPageHeaders() http.Header {
 	}
 }
 
-func newAPIHeaders() http.Header {
+func newAPIHeaders(domain string) http.Header {
 	return http.Header{
 		"User-Agent":       {"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
 		"Accept":           {"application/json, text/plain, */*"},
 		"X-Requested-With": {"XMLHttpRequest"},
-		"Referer":          {"https://www.vinted.de/"},
+		"Referer":          {fmt.Sprintf("https://%s/", domain)},
 	}
 }
 
@@ -65,7 +67,11 @@ func NewClient(proxyURL string) (*Client, error) {
 }
 
 func (c *Client) WarmUp() error {
-	req, _ := http.NewRequest("GET", "https://www.vinted.de/", nil)
+	return c.WarmUpRegion("www.vinted.de")
+}
+
+func (c *Client) WarmUpRegion(domain string) error {
+	req, _ := http.NewRequest("GET", fmt.Sprintf("https://%s/", domain), nil)
 	req.Header = newWarmupHeaders()
 
 	resp, err := c.HttpClient.Do(req)

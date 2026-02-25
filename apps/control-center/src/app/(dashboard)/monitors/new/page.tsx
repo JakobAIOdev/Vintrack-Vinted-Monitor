@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { CategoryPicker } from "@/components/monitors/category-picker";
 import { BrandPicker } from "@/components/monitors/brand-picker";
 import { SizePicker } from "@/components/monitors/size-picker";
+import { RegionPicker } from "@/components/monitors/region-picker";
 import { ArrowLeft, Plus } from "lucide-react";
 import Link from "next/link";
 import { useState, useEffect } from "react";
@@ -22,6 +23,7 @@ export default function NewMonitorPage() {
   const [selectedSizes, setSelectedSizes] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedBrands, setSelectedBrands] = useState<string[]>([]);
+  const [selectedRegion, setSelectedRegion] = useState<string>("de");
   const [proxyGroups, setProxyGroups] = useState<ProxyGroupOption[]>([]);
   const [userRole, setUserRole] = useState<string>("free");
   const [selectedProxyGroup, setSelectedProxyGroup] = useState<string>("");
@@ -69,6 +71,18 @@ export default function NewMonitorPage() {
               />
               <p className="text-[12px] text-muted-foreground">
                 This text will be searched on Vinted exactly as entered.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-[13px]">Country / Region</Label>
+              <RegionPicker
+                selected={selectedRegion}
+                onChange={setSelectedRegion}
+              />
+              <input type="hidden" name="region" value={selectedRegion} />
+              <p className="text-[12px] text-muted-foreground">
+                Select which Vinted country to monitor. Default is Germany (vinted.de).
               </p>
             </div>
 

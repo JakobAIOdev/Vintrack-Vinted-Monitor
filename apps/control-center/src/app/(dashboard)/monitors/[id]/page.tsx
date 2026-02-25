@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { getCategoryLabels } from "@/lib/categories";
 import { getBrandLabels } from "@/lib/brands";
 import { getSizeLabels } from "@/lib/sizes";
+import { getRegionLabel } from "@/lib/regions";
 import { ProxyHealthCard } from "@/components/monitors/proxy-health";
 
 export default async function MonitorPage({
@@ -87,6 +88,8 @@ export default async function MonitorPage({
               )}
               <span className="text-slate-300">·</span>
               <span>{monitor._count.items.toLocaleString()} items</span>
+              <span className="text-slate-300">·</span>
+              <span>{getRegionLabel(monitor.region)}</span>
               <span className="text-slate-300">·</span>
               {monitor.proxy_group ? (
                 <span className="flex items-center gap-1">

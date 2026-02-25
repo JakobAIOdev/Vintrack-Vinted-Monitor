@@ -38,13 +38,13 @@ func (e *Engine) getProxyManager(m model.Monitor) *proxy.Manager {
 	return e.serverProxy
 }
 
-func (e *Engine) newWarmClient(monitorID int, pm *proxy.Manager) (*Client, error) {
+func (e *Engine) newWarmClient(monitorID int, pm *proxy.Manager, domain string) (*Client, error) {
 	client, err := NewClient(pm.Next())
 	if err != nil {
 		return nil, fmt.Errorf("client creation failed: %w", err)
 	}
 
-	if err := client.WarmUp(); err != nil {
+	if err := client.WarmUpRegion(domain); err != nil {
 		log.Printf("[%d] warmup warning: %v", monitorID, err)
 	}
 
@@ -53,6 +53,7 @@ func (e *Engine) newWarmClient(monitorID int, pm *proxy.Manager) (*Client, error
 
 func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	pm := e.getProxyManager(m)
+	domain := model.RegionDomain(m.Region)
 
 	proxySource := "server"
 	if m.ProxyGroupName.Valid && m.ProxyGroupName.String != "" {
@@ -71,7 +72,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	}
 	log.Printf("[%d] proxy source: %s (%d proxies)", m.ID, proxySource, pm.Count())
 
-	client, err := e.newWarmClient(m.ID, pm)
+	client, err := e.newWarmClient(m.ID, pm, domain)
 	if err != nil {
 		log.Printf("[%d] init error: %v", m.ID, err)
 		return
@@ -133,7 +134,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			}
 		}
 
-		items, status, err := e.fetchCatalog(client, apiURL)
+		items, status, err := e.fetchCatalog(client, apiURL, domain)
 
 		if err != nil {
 			consecutiveErrors++
@@ -150,7 +151,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 				return
 			}
 			if consecutiveErrors > 2 {
-				if newClient, err := e.newWarmClient(m.ID, pm); err == nil {
+				if newClient, err := e.newWarmClient(m.ID, pm, domain); err == nil {
 					client = newClient
 					consecutiveErrors = 0
 					reportHealth("")
@@ -172,7 +173,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 				e.db.SetMonitorStatus(m.ID, "error")
 				return
 			}
-			if newClient, err := e.newWarmClient(m.ID, pm); err == nil {
+			if newClient, err := e.newWarmClient(m.ID, pm, domain); err == nil {
 				client = newClient
 			} else {
 				log.Printf("[%d] re-warm failed: %v", m.ID, err)
@@ -236,12 +237,12 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	}
 }
 
-func (e *Engine) fetchCatalog(client *Client, apiURL string) ([]model.VintedItem, int, error) {
+func (e *Engine) fetchCatalog(client *Client, apiURL string, domain string) ([]model.VintedItem, int, error) {
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return nil, 0, err
 	}
-	req.Header = newAPIHeaders()
+	req.Header = newAPIHeaders(domain)
 
 	resp, err := client.HttpClient.Do(req)
 	if err != nil {
@@ -267,9 +268,10 @@ func (e *Engine) fetchCatalog(client *Client, apiURL string) ([]model.VintedItem
 }
 
 func (e *Engine) processNewItem(m model.Monitor, vItem model.VintedItem, scraper *HTMLScraper, skipEnrich bool, proxySource string) {
+	domain := model.RegionDomain(m.Region)
 	itemURL := vItem.Url
 	if !strings.HasPrefix(itemURL, "http") {
-		itemURL = "https://www.vinted.de" + itemURL
+		itemURL = fmt.Sprintf("https://%s%s", domain, itemURL)
 	}
 
 	size := vItem.SizeTitle
