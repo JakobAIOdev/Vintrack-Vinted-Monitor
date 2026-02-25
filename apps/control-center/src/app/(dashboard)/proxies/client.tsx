@@ -95,10 +95,10 @@ export function ProxiesClient({
     proxies.split("\n").filter((l) => l.trim().length > 0).length;
 
   return (
-    <div className="max-w-3xl mx-auto py-8 px-6 space-y-6">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold tracking-tight">Proxy Groups</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Proxy Groups</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             Manage your proxy lists for monitors.
           </p>

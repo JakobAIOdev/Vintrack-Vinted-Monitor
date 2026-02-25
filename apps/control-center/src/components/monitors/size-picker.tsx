@@ -26,7 +26,7 @@ export function SizePicker({ selected, onChange }: SizePickerProps) {
   };
 
   const activeLabel =
-    SIZE_GROUPS.find((g) => g.key === activeGroup)?.label ?? "Größentyp";
+    SIZE_GROUPS.find((g) => g.key === activeGroup)?.label ?? "Size Type";
 
   return (
     <div className="space-y-2.5">

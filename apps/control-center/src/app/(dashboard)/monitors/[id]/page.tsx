@@ -40,7 +40,7 @@ export default async function MonitorPage({
   const deleteAction = deleteMonitor.bind(null, monitor.id);
 
   return (
-    <div className="max-w-350 mx-auto space-y-6 p-6">
+    <div className="space-y-6">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div className="flex items-center gap-3">
           <Link href="/dashboard">

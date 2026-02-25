@@ -85,7 +85,7 @@ export function AdminClient({
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 p-6">
+    <div className="space-y-8">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">User Management</h1>
         <p className="text-sm text-muted-foreground mt-0.5">

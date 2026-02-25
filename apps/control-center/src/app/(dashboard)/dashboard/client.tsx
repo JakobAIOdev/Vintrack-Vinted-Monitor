@@ -174,7 +174,7 @@ export function DashboardClient({
   const totalItems = monitors.reduce((sum, m) => sum + m._count.items, 0);
 
   return (
-    <div className="max-w-350 mx-auto space-y-8 p-6">
+    <div className="space-y-8">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">
