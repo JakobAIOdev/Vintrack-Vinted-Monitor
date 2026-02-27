@@ -1,20 +1,12 @@
 "use client";
 
-import { useState } from "react";
-import { toast } from "sonner";
 import {
-  Plus,
-  Trash2,
-  Globe,
-  Server,
-  ChevronDown,
-  ChevronUp,
-  Shield,
-} from "lucide-react";
+  createProxyGroup,
+  deleteProxyGroup,
+  updateProxyGroup,
+} from "@/actions/proxy-groups";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -23,11 +15,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
-  createProxyGroup,
-  deleteProxyGroup,
-  updateProxyGroup,
-} from "@/actions/proxy-groups";
+  ChevronDown,
+  ChevronUp,
+  Globe,
+  Plus,
+  Server,
+  Shield,
+  Trash2,
+} from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
 
 export type ProxyGroup = {
   id: number;
@@ -81,8 +81,8 @@ export function ProxiesClient({
       await updateProxyGroup(id, formData);
       setGroups((prev) =>
         prev.map((g) =>
-          g.id === id ? { ...g, name: editName, proxies: editProxies } : g
-        )
+          g.id === id ? { ...g, name: editName, proxies: editProxies } : g,
+        ),
       );
       setEditingId(null);
       toast.success("Proxy group updated");
@@ -254,10 +254,7 @@ export function ProxiesClient({
                                     return `${url.protocol}//${url.username}:****@${url.host}`;
                                   }
                                 } catch {}
-                                return line.replace(
-                                  /:[^:@]+@/,
-                                  ":****@"
-                                );
+                                return line.replace(/:[^:@]+@/, ":****@");
                               })
                               .join("\n")}
                           </pre>
@@ -313,7 +310,9 @@ export function ProxiesClient({
                 rows={8}
                 required
                 className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-[13px] font-mono text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-1"
-                placeholder={"http://user:pass@host:port\nhttp://user:pass@host:port\n\nSupported formats:\nhttp://user:pass@host:port\nsocks5://user:pass@host:port\nhost:port:user:pass"}
+                placeholder={
+                  "http://user:pass@host:port\nhttp://user:pass@host:port\n\nSupported formats:\nhttp://user:pass@host:port\nsocks5://user:pass@host:port\nhost:port:user:pass"
+                }
               />
               <p className="text-[12px] text-muted-foreground">
                 One proxy per line. Supports HTTP, HTTPS, and SOCKS5.

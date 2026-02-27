@@ -70,6 +70,7 @@ model monitors {
   size_id    String?   @db.VarChar(50)
   catalog_ids String?  @db.VarChar(500)
   brand_ids  String?   @db.VarChar(500)
+  color_ids  String?   @db.VarChar(500)
   region     String    @default("de") @db.VarChar(10)
   status     String?   @default("active") @db.VarChar(50)
   created_at DateTime? @default(now()) @db.Timestamp(6)

@@ -8,6 +8,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { getCategoryLabels } from "@/lib/categories";
 import { getBrandLabels } from "@/lib/brands";
+import { getColorLabels } from "@/lib/colors";
 import { getSizeLabels } from "@/lib/sizes";
 import { getRegionLabel } from "@/lib/regions";
 import { ProxyHealthCard } from "@/components/monitors/proxy-health";
@@ -102,42 +103,44 @@ export default async function MonitorPage({
               )}
             </div>
 
-            {monitor.catalog_ids && (
+            {(monitor.catalog_ids || monitor.brand_ids || monitor.color_ids || monitor.size_id) && (
               <div className="flex flex-wrap gap-1 mt-2">
-                {getCategoryLabels(monitor.catalog_ids).map((label) => (
-                  <span
-                    key={label}
-                    className="inline-flex items-center rounded-md bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 border border-violet-200"
-                  >
-                    {label}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {monitor.brand_ids && (
-              <div className="flex flex-wrap gap-1 mt-2">
-                {getBrandLabels(monitor.brand_ids).map((label) => (
-                  <span
-                    key={label}
-                    className="inline-flex items-center rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 border border-blue-200"
-                  >
-                    {label}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {monitor.size_id && (
-              <div className="flex flex-wrap gap-1 mt-2">
-                {getSizeLabels(monitor.size_id).map((label) => (
-                  <span
-                    key={label}
-                    className="inline-flex items-center rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200"
-                  >
-                    {label}
-                  </span>
-                ))}
+                {monitor.catalog_ids &&
+                  getCategoryLabels(monitor.catalog_ids).map((label) => (
+                    <span
+                      key={`cat-${label}`}
+                      className="inline-flex items-center rounded-md bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 border border-violet-200"
+                    >
+                      {label}
+                    </span>
+                  ))}
+                {monitor.brand_ids &&
+                  getBrandLabels(monitor.brand_ids).map((label) => (
+                    <span
+                      key={`brand-${label}`}
+                      className="inline-flex items-center rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 border border-blue-200"
+                    >
+                      {label}
+                    </span>
+                  ))}
+                {monitor.color_ids &&
+                  getColorLabels(monitor.color_ids).map((label) => (
+                    <span
+                      key={`color-${label}`}
+                      className="inline-flex items-center rounded-md bg-pink-50 px-1.5 py-0.5 text-[10px] font-medium text-pink-700 border border-pink-200"
+                    >
+                      {label}
+                    </span>
+                  ))}
+                {monitor.size_id &&
+                  getSizeLabels(monitor.size_id).map((label) => (
+                    <span
+                      key={`size-${label}`}
+                      className="inline-flex items-center rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200"
+                    >
+                      {label}
+                    </span>
+                  ))}
               </div>
             )}
           </div>

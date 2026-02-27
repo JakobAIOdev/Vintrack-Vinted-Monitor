@@ -39,6 +39,7 @@ import {
 } from "@/actions/dashboard-actions";
 import { getCategoryLabels } from "@/lib/categories";
 import { getBrandLabels } from "@/lib/brands";
+import { getColorLabels } from "@/lib/colors";
 import { getSizeLabels } from "@/lib/sizes";
 import { getRegionLabel } from "@/lib/regions";
 
@@ -58,6 +59,7 @@ export type Monitor = {
   price_max: number | null;
   catalog_ids: string | null;
   brand_ids: string | null;
+  color_ids: string | null;
   size_id: string | null;
   region: string;
   discord_webhook: string | null;
@@ -324,7 +326,7 @@ export function DashboardClient({
                   </button>
                 </div>
 
-                {(m.catalog_ids || m.brand_ids || m.size_id) && (
+                {(m.catalog_ids || m.brand_ids || m.color_ids || m.size_id) && (
                   <div className="flex flex-wrap gap-1 mb-3">
                     {m.catalog_ids &&
                       getCategoryLabels(m.catalog_ids).map((label) => (
@@ -340,6 +342,15 @@ export function DashboardClient({
                         <span
                           key={`brand-${label}`}
                           className="inline-flex items-center rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 border border-blue-200"
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    {m.color_ids &&
+                      getColorLabels(m.color_ids).map((label) => (
+                        <span
+                          key={`color-${label}`}
+                          className="inline-flex items-center rounded-md bg-pink-50 px-1.5 py-0.5 text-[10px] font-medium text-pink-700 border border-pink-200"
                         >
                           {label}
                         </span>

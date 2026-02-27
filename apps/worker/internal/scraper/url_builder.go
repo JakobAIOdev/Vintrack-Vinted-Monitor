@@ -53,5 +53,15 @@ func BuildVintedURL(m model.Monitor) string {
 		}
 	}
 
+	if m.ColorIDs != nil && *m.ColorIDs != "" {
+		colors := strings.Split(*m.ColorIDs, ",")
+		for _, c := range colors {
+			c = strings.TrimSpace(c)
+			if c != "" {
+				params.Add("color_ids[]", c)
+			}
+		}
+	}
+
 	return fmt.Sprintf("%s?%s", baseURL, params.Encode())
 }

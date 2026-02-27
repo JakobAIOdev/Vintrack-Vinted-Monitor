@@ -14,6 +14,7 @@ type Monitor struct {
 	SizeID         *string
 	CatalogIDs     *string
 	BrandIDs       *string
+	ColorIDs       *string
 	Region         string
 	Status         string
 	DiscordWebhook sql.NullString

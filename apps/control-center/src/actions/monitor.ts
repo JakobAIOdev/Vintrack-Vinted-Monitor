@@ -18,6 +18,7 @@ export async function createMonitor(formData: FormData) {
   const sizeId = formData.get("size_id") as string;
   const catalogIds = (formData.get("catalog_ids") as string) || null;
   const brandIds = (formData.get("brand_ids") as string) || null;
+  const colorIds = (formData.get("color_ids") as string) || null;
   const region = (formData.get("region") as string) || "de";
   const proxyGroupRaw = formData.get("proxy_group_id") as string;
 
@@ -62,6 +63,7 @@ export async function createMonitor(formData: FormData) {
       size_id: sizeId,
       catalog_ids: catalogIds || null,
       brand_ids: brandIds || null,
+      color_ids: colorIds || null,
       region,
       proxy_group_id: proxyGroupId,
       status: "active",

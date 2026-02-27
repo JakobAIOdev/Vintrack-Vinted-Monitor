@@ -9,6 +9,7 @@ import { CategoryPicker } from "@/components/monitors/category-picker";
 import { BrandPicker } from "@/components/monitors/brand-picker";
 import { SizePicker } from "@/components/monitors/size-picker";
 import { RegionPicker } from "@/components/monitors/region-picker";
+import { ColorPicker } from "@/components/monitors/color-picker";
 import { ArrowLeft, Plus } from "lucide-react";
 import Link from "next/link";
 import { useState, useEffect } from "react";
@@ -23,6 +24,7 @@ export default function NewMonitorPage() {
   const [selectedSizes, setSelectedSizes] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedBrands, setSelectedBrands] = useState<string[]>([]);
+  const [selectedColors, setSelectedColors] = useState<string[]>([]);
   const [selectedRegion, setSelectedRegion] = useState<string>("de");
   const [proxyGroups, setProxyGroups] = useState<ProxyGroupOption[]>([]);
   const [userRole, setUserRole] = useState<string>("free");
@@ -160,6 +162,27 @@ export default function NewMonitorPage() {
               />
               <p className="text-[12px] text-muted-foreground">
                 Limit results to specific brands.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-[13px]">
+                Color Filter{" "}
+                <span className="text-muted-foreground font-normal">
+                  (optional)
+                </span>
+              </Label>
+              <ColorPicker
+                selected={selectedColors}
+                onChange={setSelectedColors}
+              />
+              <input
+                type="hidden"
+                name="color_ids"
+                value={selectedColors.join(",")}
+              />
+              <p className="text-[12px] text-muted-foreground">
+                Limit results to specific colors.
               </p>
             </div>
 
