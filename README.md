@@ -125,7 +125,7 @@ Manage all users from a dedicated admin panel:
   <img src="docs/screenshots/live-feed.webp" width="49%" alt="Live Feed" />
 </p>
 <p align="center">
-  <img src="docs/screenshots/create.webp" width="49%" alt="Create Monitor" />
+  <img src="docs/screenshots/create-monitor.webp" width="49%" alt="Create Monitor" />
   <img src="docs/screenshots/user-management.webp" width="49%" alt="Admin Panel" />
 </p>
 <p align="center">
