@@ -16,6 +16,7 @@ import {
   Globe,
   Zap,
   AlertTriangle,
+  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -304,26 +305,36 @@ export function DashboardClient({
                           Max {m.price_max}€
                         </span>
                       )}
-                      {m.region && m.region !== "de" && (
+                      {m.region && m.region && (
                         <span className="text-[11px] text-slate-400">
                           {getRegionLabel(m.region)}
                         </span>
                       )}
                     </div>
                   </div>
-                  <button
-                    onClick={() => openWebhookDialog(m)}
-                    className="text-slate-300 hover:text-slate-500 transition-colors p-1 -m-1"
-                    title="Configure webhook"
-                  >
-                    <Webhook
-                      className={`w-4 h-4 ${
-                        m.discord_webhook && m.webhook_active
-                          ? "text-indigo-400"
-                          : ""
-                      }`}
-                    />
-                  </button>
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <Link href={`/monitors/${m.id}/edit`}>
+                      <button
+                        className="text-slate-300 hover:text-slate-500 transition-colors p-1.5 rounded-md hover:bg-slate-50"
+                        title="Edit monitor"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    </Link>
+                    <button
+                      onClick={() => openWebhookDialog(m)}
+                      className="text-slate-300 hover:text-slate-500 transition-colors p-1.5 rounded-md hover:bg-slate-50"
+                      title="Configure webhook"
+                    >
+                      <Webhook
+                        className={`w-3.5 h-3.5 ${
+                          m.discord_webhook && m.webhook_active
+                            ? "text-indigo-400"
+                            : ""
+                        }`}
+                      />
+                    </button>
+                  </div>
                 </div>
 
                 {(m.catalog_ids || m.brand_ids || m.color_ids || m.size_id) && (

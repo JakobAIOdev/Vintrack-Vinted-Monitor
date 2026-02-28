@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { LiveFeed } from "@/components/monitors/live-feed";
 import { Button } from "@/components/ui/button";
 import { toggleMonitorStatus, deleteMonitor } from "@/actions/monitor";
-import { ArrowLeft, PauseCircle, PlayCircle, Trash2, Tag, Globe, Zap } from "lucide-react";
+import { ArrowLeft, PauseCircle, PlayCircle, Trash2, Tag, Globe, Zap, Pencil } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { getCategoryLabels } from "@/lib/categories";
@@ -147,6 +147,16 @@ export default async function MonitorPage({
         </div>
 
         <div className="flex items-center gap-2">
+          <Link href={`/monitors/${monitor.id}/edit`}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs font-medium text-slate-600 border-slate-200 hover:bg-slate-50"
+            >
+              <Pencil className="mr-1.5 h-3.5 w-3.5" /> Edit
+            </Button>
+          </Link>
+
           <form action={toggleAction}>
             <Button
               variant="outline"

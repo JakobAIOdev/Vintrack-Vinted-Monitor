@@ -74,6 +74,72 @@ export async function createMonitor(formData: FormData) {
   redirect("/dashboard");
 }
 
+export async function updateMonitor(id: number, formData: FormData) {
+  const session = await auth();
+  if (!session?.user?.id) throw new Error("Unauthorized");
+
+  const query = formData.get("query") as string;
+  const priceMin = formData.get("price_min") ? Number(formData.get("price_min")) : null;
+  const priceMax = formData.get("price_max") ? Number(formData.get("price_max")) : null;
+  const sizeId = formData.get("size_id") as string;
+  const catalogIds = (formData.get("catalog_ids") as string) || null;
+  const brandIds = (formData.get("brand_ids") as string) || null;
+  const colorIds = (formData.get("color_ids") as string) || null;
+  const region = (formData.get("region") as string) || "de";
+  const discordWebhook = (formData.get("discord_webhook") as string) || null;
+  const proxyGroupRaw = formData.get("proxy_group_id") as string;
+
+  if (!query) return;
+
+  // Verify the monitor belongs to this user
+  const existing = await db.monitors.findFirst({
+    where: { id, userId: session.user.id },
+  });
+  if (!existing) throw new Error("Monitor not found");
+
+  let proxyGroupId: number | null = null;
+
+  if (proxyGroupRaw && proxyGroupRaw !== "server") {
+    const pgId = parseInt(proxyGroupRaw);
+    if (!isNaN(pgId)) {
+      const group = await db.proxy_groups.findFirst({
+        where: { id: pgId, userId: session.user.id },
+      });
+      if (!group) throw new Error("Invalid proxy group");
+      proxyGroupId = pgId;
+    }
+  } else if (proxyGroupRaw === "server") {
+    const user = await db.user.findUnique({
+      where: { id: session.user.id },
+      select: { role: true },
+    });
+    if (user?.role !== "premium" && user?.role !== "admin") {
+      throw new Error("Server proxies require a premium account");
+    }
+    proxyGroupId = null;
+  }
+
+  await db.monitors.update({
+    where: { id, userId: session.user.id },
+    data: {
+      query,
+      price_min: priceMin,
+      price_max: priceMax,
+      size_id: sizeId,
+      catalog_ids: catalogIds || null,
+      brand_ids: brandIds || null,
+      color_ids: colorIds || null,
+      region,
+      discord_webhook: discordWebhook?.trim() || null,
+      proxy_group_id: proxyGroupId,
+    },
+  });
+
+  revalidatePath("/dashboard");
+  revalidatePath(`/monitors/${id}`);
+  redirect(`/monitors/${id}`);
+}
+
 export async function toggleMonitorStatus(id: number, currentStatus: string) {
   const session = await auth();
   if (!session?.user?.id) throw new Error("Unauthorized");
