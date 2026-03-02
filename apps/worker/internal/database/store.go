@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"sync"
 	"time"
 
 	"vintrack-worker/internal/cache"
@@ -15,8 +16,10 @@ import (
 )
 
 type Store struct {
-	db    *sql.DB
-	cache *cache.RedisCache
+	db             *sql.DB
+	cache          *cache.RedisCache
+	healthErrLog   map[int]time.Time
+	healthErrLogMu sync.Mutex
 }
 
 func NewStore(connStr string, redisCache *cache.RedisCache) (*Store, error) {
@@ -37,7 +40,7 @@ func NewStore(connStr string, redisCache *cache.RedisCache) (*Store, error) {
 
 	log.Printf("PostgreSQL connected (pool: %d max, %d idle)", maxConns, maxConns/2)
 
-	return &Store{db: db, cache: redisCache}, nil
+	return &Store{db: db, cache: redisCache, healthErrLog: make(map[int]time.Time)}, nil
 }
 
 func (s *Store) BatchIsNew(itemIDs []int64) map[int64]bool {
@@ -172,7 +175,7 @@ func (s *Store) UpdateMonitorHealth(health model.MonitorHealth) {
 		return
 	}
 	if err := s.cache.SetMonitorHealth(health.MonitorID, data); err != nil {
-		log.Printf("set health for monitor %d: %v", health.MonitorID, err)
+		s.logHealthErrorOnce(health.MonitorID, err)
 	}
 }
 
@@ -188,4 +191,16 @@ func (s *Store) SetMonitorStatus(monitorID int, status string) {
 	if err != nil {
 		log.Printf("set monitor %d status to %s: %v", monitorID, status, err)
 	}
+}
+
+func (s *Store) logHealthErrorOnce(monitorID int, err error) {
+	s.healthErrLogMu.Lock()
+	defer s.healthErrLogMu.Unlock()
+
+	now := time.Now()
+	if last, ok := s.healthErrLog[monitorID]; ok && now.Sub(last) < 60*time.Second {
+		return
+	}
+	s.healthErrLog[monitorID] = now
+	log.Printf("set health for monitor %d: %v (suppressing repeats for 60s)", monitorID, err)
 }

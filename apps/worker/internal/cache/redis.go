@@ -5,18 +5,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
 type RedisCache struct {
-	client *redis.Client
-	ctx    context.Context
+	client   *redis.Client
+	ctx      context.Context
+	opts     *redis.Options
+	mu       sync.Mutex
+	readonly bool
 }
 
 func NewRedisCache(addr, password string, db int) (*RedisCache, error) {
-	client := redis.NewClient(&redis.Options{
+	opts := &redis.Options{
 		Addr:         addr,
 		Password:     password,
 		DB:           db,
@@ -26,8 +31,9 @@ func NewRedisCache(addr, password string, db int) (*RedisCache, error) {
 		DialTimeout:  5 * time.Second,
 		ReadTimeout:  3 * time.Second,
 		WriteTimeout: 3 * time.Second,
-	})
+	}
 
+	client := redis.NewClient(opts)
 	ctx := context.Background()
 
 	if err := client.Ping(ctx).Err(); err != nil {
@@ -35,7 +41,42 @@ func NewRedisCache(addr, password string, db int) (*RedisCache, error) {
 	}
 
 	log.Printf("Redis connected: %s", addr)
-	return &RedisCache{client: client, ctx: ctx}, nil
+	return &RedisCache{client: client, ctx: ctx, opts: opts}, nil
+}
+
+func isReadOnlyErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "READONLY")
+}
+
+func (r *RedisCache) reconnect() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	_ = r.client.Close()
+	r.client = redis.NewClient(r.opts)
+
+	if err := r.client.Ping(r.ctx).Err(); err != nil {
+		log.Printf("redis reconnect ping failed: %v", err)
+	} else {
+		log.Printf("redis reconnected successfully")
+		r.readonly = false
+	}
+}
+
+func (r *RedisCache) writeWithRetry(op func() error) error {
+	err := op()
+	if isReadOnlyErr(err) {
+		if !r.readonly {
+			log.Printf("redis READONLY detected, attempting reconnect...")
+			r.readonly = true
+		}
+		r.reconnect()
+		return op()
+	}
+	if err == nil && r.readonly {
+		r.readonly = false
+	}
+	return err
 }
 
 func (r *RedisCache) BatchIsNew(itemIDs []int64) (map[int64]bool, error) {
@@ -63,7 +104,9 @@ func (r *RedisCache) BatchIsNew(itemIDs []int64) (map[int64]bool, error) {
 }
 
 func (r *RedisCache) MarkAsSeen(itemID int64) error {
-	return r.client.Set(r.ctx, fmt.Sprintf("item:seen:%d", itemID), "1", 30*24*time.Hour).Err()
+	return r.writeWithRetry(func() error {
+		return r.client.Set(r.ctx, fmt.Sprintf("item:seen:%d", itemID), "1", 30*24*time.Hour).Err()
+	})
 }
 
 func (r *RedisCache) GetUserRegion(userID int64) (string, bool) {
@@ -75,7 +118,9 @@ func (r *RedisCache) GetUserRegion(userID int64) (string, bool) {
 }
 
 func (r *RedisCache) SetUserRegion(userID int64, region string) {
-	r.client.Set(r.ctx, fmt.Sprintf("user:region:%d", userID), region, 7*24*time.Hour)
+	_ = r.writeWithRetry(func() error {
+		return r.client.Set(r.ctx, fmt.Sprintf("user:region:%d", userID), region, 7*24*time.Hour).Err()
+	})
 }
 
 func (r *RedisCache) PublishNewItem(item interface{}) error {
@@ -83,12 +128,16 @@ func (r *RedisCache) PublishNewItem(item interface{}) error {
 	if err != nil {
 		return fmt.Errorf("marshal item: %w", err)
 	}
-	return r.client.Publish(r.ctx, "vinted:new_items", payload).Err()
+	return r.writeWithRetry(func() error {
+		return r.client.Publish(r.ctx, "vinted:new_items", payload).Err()
+	})
 }
 
 func (r *RedisCache) SetMonitorHealth(monitorID int, data []byte) error {
 	key := fmt.Sprintf("monitor:health:%d", monitorID)
-	return r.client.Set(r.ctx, key, data, 10*time.Minute).Err()
+	return r.writeWithRetry(func() error {
+		return r.client.Set(r.ctx, key, data, 10*time.Minute).Err()
+	})
 }
 
 func (r *RedisCache) GetMonitorHealth(monitorID int) ([]byte, error) {
@@ -123,7 +172,9 @@ func (r *RedisCache) GetMonitorHealthBatch(monitorIDs []int) (map[int][]byte, er
 
 func (r *RedisCache) DeleteMonitorHealth(monitorID int) error {
 	key := fmt.Sprintf("monitor:health:%d", monitorID)
-	return r.client.Del(r.ctx, key).Err()
+	return r.writeWithRetry(func() error {
+		return r.client.Del(r.ctx, key).Err()
+	})
 }
 
 func (r *RedisCache) Close() error {

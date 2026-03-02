@@ -86,8 +86,10 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	apiURL := BuildVintedURL(m)
 
 	interval := getEnvInt("CHECK_INTERVAL_MS", 1500)
-	maxConsecutiveErrors := getEnvInt("MAX_CONSECUTIVE_ERRORS", 50)
+	maxConsecutiveErrors := getEnvInt("MAX_CONSECUTIVE_ERRORS", 10)
+	maxRotations := getEnvInt("MAX_CLIENT_ROTATIONS", 5)
 	consecutiveErrors := 0
+	clientRotations := 0
 	checks := 0
 	var totalErrors int64
 	firstRun := true
@@ -151,10 +153,16 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 				return
 			}
 			if consecutiveErrors > 2 {
+				clientRotations++
+				if clientRotations >= maxRotations {
+					log.Printf("[%d] ❌ auto-stopping: %d client rotations without recovery", m.ID, clientRotations)
+					e.db.SetMonitorStatus(m.ID, "error")
+					return
+				}
 				if newClient, err := e.newWarmClient(m.ID, pm, domain); err == nil {
 					client = newClient
-					consecutiveErrors = 0
-					reportHealth("")
+					consecutiveErrors = consecutiveErrors / 2
+					reportHealth(fmt.Sprintf("rotated client (%d/%d)", clientRotations, maxRotations))
 				} else {
 					log.Printf("[%d] client rotation failed: %v", m.ID, err)
 				}
@@ -197,6 +205,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		consecutiveErrors = 0
+		clientRotations = 0
 		if checks%5 == 0 || checks <= 3 {
 			reportHealth("")
 		}
