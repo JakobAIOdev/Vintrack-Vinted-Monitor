@@ -25,7 +25,7 @@ services:
       POSTGRES_PASSWORD: vinpassword
       POSTGRES_DB: vintrack
     ports:
-      - "5435:5432"
+      - "127.0.0.1:5435:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -39,7 +39,7 @@ services:
     image: redis:7-alpine
     container_name: vintrack_redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --stop-writes-on-bgsave-error no
@@ -64,7 +64,7 @@ services:
       - AUTH_URL=${AUTH_URL:-http://localhost:3000}
       - VINTED_SERVICE_URL=http://vinted-service:4000
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -95,7 +95,7 @@ services:
       - REDIS_PASSWORD=
       - LISTEN_ADDR=:4000
     ports:
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
     depends_on:
       redis:
         condition: service_healthy
