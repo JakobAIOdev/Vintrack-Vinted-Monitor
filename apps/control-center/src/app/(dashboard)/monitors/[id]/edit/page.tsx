@@ -94,7 +94,7 @@ export default function EditMonitorPage() {
   const boundUpdate = updateMonitor.bind(null, monitorId);
 
   return (
-    <div className="space-y-6 mx-auto max-w-5xl">
+    <div className="space-y-6 mx-auto max-w-4xl">
       <div className="flex items-center gap-3">
         <Link href={`/monitors/${monitorId}`}>
           <Button variant="outline" size="icon" className="h-8 w-8">
@@ -109,7 +109,7 @@ export default function EditMonitorPage() {
         </div>
       </div>
 
-      <Card className="border-slate-200/60 max-w-3xl">
+      <Card className="border-slate-200/60">
         <CardContent className="p-6">
           <form action={boundUpdate} className="space-y-6">
             <div className="space-y-2">

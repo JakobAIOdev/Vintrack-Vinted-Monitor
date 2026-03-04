@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>Open-source Vinted monitoring platform for resellers.</b><br/>
-  Real-time scraping · Instant Discord alerts · Proxy rotation · Beautiful dashboard
+  Real-time scraping · Instant Discord alerts · Proxy rotation · Account linking · Beautiful dashboard
 </p>
 
 <p align="center">
@@ -78,6 +78,15 @@ Vintrack now supports per-monitor Vinted country selection. Instead of being lim
 - Supports major Vinted EU markets (including Hungary / `vinted.hu`)
 - Existing monitors default to `de` for backward compatibility
 
+### Vinted Account Linking
+Link your Vinted account directly in the dashboard to interact with listings without leaving Vintrack:
+- **Like items** — one-click like from the feed or monitor view
+- **Account management** — link/unlink with region selection (12 EU markets)
+- **Session handling** — secure token storage in Redis with automatic 7-day TTL
+- **Status monitoring** — see your linked account status, username, and domain at a glance
+
+To link your account, grab your `access_token_web` cookie from Vinted's DevTools and paste it in the Account page.
+
 ### Discord Notifications
 Rich embed webhooks sent instantly when a new item is found:
 - Item image, title, price, size, condition
@@ -138,35 +147,35 @@ Manage all users from a dedicated admin panel:
 
 ```
                          ┌──────────────────┐
-                         │     Internet      │
+                         │     Internet     │
                          └────────┬─────────┘
                                   │
                          ┌────────▼─────────┐
-                         │      Caddy        │
-                         │  (Auto HTTPS)     │
+                         │      Caddy       │
+                         │  (Auto HTTPS)    │
                          └────────┬─────────┘
                                   │
                     ┌─────────────▼──────────────┐
-                    │      Control Center         │
-                    │  Next.js 16 · React 19      │
-                    │  Prisma · NextAuth · SSE     │
-                    └──────┬──────────┬──────────┘
-                           │          │
-              ┌────────────▼──┐  ┌────▼────────────┐
-              │  PostgreSQL   │  │     Redis        │
-              │   (Storage)   │  │ (Cache + Pub/Sub)│
-              └────────────▲──┘  └────▲────────────┘
-                           │          │
-                    ┌──────┴──────────┴──────────┐
-                    │         Go Worker           │
-                    │  tls-client · goroutines    │
-                    │  proxy rotation · enrichment│
-                    └──────┬──────────┬──────────┘
-                           │          │
-                  ┌────────▼──┐  ┌────▼────────────┐
-                  │ Vinted API │  │    Discord       │
-                  │ (Proxied)  │  │   (Webhooks)     │
-                  └────────────┘  └─────────────────┘
+                    │      Control Center        │
+                    │  Next.js 16 · React 19     │
+                    │  Prisma · NextAuth · SSE   │
+                    └──┬──────────┬──────────┬───┘
+                       │          │          │
+          ┌────────────▼──┐  ┌────▼────────┐ │
+          │  PostgreSQL   │  │    Redis    │ │
+          │   (Storage)   │  │(Cache+Dedup)│ │
+          └────────────▲──┘  └──▲────────▲─┘ │
+                       │        │        │   │
+              ┌────────┴────────┴──┐  ┌──┴───▼──────────┐
+              │     Go Worker      │  │ Vinted Service  │
+              │ tls-client · proxy │  │ Account linking │
+              │  rotation · scrape │  │ Likes · Sessions│
+              └──────┬──────────┬──┘  └────────┬────────┘
+                     │          │              │
+            ┌────────▼──┐  ┌───▼───────┐  ┌───▼────────┐
+            │ Vinted API │ │  Discord  │  │ Vinted API │
+            │ (Proxied)  │ │(Webhooks) │  │  (Authed)  │
+            └────────────  └───────────┘  └────────────┘
 ```
 
 **Data flow:**
@@ -175,6 +184,7 @@ Manage all users from a dedicated admin panel:
 3. Goroutine polls Vinted API through rotating proxies
 4. New items are deduplicated via Redis, stored in PostgreSQL, published via SSE
 5. Discord webhooks fire immediately for configured monitors
+6. Users with a linked Vinted account can like items directly from the feed via the Vinted Service
 
 ---
 
@@ -185,6 +195,7 @@ Manage all users from a dedicated admin panel:
 | **Frontend** | Next.js 16, React 19, Tailwind CSS 4, shadcn/ui | Dashboard & UI |
 | **Backend** | Next.js Server Actions, App Router | API & auth |
 | **Worker** | Go 1.25, tls-client, goroutines | High-perf scraping |
+| **Vinted Service** | Go 1.25, TLS client, Redis sessions | Account linking & item actions |
 | **Database** | PostgreSQL 15 + Prisma ORM | Persistent storage |
 | **Cache** | Redis 7 | Deduplication & SSE pub/sub |
 | **Auth** | NextAuth.js v5 (Discord OAuth2) | Authentication |
@@ -320,6 +331,7 @@ vintrack/
 │   │   └── src/
 │   │       ├── auth.ts           # NextAuth config
 │   │       ├── actions/          # Server actions
+│   │       │   ├── account.ts    #   Vinted account linking
 │   │       │   ├── admin.ts      #   User management (admin)
 │   │       │   ├── dashboard-actions.ts
 │   │       │   ├── monitor.ts    #   Monitor CRUD
@@ -327,14 +339,22 @@ vintrack/
 │   │       ├── app/
 │   │       │   ├── (auth)/       # OAuth routes
 │   │       │   ├── (dashboard)/  # Protected pages
+│   │       │   │   ├── account/  #   Vinted account management
 │   │       │   │   ├── admin/    #   Admin panel
 │   │       │   │   ├── dashboard/#   Monitor overview
 │   │       │   │   ├── feed/     #   Real-time feed
 │   │       │   │   ├── monitors/ #   Monitor detail + creation
 │   │       │   │   └── proxies/  #   Proxy group management
-│   │       │   └── api/          # API routes (SSE, items)
+│   │       │   └── api/          # API routes (SSE, likes)
 │   │       ├── components/       # React components
 │   │       └── lib/              # Utils, DB, constants
+│   │
+│   ├── vinted-service/           # Go Vinted interaction service
+│   │   ├── cmd/main.go           # Entrypoint
+│   │   └── internal/
+│   │       ├── api/              # HTTP handlers (link, like, etc.)
+│   │       ├── session/          # Redis session management
+│   │       └── vinted/           # Vinted API client (auth, likes)
 │   │
 │   └── worker/                   # Go scraping engine
 │       ├── cmd/main.go           # Entrypoint
@@ -358,6 +378,7 @@ sequenceDiagram
     participant D as Dashboard
     participant DB as PostgreSQL
     participant W as Worker
+    participant VS as Vinted Service
     participant V as Vinted API
     participant R as Redis
     participant DC as Discord
@@ -374,20 +395,32 @@ sequenceDiagram
     R-->>D: Push to live feed
     W->>DC: Send webhook embed
     DC-->>U: Discord notification
+
+    Note over U,VS: Account Linking Flow
+    U->>D: Link Vinted account
+    D->>VS: Store session (access token)
+    VS->>R: Persist session (7-day TTL)
+    U->>D: Click like on item
+    D->>VS: Like request
+    VS->>V: POST /api/v2/user_favourites/toggle
+    V-->>VS: Success
+    VS-->>D: Liked
 ```
 
 ---
 
 ## Roadmap
 
-- [ ] Vinted Account Linking
+- [x] Vinted Account Linking
+- [x] Like items from dashboard
+- [ ] Send offers to sellers
+- [ ] One-click buy
+- [ ] Auto-buy with price rules
 - [ ] Auto Chat Module
-- [ ] Auto Buy Module
 - [ ] Price history tracking & charts
 - [ ] Saved searches / favorites
 - [ ] Rate limiting per user
 - [ ] API tokens for external integrations
-- [ ] Region presets and custom domain overrides
 - [ ] Mobile app (React Native)
 
 ---

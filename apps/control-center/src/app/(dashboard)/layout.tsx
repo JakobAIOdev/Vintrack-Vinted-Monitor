@@ -1,5 +1,6 @@
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
+import { AccountProvider } from "@/components/account-provider";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 
@@ -18,17 +19,19 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const user = session?.user ? { ...session.user, role } : undefined;
 
   return (
-    <div className="flex min-h-screen bg-slate-50/50">
-      <Sidebar user={user} />
-      
-      <div className="flex-1 ml-60 flex flex-col min-w-0">
-        <Header />
-        <main className="flex-1 p-6 overflow-y-auto">
-            <div className="max-w-350 mx-auto">
-              {children}
-            </div>
-        </main>
+    <AccountProvider>
+      <div className="flex min-h-screen bg-slate-50/50">
+        <Sidebar user={user} />
+        
+        <div className="flex-1 ml-60 flex flex-col min-w-0">
+          <Header />
+          <main className="flex-1 p-6 overflow-y-auto">
+              <div className="max-w-350 mx-auto">
+                {children}
+              </div>
+          </main>
+        </div>
       </div>
-    </div>
+    </AccountProvider>
   );
 }
