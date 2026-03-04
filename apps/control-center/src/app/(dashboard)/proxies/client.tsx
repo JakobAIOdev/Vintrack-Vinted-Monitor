@@ -95,7 +95,7 @@ export function ProxiesClient({
     proxies.split("\n").filter((l) => l.trim().length > 0).length;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 mx-auto max-w-4xl">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Proxy Groups</h1>

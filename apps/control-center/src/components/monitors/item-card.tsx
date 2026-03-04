@@ -1,8 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { ExternalLink, ImageOff } from "lucide-react";
+import { ExternalLink, ImageOff, Heart } from "lucide-react";
 import Link from "next/link";
+import { useVintedAccount } from "@/components/account-provider";
+import { toast } from "sonner";
 
 export type ItemData = {
   id: string;
@@ -26,10 +29,46 @@ interface ItemCardProps {
 }
 
 export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
+  const { linked, likedIds, addLike, removeLike } = useVintedAccount();
+  const liked = likedIds.has(Number(item.id));
+  const [liking, setLiking] = useState(false);
+
   const timeStr = new Date(item.found_at).toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
   });
+
+  const handleLike = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!linked) {
+      toast.error("Link your Vinted account first (Account tab)");
+      return;
+    }
+    setLiking(true);
+    try {
+      const endpoint = liked ? "/api/items/unlike" : "/api/items/like";
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_id: Number(item.id) }),
+      });
+      if (res.ok) {
+        if (liked) {
+          removeLike(Number(item.id));
+        } else {
+          addLike(Number(item.id));
+        }
+        toast.success(liked ? "Unliked" : "Liked!");
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || `Like failed (${res.status})`);
+      }
+    } catch (err) {
+      toast.error("Network error — could not reach server");
+    }
+    setLiking(false);
+  };
 
   return (
     <div
@@ -66,6 +105,24 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
             NEW
           </div>
         )}
+
+        <div className="absolute top-2.5 right-2.5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+          {linked && (
+            <button
+              onClick={handleLike}
+              disabled={liking}
+              className={`w-7 h-7 rounded-full flex items-center justify-center shadow-md transition-colors ${
+                liked
+                  ? "bg-red-500 text-white"
+                  : "bg-white/90 text-slate-600 hover:text-red-500 hover:bg-white"
+              }`}
+              title={liked ? "Unlike" : "Like"}
+            >
+              <Heart className={`w-3.5 h-3.5 ${liked ? "fill-current" : ""}`} />
+            </button>
+          )}
+
+        </div>
       </div>
 
       <div className="p-3.5 flex flex-col flex-1 gap-2">

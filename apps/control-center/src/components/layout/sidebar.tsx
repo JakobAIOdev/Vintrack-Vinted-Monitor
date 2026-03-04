@@ -2,13 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, PlusCircle, Radio, LogOut, Globe, Shield } from "lucide-react";
+import { useEffect, useState } from "react";
+import { LayoutDashboard, PlusCircle, Radio, LogOut, Globe, Shield, User } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+const ACCOUNT_SEEN_KEY = "vintrack:account-tab-seen";
 
 const navItems = [
   { href: "/dashboard", label: "Monitors", icon: LayoutDashboard },
   { href: "/feed", label: "Live Feed", icon: Radio },
   { href: "/proxies", label: "Proxy Groups", icon: Globe },
+  { href: "/account", label: "Account", icon: User },
 ];
 
 const adminNavItems = [
@@ -21,6 +25,19 @@ interface SidebarProps {
 
 export function Sidebar({ user }: SidebarProps) {
   const pathname = usePathname();
+  const [showAccountBadge, setShowAccountBadge] = useState(false);
+
+  useEffect(() => {
+    const seen = localStorage.getItem(ACCOUNT_SEEN_KEY);
+    if (!seen) setShowAccountBadge(true);
+  }, []);
+
+  useEffect(() => {
+    if (pathname === "/account" && showAccountBadge) {
+      localStorage.setItem(ACCOUNT_SEEN_KEY, "1");
+      setShowAccountBadge(false);
+    }
+  }, [pathname, showAccountBadge]);
 
   const initials = user?.name
     ? user.name
@@ -71,6 +88,11 @@ export function Sidebar({ user }: SidebarProps) {
                 )}
               />
               {item.label}
+              {item.href === "/account" && showAccountBadge && (
+                <span className="ml-auto text-[9px] font-bold bg-blue-500 text-white px-1.5 py-0.5 rounded-full uppercase tracking-wide">
+                  New
+                </span>
+              )}
             </Link>
           );
         })}

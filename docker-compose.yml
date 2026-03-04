@@ -61,9 +61,10 @@ services:
       - AUTH_DISCORD_ID=${AUTH_DISCORD_ID}
       - AUTH_DISCORD_SECRET=${AUTH_DISCORD_SECRET}
       - AUTH_TRUST_HOST=true
-      - AUTH_URL=https://vintrack.jakobaio.dev
-    expose:
-      - "3000"
+      - AUTH_URL=http://localhost:3000
+      - VINTED_SERVICE_URL=http://vinted-service:4000
+    ports:
+      - "3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,6 +84,22 @@ services:
       postgres:
         condition: service_healthy
     restart: "no"
+
+  vinted-service:
+    build:
+      context: ./apps/vinted-service
+      dockerfile: Dockerfile
+    container_name: vintrack_vinted
+    environment:
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - LISTEN_ADDR=:4000
+    ports:
+      - "4000:4000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
   worker:
     build:
