@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"vintrack-vinted/internal/session"
@@ -30,6 +31,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/items/like", s.handleLike)
 	mux.HandleFunc("POST /api/items/unlike", s.handleUnlike)
 	mux.HandleFunc("GET /api/items/liked", s.handleLikedItems)
+
+	mux.HandleFunc("POST /api/account/refresh", s.handleRefreshToken)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]string{"status": "ok"})
@@ -84,10 +87,6 @@ func (s *Server) getSessionAndClient(r *http.Request, w http.ResponseWriter) (*s
 		writeError(w, "no linked Vinted account", 404)
 		return nil, nil, false
 	}
-	if sess.Status != "active" {
-		writeError(w, "Vinted session is "+sess.Status+", please re-link", 403)
-		return nil, nil, false
-	}
 
 	client, err := vinted.NewClient(sess)
 	if err != nil {
@@ -95,14 +94,46 @@ func (s *Server) getSessionAndClient(r *http.Request, w http.ResponseWriter) (*s
 		return nil, nil, false
 	}
 
-	_ = client.WarmUp()
+	if err := client.WarmUp(); err != nil {
+		log.Printf("[session] warmup failed for user %s: %v", userID, err)
+	}
+
+	if sess.Status != "active" {
+		log.Printf("[session] session for user %s is %s, attempting recovery...", userID, sess.Status)
+
+		if sess.RefreshToken != "" {
+			log.Printf("[session] attempting token refresh for user %s...", userID)
+			if err := client.RefreshAccessToken(); err != nil {
+				log.Printf("[session] token refresh failed for user %s: %v", userID, err)
+			} else {
+				log.Printf("[session] token refresh succeeded for user %s", userID)
+				updated := client.GetSession()
+				updated.Status = "active"
+				updated.LastCheck = time.Now().UTC().Format(time.RFC3339)
+				_ = s.sessions.Store(*updated)
+				sess = updated
+				return sess, client, true
+			}
+		}
+
+		if client.ValidateSession() {
+			log.Printf("[session] re-validation succeeded for user %s, reactivating session", userID)
+			sess.Status = "active"
+			sess.LastCheck = time.Now().UTC().Format(time.RFC3339)
+			_ = s.sessions.Store(*sess)
+		} else {
+			writeError(w, "Vinted session is "+sess.Status+", please re-link", 403)
+			return nil, nil, false
+		}
+	}
 
 	return sess, client, true
 }
 
 type linkRequest struct {
-	AccessToken string `json:"access_token"`
-	Domain      string `json:"domain"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	Domain       string `json:"domain"`
 }
 
 func (s *Server) handleLink(w http.ResponseWriter, r *http.Request) {
@@ -128,12 +159,13 @@ func (s *Server) handleLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sess := session.VintedSession{
-		UserID:      userID,
-		AccessToken: req.AccessToken,
-		Domain:      req.Domain,
-		Status:      "active",
-		LinkedAt:    time.Now().UTC().Format(time.RFC3339),
-		LastCheck:   time.Now().UTC().Format(time.RFC3339),
+		UserID:       userID,
+		AccessToken:  req.AccessToken,
+		RefreshToken: req.RefreshToken,
+		Domain:       req.Domain,
+		Status:       "active",
+		LinkedAt:     time.Now().UTC().Format(time.RFC3339),
+		LastCheck:    time.Now().UTC().Format(time.RFC3339),
 	}
 
 	client, err := vinted.NewClient(&sess)
@@ -236,7 +268,7 @@ type itemRequest struct {
 }
 
 func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
-	_, client, ok := s.getSessionAndClient(r, w)
+	sess, client, ok := s.getSessionAndClient(r, w)
 	if !ok {
 		return
 	}
@@ -252,6 +284,8 @@ func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.persistIfRefreshed(sess, client)
+
 	userID := getUserID(r)
 	_ = s.sessions.AddLike(userID, req.ItemID)
 
@@ -259,7 +293,7 @@ func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUnlike(w http.ResponseWriter, r *http.Request) {
-	_, client, ok := s.getSessionAndClient(r, w)
+	sess, client, ok := s.getSessionAndClient(r, w)
 	if !ok {
 		return
 	}
@@ -274,6 +308,8 @@ func (s *Server) handleUnlike(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "unlike failed: "+err.Error(), 502)
 		return
 	}
+
+	s.persistIfRefreshed(sess, client)
 
 	userID := getUserID(r)
 	_ = s.sessions.RemoveLike(userID, req.ItemID)
@@ -295,4 +331,78 @@ func (s *Server) handleLikedItems(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, 200, map[string]interface{}{"item_ids": ids})
+}
+
+func (s *Server) persistIfRefreshed(original *session.VintedSession, client *vinted.Client) {
+	updated := client.GetSession()
+	if updated.AccessToken != original.AccessToken {
+		updated.Status = "active"
+		updated.LastCheck = time.Now().UTC().Format(time.RFC3339)
+		if err := s.sessions.Store(*updated); err != nil {
+			log.Printf("[server] failed to persist refreshed session for user %s: %v", updated.UserID, err)
+		} else {
+			log.Printf("[server] persisted refreshed tokens for user %s", updated.UserID)
+		}
+	}
+}
+
+func (s *Server) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r)
+	if userID == "" {
+		writeError(w, "unauthorized", 401)
+		return
+	}
+
+	sess, err := s.sessions.Get(userID)
+	if err != nil {
+		writeError(w, "session fetch error", 500)
+		return
+	}
+	if sess == nil {
+		writeError(w, "no linked Vinted account", 404)
+		return
+	}
+	if sess.RefreshToken == "" {
+		writeError(w, "no refresh token available — please re-link with a refresh token", 400)
+		return
+	}
+
+	client, err := vinted.NewClient(sess)
+	if err != nil {
+		writeError(w, "failed to create client", 500)
+		return
+	}
+
+	if err := client.WarmUp(); err != nil {
+		log.Printf("[refresh] warmup warning for user %s: %v", userID, err)
+	}
+
+	if err := client.RefreshAccessToken(); err != nil {
+		log.Printf("[refresh] token refresh failed for user %s: %v", userID, err)
+
+		var body struct {
+			RefreshToken string `json:"refresh_token"`
+		}
+		_ = json.NewDecoder(strings.NewReader("")).Decode(&body)
+
+		writeError(w, "token refresh failed: "+err.Error(), 502)
+		return
+	}
+
+	updated := client.GetSession()
+	updated.Status = "active"
+	updated.LastCheck = time.Now().UTC().Format(time.RFC3339)
+	if err := s.sessions.Store(*updated); err != nil {
+		writeError(w, "failed to save refreshed session", 500)
+		return
+	}
+
+	log.Printf("[refresh] token refreshed for user %s (@%s)", userID, updated.VintedName)
+
+	writeJSON(w, 200, map[string]interface{}{
+		"status":      "refreshed",
+		"vinted_name": updated.VintedName,
+		"vinted_id":   updated.VintedUserID,
+		"domain":      updated.Domain,
+	})
 }

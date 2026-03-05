@@ -154,9 +154,14 @@ func (c *Client) WarmUp() error {
 	}
 
 	c.injectAuthCookie()
+
 	c.warmedUp = true
 	log.Printf("[vinted] warmup done for %s, csrf=%v, anon_id=%v", c.session.Domain, c.csrfToken != "", c.anonID != "")
 	return nil
+}
+
+func (c *Client) GetAccessToken() string {
+	return c.session.AccessToken
 }
 
 type AccountInfo struct {
@@ -307,6 +312,19 @@ func (c *Client) ValidateSession() bool {
 }
 
 func (c *Client) LikeItem(itemID int64) error {
+	err := c.doLike(itemID)
+	if err != nil && strings.Contains(err.Error(), "HTTP 401") && c.session.RefreshToken != "" {
+		log.Printf("[vinted] like got 401, attempting token refresh...")
+		if refreshErr := c.RefreshAccessToken(); refreshErr != nil {
+			log.Printf("[vinted] token refresh failed: %v", refreshErr)
+			return err
+		}
+		return c.doLike(itemID)
+	}
+	return err
+}
+
+func (c *Client) doLike(itemID int64) error {
 	if err := c.WarmUp(); err != nil {
 		log.Printf("[vinted] warmup failed before like: %v", err)
 	}
@@ -351,6 +369,19 @@ func minInt(a, b int) int {
 }
 
 func (c *Client) UnlikeItem(itemID int64) error {
+	err := c.doUnlike(itemID)
+	if err != nil && strings.Contains(err.Error(), "HTTP 401") && c.session.RefreshToken != "" {
+		log.Printf("[vinted] unlike got 401, attempting token refresh...")
+		if refreshErr := c.RefreshAccessToken(); refreshErr != nil {
+			log.Printf("[vinted] token refresh failed: %v", refreshErr)
+			return err
+		}
+		return c.doUnlike(itemID)
+	}
+	return err
+}
+
+func (c *Client) doUnlike(itemID int64) error {
 	if err := c.WarmUp(); err != nil {
 		log.Printf("[vinted] warmup failed before unlike: %v", err)
 	}
@@ -436,4 +467,104 @@ func truncate(s string, maxLen int) string {
 
 func (c *Client) GetDomain() string {
 	return c.session.Domain
+}
+
+func (c *Client) GetSession() *session.VintedSession {
+	return c.session
+}
+
+func (c *Client) RefreshAccessToken() error {
+	if c.session.RefreshToken == "" {
+		return fmt.Errorf("no refresh token available")
+	}
+
+	domainURL, _ := url.Parse(fmt.Sprintf("https://%s/", c.session.Domain))
+
+	c.httpClient.SetCookies(domainURL, []*http.Cookie{
+		{Name: "access_token_web", Value: c.session.AccessToken, Path: "/"},
+		{Name: "refresh_token_web", Value: c.session.RefreshToken, Path: "/"},
+	})
+
+	c.warmedUp = false
+	if err := c.WarmUp(); err != nil {
+		log.Printf("[vinted] warmup before refresh failed: %v (continuing anyway)", err)
+	}
+
+	c.httpClient.SetCookies(domainURL, []*http.Cookie{
+		{Name: "refresh_token_web", Value: c.session.RefreshToken, Path: "/"},
+	})
+
+	refreshURL := fmt.Sprintf("https://%s/web/api/auth/refresh", c.session.Domain)
+
+	req, err := http.NewRequest("POST", refreshURL, strings.NewReader(""))
+	if err != nil {
+		return fmt.Errorf("create refresh request: %w", err)
+	}
+	req.Header = http.Header{
+		"User-Agent":         {"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
+		"Accept":             {"application/json, text/plain, */*"},
+		"Accept-Language":    {c.locale()},
+		"Cache-Control":      {"no-cache"},
+		"Pragma":             {"no-cache"},
+		"Origin":             {fmt.Sprintf("https://%s", c.session.Domain)},
+		"Referer":            {fmt.Sprintf("https://%s/session-refresh?ref_url=%%2F", c.session.Domain)},
+		"Sec-Ch-Ua":          {`"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`},
+		"Sec-Ch-Ua-Mobile":   {"?0"},
+		"Sec-Ch-Ua-Platform": {`"macOS"`},
+		"Sec-Fetch-Dest":     {"empty"},
+		"Sec-Fetch-Mode":     {"cors"},
+		"Sec-Fetch-Site":     {"same-origin"},
+	}
+	if c.csrfToken != "" {
+		req.Header.Set("X-Csrf-Token", c.csrfToken)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("refresh request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	log.Printf("[vinted] POST /web/api/auth/refresh -> %d (%.200s)", resp.StatusCode, string(body))
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("refresh failed (HTTP %d): %s", resp.StatusCode, truncate(string(body), 200))
+	}
+
+	var newAccessToken, newRefreshToken string
+	for _, cookie := range c.httpClient.GetCookies(domainURL) {
+		switch cookie.Name {
+		case "access_token_web":
+			newAccessToken = cookie.Value
+		case "refresh_token_web":
+			newRefreshToken = cookie.Value
+		}
+	}
+
+	if newAccessToken == "" {
+		for _, cookie := range resp.Cookies() {
+			switch cookie.Name {
+			case "access_token_web":
+				newAccessToken = cookie.Value
+			case "refresh_token_web":
+				newRefreshToken = cookie.Value
+			}
+		}
+	}
+
+	if newAccessToken == "" {
+		return fmt.Errorf("refresh response did not contain new access token")
+	}
+
+	c.session.AccessToken = newAccessToken
+	if newRefreshToken != "" {
+		c.session.RefreshToken = newRefreshToken
+	}
+
+	c.injectAuthCookie()
+	c.warmedUp = false
+
+	log.Printf("[vinted] token refresh successful, new access token: %s...", truncate(newAccessToken, 20))
+	return nil
 }

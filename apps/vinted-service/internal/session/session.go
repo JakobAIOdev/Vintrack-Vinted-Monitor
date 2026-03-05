@@ -15,6 +15,7 @@ type VintedSession struct {
 	VintedUserID int64  `json:"vinted_user_id"`
 	VintedName   string `json:"vinted_name"`
 	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token,omitempty"`
 	Domain       string `json:"domain"`
 	Status       string `json:"status"`
 	LinkedAt     string `json:"linked_at"`
@@ -150,12 +151,23 @@ func (m *Manager) StartKeepAlive(validateFn func(sess *VintedSession) bool) {
 				continue
 			}
 
-			valid := validateFn(&sess)
+			valid := false
+			for attempt := 1; attempt <= 3; attempt++ {
+				if validateFn(&sess) {
+					valid = true
+					break
+				}
+				if attempt < 3 {
+					log.Printf("[keep-alive] validation attempt %d/3 failed for user %s, retrying...", attempt, sess.UserID)
+					time.Sleep(5 * time.Second)
+				}
+			}
+
 			if valid {
 				sess.LastCheck = time.Now().UTC().Format(time.RFC3339)
 				sess.Status = "active"
 			} else {
-				log.Printf("[keep-alive] session expired for user %s (@%s)", sess.UserID, sess.VintedName)
+				log.Printf("[keep-alive] session expired for user %s (@%s) after 3 attempts", sess.UserID, sess.VintedName)
 				sess.Status = "expired"
 			}
 			if err := m.Store(sess); err != nil {

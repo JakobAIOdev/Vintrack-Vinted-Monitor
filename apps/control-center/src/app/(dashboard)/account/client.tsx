@@ -29,6 +29,7 @@ import {
   linkVintedAccount,
   unlinkVintedAccount,
   getAccountStatus,
+  refreshVintedSession,
 } from "@/actions/account";
 import { toast } from "sonner";
 
@@ -49,6 +50,7 @@ export function AccountClient({
 }) {
   const [status, setStatus] = useState<AccountStatus>(initialStatus);
   const [accessToken, setAccessToken] = useState("");
+  const [refreshToken, setRefreshToken] = useState("");
   const [selectedRegion, setSelectedRegion] = useState("de");
   const [isPending, startTransition] = useTransition();
 
@@ -62,25 +64,27 @@ export function AccountClient({
     }
 
     startTransition(async () => {
-      try {
-        const result = await linkVintedAccount(
-          accessToken.trim(),
-          `www.${selectedDomain}`
-        );
-        setAccessToken("");
-        setStatus({
-          linked: true,
-          status: "active",
-          vinted_name: result.vinted_name,
-          vinted_id: result.vinted_id,
-          domain: result.domain,
-          linked_at: new Date().toISOString(),
-          last_check: new Date().toISOString(),
-        });
-        toast.success(`Linked to @${result.vinted_name}`);
-      } catch (err: any) {
-        toast.error(err.message || "Failed to link account");
+      const result = await linkVintedAccount(
+        accessToken.trim(),
+        `www.${selectedDomain}`,
+        refreshToken.trim() || undefined
+      );
+      if (result.error) {
+        toast.error(result.error);
+        return;
       }
+      setAccessToken("");
+      setRefreshToken("");
+      setStatus({
+        linked: true,
+        status: "active",
+        vinted_name: result.vinted_name,
+        vinted_id: result.vinted_id,
+        domain: result.domain,
+        linked_at: new Date().toISOString(),
+        last_check: new Date().toISOString(),
+      });
+      toast.success(`Linked to @${result.vinted_name}`);
     });
   };
 
@@ -88,18 +92,27 @@ export function AccountClient({
     if (!confirm("Unlink your Vinted account?")) return;
 
     startTransition(async () => {
-      try {
-        await unlinkVintedAccount();
-        setStatus({ linked: false });
-        toast.success("Account unlinked");
-      } catch (err: any) {
-        toast.error(err.message || "Failed to unlink");
+      const result = await unlinkVintedAccount();
+      if (result.error) {
+        toast.error(result.error);
+        return;
       }
+      setStatus({ linked: false });
+      toast.success("Account unlinked");
     });
   };
 
   const handleRefresh = () => {
     startTransition(async () => {
+      const result = await refreshVintedSession();
+      if (result.error) {
+        toast.error("Token refresh failed: " + result.error);
+        // Still update status to show current state
+        const updated = await getAccountStatus();
+        setStatus(updated);
+        return;
+      }
+      toast.success("Token refreshed successfully");
       const updated = await getAccountStatus();
       setStatus(updated);
     });
@@ -204,12 +217,16 @@ export function AccountClient({
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
               <p className="text-sm text-amber-800">
-                To get your access token: Open Vinted in your browser → DevTools
+                To get your tokens: Open Vinted in your browser → DevTools
                 (F12) → Application → Cookies → copy the{" "}
                 <code className="bg-amber-100 px-1 rounded text-xs">
                   access_token_web
                 </code>{" "}
-                value.
+                and{" "}
+                <code className="bg-amber-100 px-1 rounded text-xs">
+                  refresh_token_web
+                </code>{" "}
+                values.
               </p>
             </div>
 
@@ -243,10 +260,24 @@ export function AccountClient({
               <Input
                 id="access-token"
                 type="password"
-                placeholder="Paste your Vinted access token..."
+                placeholder="Paste your access_token_web..."
                 value={accessToken}
                 onChange={(e) => setAccessToken(e.target.value)}
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="refresh-token">Refresh Token</Label>
+              <Input
+                id="refresh-token"
+                type="password"
+                placeholder="Paste your refresh_token_web (recommended)..."
+                value={refreshToken}
+                onChange={(e) => setRefreshToken(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Providing the refresh token allows automatic token renewal so your session stays active.
+              </p>
             </div>
 
             <Button
