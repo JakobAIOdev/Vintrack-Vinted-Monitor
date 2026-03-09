@@ -25,36 +25,36 @@ type Monitor struct {
 	CreatedAt      time.Time
 }
 
-// RegionDomain returns the Vinted domain for a given region code.
+var regionDomains = map[string]string{
+	"de": "www.vinted.de",
+	"fr": "www.vinted.fr",
+	"it": "www.vinted.it",
+	"es": "www.vinted.es",
+	"nl": "www.vinted.nl",
+	"pl": "www.vinted.pl",
+	"pt": "www.vinted.pt",
+	"be": "www.vinted.be",
+	"at": "www.vinted.at",
+	"lu": "www.vinted.lu",
+	"uk": "www.vinted.co.uk",
+	"cz": "www.vinted.cz",
+	"sk": "www.vinted.sk",
+	"lt": "www.vinted.lt",
+	"se": "www.vinted.se",
+	"dk": "www.vinted.dk",
+	"ro": "www.vinted.ro",
+	"hu": "www.vinted.hu",
+	"hr": "www.vinted.hr",
+	"fi": "www.vinted.fi",
+	"ie": "www.vinted.ie",
+	"si": "www.vinted.si",
+	"ee": "www.vinted.ee",
+	"lv": "www.vinted.lv",
+	"gr": "www.vinted.gr",
+}
+
 func RegionDomain(region string) string {
-	domains := map[string]string{
-		"de": "www.vinted.de",
-		"fr": "www.vinted.fr",
-		"it": "www.vinted.it",
-		"es": "www.vinted.es",
-		"nl": "www.vinted.nl",
-		"pl": "www.vinted.pl",
-		"pt": "www.vinted.pt",
-		"be": "www.vinted.be",
-		"at": "www.vinted.at",
-		"lu": "www.vinted.lu",
-		"uk": "www.vinted.co.uk",
-		"cz": "www.vinted.cz",
-		"sk": "www.vinted.sk",
-		"lt": "www.vinted.lt",
-		"se": "www.vinted.se",
-		"dk": "www.vinted.dk",
-		"ro": "www.vinted.ro",
-		"hu": "www.vinted.hu",
-		"hr": "www.vinted.hr",
-		"fi": "www.vinted.fi",
-		"ie": "www.vinted.ie",
-		"si": "www.vinted.si",
-		"ee": "www.vinted.ee",
-		"lv": "www.vinted.lv",
-		"gr": "www.vinted.gr",
-	}
-	if d, ok := domains[region]; ok {
+	if d, ok := regionDomains[region]; ok {
 		return d
 	}
 	return "www.vinted.de"

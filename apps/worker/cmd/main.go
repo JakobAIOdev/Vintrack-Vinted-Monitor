@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -11,6 +12,7 @@ import (
 
 	"vintrack-worker/internal/cache"
 	"vintrack-worker/internal/database"
+	"vintrack-worker/internal/model"
 	"vintrack-worker/internal/proxy"
 	"vintrack-worker/internal/scraper"
 
@@ -53,9 +55,18 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	var (
-		running = make(map[int]context.CancelFunc)
-		mu      sync.Mutex
+		running    = make(map[int]context.CancelFunc)
+		monitorCfg = make(map[int]string)
+		mu         sync.Mutex
 	)
+
+	monitorHash := func(m model.Monitor) string {
+		proxyStr := ""
+		if m.Proxies.Valid {
+			proxyStr = m.Proxies.String
+		}
+		return fmt.Sprintf("%s|%s|%s", m.Query, m.Region, proxyStr)
+	}
 
 	syncMonitors := func() {
 		monitors, err := store.GetActiveMonitors()
@@ -71,11 +82,22 @@ func main() {
 
 		for _, m := range monitors {
 			activeIDs[m.ID] = true
-			if _, exists := running[m.ID]; !exists {
-				mCtx, mCancel := context.WithCancel(ctx)
-				running[m.ID] = mCancel
-				go engine.MonitorTask(mCtx, m)
+			hash := monitorHash(m)
+
+			if cancelFn, exists := running[m.ID]; exists {
+				if oldHash, ok := monitorCfg[m.ID]; ok && oldHash != hash {
+					log.Printf("Config changed for monitor [%d], restarting...", m.ID)
+					cancelFn()
+					delete(running, m.ID)
+				} else {
+					continue
+				}
 			}
+
+			mCtx, mCancel := context.WithCancel(ctx)
+			running[m.ID] = mCancel
+			monitorCfg[m.ID] = hash
+			go engine.MonitorTask(mCtx, m)
 		}
 
 		for id, cancelFn := range running {
@@ -83,6 +105,7 @@ func main() {
 				log.Printf("Stopping monitor [%d] (removed/paused)", id)
 				cancelFn()
 				delete(running, id)
+				delete(monitorCfg, id)
 			}
 		}
 	}

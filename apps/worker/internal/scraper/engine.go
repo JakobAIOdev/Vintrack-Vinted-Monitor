@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"vintrack-worker/internal/database"
@@ -19,16 +20,20 @@ import (
 	http "github.com/bogdanfinn/fhttp"
 )
 
+const maxAPIResponseBytes = 2 * 1024 * 1024 // 2 MB
+
 type Engine struct {
 	db           *database.Store
 	serverProxy  *proxy.Manager
 	enrichSeller bool
+	poolSize     int
 }
 
 func NewEngine(db *database.Store, pm *proxy.Manager) *Engine {
 	enrich := os.Getenv("ENRICH_SELLER_INFO") != "false"
-	log.Printf("Seller enrichment (region/rating): %v", enrich)
-	return &Engine{db: db, serverProxy: pm, enrichSeller: enrich}
+	poolSize := getEnvInt("CLIENT_POOL_SIZE", 5)
+	log.Printf("Seller enrichment (region/rating): %v, client pool size: %d", enrich, poolSize)
+	return &Engine{db: db, serverProxy: pm, enrichSeller: enrich, poolSize: poolSize}
 }
 
 func (e *Engine) getProxyManager(m model.Monitor) *proxy.Manager {
@@ -36,19 +41,6 @@ func (e *Engine) getProxyManager(m model.Monitor) *proxy.Manager {
 		return proxy.FromString(m.Proxies.String)
 	}
 	return e.serverProxy
-}
-
-func (e *Engine) newWarmClient(monitorID int, pm *proxy.Manager, domain string) (*Client, error) {
-	client, err := NewClient(pm.Next())
-	if err != nil {
-		return nil, fmt.Errorf("client creation failed: %w", err)
-	}
-
-	if err := client.WarmUpRegion(domain); err != nil {
-		log.Printf("[%d] warmup warning: %v", monitorID, err)
-	}
-
-	return client, nil
 }
 
 func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
@@ -72,11 +64,8 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	}
 	log.Printf("[%d] proxy source: %s (%d proxies)", m.ID, proxySource, pm.Count())
 
-	client, err := e.newWarmClient(m.ID, pm, domain)
-	if err != nil {
-		log.Printf("[%d] init error: %v", m.ID, err)
-		return
-	}
+	pool := NewClientPool(pm, domain, e.poolSize)
+	log.Printf("[%d] client pool ready: %d clients", m.ID, pool.Size())
 
 	var scraper *HTMLScraper
 	if e.enrichSeller {
@@ -85,16 +74,15 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 	apiURL := BuildVintedURL(m)
 
-	interval := getEnvInt("CHECK_INTERVAL_MS", 1500)
-	maxConsecutiveErrors := getEnvInt("MAX_CONSECUTIVE_ERRORS", 10)
-	maxRotations := getEnvInt("MAX_CLIENT_ROTATIONS", 5)
+	interval := getEnvInt("CHECK_INTERVAL_MS", 500)
+	maxConsecutiveErrors := getEnvInt("MAX_CONSECUTIVE_ERRORS", 50)
+	raceFetchers := getEnvInt("RACE_FETCHERS", 2)
 	consecutiveErrors := 0
-	clientRotations := 0
 	checks := 0
 	var totalErrors int64
 	firstRun := true
 
-	log.Printf("[%d] started | query=%q | url=%s", m.ID, m.Query, apiURL)
+	log.Printf("[%d] started | query=%q | race=%d | url=%s", m.ID, m.Query, raceFetchers, apiURL)
 
 	reportHealth := func(lastErr string) {
 		h := model.MonitorHealth{
@@ -114,7 +102,11 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		e.db.ClearMonitorHealth(m.ID)
 	}()
 
+	intervalDuration := time.Duration(interval) * time.Millisecond
+
 	for {
+		cycleStart := time.Now()
+
 		select {
 		case <-ctx.Done():
 			log.Printf("[%d] stopped gracefully", m.ID)
@@ -124,88 +116,113 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 		checks++
 
-		if checks%10 == 0 {
+		if checks%20 == 0 {
 			if updated, err := e.db.GetMonitorByID(m.ID); err == nil {
-				m.DiscordWebhook = updated.DiscordWebhook
-				m.WebhookActive = updated.WebhookActive
-				m.Status = updated.Status
 				if m.Status != "active" {
 					log.Printf("[%d] paused via dashboard", m.ID)
 					return
 				}
-			}
-		}
-
-		items, status, err := e.fetchCatalog(client, apiURL, domain)
-
-		if err != nil {
-			consecutiveErrors++
-			totalErrors++
-			errMsg := err.Error()
-			if len(errMsg) > 200 {
-				errMsg = errMsg[:200]
-			}
-			log.Printf("[%d] #%d network error (%d consecutive): %v", m.ID, checks, consecutiveErrors, err)
-			reportHealth(errMsg)
-			if consecutiveErrors >= maxConsecutiveErrors {
-				log.Printf("[%d] ❌ auto-stopping: %d consecutive errors", m.ID, consecutiveErrors)
-				e.db.SetMonitorStatus(m.ID, "error")
-				return
-			}
-			if consecutiveErrors > 2 {
-				clientRotations++
-				if clientRotations >= maxRotations {
-					log.Printf("[%d] ❌ auto-stopping: %d client rotations without recovery", m.ID, clientRotations)
-					e.db.SetMonitorStatus(m.ID, "error")
+				if updated.Query != m.Query || updated.Region != m.Region ||
+					(updated.Proxies.Valid != m.Proxies.Valid) ||
+					(updated.Proxies.Valid && updated.Proxies.String != m.Proxies.String) {
+					log.Printf("[%d] config changed (query/region/proxy), will be restarted by sync loop", m.ID)
 					return
 				}
-				if newClient, err := e.newWarmClient(m.ID, pm, domain); err == nil {
-					client = newClient
-					consecutiveErrors = consecutiveErrors / 2
-					reportHealth(fmt.Sprintf("rotated client (%d/%d)", clientRotations, maxRotations))
-				} else {
-					log.Printf("[%d] client rotation failed: %v", m.ID, err)
+				m.DiscordWebhook = updated.DiscordWebhook
+				m.WebhookActive = updated.WebhookActive
+				m.Status = updated.Status
+			}
+		}
+
+		type fetchResult struct {
+			items  []model.VintedItem
+			status int
+			err    error
+			client *Client
+		}
+
+		clients := pool.RaceClients(raceFetchers)
+		resultCh := make(chan fetchResult, len(clients))
+
+		for _, c := range clients {
+			go func(cl *Client) {
+				items, status, err := e.fetchCatalog(cl, apiURL, domain)
+				resultCh <- fetchResult{items, status, err, cl}
+			}(c)
+		}
+
+		var items []model.VintedItem
+		gotSuccess := false
+		remaining := len(clients)
+
+		timeout := time.NewTimer(3 * time.Second)
+	collectLoop:
+		for remaining > 0 {
+			select {
+			case r := <-resultCh:
+				remaining--
+				if r.err != nil {
+					continue
 				}
+				if r.status == 200 && !gotSuccess {
+					items = r.items
+					gotSuccess = true
+					if remaining > 0 {
+						go func(ch chan fetchResult, n int, p *ClientPool) {
+							for i := 0; i < n; i++ {
+								r := <-ch
+								if r.status == 403 {
+									p.Replace(r.client)
+								}
+							}
+						}(resultCh, remaining, pool)
+					}
+					break collectLoop
+				} else if r.status == 403 {
+					pool.Replace(r.client)
+				}
+			case <-timeout.C:
+				if remaining > 0 {
+					go func(ch chan fetchResult, n int, p *ClientPool) {
+						for i := 0; i < n; i++ {
+							r := <-ch
+							if r.status == 403 {
+								p.Replace(r.client)
+							}
+						}
+					}(resultCh, remaining, pool)
+				}
+				break collectLoop
 			}
-			time.Sleep(2 * time.Second)
-			continue
+		}
+		if !timeout.Stop() {
+			select {
+			case <-timeout.C:
+			default:
+			}
 		}
 
-		if status == 401 || status == 403 {
+		if !gotSuccess {
 			consecutiveErrors++
 			totalErrors++
-			reportHealth(fmt.Sprintf("HTTP %d", status))
-			log.Printf("[%d] #%d got %d, re-warming...", m.ID, checks, status)
+			if consecutiveErrors%5 == 0 {
+				reportHealth("all fetchers failed")
+				log.Printf("[%d] %d consecutive failures, backing off...", m.ID, consecutiveErrors)
+			}
 			if consecutiveErrors >= maxConsecutiveErrors {
 				log.Printf("[%d] ❌ auto-stopping: %d consecutive errors", m.ID, consecutiveErrors)
 				e.db.SetMonitorStatus(m.ID, "error")
 				return
 			}
-			if newClient, err := e.newWarmClient(m.ID, pm, domain); err == nil {
-				client = newClient
-			} else {
-				log.Printf("[%d] re-warm failed: %v", m.ID, err)
+			backoff := time.Duration(300+consecutiveErrors*200) * time.Millisecond
+			if backoff > 3*time.Second {
+				backoff = 3 * time.Second
 			}
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
-		if status != 200 {
-			consecutiveErrors++
-			totalErrors++
-			reportHealth(fmt.Sprintf("HTTP %d", status))
-			log.Printf("[%d] #%d catalog returned %d, waiting...", m.ID, checks, status)
-			if consecutiveErrors >= maxConsecutiveErrors {
-				log.Printf("[%d] ❌ auto-stopping: %d consecutive errors", m.ID, consecutiveErrors)
-				e.db.SetMonitorStatus(m.ID, "error")
-				return
-			}
-			time.Sleep(5 * time.Second)
+			time.Sleep(backoff)
 			continue
 		}
 
 		consecutiveErrors = 0
-		clientRotations = 0
 		if checks%5 == 0 || checks <= 3 {
 			reportHealth("")
 		}
@@ -224,30 +241,92 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			}
 		}
 
-		fmt.Printf("\r[%d] #%d | %d items | %d new", m.ID, checks, len(items), len(newItems))
+		fmt.Printf("\r[%d] #%d | %d items | %d new | %dms", m.ID, checks, len(items), len(newItems), time.Since(cycleStart).Milliseconds())
 
 		if len(newItems) == 0 {
-			time.Sleep(time.Duration(interval) * time.Millisecond)
+			if remaining := intervalDuration - time.Since(cycleStart); remaining > 0 {
+				time.Sleep(remaining)
+			}
 			continue
 		}
 
-		skipEnrich := firstRun && len(newItems) > 5
-		if skipEnrich {
-			log.Printf("[%d] bulk import: %d items, skipping seller enrichment", m.ID, len(newItems))
+		newIDs := make([]int64, len(newItems))
+		for i, item := range newItems {
+			newIDs[i] = item.ID
 		}
+		e.db.MarkItemsSeen(newIDs)
 
-		for _, vItem := range newItems {
-			e.processNewItem(m, vItem, scraper, skipEnrich, proxySource)
+		builtItems := e.buildItems(m, newItems, nil, true)
+		for _, item := range builtItems {
+			fmt.Printf("\n  NEW [%d]: %s (%s) [%s]", m.ID, item.Title, item.Price, item.Size)
 		}
 		fmt.Println()
 
+		skipEnrich := firstRun && len(newItems) > 5
+		go func(ctx context.Context, items []model.Item, vItems []model.VintedItem, monitorID int, webhook string, webhookActive bool, query string, ps string, scr *HTMLScraper, skip bool, dom string) {
+			if err := e.db.BatchSaveItems(items); err != nil {
+				log.Printf("[%d] batch save error: %v", monitorID, err)
+			}
+
+			for i := range items {
+				if err := e.db.PublishItem(items[i]); err != nil {
+					log.Printf("[%d] publish error: %v", monitorID, err)
+				}
+			}
+
+			if webhook != "" && webhookActive {
+				for _, it := range items {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
+					discord.SendWebhook(webhook, it, query, ps)
+				}
+			}
+
+			if e.enrichSeller && scr != nil && !skip {
+				sem := make(chan struct{}, 5)
+				var wg sync.WaitGroup
+				for i, vItem := range vItems {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
+					itemURL := vItem.Url
+					if !strings.HasPrefix(itemURL, "http") {
+						itemURL = fmt.Sprintf("https://%s%s", dom, itemURL)
+					}
+					wg.Add(1)
+					go func(idx int, url string, userID int64) {
+						defer wg.Done()
+						sem <- struct{}{}
+						defer func() { <-sem }()
+						info := scr.FetchSellerInfo(url, userID)
+						if info.Region != "" && info.Region != "NaN" {
+							items[idx].Location = info.Region
+							items[idx].Rating = info.Rating
+							_ = e.db.UpdateItemSellerInfo(items[idx].ID, info.Region, info.Rating)
+							_ = e.db.PublishItem(items[idx])
+						}
+					}(i, itemURL, vItem.User.ID)
+				}
+				wg.Wait()
+			}
+		}(ctx, builtItems, newItems, m.ID, m.DiscordWebhook.String, m.WebhookActive, m.Query, proxySource, scraper, skipEnrich, domain)
+
 		firstRun = false
-		time.Sleep(time.Duration(interval) * time.Millisecond)
+
+		if remaining := intervalDuration - time.Since(cycleStart); remaining > 0 {
+			time.Sleep(remaining)
+		}
 	}
 }
 
 func (e *Engine) fetchCatalog(client *Client, apiURL string, domain string) ([]model.VintedItem, int, error) {
-	req, err := http.NewRequest("GET", apiURL, nil)
+	reqURL := apiURL + "&_=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
+	req, err := http.NewRequest("GET", reqURL, nil)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -260,76 +339,114 @@ func (e *Engine) fetchCatalog(client *Client, apiURL string, domain string) ([]m
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil, resp.StatusCode, nil
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, 0, err
-	}
-
+	limitedReader := io.LimitReader(resp.Body, maxAPIResponseBytes)
 	var data model.VintedResponse
-	if err := json.Unmarshal(body, &data); err != nil {
+	if err := json.NewDecoder(limitedReader).Decode(&data); err != nil {
 		return nil, 0, fmt.Errorf("json decode: %w", err)
 	}
 
 	return data.Items, 200, nil
 }
 
-func (e *Engine) processNewItem(m model.Monitor, vItem model.VintedItem, scraper *HTMLScraper, skipEnrich bool, proxySource string) {
+func (e *Engine) buildItems(m model.Monitor, vItems []model.VintedItem, scraper *HTMLScraper, skipEnrich bool) []model.Item {
 	domain := model.RegionDomain(m.Region)
-	itemURL := vItem.Url
-	if !strings.HasPrefix(itemURL, "http") {
-		itemURL = fmt.Sprintf("https://%s%s", domain, itemURL)
-	}
-
-	size := vItem.SizeTitle
-	if size == "" {
-		size = vItem.Size
-	}
-
-	var region, rating string
+	items := make([]model.Item, len(vItems))
 
 	if e.enrichSeller && !skipEnrich && scraper != nil {
-		sellerInfo := scraper.FetchSellerInfo(itemURL, vItem.User.ID)
-		if sellerInfo.Region != "" && sellerInfo.Region != "NaN" {
-			region = sellerInfo.Region
-			rating = sellerInfo.Rating
+		type enrichResult struct {
+			index  int
+			region string
+			rating string
+		}
+		results := make(chan enrichResult, len(vItems))
+		sem := make(chan struct{}, 5)
+
+		var wg sync.WaitGroup
+		for i, vItem := range vItems {
+			itemURL := vItem.Url
+			if !strings.HasPrefix(itemURL, "http") {
+				itemURL = fmt.Sprintf("https://%s%s", domain, itemURL)
+			}
+			wg.Add(1)
+			go func(idx int, url string, userID int64) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				sellerInfo := scraper.FetchSellerInfo(url, userID)
+				if sellerInfo.Region != "" && sellerInfo.Region != "NaN" {
+					results <- enrichResult{idx, sellerInfo.Region, sellerInfo.Rating}
+				} else {
+					results <- enrichResult{idx, "", ""}
+				}
+			}(i, itemURL, vItem.User.ID)
+		}
+		go func() {
+			wg.Wait()
+			close(results)
+		}()
+
+		enriched := make(map[int]enrichResult, len(vItems))
+		for r := range results {
+			enriched[r.index] = r
+		}
+
+		for i, vItem := range vItems {
+			itemURL := vItem.Url
+			if !strings.HasPrefix(itemURL, "http") {
+				itemURL = fmt.Sprintf("https://%s%s", domain, itemURL)
+			}
+			size := vItem.SizeTitle
+			if size == "" {
+				size = vItem.Size
+			}
+			var region, rating string
+			if r, ok := enriched[i]; ok {
+				region = r.region
+				rating = r.rating
+			}
+			items[i] = model.Item{
+				ID:        vItem.ID,
+				MonitorID: m.ID,
+				Title:     vItem.Title,
+				Price:     vItem.Price.Amount + " " + vItem.Price.Currency,
+				Size:      size,
+				Condition: vItem.Condition,
+				URL:       itemURL,
+				ImageURL:  vItem.Photo.Url,
+				Location:  region,
+				Rating:    rating,
+				FoundAt:   time.Now(),
+			}
+		}
+	} else {
+		for i, vItem := range vItems {
+			itemURL := vItem.Url
+			if !strings.HasPrefix(itemURL, "http") {
+				itemURL = fmt.Sprintf("https://%s%s", domain, itemURL)
+			}
+			size := vItem.SizeTitle
+			if size == "" {
+				size = vItem.Size
+			}
+			items[i] = model.Item{
+				ID:        vItem.ID,
+				MonitorID: m.ID,
+				Title:     vItem.Title,
+				Price:     vItem.Price.Amount + " " + vItem.Price.Currency,
+				Size:      size,
+				Condition: vItem.Condition,
+				URL:       itemURL,
+				ImageURL:  vItem.Photo.Url,
+				FoundAt:   time.Now(),
+			}
 		}
 	}
 
-	item := model.Item{
-		ID:        vItem.ID,
-		MonitorID: m.ID,
-		Title:     vItem.Title,
-		Price:     vItem.Price.Amount + " " + vItem.Price.Currency,
-		Size:      size,
-		Condition: vItem.Condition,
-		URL:       itemURL,
-		ImageURL:  vItem.Photo.Url,
-		Location:  region,
-		Rating:    rating,
-		FoundAt:   time.Now(),
-	}
-
-	if err := e.db.SaveItem(item); err != nil {
-		log.Printf("[%d] save error for item %d: %v", m.ID, item.ID, err)
-		return
-	}
-
-	if err := e.db.PublishItem(item); err != nil {
-		log.Printf("[%d] publish error: %v", m.ID, err)
-	}
-
-	ratingStr := ""
-	if item.Rating != "" {
-		ratingStr = " " + item.Rating
-	}
-	fmt.Printf("\n  NEW [%d]: %s (%s) [%s] %s%s", m.ID, item.Title, item.Price, item.Size, item.Location, ratingStr)
-
-	if m.DiscordWebhook.Valid && m.DiscordWebhook.String != "" && m.WebhookActive {
-		go discord.SendWebhook(m.DiscordWebhook.String, item, m.Query, proxySource)
-	}
+	return items
 }
 
 func getEnvInt(key string, fallback int) int {

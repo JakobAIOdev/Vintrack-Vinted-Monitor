@@ -7,12 +7,15 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"vintrack-worker/internal/database"
 	"vintrack-worker/internal/proxy"
 
 	http "github.com/bogdanfinn/fhttp"
 )
+
+const maxHTMLResponseBytes = 1 * 1024 * 1024 // 1 MB
 
 type SellerInfo struct {
 	Region string
@@ -47,38 +50,56 @@ var countryMap = map[string]string{
 	"ΕΛΛΆΔΑ": "🇬🇷 GR", "GREECE": "🇬🇷 GR", "GRIECHENLAND": "🇬🇷 GR",
 }
 
+type sellerCacheEntry struct {
+	info    SellerInfo
+	counter uint64
+}
+
 type sellerInfoCache struct {
-	mu    sync.RWMutex
-	cache map[int64]SellerInfo
+	mu      sync.RWMutex
+	cache   map[int64]sellerCacheEntry
+	counter uint64
 }
 
 var sellerCache = &sellerInfoCache{
-	cache: make(map[int64]SellerInfo, 4096),
+	cache: make(map[int64]sellerCacheEntry, 4096),
 }
 
 func (c *sellerInfoCache) Get(userID int64) (SellerInfo, bool) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	info, ok := c.cache[userID]
-	return info, ok
+	entry, ok := c.cache[userID]
+	c.mu.RUnlock()
+	if ok {
+		n := atomic.AddUint64(&c.counter, 1)
+		c.mu.Lock()
+		if e, exists := c.cache[userID]; exists {
+			e.counter = n
+			c.cache[userID] = e
+		}
+		c.mu.Unlock()
+	}
+	return entry.info, ok
 }
 
 func (c *sellerInfoCache) Set(userID int64, info SellerInfo) {
+	n := atomic.AddUint64(&c.counter, 1)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.cache) > 50000 {
-		newCache := make(map[int64]SellerInfo, 25000)
-		i := 0
-		for k, v := range c.cache {
-			if i >= 25000 {
-				break
+		minCounter := n
+		for _, e := range c.cache {
+			if e.counter < minCounter {
+				minCounter = e.counter
 			}
-			newCache[k] = v
-			i++
 		}
-		c.cache = newCache
+		mid := minCounter + (n-minCounter)/2
+		for k, e := range c.cache {
+			if e.counter < mid {
+				delete(c.cache, k)
+			}
+		}
 	}
-	c.cache[userID] = info
+	c.cache[userID] = sellerCacheEntry{info: info, counter: n}
 }
 
 var ariaLabelRatingRegex = regexp.MustCompile(`(?i)aria-label="[^"]*?(\d+(?:[.,]\d+)?)\s*(?:von|out of|sur|di|van)\s*5[^"]*?(?:Stern|star|étoi|stell)[^"]*?"`)
@@ -114,28 +135,71 @@ func parseSellerInfoFromHTML(htmlBody []byte) SellerInfo {
 }
 
 type HTMLScraper struct {
-	client *Client
-	pm     *proxy.Manager
-	db     *database.Store
-	mu     sync.Mutex
+	clients []*Client
+	pm      *proxy.Manager
+	db      *database.Store
+	mu      sync.Mutex
+	idx     int
 }
 
 func NewHTMLScraper(pm *proxy.Manager, db *database.Store) *HTMLScraper {
-	s := &HTMLScraper{pm: pm, db: db}
-	s.warmUp()
+	poolSize := 3
+	if pm.Count() < poolSize {
+		poolSize = pm.Count()
+	}
+	if poolSize < 1 {
+		poolSize = 1
+	}
+	s := &HTMLScraper{pm: pm, db: db, clients: make([]*Client, 0, poolSize)}
+	for i := 0; i < poolSize; i++ {
+		s.addClient()
+	}
 	return s
 }
 
-func (s *HTMLScraper) warmUp() {
+func (s *HTMLScraper) addClient() {
 	client, err := NewClient(s.pm.Next())
 	if err != nil {
-		log.Printf("scraper warmup: %v", err)
+		log.Printf("scraper client creation: %v", err)
 		return
 	}
 	if err := client.WarmUp(); err != nil {
-		log.Printf("scraper warmup request: %v", err)
+		log.Printf("scraper warmup: %v", err)
 	}
-	s.client = client
+	s.clients = append(s.clients, client)
+}
+
+func (s *HTMLScraper) nextClient() *Client {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.clients) == 0 {
+		return nil
+	}
+	c := s.clients[s.idx%len(s.clients)]
+	s.idx++
+	return c
+}
+
+func (s *HTMLScraper) replaceClient(bad *Client) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, c := range s.clients {
+		if c == bad {
+			go func(idx int) {
+				nc, err := NewClient(s.pm.Next())
+				if err != nil {
+					return
+				}
+				_ = nc.WarmUp()
+				s.mu.Lock()
+				if idx < len(s.clients) {
+					s.clients[idx] = nc
+				}
+				s.mu.Unlock()
+			}(i)
+			return
+		}
+	}
 }
 
 func (s *HTMLScraper) FetchSellerInfo(itemURL string, userID int64) SellerInfo {
@@ -164,35 +228,36 @@ func (s *HTMLScraper) FetchSellerInfo(itemURL string, userID int64) SellerInfo {
 }
 
 func (s *HTMLScraper) scrapeWithRetry(itemURL string) SellerInfo {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.client == nil {
-		s.warmUp()
+	client := s.nextClient()
+	if client == nil {
+		return SellerInfo{Region: "NaN"}
 	}
 
-	info, status := s.doScrape(itemURL)
+	info, status := s.doScrape(client, itemURL)
 	if info.Region != "" {
 		return info
 	}
 
 	if status != 200 {
-		s.warmUp()
-		info, _ = s.doScrape(itemURL)
-		if info.Region != "" {
-			return info
+		s.replaceClient(client)
+		client2 := s.nextClient()
+		if client2 != nil {
+			info, _ = s.doScrape(client2, itemURL)
+			if info.Region != "" {
+				return info
+			}
 		}
 	}
 
 	return SellerInfo{Region: "NaN"}
 }
 
-func (s *HTMLScraper) doScrape(itemURL string) (SellerInfo, int) {
-	if s.client == nil {
+func (s *HTMLScraper) doScrape(client *Client, itemURL string) (SellerInfo, int) {
+	if client == nil {
 		return SellerInfo{}, 0
 	}
 
-	body, status := s.fetchHTML(itemURL)
+	body, status := s.fetchHTML(client, itemURL)
 	if status != 200 || len(body) == 0 {
 		return SellerInfo{}, status
 	}
@@ -200,7 +265,7 @@ func (s *HTMLScraper) doScrape(itemURL string) (SellerInfo, int) {
 	return parseSellerInfoFromHTML(body), 200
 }
 
-func (s *HTMLScraper) fetchHTML(targetURL string) ([]byte, int) {
+func (s *HTMLScraper) fetchHTML(client *Client, targetURL string) ([]byte, int) {
 	currentURL := targetURL
 
 	// Extract domain from URL for headers
@@ -217,7 +282,7 @@ func (s *HTMLScraper) fetchHTML(targetURL string) ([]byte, int) {
 
 		req.Header = newPageHeaders(domain)
 
-		resp, err := s.client.HttpClient.Do(req)
+		resp, err := client.HttpClient.Do(req)
 		if err != nil {
 			return nil, 0
 		}
@@ -240,7 +305,7 @@ func (s *HTMLScraper) fetchHTML(targetURL string) ([]byte, int) {
 			return nil, resp.StatusCode
 		}
 
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxHTMLResponseBytes))
 		resp.Body.Close()
 		return body, 200
 	}
