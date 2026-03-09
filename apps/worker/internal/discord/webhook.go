@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"vintrack-worker/internal/model"
@@ -64,6 +65,24 @@ func SendWebhook(webhookURL string, item model.Item, query string, proxySource s
 		return
 	}
 	resp.Body.Close()
+
+	if resp.StatusCode == 429 {
+		if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+			if secs, err := strconv.ParseFloat(retryAfter, 64); err == nil {
+				wait := time.Duration(secs*1000+500) * time.Millisecond
+				if wait > 10*time.Second {
+					wait = 10 * time.Second
+				}
+				time.Sleep(wait)
+				resp2, err := httpClient.Post(webhookURL, "application/json", bytes.NewReader(body))
+				if err == nil {
+					resp2.Body.Close()
+				}
+			}
+		} else {
+			time.Sleep(2 * time.Second)
+		}
+	}
 }
 
 func buildFields(item model.Item) []map[string]interface{} {
