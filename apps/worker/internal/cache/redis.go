@@ -109,6 +109,23 @@ func (r *RedisCache) MarkAsSeen(itemID int64) error {
 	})
 }
 
+func (r *RedisCache) BatchMarkAsSeen(itemIDs []int64) error {
+	if len(itemIDs) == 0 {
+		return nil
+	}
+	return r.writeWithRetry(func() error {
+		pipe := r.client.Pipeline()
+		for _, id := range itemIDs {
+			pipe.Set(r.ctx, fmt.Sprintf("item:seen:%d", id), "1", 30*24*time.Hour)
+		}
+		_, err := pipe.Exec(r.ctx)
+		if err != nil && err != redis.Nil {
+			return fmt.Errorf("batch mark-seen pipeline: %w", err)
+		}
+		return nil
+	})
+}
+
 func (r *RedisCache) GetUserRegion(userID int64) (string, bool) {
 	val, err := r.client.Get(r.ctx, fmt.Sprintf("user:region:%d", userID)).Result()
 	if err != nil {

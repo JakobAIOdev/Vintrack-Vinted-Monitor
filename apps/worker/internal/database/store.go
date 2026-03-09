@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,14 +55,31 @@ func (s *Store) BatchIsNew(itemIDs []int64) map[int64]bool {
 
 	result := make(map[int64]bool, len(itemIDs))
 	for _, id := range itemIDs {
-		var exists bool
-		err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM items WHERE id = $1)", id).Scan(&exists)
-		if err != nil {
-			log.Printf("db IsNew error: %v", err)
+		result[id] = true
+	}
+
+	if len(itemIDs) == 0 {
+		return result
+	}
+
+	args := make([]interface{}, len(itemIDs))
+	placeholders := make([]string, len(itemIDs))
+	for i, id := range itemIDs {
+		args[i] = id
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+	query := fmt.Sprintf("SELECT id FROM items WHERE id IN (%s)", strings.Join(placeholders, ","))
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		log.Printf("db BatchIsNew query error: %v", err)
+		return result
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err == nil {
 			result[id] = false
-			continue
 		}
-		result[id] = !exists
 	}
 	return result
 }
@@ -105,6 +123,68 @@ func (s *Store) SaveItem(item model.Item) error {
 	}
 
 	return nil
+}
+
+func (s *Store) BatchSaveItems(items []model.Item) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	for i := range items {
+		if items[i].Size == "" {
+			items[i].Size = "N/A"
+		}
+		if items[i].Condition == "" {
+			items[i].Condition = "N/A"
+		}
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO items (id, monitor_id, title, price, size, condition, url, image_url, location, rating, found_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		ON CONFLICT (id) DO NOTHING`)
+	if err != nil {
+		return fmt.Errorf("prepare: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, item := range items {
+		_, err := stmt.Exec(item.ID, item.MonitorID, item.Title, item.Price, item.Size, item.Condition,
+			item.URL, item.ImageURL, item.Location, item.Rating, item.FoundAt)
+		if err != nil {
+			return fmt.Errorf("insert item %d: %w", item.ID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	if s.cache != nil {
+		ids := make([]int64, len(items))
+		for i, item := range items {
+			ids[i] = item.ID
+		}
+		if err := s.cache.BatchMarkAsSeen(ids); err != nil {
+			log.Printf("redis batch mark-seen failed: %v", err)
+		}
+	}
+
+	return nil
+}
+
+func (s *Store) MarkItemsSeen(ids []int64) {
+	if s.cache != nil {
+		if err := s.cache.BatchMarkAsSeen(ids); err != nil {
+			log.Printf("redis mark-seen failed: %v", err)
+		}
+	}
 }
 
 func (s *Store) PublishItem(item model.Item) error {
