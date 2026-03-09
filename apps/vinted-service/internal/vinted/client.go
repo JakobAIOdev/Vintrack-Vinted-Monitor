@@ -31,7 +31,7 @@ func NewClient(sess *session.VintedSession) (*Client, error) {
 
 	options := []tls_client.HttpClientOption{
 		tls_client.WithTimeoutSeconds(15),
-		tls_client.WithClientProfile(profiles.Chrome_120),
+		tls_client.WithClientProfile(profiles.Chrome_131),
 		tls_client.WithCookieJar(jar),
 	}
 
@@ -56,7 +56,7 @@ func (c *Client) injectAuthCookie() {
 
 func (c *Client) apiHeaders() http.Header {
 	h := http.Header{
-		"User-Agent":         {"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
+		"User-Agent":         {"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"},
 		"Accept":             {"application/json, text/plain, */*"},
 		"Accept-Language":    {"de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"},
 		"Cache-Control":      {"no-cache"},
@@ -64,7 +64,7 @@ func (c *Client) apiHeaders() http.Header {
 		"Locale":             {c.locale()},
 		"Origin":             {fmt.Sprintf("https://%s", c.session.Domain)},
 		"Referer":            {fmt.Sprintf("https://%s/", c.session.Domain)},
-		"Sec-Ch-Ua":          {`"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`},
+		"Sec-Ch-Ua":          {`"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"`},
 		"Sec-Ch-Ua-Mobile":   {"?0"},
 		"Sec-Ch-Ua-Platform": {`"macOS"`},
 		"Sec-Fetch-Dest":     {"empty"},
@@ -117,7 +117,7 @@ func (c *Client) WarmUp() error {
 	u := fmt.Sprintf("https://%s/", c.session.Domain)
 	req, _ := http.NewRequest("GET", u, nil)
 	req.Header = http.Header{
-		"User-Agent": {"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
+		"User-Agent": {"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"},
 		"Accept":     {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"},
 	}
 	resp, err := c.httpClient.Do(req)
@@ -501,14 +501,14 @@ func (c *Client) RefreshAccessToken() error {
 		return fmt.Errorf("create refresh request: %w", err)
 	}
 	req.Header = http.Header{
-		"User-Agent":         {"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
+		"User-Agent":         {"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"},
 		"Accept":             {"application/json, text/plain, */*"},
 		"Accept-Language":    {c.locale()},
 		"Cache-Control":      {"no-cache"},
 		"Pragma":             {"no-cache"},
 		"Origin":             {fmt.Sprintf("https://%s", c.session.Domain)},
 		"Referer":            {fmt.Sprintf("https://%s/session-refresh?ref_url=%%2F", c.session.Domain)},
-		"Sec-Ch-Ua":          {`"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`},
+		"Sec-Ch-Ua":          {`"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"`},
 		"Sec-Ch-Ua-Mobile":   {"?0"},
 		"Sec-Ch-Ua-Platform": {`"macOS"`},
 		"Sec-Fetch-Dest":     {"empty"},
