@@ -112,6 +112,9 @@ services:
       - REDIS_PASSWORD=
       - CHECK_INTERVAL_MS=1500
       - PROXY_FILE=/app/proxies.txt
+      - ENRICH_SELLER_INFO=${ENRICH_SELLER_INFO:-true}
+      - CLIENT_POOL_SIZE=${CLIENT_POOL_SIZE:-5}
+      - RACE_FETCHERS=${RACE_FETCHERS:-2}
     volumes:
       - ./apps/worker/proxies.txt:/app/proxies.txt
     depends_on:
