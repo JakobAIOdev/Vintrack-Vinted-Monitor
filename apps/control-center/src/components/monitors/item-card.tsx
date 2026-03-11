@@ -21,6 +21,7 @@ export type ItemData = {
   monitor_id: number;
   title: string | null;
   price: string | null;
+  total_price: string | null;
   size: string | null;
   condition: string | null;
   url: string | null;
@@ -136,8 +137,15 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
           </div>
         )}
 
-        <div className="absolute bottom-2.5 right-2.5 bg-white/95 backdrop-blur-sm shadow-sm text-slate-900 font-bold px-2.5 py-1 rounded-lg text-sm">
-          {item.price}
+        <div className="absolute bottom-2.5 right-2.5 flex flex-col items-end gap-0.5">
+          <span className="bg-white/95 backdrop-blur-sm shadow-sm text-slate-900 font-bold px-2.5 py-1 rounded-lg text-sm">
+            {item.price}
+          </span>
+          {item.total_price && (
+            <span className="bg-slate-900/70 backdrop-blur-sm text-white/90 text-[10px] font-medium px-2 py-0.5 rounded-md">
+              {item.total_price} inkl.
+            </span>
+          )}
         </div>
 
         {item.isLive && (

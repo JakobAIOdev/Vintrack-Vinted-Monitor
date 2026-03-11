@@ -86,8 +86,9 @@ model items {
   id         BigInt    @id
   monitor_id Int?
   title      String?   @db.VarChar(500)
-  price      String?   @db.VarChar(50)
-  size       String?   @db.VarChar(100)
+  price       String?   @db.VarChar(50)
+  total_price String?   @db.VarChar(50)
+  size        String?   @db.VarChar(100)
   condition  String?   @db.VarChar(100)
   location    String?
   rating     String?   @db.VarChar(50)
