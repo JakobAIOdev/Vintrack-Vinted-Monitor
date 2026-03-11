@@ -86,9 +86,13 @@ func SendWebhook(webhookURL string, item model.Item, query string, proxySource s
 }
 
 func buildFields(item model.Item) []map[string]interface{} {
+	priceValue := fmt.Sprintf("`%s`", item.Price)
+	if item.TotalPrice != "" {
+		priceValue = fmt.Sprintf("`%s`\n(`%s` inkl.)", item.Price, item.TotalPrice)
+	}
 	fields := []map[string]interface{}{
 		{"name": "Region", "value": fmt.Sprintf("**%s**", item.Location), "inline": true},
-		{"name": "Price", "value": fmt.Sprintf("`%s`", item.Price), "inline": true},
+		{"name": "Price", "value": priceValue, "inline": true},
 		{"name": "Size", "value": fmt.Sprintf("**%s**", item.Size), "inline": true},
 		{"name": "Condition", "value": fmt.Sprintf("`%s`", item.Condition), "inline": true},
 	}

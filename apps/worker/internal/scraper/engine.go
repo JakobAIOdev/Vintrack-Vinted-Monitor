@@ -374,17 +374,22 @@ func (e *Engine) buildItems(m model.Monitor, vItems []model.VintedItem) []model.
 		if size == "" {
 			size = vItem.Size
 		}
+		totalPrice := ""
+		if vItem.TotalItemPrice != nil {
+			totalPrice = vItem.TotalItemPrice.Amount + " " + vItem.TotalItemPrice.Currency
+		}
 		items[i] = model.Item{
-			ID:        vItem.ID,
-			MonitorID: m.ID,
-			Title:     vItem.Title,
-			Price:     vItem.Price.Amount + " " + vItem.Price.Currency,
-			Size:      size,
-			Condition: vItem.Condition,
-			URL:       itemURL,
-			ImageURL:  vItem.Photo.Url,
-			SellerID:  vItem.User.ID,
-			FoundAt:   time.Now(),
+			ID:         vItem.ID,
+			MonitorID:  m.ID,
+			Title:      vItem.Title,
+			Price:      vItem.Price.Amount + " " + vItem.Price.Currency,
+			TotalPrice: totalPrice,
+			Size:       size,
+			Condition:  vItem.Condition,
+			URL:        itemURL,
+			ImageURL:   vItem.Photo.Url,
+			SellerID:   vItem.User.ID,
+			FoundAt:    time.Now(),
 		}
 	}
 
