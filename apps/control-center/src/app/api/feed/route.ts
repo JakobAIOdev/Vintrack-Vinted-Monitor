@@ -38,6 +38,7 @@ export async function GET(request: Request) {
     const safeItems = items.map(item => ({
       ...item,
       id: item.id.toString(),
+      seller_id: item.seller_id?.toString() || null,
       monitor_name: item.monitors?.query || "Unknown"
     }));
 

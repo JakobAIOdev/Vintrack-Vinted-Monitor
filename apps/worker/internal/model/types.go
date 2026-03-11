@@ -72,6 +72,7 @@ type Item struct {
 	ImageURL  string    `json:"image_url"`
 	Location  string    `json:"location"`
 	Rating    string    `json:"rating,omitempty"`
+	SellerID  int64     `json:"seller_id,omitempty"`
 	FoundAt   time.Time `json:"found_at"`
 }
 

@@ -568,3 +568,108 @@ func (c *Client) RefreshAccessToken() error {
 	log.Printf("[vinted] token refresh successful, new access token: %s...", truncate(newAccessToken, 20))
 	return nil
 }
+
+func (c *Client) SendMessage(itemID, sellerID int64, message string) error {
+	err := c.doSendMessage(itemID, sellerID, message)
+	if err != nil && strings.Contains(err.Error(), "HTTP 401") && c.session.RefreshToken != "" {
+		log.Printf("[vinted] send message got 401, attempting token refresh...")
+		if refreshErr := c.RefreshAccessToken(); refreshErr != nil {
+			log.Printf("[vinted] token refresh failed: %v", refreshErr)
+			return err
+		}
+		return c.doSendMessage(itemID, sellerID, message)
+	}
+	return err
+}
+
+func (c *Client) doSendMessage(itemID, sellerID int64, message string) error {
+	if err := c.WarmUp(); err != nil {
+		log.Printf("[vinted] warmup failed before send message: %v", err)
+	}
+
+	convoURL := fmt.Sprintf("https://%s/api/v2/conversations", c.session.Domain)
+	convoPayload := map[string]interface{}{
+		"initiator":        "ask_seller",
+		"item_id":          fmt.Sprintf("%d", itemID),
+		"opposite_user_id": fmt.Sprintf("%d", sellerID),
+	}
+	convoBody, _ := json.Marshal(convoPayload)
+
+	req, err := http.NewRequest("POST", convoURL, strings.NewReader(string(convoBody)))
+	if err != nil {
+		return fmt.Errorf("create conversation request: %w", err)
+	}
+	req.Header = c.apiHeadersWithBody()
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("conversation request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	bodyStr := strings.TrimSpace(string(respBody))
+
+	log.Printf("[vinted] POST /api/v2/conversations -> %d (%.300s)", resp.StatusCode, bodyStr)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("create conversation failed (HTTP %d): %s", resp.StatusCode, truncate(bodyStr, 300))
+	}
+
+	var convoResp struct {
+		Conversation struct {
+			ID int64 `json:"id"`
+		} `json:"conversation"`
+	}
+	if err := json.Unmarshal(respBody, &convoResp); err != nil {
+		return fmt.Errorf("parse conversation response: %w", err)
+	}
+	convoID := convoResp.Conversation.ID
+	if convoID == 0 {
+		var alt struct {
+			ID int64 `json:"id"`
+		}
+		if err := json.Unmarshal(respBody, &alt); err == nil && alt.ID > 0 {
+			convoID = alt.ID
+		}
+	}
+	if convoID == 0 {
+		return fmt.Errorf("could not extract conversation ID from response: %.200s", bodyStr)
+	}
+
+	log.Printf("[vinted] created conversation %d for item %d", convoID, itemID)
+
+	replyURL := fmt.Sprintf("https://%s/api/v2/conversations/%d/replies", c.session.Domain, convoID)
+	replyPayload := map[string]interface{}{
+		"reply": map[string]interface{}{
+			"body":                                   message,
+			"photo_temp_uuids":                       nil,
+			"is_personal_data_sharing_check_skipped": false,
+		},
+	}
+	replyBody, _ := json.Marshal(replyPayload)
+
+	req2, err := http.NewRequest("POST", replyURL, strings.NewReader(string(replyBody)))
+	if err != nil {
+		return fmt.Errorf("create reply request: %w", err)
+	}
+	req2.Header = c.apiHeadersWithBody()
+
+	resp2, err := c.httpClient.Do(req2)
+	if err != nil {
+		return fmt.Errorf("reply request failed: %w", err)
+	}
+	defer resp2.Body.Close()
+
+	respBody2, _ := io.ReadAll(resp2.Body)
+	bodyStr2 := strings.TrimSpace(string(respBody2))
+
+	log.Printf("[vinted] POST /api/v2/conversations/%d/replies -> %d (%.300s)", convoID, resp2.StatusCode, bodyStr2)
+
+	if resp2.StatusCode >= 200 && resp2.StatusCode < 300 {
+		log.Printf("[vinted] message sent to seller %d for item %d", sellerID, itemID)
+		return nil
+	}
+
+	return fmt.Errorf("send reply failed (HTTP %d): %s", resp2.StatusCode, truncate(bodyStr2, 300))
+}

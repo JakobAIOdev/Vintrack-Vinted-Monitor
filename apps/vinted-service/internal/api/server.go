@@ -32,6 +32,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/items/unlike", s.handleUnlike)
 	mux.HandleFunc("GET /api/items/liked", s.handleLikedItems)
 
+	mux.HandleFunc("POST /api/messages/send", s.handleSendMessage)
+
 	mux.HandleFunc("POST /api/account/refresh", s.handleRefreshToken)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -344,6 +346,52 @@ func (s *Server) persistIfRefreshed(original *session.VintedSession, client *vin
 			log.Printf("[server] persisted refreshed tokens for user %s", updated.UserID)
 		}
 	}
+}
+
+type sendMessageRequest struct {
+	ItemID   int64  `json:"item_id"`
+	SellerID int64  `json:"seller_id"`
+	Message  string `json:"message"`
+}
+
+func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
+	sess, client, ok := s.getSessionAndClient(r, w)
+	if !ok {
+		return
+	}
+
+	var req sendMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid request body", 400)
+		return
+	}
+
+	if req.ItemID == 0 {
+		writeError(w, "item_id is required", 400)
+		return
+	}
+	if req.SellerID == 0 {
+		writeError(w, "seller_id is required", 400)
+		return
+	}
+	msg := strings.TrimSpace(req.Message)
+	if msg == "" {
+		writeError(w, "message is required", 400)
+		return
+	}
+	if len(msg) > 2000 {
+		writeError(w, "message too long (max 2000 characters)", 400)
+		return
+	}
+
+	if err := client.SendMessage(req.ItemID, req.SellerID, msg); err != nil {
+		writeError(w, "send message failed: "+err.Error(), 502)
+		return
+	}
+
+	s.persistIfRefreshed(sess, client)
+
+	writeJSON(w, 200, map[string]interface{}{"status": "sent", "item_id": req.ItemID})
 }
 
 func (s *Server) handleRefreshToken(w http.ResponseWriter, r *http.Request) {

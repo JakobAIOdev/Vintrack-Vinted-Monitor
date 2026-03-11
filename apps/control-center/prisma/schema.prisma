@@ -91,6 +91,7 @@ model items {
   condition  String?   @db.VarChar(100)
   location    String?
   rating     String?   @db.VarChar(50)
+  seller_id  BigInt?
   url        String?
   image_url  String?
   found_at   DateTime? @default(now()) @db.Timestamp(6)

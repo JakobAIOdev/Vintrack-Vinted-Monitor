@@ -2,10 +2,19 @@
 
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { ExternalLink, ImageOff, Heart } from "lucide-react";
+import { ExternalLink, ImageOff, Heart, MessageCircle, Send, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useVintedAccount } from "@/components/account-provider";
 import { toast } from "sonner";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 export type ItemData = {
   id: string;
@@ -21,6 +30,7 @@ export type ItemData = {
   isLive?: boolean;
   location: string | null;
   rating: string | null;
+  seller_id: string | null;
 };
 
 interface ItemCardProps {
@@ -32,6 +42,9 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
   const { linked, likedIds, addLike, removeLike } = useVintedAccount();
   const liked = likedIds.has(Number(item.id));
   const [liking, setLiking] = useState(false);
+  const [msgOpen, setMsgOpen] = useState(false);
+  const [msgText, setMsgText] = useState("");
+  const [sending, setSending] = useState(false);
 
   const timeStr = new Date(item.found_at).toLocaleTimeString([], {
     hour: "2-digit",
@@ -68,6 +81,37 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
       toast.error("Network error — could not reach server");
     }
     setLiking(false);
+  };
+
+  const handleSendMessage = async () => {
+    if (!linked) {
+      toast.error("Link your Vinted account first (Account tab)");
+      return;
+    }
+    if (!msgText.trim()) return;
+    setSending(true);
+    try {
+      const res = await fetch("/api/messages/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          item_id: Number(item.id),
+          seller_id: Number(item.seller_id),
+          message: msgText.trim(),
+        }),
+      });
+      if (res.ok) {
+        toast.success("Message sent!");
+        setMsgOpen(false);
+        setMsgText("");
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || `Send failed (${res.status})`);
+      }
+    } catch {
+      toast.error("Network error — could not reach server");
+    }
+    setSending(false);
   };
 
   return (
@@ -121,7 +165,19 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
               <Heart className={`w-3.5 h-3.5 ${liked ? "fill-current" : ""}`} />
             </button>
           )}
-
+          {linked && item.seller_id && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                setMsgOpen(true);
+              }}
+              className="w-7 h-7 rounded-full flex items-center justify-center shadow-md bg-white/90 text-slate-600 hover:text-blue-500 hover:bg-white transition-colors"
+              title="Send message to seller"
+            >
+              <MessageCircle className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -191,6 +247,39 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
         View on Vinted
         <ExternalLink className="w-3 h-3" />
       </a>
+
+      <Dialog open={msgOpen} onOpenChange={setMsgOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Send Message</DialogTitle>
+            <DialogDescription>
+              Send a message to the seller of &quot;{item.title || "this item"}&quot;
+            </DialogDescription>
+          </DialogHeader>
+          <textarea
+            value={msgText}
+            onChange={(e) => setMsgText(e.target.value)}
+            placeholder="Write your message..."
+            maxLength={2000}
+            rows={4}
+            className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-1 resize-none"
+          />
+          <DialogFooter>
+            <Button
+              onClick={handleSendMessage}
+              disabled={sending || !msgText.trim()}
+              className="gap-1.5"
+            >
+              {sending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4" />
+              )}
+              {sending ? "Sending..." : "Send"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
