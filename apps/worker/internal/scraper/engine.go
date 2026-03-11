@@ -69,7 +69,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 	var scraper *HTMLScraper
 	if e.enrichSeller {
-		scraper = NewHTMLScraper(pm, e.db)
+		scraper = NewHTMLScraper(pm, e.db, domain)
 	}
 
 	apiURL := BuildVintedURL(m)
@@ -80,7 +80,6 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	consecutiveErrors := 0
 	checks := 0
 	var totalErrors int64
-	firstRun := true
 
 	log.Printf("[%d] started | query=%q | race=%d | url=%s", m.ID, m.Query, raceFetchers, apiURL)
 
@@ -256,14 +255,23 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 		e.db.MarkItemsSeen(newIDs)
 
-		builtItems := e.buildItems(m, newItems, nil, true)
+		builtItems := e.buildItems(m, newItems)
+
+		if e.enrichSeller {
+			for i, vItem := range newItems {
+				if info, ok := LookupCachedSellerInfo(e.db, vItem.User.ID); ok {
+					builtItems[i].Location = info.Region
+					builtItems[i].Rating = info.Rating
+				}
+			}
+		}
+
 		for _, item := range builtItems {
 			fmt.Printf("\n  NEW [%d]: %s (%s) [%s]", m.ID, item.Title, item.Price, item.Size)
 		}
 		fmt.Println()
 
-		skipEnrich := firstRun && len(newItems) > 5
-		go func(ctx context.Context, items []model.Item, vItems []model.VintedItem, monitorID int, webhook string, webhookActive bool, query string, ps string, scr *HTMLScraper, skip bool, dom string) {
+		go func(ctx context.Context, items []model.Item, vItems []model.VintedItem, monitorID int, webhook string, webhookActive bool, query string, ps string, scr *HTMLScraper, dom string) {
 			if err := e.db.BatchSaveItems(items); err != nil {
 				log.Printf("[%d] batch save error: %v", monitorID, err)
 			}
@@ -285,10 +293,13 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 				}
 			}
 
-			if e.enrichSeller && scr != nil && !skip {
-				sem := make(chan struct{}, 5)
+			if e.enrichSeller && scr != nil {
+				sem := make(chan struct{}, 10)
 				var wg sync.WaitGroup
 				for i, vItem := range vItems {
+					if items[i].Location != "" {
+						continue
+					}
 					select {
 					case <-ctx.Done():
 						return
@@ -314,9 +325,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 				}
 				wg.Wait()
 			}
-		}(ctx, builtItems, newItems, m.ID, m.DiscordWebhook.String, m.WebhookActive, m.Query, proxySource, scraper, skipEnrich, domain)
-
-		firstRun = false
+		}(ctx, builtItems, newItems, m.ID, m.DiscordWebhook.String, m.WebhookActive, m.Query, proxySource, scraper, domain)
 
 		if remaining := intervalDuration - time.Since(cycleStart); remaining > 0 {
 			time.Sleep(remaining)
@@ -352,99 +361,30 @@ func (e *Engine) fetchCatalog(client *Client, apiURL string, domain string) ([]m
 	return data.Items, 200, nil
 }
 
-func (e *Engine) buildItems(m model.Monitor, vItems []model.VintedItem, scraper *HTMLScraper, skipEnrich bool) []model.Item {
+func (e *Engine) buildItems(m model.Monitor, vItems []model.VintedItem) []model.Item {
 	domain := model.RegionDomain(m.Region)
 	items := make([]model.Item, len(vItems))
 
-	if e.enrichSeller && !skipEnrich && scraper != nil {
-		type enrichResult struct {
-			index  int
-			region string
-			rating string
+	for i, vItem := range vItems {
+		itemURL := vItem.Url
+		if !strings.HasPrefix(itemURL, "http") {
+			itemURL = fmt.Sprintf("https://%s%s", domain, itemURL)
 		}
-		results := make(chan enrichResult, len(vItems))
-		sem := make(chan struct{}, 5)
-
-		var wg sync.WaitGroup
-		for i, vItem := range vItems {
-			itemURL := vItem.Url
-			if !strings.HasPrefix(itemURL, "http") {
-				itemURL = fmt.Sprintf("https://%s%s", domain, itemURL)
-			}
-			wg.Add(1)
-			go func(idx int, url string, userID int64) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-				sellerInfo := scraper.FetchSellerInfo(url, userID)
-				if sellerInfo.Region != "" && sellerInfo.Region != "NaN" {
-					results <- enrichResult{idx, sellerInfo.Region, sellerInfo.Rating}
-				} else {
-					results <- enrichResult{idx, "", ""}
-				}
-			}(i, itemURL, vItem.User.ID)
+		size := vItem.SizeTitle
+		if size == "" {
+			size = vItem.Size
 		}
-		go func() {
-			wg.Wait()
-			close(results)
-		}()
-
-		enriched := make(map[int]enrichResult, len(vItems))
-		for r := range results {
-			enriched[r.index] = r
-		}
-
-		for i, vItem := range vItems {
-			itemURL := vItem.Url
-			if !strings.HasPrefix(itemURL, "http") {
-				itemURL = fmt.Sprintf("https://%s%s", domain, itemURL)
-			}
-			size := vItem.SizeTitle
-			if size == "" {
-				size = vItem.Size
-			}
-			var region, rating string
-			if r, ok := enriched[i]; ok {
-				region = r.region
-				rating = r.rating
-			}
-			items[i] = model.Item{
-				ID:        vItem.ID,
-				MonitorID: m.ID,
-				Title:     vItem.Title,
-				Price:     vItem.Price.Amount + " " + vItem.Price.Currency,
-				Size:      size,
-				Condition: vItem.Condition,
-				URL:       itemURL,
-				ImageURL:  vItem.Photo.Url,
-				Location:  region,
-				Rating:    rating,
-				SellerID:  vItem.User.ID,
-				FoundAt:   time.Now(),
-			}
-		}
-	} else {
-		for i, vItem := range vItems {
-			itemURL := vItem.Url
-			if !strings.HasPrefix(itemURL, "http") {
-				itemURL = fmt.Sprintf("https://%s%s", domain, itemURL)
-			}
-			size := vItem.SizeTitle
-			if size == "" {
-				size = vItem.Size
-			}
-			items[i] = model.Item{
-				ID:        vItem.ID,
-				MonitorID: m.ID,
-				Title:     vItem.Title,
-				Price:     vItem.Price.Amount + " " + vItem.Price.Currency,
-				Size:      size,
-				Condition: vItem.Condition,
-				URL:       itemURL,
-				ImageURL:  vItem.Photo.Url,
-				SellerID:  vItem.User.ID,
-				FoundAt:   time.Now(),
-			}
+		items[i] = model.Item{
+			ID:        vItem.ID,
+			MonitorID: m.ID,
+			Title:     vItem.Title,
+			Price:     vItem.Price.Amount + " " + vItem.Price.Currency,
+			Size:      size,
+			Condition: vItem.Condition,
+			URL:       itemURL,
+			ImageURL:  vItem.Photo.Url,
+			SellerID:  vItem.User.ID,
+			FoundAt:   time.Now(),
 		}
 	}
 
