@@ -36,7 +36,20 @@ export function LiveFeed({ monitorId }: { monitorId: number }) {
           const liveItem: ItemData = { ...newItem, id: String(newItem.id), isLive: true };
 
           setItems((prev) => {
-            if (prev.some((i) => String(i.id) === String(newItem.id))) return prev;
+            const newId = String(newItem.id);
+            const existingIdx = prev.findIndex((i) => String(i.id) === newId);
+            if (existingIdx !== -1) {
+              const existing = prev[existingIdx];
+              const merged = {
+                ...existing,
+                location: newItem.location || existing.location,
+                rating: newItem.rating || existing.rating,
+                seller_id: newItem.seller_id || existing.seller_id,
+              };
+              const updated = [...prev];
+              updated[existingIdx] = merged;
+              return updated;
+            }
             return [liveItem, ...prev];
           });
 

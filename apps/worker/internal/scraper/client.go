@@ -78,6 +78,26 @@ func NewClient(proxyURL string) (*Client, error) {
 	return &Client{HttpClient: httpClient}, nil
 }
 
+func NewHTMLClient(proxyURL string) (*Client, error) {
+	options := []tls_client.HttpClientOption{
+		tls_client.WithTimeoutSeconds(10),
+		tls_client.WithClientProfile(profiles.Chrome_131),
+		tls_client.WithNotFollowRedirects(),
+		tls_client.WithCookieJar(tls_client.NewCookieJar()),
+	}
+
+	if proxyURL != "" {
+		options = append(options, tls_client.WithProxyUrl(proxyURL))
+	}
+
+	httpClient, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), options...)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Client{HttpClient: httpClient}, nil
+}
+
 func (c *Client) WarmUp() error {
 	return c.WarmUpRegion("www.vinted.de")
 }

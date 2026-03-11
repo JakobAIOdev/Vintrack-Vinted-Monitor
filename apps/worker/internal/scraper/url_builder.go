@@ -14,7 +14,7 @@ func BuildVintedURL(m model.Monitor) string {
 
 	params.Add("search_text", m.Query)
 	params.Add("order", "newest_first")
-	params.Add("per_page", "20")
+	params.Add("per_page", "96")
 
 	if m.PriceMin != nil {
 		params.Add("price_from", fmt.Sprintf("%d", *m.PriceMin))
