@@ -106,11 +106,11 @@ func (s *Store) SaveItem(item model.Item) error {
 	}
 
 	_, err := s.db.Exec(`
-		INSERT INTO items (id, monitor_id, title, price, size, condition, url, image_url, location, rating, found_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO items (id, monitor_id, title, price, size, condition, url, image_url, location, rating, seller_id, found_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (id) DO NOTHING`,
 		item.ID, item.MonitorID, item.Title, item.Price, item.Size, item.Condition,
-		item.URL, item.ImageURL, item.Location, item.Rating, item.FoundAt,
+		item.URL, item.ImageURL, item.Location, item.Rating, nilIfZero(item.SellerID), item.FoundAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert item %d: %w", item.ID, err)
@@ -146,8 +146,8 @@ func (s *Store) BatchSaveItems(items []model.Item) error {
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO items (id, monitor_id, title, price, size, condition, url, image_url, location, rating, found_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO items (id, monitor_id, title, price, size, condition, url, image_url, location, rating, seller_id, found_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (id) DO NOTHING`)
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
@@ -156,7 +156,7 @@ func (s *Store) BatchSaveItems(items []model.Item) error {
 
 	for _, item := range items {
 		_, err := stmt.Exec(item.ID, item.MonitorID, item.Title, item.Price, item.Size, item.Condition,
-			item.URL, item.ImageURL, item.Location, item.Rating, item.FoundAt)
+			item.URL, item.ImageURL, item.Location, item.Rating, nilIfZero(item.SellerID), item.FoundAt)
 		if err != nil {
 			return fmt.Errorf("insert item %d: %w", item.ID, err)
 		}
@@ -200,6 +200,13 @@ func (s *Store) UpdateItemSellerInfo(itemID int64, location, rating string) erro
 		location, rating, itemID,
 	)
 	return err
+}
+
+func nilIfZero(v int64) interface{} {
+	if v == 0 {
+		return nil
+	}
+	return v
 }
 
 func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {

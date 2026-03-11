@@ -419,6 +419,7 @@ func (e *Engine) buildItems(m model.Monitor, vItems []model.VintedItem, scraper 
 				ImageURL:  vItem.Photo.Url,
 				Location:  region,
 				Rating:    rating,
+				SellerID:  vItem.User.ID,
 				FoundAt:   time.Now(),
 			}
 		}
@@ -441,6 +442,7 @@ func (e *Engine) buildItems(m model.Monitor, vItems []model.VintedItem, scraper 
 				Condition: vItem.Condition,
 				URL:       itemURL,
 				ImageURL:  vItem.Photo.Url,
+				SellerID:  vItem.User.ID,
 				FoundAt:   time.Now(),
 			}
 		}

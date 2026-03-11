@@ -34,6 +34,7 @@ export async function GET(
     const safeItems = items.map(item => ({
       ...item,
       id: item.id.toString(),
+      seller_id: item.seller_id?.toString() || null,
     }));
 
     return NextResponse.json(safeItems);
