@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"net/url"
@@ -106,28 +107,70 @@ var ariaLabelRatingRegex = regexp.MustCompile(`(?i)aria-label="[^"]*?(\d+(?:[.,]
 var ratingLabelRegex = regexp.MustCompile(`(?i)Rating__label[^>]*>\s*<[^>]*>\s*(\d{1,5})\s*<`)
 var reviewCountLabelRegex = regexp.MustCompile(`(?i)(\d{1,5})\s*(?:Bewertung|review|avis|recens)`)
 
+var jsonCountryTitleRegex = regexp.MustCompile(`"country_title"\s*:\s*"([^"]{2,50})"`)
+var jsonAddressCountryRegex = regexp.MustCompile(`"addressCountry"\s*:\s*"([A-Z]{2})"`)
+var jsonCityRegex = regexp.MustCompile(`"city"\s*:\s*"[^"]+"[^}]{0,200}?"country_title"\s*:\s*"([^"]{2,50})"`)
+var jsonReputationRegex = regexp.MustCompile(`"feedback_reputation"\s*:\s*([\d.]+)`)
+var jsonFeedbackCountRegex = regexp.MustCompile(`"feedback_count"\s*:\s*(\d+)`)
+
+var isoCountryMap = map[string]string{
+	"DE": "🇩🇪 DE", "FR": "🇫🇷 FR", "IT": "🇮🇹 IT", "ES": "🇪🇸 ES",
+	"NL": "🇳🇱 NL", "PL": "🇵🇱 PL", "AT": "🇦🇹 AT", "BE": "🇧🇪 BE",
+	"GB": "🇬🇧 UK", "UK": "🇬🇧 UK", "LU": "🇱🇺 LU", "PT": "🇵🇹 PT",
+	"CZ": "🇨🇿 CZ", "SK": "🇸🇰 SK", "LT": "🇱🇹 LT", "SE": "🇸🇪 SE",
+	"DK": "🇩🇰 DK", "RO": "🇷🇴 RO", "HU": "🇭🇺 HU", "HR": "🇭🇷 HR",
+	"FI": "🇫🇮 FI", "IE": "🇮🇪 IE", "SI": "🇸🇮 SI", "EE": "🇪🇪 EE",
+	"LV": "🇱🇻 LV", "GR": "🇬🇷 GR",
+}
+
 func parseSellerInfoFromHTML(htmlBody []byte) SellerInfo {
 	html := string(htmlBody)
-	upperHTML := strings.ToUpper(html)
-
 	var info SellerInfo
 
-	for name, code := range countryMap {
-		if strings.Contains(upperHTML, ", "+name) ||
-			strings.Contains(upperHTML, ">"+name+"<") ||
-			strings.Contains(upperHTML, "> "+name+"<") {
+	if m := jsonCountryTitleRegex.FindStringSubmatch(html); len(m) > 1 {
+		country := strings.ToUpper(strings.TrimSpace(m[1]))
+		if code, ok := countryMap[country]; ok {
 			info.Region = code
-			break
 		}
 	}
-	if matches := ariaLabelRatingRegex.FindStringSubmatch(html); len(matches) > 1 {
-		rating := strings.Replace(matches[1], ",", ".", 1)
-		info.Rating = "⭐ " + rating
 
-		if m := ratingLabelRegex.FindStringSubmatch(html); len(m) > 1 {
-			info.Rating += " (" + m[1] + ")"
-		} else if m := reviewCountLabelRegex.FindStringSubmatch(html); len(m) > 1 {
-			info.Rating += " (" + m[1] + ")"
+	if info.Region == "" {
+		if m := jsonAddressCountryRegex.FindStringSubmatch(html); len(m) > 1 {
+			if code, ok := isoCountryMap[m[1]]; ok {
+				info.Region = code
+			}
+		}
+	}
+
+	if info.Region == "" {
+		upperHTML := strings.ToUpper(html)
+		for name, code := range countryMap {
+			if strings.Contains(upperHTML, ", "+name) ||
+				strings.Contains(upperHTML, ">"+name+"<") ||
+				strings.Contains(upperHTML, "> "+name+"<") {
+				info.Region = code
+				break
+			}
+		}
+	}
+
+	if m := jsonReputationRegex.FindStringSubmatch(html); len(m) > 1 {
+		info.Rating = "⭐ " + m[1]
+		if mc := jsonFeedbackCountRegex.FindStringSubmatch(html); len(mc) > 1 {
+			info.Rating += " (" + mc[1] + ")"
+		}
+	}
+
+	if info.Rating == "" {
+		if matches := ariaLabelRatingRegex.FindStringSubmatch(html); len(matches) > 1 {
+			rating := strings.Replace(matches[1], ",", ".", 1)
+			info.Rating = "⭐ " + rating
+
+			if m := ratingLabelRegex.FindStringSubmatch(html); len(m) > 1 {
+				info.Rating += " (" + m[1] + ")"
+			} else if m := reviewCountLabelRegex.FindStringSubmatch(html); len(m) > 1 {
+				info.Rating += " (" + m[1] + ")"
+			}
 		}
 	}
 
@@ -138,19 +181,20 @@ type HTMLScraper struct {
 	clients []*Client
 	pm      *proxy.Manager
 	db      *database.Store
+	domain  string
 	mu      sync.Mutex
 	idx     int
 }
 
-func NewHTMLScraper(pm *proxy.Manager, db *database.Store) *HTMLScraper {
-	poolSize := 3
+func NewHTMLScraper(pm *proxy.Manager, db *database.Store, domain string) *HTMLScraper {
+	poolSize := 5
 	if pm.Count() < poolSize {
 		poolSize = pm.Count()
 	}
 	if poolSize < 1 {
 		poolSize = 1
 	}
-	s := &HTMLScraper{pm: pm, db: db, clients: make([]*Client, 0, poolSize)}
+	s := &HTMLScraper{pm: pm, db: db, domain: domain, clients: make([]*Client, 0, poolSize)}
 	for i := 0; i < poolSize; i++ {
 		s.addClient()
 	}
@@ -158,12 +202,12 @@ func NewHTMLScraper(pm *proxy.Manager, db *database.Store) *HTMLScraper {
 }
 
 func (s *HTMLScraper) addClient() {
-	client, err := NewClient(s.pm.Next())
+	client, err := NewHTMLClient(s.pm.Next())
 	if err != nil {
 		log.Printf("scraper client creation: %v", err)
 		return
 	}
-	if err := client.WarmUp(); err != nil {
+	if err := client.WarmUpRegion(s.domain); err != nil {
 		log.Printf("scraper warmup: %v", err)
 	}
 	s.clients = append(s.clients, client)
@@ -185,21 +229,36 @@ func (s *HTMLScraper) replaceClient(bad *Client) {
 	defer s.mu.Unlock()
 	for i, c := range s.clients {
 		if c == bad {
-			go func(idx int) {
-				nc, err := NewClient(s.pm.Next())
+			go func(idx int, domain string) {
+				nc, err := NewHTMLClient(s.pm.Next())
 				if err != nil {
 					return
 				}
-				_ = nc.WarmUp()
+				_ = nc.WarmUpRegion(domain)
 				s.mu.Lock()
 				if idx < len(s.clients) {
 					s.clients[idx] = nc
 				}
 				s.mu.Unlock()
-			}(i)
+			}(i, s.domain)
 			return
 		}
 	}
+}
+
+func LookupCachedSellerInfo(db *database.Store, userID int64) (SellerInfo, bool) {
+	if userID <= 0 {
+		return SellerInfo{}, false
+	}
+	if info, ok := sellerCache.Get(userID); ok {
+		return info, true
+	}
+	if region, ok := db.GetUserRegion(userID); ok && region != "" {
+		info := SellerInfo{Region: region}
+		sellerCache.Set(userID, info)
+		return info, true
+	}
+	return SellerInfo{}, false
 }
 
 func (s *HTMLScraper) FetchSellerInfo(itemURL string, userID int64) SellerInfo {
@@ -217,9 +276,13 @@ func (s *HTMLScraper) FetchSellerInfo(itemURL string, userID int64) SellerInfo {
 		}
 	}
 
-	info := s.scrapeWithRetry(itemURL)
+	scrapeURL := itemURL
+	if userID > 0 {
+		scrapeURL = fmt.Sprintf("https://%s/member/%d", s.domain, userID)
+	}
+	info := s.scrapeWithRetry(scrapeURL)
 
-	if userID > 0 && info.Region != "NaN" {
+	if userID > 0 && info.Region != "" && info.Region != "NaN" {
 		sellerCache.Set(userID, info)
 		s.db.SetUserRegion(userID, info.Region)
 	}
@@ -240,35 +303,42 @@ func (s *HTMLScraper) scrapeWithRetry(itemURL string) SellerInfo {
 
 	if status != 200 {
 		s.replaceClient(client)
-		client2 := s.nextClient()
-		if client2 != nil {
-			info, _ = s.doScrape(client2, itemURL)
-			if info.Region != "" {
-				return info
-			}
+	}
+
+	client2 := s.nextClient()
+	if client2 != nil && client2 != client {
+		info, status2 := s.doScrape(client2, itemURL)
+		if info.Region != "" {
+			return info
+		}
+		if status2 != 200 {
+			s.replaceClient(client2)
 		}
 	}
 
 	return SellerInfo{Region: "NaN"}
 }
 
-func (s *HTMLScraper) doScrape(client *Client, itemURL string) (SellerInfo, int) {
+func (s *HTMLScraper) doScrape(client *Client, scrapeURL string) (SellerInfo, int) {
 	if client == nil {
 		return SellerInfo{}, 0
 	}
 
-	body, status := s.fetchHTML(client, itemURL)
+	body, status := s.fetchHTML(client, scrapeURL)
 	if status != 200 || len(body) == 0 {
 		return SellerInfo{}, status
 	}
 
-	return parseSellerInfoFromHTML(body), 200
+	info := parseSellerInfoFromHTML(body)
+	if info.Region == "" {
+		log.Printf("seller enrich: 200 but no region parsed (url=%s len=%d)", scrapeURL, len(body))
+	}
+	return info, 200
 }
 
 func (s *HTMLScraper) fetchHTML(client *Client, targetURL string) ([]byte, int) {
 	currentURL := targetURL
 
-	// Extract domain from URL for headers
 	domain := "www.vinted.de"
 	if parsed, err := url.Parse(targetURL); err == nil && parsed.Host != "" {
 		domain = parsed.Host
