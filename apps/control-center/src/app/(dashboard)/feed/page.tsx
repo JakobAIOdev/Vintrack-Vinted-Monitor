@@ -40,7 +40,19 @@ export default function FeedPage() {
 
         setItems((prev) => {
           const newId = String(newItem.id);
-          if (prev.some((i) => String(i.id) === newId)) return prev;
+          const existingIdx = prev.findIndex((i) => String(i.id) === newId);
+          if (existingIdx !== -1) {
+            const existing = prev[existingIdx];
+            const merged = {
+              ...existing,
+              location: newItem.location || existing.location,
+              rating: newItem.rating || existing.rating,
+              seller_id: newItem.seller_id || existing.seller_id,
+            };
+            const updated = [...prev];
+            updated[existingIdx] = merged;
+            return updated;
+          }
           return [{ ...liveItem, id: newId }, ...prev];
         });
 
