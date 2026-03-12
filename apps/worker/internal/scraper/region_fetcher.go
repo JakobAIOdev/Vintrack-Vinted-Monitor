@@ -344,7 +344,7 @@ func (s *HTMLScraper) doScrape(client *Client, scrapeURL string, userID int64) (
 					rating := resp.User.FeedbackReputation * 5.0
 					info.Rating = fmt.Sprintf("⭐ %.1f (%d)", rating, resp.User.FeedbackCount)
 				} else {
-					info.Rating = "Keine Bewertungen"
+					info.Rating = "No rating"
 				}
 
 				if info.Region != "" {
