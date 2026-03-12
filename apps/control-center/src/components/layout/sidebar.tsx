@@ -112,7 +112,7 @@ export function Sidebar({ user }: SidebarProps) {
             Community
           </p>
           <a
-            href="https://github.com/jakob-kellermann/vintrack"
+            href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor"
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium text-amber-600 hover:bg-amber-50 hover:text-amber-700 transition-colors"

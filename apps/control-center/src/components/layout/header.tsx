@@ -47,7 +47,7 @@ export function Header() {
 
       <div className="flex items-center gap-4">
         <a
-          href="https://github.com/jakob-kellermann/vintrack"
+          href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor"
           target="_blank"
           rel="noopener noreferrer"
           className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 hover:text-amber-600 transition-colors bg-slate-50 hover:bg-amber-50 px-2 py-1 rounded-md border border-slate-200 hover:border-amber-200"
