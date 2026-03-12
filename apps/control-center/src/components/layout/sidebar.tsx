@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { LayoutDashboard, PlusCircle, Radio, LogOut, Globe, Shield, User } from "lucide-react";
+import { LayoutDashboard, PlusCircle, Radio, LogOut, Globe, Shield, User, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const ACCOUNT_SEEN_KEY = "vintrack:account-tab-seen";
@@ -105,6 +105,21 @@ export function Sidebar({ user }: SidebarProps) {
             <PlusCircle className="w-4 h-4 text-slate-400" />
             New Monitor
           </Link>
+        </div>
+
+        <div className="pt-4">
+          <p className="px-3 mb-2 text-[11px] font-medium text-slate-400 uppercase tracking-widest">
+            Community
+          </p>
+          <a
+            href="https://github.com/jakob-kellermann/vintrack"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium text-amber-600 hover:bg-amber-50 hover:text-amber-700 transition-colors"
+          >
+            <Star className="w-4 h-4" />
+            Star on GitHub
+          </a>
         </div>
 
         {user?.role === "admin" && (

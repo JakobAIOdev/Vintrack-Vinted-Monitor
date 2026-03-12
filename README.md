@@ -19,6 +19,18 @@
 </p>
 
 <p align="center">
+  <b>⭐ If you find Vintrack useful, please consider giving it a star on GitHub! It helps the project grow and reach more people. ⭐</b>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/topic-vinted-blue?style=flat-square" alt="Vinted" />
+  <img src="https://img.shields.io/badge/topic-bot-blue?style=flat-square" alt="Bot" />
+  <img src="https://img.shields.io/badge/topic-scraper-blue?style=flat-square" alt="Scraper" />
+  <img src="https://img.shields.io/badge/topic-reselling-blue?style=flat-square" alt="Reselling" />
+  <img src="https://img.shields.io/badge/topic-monitor-blue?style=flat-square" alt="Monitor" />
+</p>
+
+<p align="center">
   <a href="#live-demo">Live Demo</a> •
   <a href="#getting-started">Getting Started</a> •
   <a href="#features">Features</a> •
