@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Github, Star } from "lucide-react";
 
 export function Header() {
   const pathname = usePathname();
@@ -45,12 +45,25 @@ export function Header() {
         ))}
       </nav>
 
-      <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
-        <span className="relative flex h-2 w-2">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-        </span>
-        Connected
+      <div className="flex items-center gap-4">
+        <a
+          href="https://github.com/jakob-kellermann/vintrack"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 hover:text-amber-600 transition-colors bg-slate-50 hover:bg-amber-50 px-2 py-1 rounded-md border border-slate-200 hover:border-amber-200"
+        >
+          <Github className="w-3.5 h-3.5" />
+          Star us on GitHub
+          <Star className="w-3.5 h-3.5" />
+        </a>
+
+        <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+          </span>
+          Connected
+        </div>
       </div>
     </header>
   );
