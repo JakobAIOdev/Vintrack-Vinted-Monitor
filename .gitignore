@@ -2,6 +2,8 @@
 .DS_Store
 Thumbs.db
 .vscode
+GEMINI.md
+.gemini
 
 # --- Environment & Secrets ---
 .env
