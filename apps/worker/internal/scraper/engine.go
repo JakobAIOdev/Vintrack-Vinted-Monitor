@@ -27,13 +27,73 @@ type Engine struct {
 	serverProxy  *proxy.Manager
 	enrichSeller bool
 	poolSize     int
+	pools        map[string]*ClientPool
+	poolsMu      sync.RWMutex
+	scrapers     map[string]*HTMLScraper
+	scrapersMu   sync.RWMutex
 }
 
 func NewEngine(db *database.Store, pm *proxy.Manager) *Engine {
 	enrich := os.Getenv("ENRICH_SELLER_INFO") != "false"
 	poolSize := getEnvInt("CLIENT_POOL_SIZE", 5)
 	log.Printf("Seller enrichment (region/rating): %v, client pool size: %d", enrich, poolSize)
-	return &Engine{db: db, serverProxy: pm, enrichSeller: enrich, poolSize: poolSize}
+	return &Engine{
+		db:           db,
+		serverProxy:  pm,
+		enrichSeller: enrich,
+		poolSize:     poolSize,
+		pools:        make(map[string]*ClientPool),
+		scrapers:     make(map[string]*HTMLScraper),
+	}
+}
+
+func (e *Engine) GetOrCreateScraper(pm *proxy.Manager, domain string, proxySource string) *HTMLScraper {
+	key := fmt.Sprintf("%s:%s", domain, proxySource)
+
+	e.scrapersMu.RLock()
+	s, ok := e.scrapers[key]
+	e.scrapersMu.RUnlock()
+
+	if ok {
+		return s
+	}
+
+	e.scrapersMu.Lock()
+	defer e.scrapersMu.Unlock()
+
+	if s, ok = e.scrapers[key]; ok {
+		return s
+	}
+
+	log.Printf("Creating new HTML scraper for %s (source: %s)", domain, proxySource)
+	s = NewHTMLScraper(pm, e.db, domain, e.poolSize)
+	e.scrapers[key] = s
+	return s
+}
+
+func (e *Engine) GetOrCreatePool(pm *proxy.Manager, domain string, proxySource string) *ClientPool {
+	key := fmt.Sprintf("%s:%s", domain, proxySource)
+
+	e.poolsMu.RLock()
+	pool, ok := e.pools[key]
+	e.poolsMu.RUnlock()
+
+	if ok {
+		return pool
+	}
+
+	e.poolsMu.Lock()
+	defer e.poolsMu.Unlock()
+
+	// Double check
+	if pool, ok = e.pools[key]; ok {
+		return pool
+	}
+
+	log.Printf("Creating new client pool for %s (source: %s)", domain, proxySource)
+	pool = NewClientPool(pm, domain, e.poolSize)
+	e.pools[key] = pool
+	return pool
 }
 
 func (e *Engine) getProxyManager(m model.Monitor) *proxy.Manager {
@@ -64,12 +124,12 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	}
 	log.Printf("[%d] proxy source: %s (%d proxies)", m.ID, proxySource, pm.Count())
 
-	pool := NewClientPool(pm, domain, e.poolSize)
-	log.Printf("[%d] client pool ready: %d clients", m.ID, pool.Size())
+	pool := e.GetOrCreatePool(pm, domain, proxySource)
+	log.Printf("[%d] using client pool: %d clients", m.ID, pool.Size())
 
 	var scraper *HTMLScraper
 	if e.enrichSeller {
-		scraper = NewHTMLScraper(pm, e.db, domain)
+		scraper = e.GetOrCreateScraper(pm, domain, proxySource)
 	}
 
 	apiURL := BuildVintedURL(m)
@@ -145,7 +205,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 		for _, c := range clients {
 			go func(cl *Client) {
-				items, status, err := e.fetchCatalog(cl, apiURL, domain)
+				items, status, err := e.fetchCatalog(ctx, cl, apiURL, domain)
 				resultCh <- fetchResult{items, status, err, cl}
 			}(c)
 		}
@@ -272,31 +332,10 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		fmt.Println()
 
 		go func(ctx context.Context, items []model.Item, vItems []model.VintedItem, monitorID int, webhook string, webhookActive bool, query string, ps string, scr *HTMLScraper, dom string) {
-			if err := e.db.BatchSaveItems(items); err != nil {
-				log.Printf("[%d] batch save error: %v", monitorID, err)
-			}
-
-			for i := range items {
-				if err := e.db.PublishItem(items[i]); err != nil {
-					log.Printf("[%d] publish error: %v", monitorID, err)
-				}
-			}
-
-			if webhook != "" && webhookActive {
-				for _, it := range items {
-					select {
-					case <-ctx.Done():
-						return
-					default:
-					}
-					discord.SendWebhook(webhook, it, query, ps)
-				}
-			}
-
 			if e.enrichSeller && scr != nil {
 				sem := make(chan struct{}, 10)
 				var wg sync.WaitGroup
-				for i, vItem := range vItems {
+				for i := range items {
 					if items[i].Location != "" {
 						continue
 					}
@@ -305,25 +344,49 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 						return
 					default:
 					}
-					itemURL := vItem.Url
+
+					itemURL := vItems[i].Url
 					if !strings.HasPrefix(itemURL, "http") {
 						itemURL = fmt.Sprintf("https://%s%s", dom, itemURL)
 					}
+
 					wg.Add(1)
 					go func(idx int, url string, userID int64) {
 						defer wg.Done()
 						sem <- struct{}{}
 						defer func() { <-sem }()
+
 						info := scr.FetchSellerInfo(url, userID)
 						if info.Region != "" && info.Region != "NaN" {
 							items[idx].Location = info.Region
 							items[idx].Rating = info.Rating
-							_ = e.db.UpdateItemSellerInfo(items[idx].ID, info.Region, info.Rating)
-							_ = e.db.PublishItem(items[idx])
 						}
-					}(i, itemURL, vItem.User.ID)
+					}(i, itemURL, vItems[i].User.ID)
 				}
 				wg.Wait()
+			}
+
+			if err := e.db.BatchSaveItems(items); err != nil {
+				log.Printf("[%d] batch save error: %v", monitorID, err)
+			}
+
+			for i := range items {
+				if items[i].Location != "" {
+					_ = e.db.UpdateItemSellerInfo(items[i].ID, items[i].Location, items[i].Rating)
+				}
+
+				if err := e.db.PublishItem(items[i]); err != nil {
+					log.Printf("[%d] publish error: %v", monitorID, err)
+				}
+
+				if webhook != "" && webhookActive {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
+					discord.SendWebhook(webhook, items[i], query, ps)
+				}
 			}
 		}(ctx, builtItems, newItems, m.ID, m.DiscordWebhook.String, m.WebhookActive, m.Query, proxySource, scraper, domain)
 
@@ -333,9 +396,9 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	}
 }
 
-func (e *Engine) fetchCatalog(client *Client, apiURL string, domain string) ([]model.VintedItem, int, error) {
+func (e *Engine) fetchCatalog(ctx context.Context, client *Client, apiURL string, domain string) ([]model.VintedItem, int, error) {
 	reqURL := apiURL + "&_=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
-	req, err := http.NewRequest("GET", reqURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, 0, err
 	}

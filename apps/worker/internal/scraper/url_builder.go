@@ -3,6 +3,7 @@ package scraper
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"vintrack-worker/internal/model"
 )
@@ -12,9 +13,14 @@ func BuildVintedURL(m model.Monitor) string {
 	baseURL := fmt.Sprintf("https://%s/api/v2/catalog/items", domain)
 	params := url.Values{}
 
+	perPage := os.Getenv("VINTED_PER_PAGE")
+	if perPage == "" {
+		perPage = "20"
+	}
+
 	params.Add("search_text", m.Query)
 	params.Add("order", "newest_first")
-	params.Add("per_page", "96")
+	params.Add("per_page", perPage)
 
 	if m.PriceMin != nil {
 		params.Add("price_from", fmt.Sprintf("%d", *m.PriceMin))

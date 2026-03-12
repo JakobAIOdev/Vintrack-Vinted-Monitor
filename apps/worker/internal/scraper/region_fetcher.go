@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"vintrack-worker/internal/database"
+	"vintrack-worker/internal/model"
 	"vintrack-worker/internal/proxy"
 
 	http "github.com/bogdanfinn/fhttp"
@@ -186,8 +188,7 @@ type HTMLScraper struct {
 	idx     int
 }
 
-func NewHTMLScraper(pm *proxy.Manager, db *database.Store, domain string) *HTMLScraper {
-	poolSize := 5
+func NewHTMLScraper(pm *proxy.Manager, db *database.Store, domain string, poolSize int) *HTMLScraper {
 	if pm.Count() < poolSize {
 		poolSize = pm.Count()
 	}
@@ -280,7 +281,7 @@ func (s *HTMLScraper) FetchSellerInfo(itemURL string, userID int64) SellerInfo {
 	if userID > 0 {
 		scrapeURL = fmt.Sprintf("https://%s/member/%d", s.domain, userID)
 	}
-	info := s.scrapeWithRetry(scrapeURL)
+	info := s.scrapeWithRetry(scrapeURL, userID)
 
 	if userID > 0 && info.Region != "" && info.Region != "NaN" {
 		sellerCache.Set(userID, info)
@@ -290,13 +291,13 @@ func (s *HTMLScraper) FetchSellerInfo(itemURL string, userID int64) SellerInfo {
 	return info
 }
 
-func (s *HTMLScraper) scrapeWithRetry(itemURL string) SellerInfo {
+func (s *HTMLScraper) scrapeWithRetry(itemURL string, userID int64) SellerInfo {
 	client := s.nextClient()
 	if client == nil {
 		return SellerInfo{Region: "NaN"}
 	}
 
-	info, status := s.doScrape(client, itemURL)
+	info, status := s.doScrape(client, itemURL, userID)
 	if info.Region != "" {
 		return info
 	}
@@ -307,7 +308,7 @@ func (s *HTMLScraper) scrapeWithRetry(itemURL string) SellerInfo {
 
 	client2 := s.nextClient()
 	if client2 != nil && client2 != client {
-		info, status2 := s.doScrape(client2, itemURL)
+		info, status2 := s.doScrape(client2, itemURL, userID)
 		if info.Region != "" {
 			return info
 		}
@@ -319,27 +320,56 @@ func (s *HTMLScraper) scrapeWithRetry(itemURL string) SellerInfo {
 	return SellerInfo{Region: "NaN"}
 }
 
-func (s *HTMLScraper) doScrape(client *Client, scrapeURL string) (SellerInfo, int) {
+func (s *HTMLScraper) doScrape(client *Client, scrapeURL string, userID int64) (SellerInfo, int) {
 	if client == nil {
 		return SellerInfo{}, 0
 	}
 
-	body, status := s.fetchHTML(client, scrapeURL)
+	if userID > 0 {
+		apiURL := fmt.Sprintf("https://%s/api/v2/users/%d", s.domain, userID)
+		body, status := s.fetchBody(client, apiURL, true)
+		if status == 200 && len(body) > 0 {
+			var resp model.VintedUserDetailResponse
+			if err := json.Unmarshal(body, &resp); err == nil && resp.User.ID > 0 {
+				info := SellerInfo{}
+				if code, ok := isoCountryMap[resp.User.CountryCode]; ok {
+					info.Region = code
+				} else if resp.User.CountryTitle != "" {
+					if code, ok := countryMap[strings.ToUpper(resp.User.CountryTitle)]; ok {
+						info.Region = code
+					}
+				}
+
+				if resp.User.FeedbackCount > 0 {
+					rating := resp.User.FeedbackReputation * 5.0
+					info.Rating = fmt.Sprintf("⭐ %.1f (%d)", rating, resp.User.FeedbackCount)
+				} else {
+					info.Rating = "Keine Bewertungen"
+				}
+
+				if info.Region != "" {
+					return info, 200
+				}
+			}
+		}
+		if status == 403 || status == 429 {
+			return SellerInfo{}, status
+		}
+	}
+
+	body, status := s.fetchBody(client, scrapeURL, false)
 	if status != 200 || len(body) == 0 {
 		return SellerInfo{}, status
 	}
 
 	info := parseSellerInfoFromHTML(body)
-	if info.Region == "" {
-		log.Printf("seller enrich: 200 but no region parsed (url=%s len=%d)", scrapeURL, len(body))
-	}
 	return info, 200
 }
 
-func (s *HTMLScraper) fetchHTML(client *Client, targetURL string) ([]byte, int) {
+func (s *HTMLScraper) fetchBody(client *Client, targetURL string, isAPI bool) ([]byte, int) {
 	currentURL := targetURL
 
-	domain := "www.vinted.de"
+	domain := s.domain
 	if parsed, err := url.Parse(targetURL); err == nil && parsed.Host != "" {
 		domain = parsed.Host
 	}
@@ -350,7 +380,11 @@ func (s *HTMLScraper) fetchHTML(client *Client, targetURL string) ([]byte, int) 
 			return nil, 0
 		}
 
-		req.Header = newPageHeaders(domain)
+		if isAPI {
+			req.Header = newAPIHeaders(domain)
+		} else {
+			req.Header = newPageHeaders(domain)
+		}
 
 		resp, err := client.HttpClient.Do(req)
 		if err != nil {
@@ -375,7 +409,11 @@ func (s *HTMLScraper) fetchHTML(client *Client, targetURL string) ([]byte, int) 
 			return nil, resp.StatusCode
 		}
 
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxHTMLResponseBytes))
+		limit := maxHTMLResponseBytes
+		if isAPI {
+			limit = 512 * 1024
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, int64(limit)))
 		resp.Body.Close()
 		return body, 200
 	}
