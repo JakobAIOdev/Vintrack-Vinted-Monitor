@@ -118,3 +118,16 @@ type VintedPrice struct {
 type VintedPhoto struct {
 	Url string `json:"url"`
 }
+
+type VintedUserDetailResponse struct {
+	User VintedUserDetail `json:"user"`
+}
+
+type VintedUserDetail struct {
+	ID                 int64   `json:"id"`
+	Login              string  `json:"login"`
+	CountryTitle       string  `json:"country_title"`
+	CountryCode        string  `json:"country_iso_code"`
+	FeedbackCount      int     `json:"feedback_count"`
+	FeedbackReputation float64 `json:"feedback_reputation"`
+}
