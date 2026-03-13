@@ -441,18 +441,31 @@ func (e *Engine) buildItems(m model.Monitor, vItems []model.VintedItem) []model.
 		if vItem.TotalItemPrice != nil {
 			totalPrice = vItem.TotalItemPrice.Amount + " " + vItem.TotalItemPrice.Currency
 		}
+
+		var extraImages []string
+		for idx, photo := range vItem.Photos {
+			if idx == 0 {
+				continue
+			}
+			if photo.Url != "" {
+				extraImages = append(extraImages, photo.Url)
+			}
+		}
+
 		items[i] = model.Item{
-			ID:         vItem.ID,
-			MonitorID:  m.ID,
-			Title:      vItem.Title,
-			Price:      vItem.Price.Amount + " " + vItem.Price.Currency,
-			TotalPrice: totalPrice,
-			Size:       size,
-			Condition:  vItem.Condition,
-			URL:        itemURL,
-			ImageURL:   vItem.Photo.Url,
-			SellerID:   vItem.User.ID,
-			FoundAt:    time.Now(),
+			ID:          vItem.ID,
+			MonitorID:   m.ID,
+			Title:       vItem.Title,
+			Brand:       vItem.BrandTitle,
+			Price:       vItem.Price.Amount + " " + vItem.Price.Currency,
+			TotalPrice:  totalPrice,
+			Size:        size,
+			Condition:   vItem.Condition,
+			URL:         itemURL,
+			ImageURL:    vItem.Photo.Url,
+			ExtraImages: extraImages,
+			SellerID:    vItem.User.ID,
+			FoundAt:     time.Now(),
 		}
 	}
 

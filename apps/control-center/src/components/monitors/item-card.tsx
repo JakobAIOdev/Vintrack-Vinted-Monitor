@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { ExternalLink, ImageOff, Heart, MessageCircle, Send, Loader2 } from "lucide-react";
+import { ExternalLink, ImageOff, Heart, MessageCircle, Send, Loader2, XIcon } from "lucide-react";
 import Link from "next/link";
 import { useVintedAccount } from "@/components/account-provider";
 import { toast } from "sonner";
@@ -20,12 +20,14 @@ export type ItemData = {
   id: string;
   monitor_id: number;
   title: string | null;
+  brand?: string | null;
   price: string | null;
   total_price: string | null;
   size: string | null;
   condition: string | null;
   url: string | null;
   image_url: string | null;
+  extra_images?: string[] | null;
   found_at: string;
   monitor_name?: string;
   isLive?: boolean;
@@ -46,6 +48,7 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
   const [msgOpen, setMsgOpen] = useState(false);
   const [msgText, setMsgText] = useState("");
   const [sending, setSending] = useState(false);
+  const [selectedImg, setSelectedImg] = useState<string | null>(null);
 
   const timeStr = new Date(item.found_at).toLocaleTimeString([], {
     hour: "2-digit",
@@ -125,12 +128,49 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
     >
       <div className="relative aspect-4/5 bg-slate-100 overflow-hidden">
         {item.image_url ? (
-          <img
-            src={item.image_url}
-            alt={item.title || "Item"}
-            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-            loading="lazy"
-          />
+          item.extra_images && item.extra_images.length > 0 ? (
+            <div className="w-full h-full flexgap-0.5">
+              <div
+                className="flex-2 h-full overflow-hidden cursor-pointer"
+                onClick={() => setSelectedImg(item.image_url)}
+              >
+                <img
+                  src={item.image_url}
+                  alt={item.title || "Item"}
+                  className="w-full h-full object-cover transition-transform duration-500 hover:scale-105"
+                  loading="lazy"
+                />
+              </div>
+              <div className="flex-1 h-full flex flex-col gap-0.5">
+                {item.extra_images.slice(0, 2).map((img, idx) => (
+                  <div
+                    key={idx}
+                    className="flex-1 overflow-hidden bg-slate-200 cursor-pointer"
+                    onClick={() => setSelectedImg(img)}
+                  >
+                    <img
+                      src={img}
+                      alt={`${item.title} ${idx + 1}`}
+                      className="w-full h-full object-cover transition-transform duration-500 hover:scale-105"
+                      loading="lazy"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div
+              className="w-full h-full cursor-pointer"
+              onClick={() => setSelectedImg(item.image_url)}
+            >
+              <img
+                src={item.image_url}
+                alt={item.title || "Item"}
+                className="w-full h-full object-cover transition-transform duration-500 hover:scale-105"
+                loading="lazy"
+              />
+            </div>
+          )
         ) : (
           <div className="w-full h-full flex items-center justify-center text-slate-300">
             <ImageOff className="w-8 h-8" />
@@ -220,6 +260,11 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
         </h3>
 
         <div className="flex flex-wrap gap-1.5 mt-auto pt-1">
+          {item.brand && (
+            <span className="text-[10px] px-1.5 h-5 flex items-center rounded bg-slate-50 text-slate-500 font-medium">
+              {item.brand}
+            </span>
+          )}
           {item.size && (
             <Badge
               variant="secondary"
@@ -286,6 +331,24 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
               {sending ? "Sending..." : "Send"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!selectedImg} onOpenChange={(open) => !open && setSelectedImg(null)}>
+        <DialogContent showCloseButton={false} className="max-w-[90vw] max-h-[90vh] p-0 border-none bg-transparent shadow-none flex items-center justify-center outline-none">
+          <button 
+            onClick={() => setSelectedImg(null)}
+            className="fixed top-6 right-6 z-60 w-12 h-12 rounded-full bg-black/20 backdrop-blur-xl border border-white/10 text-white flex items-center justify-center hover:bg-black/40 transition-all hover:scale-110 active:scale-95 shadow-2xl group"
+          >
+            <XIcon className="w-6 h-6 transition-transform group-hover:rotate-90" />
+          </button>
+          {selectedImg && (
+            <img
+              src={selectedImg}
+              alt="Preview"
+              className="max-w-full max-h-[90vh] object-contain rounded-xl shadow-[0_0_50px_rgba(0,0,0,0.5)] animate-in zoom-in-95 duration-300"
+            />
+          )}
         </DialogContent>
       </Dialog>
     </div>

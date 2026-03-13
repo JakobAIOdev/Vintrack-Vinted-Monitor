@@ -62,19 +62,21 @@ func RegionDomain(region string) string {
 
 // Item represents a found Vinted listing stored in the database.
 type Item struct {
-	ID         int64     `json:"id"`
-	MonitorID  int       `json:"monitor_id"`
-	Title      string    `json:"title"`
-	Price      string    `json:"price"`
-	TotalPrice string    `json:"total_price,omitempty"`
-	Size       string    `json:"size"`
-	Condition  string    `json:"condition"`
-	URL        string    `json:"url"`
-	ImageURL   string    `json:"image_url"`
-	Location   string    `json:"location"`
-	Rating     string    `json:"rating,omitempty"`
-	SellerID   int64     `json:"seller_id,omitempty"`
-	FoundAt    time.Time `json:"found_at"`
+	ID          int64     `json:"id"`
+	MonitorID   int       `json:"monitor_id"`
+	Title       string    `json:"title"`
+	Brand       string    `json:"brand,omitempty"`
+	Price       string    `json:"price"`
+	TotalPrice  string    `json:"total_price,omitempty"`
+	Size        string    `json:"size"`
+	Condition   string    `json:"condition"`
+	URL         string    `json:"url"`
+	ImageURL    string    `json:"image_url"`
+	ExtraImages []string  `json:"extra_images,omitempty"`
+	Location    string    `json:"location"`
+	Rating      string    `json:"rating,omitempty"`
+	SellerID    int64     `json:"seller_id,omitempty"`
+	FoundAt     time.Time `json:"found_at"`
 }
 
 type MonitorHealth struct {
@@ -93,16 +95,18 @@ type VintedResponse struct {
 }
 
 type VintedItem struct {
-	ID             int64        `json:"id"`
-	Title          string       `json:"title"`
-	Price          VintedPrice  `json:"price"`
-	TotalItemPrice *VintedPrice `json:"total_item_price,omitempty"`
-	Url            string       `json:"url"`
-	Photo          VintedPhoto  `json:"photo"`
-	SizeTitle      string       `json:"size_title"`
-	Size           string       `json:"size"`
-	Condition      string       `json:"status"`
-	User           VintedUser   `json:"user"`
+	ID             int64         `json:"id"`
+	Title          string        `json:"title"`
+	Price          VintedPrice   `json:"price"`
+	TotalItemPrice *VintedPrice  `json:"total_item_price,omitempty"`
+	Url            string        `json:"url"`
+	Photo          VintedPhoto   `json:"photo"`
+	Photos         []VintedPhoto `json:"photos,omitempty"`
+	SizeTitle      string        `json:"size_title"`
+	Size           string        `json:"size"`
+	BrandTitle     string        `json:"brand_title,omitempty"`
+	Condition      string        `json:"status"`
+	User           VintedUser    `json:"user"`
 }
 
 type VintedUser struct {

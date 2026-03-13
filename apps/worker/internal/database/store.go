@@ -13,7 +13,7 @@ import (
 	"vintrack-worker/internal/cache"
 	"vintrack-worker/internal/model"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 type Store struct {
@@ -106,11 +106,14 @@ func (s *Store) SaveItem(item model.Item) error {
 	}
 
 	_, err := s.db.Exec(`
-		INSERT INTO items (id, monitor_id, title, price, total_price, size, condition, url, image_url, location, rating, seller_id, found_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		ON CONFLICT (id) DO NOTHING`,
-		item.ID, item.MonitorID, item.Title, item.Price, nilIfEmpty(item.TotalPrice), item.Size, item.Condition,
-		item.URL, item.ImageURL, item.Location, item.Rating, nilIfZero(item.SellerID), item.FoundAt,
+		INSERT INTO items (id, monitor_id, title, brand, price, total_price, size, condition, url, image_url, extra_images, location, rating, seller_id, found_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		ON CONFLICT (id) DO UPDATE SET 
+			total_price = COALESCE(EXCLUDED.total_price, items.total_price),
+			brand = COALESCE(EXCLUDED.brand, items.brand),
+			extra_images = COALESCE(EXCLUDED.extra_images, items.extra_images)`,
+		item.ID, item.MonitorID, item.Title, item.Brand, item.Price, nilIfEmpty(item.TotalPrice), item.Size, item.Condition,
+		item.URL, item.ImageURL, pq.Array(item.ExtraImages), item.Location, item.Rating, nilIfZero(item.SellerID), item.FoundAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert item %d: %w", item.ID, err)
@@ -146,17 +149,20 @@ func (s *Store) BatchSaveItems(items []model.Item) error {
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO items (id, monitor_id, title, price, total_price, size, condition, url, image_url, location, rating, seller_id, found_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		ON CONFLICT (id) DO NOTHING`)
+		INSERT INTO items (id, monitor_id, title, brand, price, total_price, size, condition, url, image_url, extra_images, location, rating, seller_id, found_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		ON CONFLICT (id) DO UPDATE SET 
+			total_price = COALESCE(EXCLUDED.total_price, items.total_price),
+			brand = COALESCE(EXCLUDED.brand, items.brand),
+			extra_images = COALESCE(EXCLUDED.extra_images, items.extra_images)`)
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
 	}
 	defer stmt.Close()
 
 	for _, item := range items {
-		_, err := stmt.Exec(item.ID, item.MonitorID, item.Title, item.Price, nilIfEmpty(item.TotalPrice), item.Size, item.Condition,
-			item.URL, item.ImageURL, item.Location, item.Rating, nilIfZero(item.SellerID), item.FoundAt)
+		_, err := stmt.Exec(item.ID, item.MonitorID, item.Title, item.Brand, item.Price, nilIfEmpty(item.TotalPrice), item.Size, item.Condition,
+			item.URL, item.ImageURL, pq.Array(item.ExtraImages), item.Location, item.Rating, nilIfZero(item.SellerID), item.FoundAt)
 		if err != nil {
 			return fmt.Errorf("insert item %d: %w", item.ID, err)
 		}

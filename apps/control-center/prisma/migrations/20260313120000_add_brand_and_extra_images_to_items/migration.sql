@@ -1,0 +1,1 @@
+-- AlterTable\nALTER TABLE "items" ADD COLUMN "brand" VARCHAR(100),\nADD COLUMN "extra_images" TEXT[] DEFAULT ARRAY[]::TEXT[];
