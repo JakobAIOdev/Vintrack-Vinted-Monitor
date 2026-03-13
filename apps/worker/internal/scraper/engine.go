@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -401,7 +402,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 }
 
 func (e *Engine) fetchCatalog(ctx context.Context, client *Client, apiURL string, domain string) ([]model.VintedItem, int, error) {
-	reqURL := apiURL + "&time=" + strconv.FormatInt(time.Now().Unix(), 10)
+	reqURL := apiURL + "&_=" + strconv.FormatInt(time.Now().UnixMilli(), 10) + strconv.Itoa(rand.Intn(10000))
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, 0, err
