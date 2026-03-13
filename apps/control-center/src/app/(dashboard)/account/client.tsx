@@ -20,6 +20,7 @@ import {
   AlertTriangle,
   Heart,
   MessageSquare,
+  MessagesSquare,
   ShoppingCart,
   Bot,
 } from "lucide-react";
@@ -319,6 +320,22 @@ export function AccountClient({
               </Badge>
             </li>
             <li className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-orange-50 flex items-center justify-center shrink-0">
+                <MessagesSquare className="w-4 h-4 text-orange-500"/>
+              </div>
+              <div>
+                <span className="font-medium text-slate-800">
+                  Send Messages
+                </span>
+                <span className="text-muted-foreground ml-1">
+                  — direct messages to sellers
+                </span>
+              </div>
+              <Badge variant="outline" className="ml-auto text-[10px]">
+                Available
+              </Badge>
+            </li>
+            <li className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
                 <MessageSquare className="w-4 h-4 text-blue-500" />
               </div>
@@ -337,7 +354,6 @@ export function AccountClient({
                 Coming Soon
               </Badge>
             </li>
-
             <li className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0">
                 <ShoppingCart className="w-4 h-4 text-emerald-500" />
