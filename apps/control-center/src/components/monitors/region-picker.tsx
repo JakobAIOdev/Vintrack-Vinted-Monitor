@@ -19,7 +19,7 @@ export function RegionPicker({ selected, onChange }: RegionPickerProps) {
             type="button"
             onClick={() => onChange(region.code)}
             className={cn(
-              "flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors",
+              "flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors cursor-pointer",
               isSelected
                 ? "border-slate-900 bg-slate-900 text-white"
                 : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"

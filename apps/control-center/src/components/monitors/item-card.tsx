@@ -129,9 +129,9 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
       <div className="relative aspect-4/5 bg-slate-100 overflow-hidden">
         {item.image_url ? (
           item.extra_images && item.extra_images.length > 0 ? (
-            <div className="w-full h-full flexgap-0.5">
+            <div className="w-full h-full flex gap-0.5">
               <div
-                className="flex-2 h-full overflow-hidden cursor-pointer"
+                className="flex-[2] h-full overflow-hidden cursor-pointer"
                 onClick={() => setSelectedImg(item.image_url)}
               >
                 <img
@@ -203,7 +203,7 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
             <button
               onClick={handleLike}
               disabled={liking}
-              className={`w-7 h-7 rounded-full flex items-center justify-center shadow-md transition-colors ${
+              className={`w-7 h-7 rounded-full flex items-center justify-center shadow-md transition-colors cursor-pointer ${
                 liked
                   ? "bg-red-500 text-white"
                   : "bg-white/90 text-slate-600 hover:text-red-500 hover:bg-white"
@@ -220,7 +220,7 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
                 e.preventDefault();
                 setMsgOpen(true);
               }}
-              className="w-7 h-7 rounded-full flex items-center justify-center shadow-md bg-white/90 text-slate-600 hover:text-blue-500 hover:bg-white transition-colors"
+              className="w-7 h-7 rounded-full flex items-center justify-center shadow-md bg-white/90 text-slate-600 hover:text-blue-500 hover:bg-white transition-colors cursor-pointer"
               title="Send message to seller"
             >
               <MessageCircle className="w-3.5 h-3.5" />
@@ -338,7 +338,7 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
         <DialogContent showCloseButton={false} className="max-w-[90vw] max-h-[90vh] p-0 border-none bg-transparent shadow-none flex items-center justify-center outline-none">
           <button 
             onClick={() => setSelectedImg(null)}
-            className="fixed top-6 right-6 z-60 w-12 h-12 rounded-full bg-black/20 backdrop-blur-xl border border-white/10 text-white flex items-center justify-center hover:bg-black/40 transition-all hover:scale-110 active:scale-95 shadow-2xl group"
+            className="fixed top-6 right-6 z-60 w-12 h-12 rounded-full bg-black/20 backdrop-blur-xl border border-white/10 text-white flex items-center justify-center hover:bg-black/40 transition-all hover:scale-110 active:scale-95 shadow-2xl group cursor-pointer"
           >
             <XIcon className="w-6 h-6 transition-transform group-hover:rotate-90" />
           </button>
