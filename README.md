@@ -93,6 +93,7 @@ Vintrack now supports per-monitor Vinted country selection. Instead of being lim
 ### Vinted Account Linking
 Link your Vinted account directly in the dashboard to interact with listings without leaving Vintrack:
 - **Like items** — one-click like from the feed or monitor view
+- **Send Messages** — direct messages to sellers
 - **Account management** — link/unlink with region selection (12 EU markets)
 - **Session handling** — secure token storage in Redis with automatic 7-day TTL
 - **Status monitoring** — see your linked account status, username, and domain at a glance
@@ -425,6 +426,7 @@ sequenceDiagram
 
 - [x] Vinted Account Linking
 - [x] Like items from dashboard
+- [x] Send direct messages to sellers
 - [ ] Send offers to sellers
 - [ ] One-click buy
 - [ ] Auto-buy with price rules
