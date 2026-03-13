@@ -23,6 +23,8 @@ import {
   MessagesSquare,
   ShoppingCart,
   Bot,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { REGIONS } from "@/lib/regions";
 import { cn } from "@/lib/utils";
@@ -53,6 +55,7 @@ export function AccountClient({
   const [accessToken, setAccessToken] = useState("");
   const [refreshToken, setRefreshToken] = useState("");
   const [selectedRegion, setSelectedRegion] = useState("de");
+  const [isVintedIdVisible, setIsVintedIdVisible] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   const selectedDomain =
@@ -157,7 +160,21 @@ export function AccountClient({
             <div className="grid grid-cols-3 gap-4 text-sm">
               <div>
                 <span className="text-muted-foreground">Vinted ID</span>
-                <p className="font-medium">{status.vinted_id}</p>
+                <div className="flex items-center gap-1">
+                  <p className="font-medium">
+                    {isVintedIdVisible ? status.vinted_id : "••••••••••"}
+                  </p>
+                  <button
+                    onClick={() => setIsVintedIdVisible((prev) => !prev)}
+                    className="p-1 text-muted-foreground hover:text-foreground"
+                  >
+                    {isVintedIdVisible ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
               </div>
               <div>
                 <span className="text-muted-foreground">Linked</span>

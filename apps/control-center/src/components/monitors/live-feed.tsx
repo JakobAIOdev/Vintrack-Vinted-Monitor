@@ -45,6 +45,7 @@ export function LiveFeed({ monitorId }: { monitorId: number }) {
                 location: newItem.location || existing.location,
                 rating: newItem.rating || existing.rating,
                 seller_id: newItem.seller_id || existing.seller_id,
+                total_price: newItem.total_price || existing.total_price,
               };
               const updated = [...prev];
               updated[existingIdx] = merged;
