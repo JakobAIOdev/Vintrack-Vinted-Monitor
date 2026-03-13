@@ -332,6 +332,16 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		fmt.Println()
 
 		go func(ctx context.Context, items []model.Item, vItems []model.VintedItem, monitorID int, webhook string, webhookActive bool, query string, ps string, scr *HTMLScraper, dom string) {
+			if err := e.db.BatchSaveItems(items); err != nil {
+				log.Printf("[%d] batch save error: %v", monitorID, err)
+			}
+
+			for i := range items {
+				if err := e.db.PublishItem(items[i]); err != nil {
+					log.Printf("[%d] publish error: %v", monitorID, err)
+				}
+			}
+
 			if e.enrichSeller && scr != nil {
 				sem := make(chan struct{}, 10)
 				var wg sync.WaitGroup
@@ -360,26 +370,20 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 						if info.Region != "" && info.Region != "NaN" {
 							items[idx].Location = info.Region
 							items[idx].Rating = info.Rating
+
+							_ = e.db.UpdateItemSellerInfo(items[idx].ID, items[idx].Location, items[idx].Rating)
+
+							if err := e.db.PublishItem(items[idx]); err != nil {
+								log.Printf("[%d] publish update error: %v", monitorID, err)
+							}
 						}
 					}(i, itemURL, vItems[i].User.ID)
 				}
 				wg.Wait()
 			}
 
-			if err := e.db.BatchSaveItems(items); err != nil {
-				log.Printf("[%d] batch save error: %v", monitorID, err)
-			}
-
-			for i := range items {
-				if items[i].Location != "" {
-					_ = e.db.UpdateItemSellerInfo(items[i].ID, items[i].Location, items[i].Rating)
-				}
-
-				if err := e.db.PublishItem(items[i]); err != nil {
-					log.Printf("[%d] publish error: %v", monitorID, err)
-				}
-
-				if webhook != "" && webhookActive {
+			if webhook != "" && webhookActive {
+				for i := range items {
 					select {
 					case <-ctx.Done():
 						return
@@ -397,7 +401,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 }
 
 func (e *Engine) fetchCatalog(ctx context.Context, client *Client, apiURL string, domain string) ([]model.VintedItem, int, error) {
-	reqURL := apiURL + "&_=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
+	reqURL := apiURL + "&time=" + strconv.FormatInt(time.Now().Unix(), 10)
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, 0, err
