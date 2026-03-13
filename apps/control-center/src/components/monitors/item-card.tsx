@@ -131,7 +131,7 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
           item.extra_images && item.extra_images.length > 0 ? (
             <div className="w-full h-full flex gap-0.5">
               <div
-                className="flex-[2] h-full overflow-hidden cursor-pointer"
+                className="flex-2 h-full overflow-hidden cursor-pointer"
                 onClick={() => setSelectedImg(item.image_url)}
               >
                 <img

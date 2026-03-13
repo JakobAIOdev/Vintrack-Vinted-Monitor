@@ -29,6 +29,23 @@ export async function GET(
       where: { monitor_id: monitorId },
       orderBy: { found_at: "desc" },
       take: 50,
+      select: {
+        id: true,
+        monitor_id: true,
+        title: true,
+        brand: true,
+        price: true,
+        total_price: true,
+        size: true,
+        condition: true,
+        url: true,
+        image_url: true,
+        extra_images: true,
+        found_at: true,
+        location: true,
+        rating: true,
+        seller_id: true,
+      }
     });
 
     const safeItems = items.map(item => ({
