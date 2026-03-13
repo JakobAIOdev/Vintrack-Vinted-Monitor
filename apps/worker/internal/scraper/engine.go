@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"vintrack-worker/internal/database"
 	"vintrack-worker/internal/discord"
 	"vintrack-worker/internal/model"
@@ -402,7 +404,11 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 }
 
 func (e *Engine) fetchCatalog(ctx context.Context, client *Client, apiURL string, domain string) ([]model.VintedItem, int, error) {
-	reqURL := apiURL + "&_=" + strconv.FormatInt(time.Now().UnixMilli(), 10) + strconv.Itoa(rand.Intn(10000))
+	// Generating a new UUID for search_session_id forces Vinted's internal search index
+	// to bypass its 30s cache replication delay.
+	sessionUUID := uuid.New().String()
+	reqURL := apiURL + "&search_session_id=" + sessionUUID + "&_=" + strconv.FormatInt(time.Now().UnixMilli(), 10) + strconv.Itoa(rand.Intn(10000))
+
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, 0, err
