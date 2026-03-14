@@ -53,6 +53,7 @@ services:
     build:
       context: ./apps/control-center
       dockerfile: Dockerfile
+    image: ghcr.io/jakobaiodev/vintrack-vinted-monitor/control-center:latest
     container_name: vintrack_control_center
     environment:
       - DATABASE_URL=postgresql://vinuser:vinpassword@postgres:5432/vintrack
@@ -89,6 +90,7 @@ services:
     build:
       context: ./apps/vinted-service
       dockerfile: Dockerfile
+    image: ghcr.io/jakobaiodev/vintrack-vinted-monitor/vinted-service:latest
     container_name: vintrack_vinted
     environment:
       - REDIS_ADDR=redis:6379
@@ -105,6 +107,7 @@ services:
     build:
       context: ./apps/worker
       dockerfile: Dockerfile
+    image: ghcr.io/jakobaiodev/vintrack-vinted-monitor/worker:latest
     container_name: vintrack_worker
     environment:
       - DATABASE_URL=postgres://vinuser:vinpassword@postgres:5432/vintrack?sslmode=disable

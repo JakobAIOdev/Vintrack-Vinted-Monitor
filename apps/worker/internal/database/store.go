@@ -112,7 +112,9 @@ func (s *Store) SaveItem(item model.Item) error {
 		ON CONFLICT (id, monitor_id) DO UPDATE SET
 			total_price = COALESCE(EXCLUDED.total_price, items.total_price),
 			brand = COALESCE(EXCLUDED.brand, items.brand),
-			extra_images = COALESCE(EXCLUDED.extra_images, items.extra_images)`,
+			extra_images = COALESCE(EXCLUDED.extra_images, items.extra_images),
+			location = COALESCE(NULLIF(EXCLUDED.location, ''), items.location),
+			rating = COALESCE(NULLIF(EXCLUDED.rating, ''), items.rating)`,
 		item.ID, item.MonitorID, item.Title, item.Brand, item.Price, nilIfEmpty(item.TotalPrice), item.Size, item.Condition,
 		item.URL, item.ImageURL, pq.Array(item.ExtraImages), item.Location, item.Rating, nilIfZero(item.SellerID), item.FoundAt,
 	)
@@ -155,7 +157,9 @@ func (s *Store) BatchSaveItems(items []model.Item) error {
 		ON CONFLICT (id, monitor_id) DO UPDATE SET 
 			total_price = COALESCE(EXCLUDED.total_price, items.total_price),
 			brand = COALESCE(EXCLUDED.brand, items.brand),
-			extra_images = COALESCE(EXCLUDED.extra_images, items.extra_images)`)
+			extra_images = COALESCE(EXCLUDED.extra_images, items.extra_images),
+			location = COALESCE(NULLIF(EXCLUDED.location, ''), items.location),
+			rating = COALESCE(NULLIF(EXCLUDED.rating, ''), items.rating)`)
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
 	}

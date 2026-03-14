@@ -89,14 +89,29 @@ func (m *Manager) GetAllSessions() ([]VintedSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	var sessions []VintedSession
-	for _, key := range keys {
-		data, err := m.redis.Get(m.ctx, key).Bytes()
-		if err != nil {
+
+	if len(keys) == 0 {
+		return []VintedSession{}, nil
+	}
+
+	values, err := m.redis.MGet(m.ctx, keys...).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	sessions := make([]VintedSession, 0, len(values))
+	for _, val := range values {
+		if val == nil {
 			continue
 		}
+
+		s, ok := val.(string)
+		if !ok {
+			continue
+		}
+
 		var sess VintedSession
-		if err := json.Unmarshal(data, &sess); err != nil {
+		if err := json.Unmarshal([]byte(s), &sess); err != nil {
 			continue
 		}
 		sessions = append(sessions, sess)

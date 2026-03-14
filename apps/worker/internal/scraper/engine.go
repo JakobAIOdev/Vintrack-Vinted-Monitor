@@ -300,7 +300,9 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			}
 		}
 
-		fmt.Printf("\r[%d] #%d | %d items | %d new | %dms", m.ID, checks, len(items), len(newItems), time.Since(cycleStart).Milliseconds())
+		if len(newItems) > 0 {
+			log.Printf("[%d] #%d | %d items | %d new | %dms", m.ID, checks, len(items), len(newItems), time.Since(cycleStart).Milliseconds())
+		}
 
 		if len(newItems) == 0 {
 			if remaining := intervalDuration - time.Since(cycleStart); remaining > 0 {
@@ -327,10 +329,8 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		for _, item := range builtItems {
-			fmt.Printf("\n  NEW [%d]: %s (%s) [%s]", m.ID, item.Title, item.Price, item.Size)
+			log.Printf("[%d] NEW: %s (%s) [%s]", m.ID, item.Title, item.Price, item.Size)
 		}
-		fmt.Println()
-
 		go func(ctx context.Context, items []model.Item, vItems []model.VintedItem, monitorID int, webhook string, webhookActive bool, query string, ps string, scr *HTMLScraper, dom string) {
 			if err := e.db.BatchSaveItems(items); err != nil {
 				log.Printf("[%d] batch save error: %v", monitorID, err)
@@ -402,7 +402,6 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 func (e *Engine) fetchCatalog(ctx context.Context, client *Client, apiURL string, domain string) ([]model.VintedItem, int, error) {
 	reqURL := apiURL + "&_=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
-
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, 0, err
