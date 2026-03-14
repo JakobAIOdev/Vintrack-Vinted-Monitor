@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
+
 	"log"
 	"os"
 	"os/signal"
@@ -54,19 +54,22 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	var (
-		running    = make(map[int]context.CancelFunc)
-		monitorCfg = make(map[int]string)
-		mu         sync.Mutex
-	)
-
-	monitorHash := func(m model.Monitor) string {
-		proxyStr := ""
-		if m.Proxies.Valid {
-			proxyStr = m.Proxies.String
-		}
-		return fmt.Sprintf("%s|%s|%s", m.Query, m.Region, proxyStr)
+	// Domains to poll globally. In a larger setup, infer this from monitors.
+	// For now, tracking the most common domains to avoid excessive redundant loops.
+	activeDomains := map[string]string{
+		"de": "www.vinted.de",
+		"fr": "www.vinted.fr",
+		"pl": "www.vinted.pl",
+		"uk": "www.vinted.co.uk",
+		"it": "www.vinted.it",
+		"nl": "www.vinted.nl",
+		"es": "www.vinted.es",
 	}
+
+	var (
+		feedRunning = make(map[string]context.CancelFunc)
+		mu          sync.Mutex
+	)
 
 	syncMonitors := func() {
 		monitors, err := store.GetActiveMonitors()
@@ -75,37 +78,42 @@ func main() {
 			return
 		}
 
+		engine.UpdateMonitors(monitors)
+
+		// Find required domains based on active monitors
+		requiredDomains := make(map[string]bool)
+		for _, m := range monitors {
+			if domain, ok := activeDomains[m.Region]; ok {
+				requiredDomains[domain] = true
+			} else {
+				// Default or unlisted region fallback
+				domain = model.RegionDomain(m.Region)
+				activeDomains[m.Region] = domain
+				requiredDomains[domain] = true
+			}
+		}
+
 		mu.Lock()
 		defer mu.Unlock()
 
-		activeIDs := make(map[int]bool, len(monitors))
-
-		for _, m := range monitors {
-			activeIDs[m.ID] = true
-			hash := monitorHash(m)
-
-			if cancelFn, exists := running[m.ID]; exists {
-				if oldHash, ok := monitorCfg[m.ID]; ok && oldHash != hash {
-					log.Printf("Config changed for monitor [%d], restarting...", m.ID)
-					cancelFn()
-					delete(running, m.ID)
-				} else {
-					continue
+		// Start feeds for new domains
+		for region, domain := range activeDomains {
+			if requiredDomains[domain] {
+				if _, exists := feedRunning[domain]; !exists {
+					log.Printf("Starting global feed for region: %s (%s)", region, domain)
+					fCtx, fCancel := context.WithCancel(ctx)
+					feedRunning[domain] = fCancel
+					go engine.GlobalFeedTask(fCtx, domain, region)
 				}
 			}
-
-			mCtx, mCancel := context.WithCancel(ctx)
-			running[m.ID] = mCancel
-			monitorCfg[m.ID] = hash
-			go engine.MonitorTask(mCtx, m)
 		}
 
-		for id, cancelFn := range running {
-			if !activeIDs[id] {
-				log.Printf("Stopping monitor [%d] (removed/paused)", id)
+		// Stop feeds for domains with no active monitors
+		for domain, cancelFn := range feedRunning {
+			if !requiredDomains[domain] {
+				log.Printf("Stopping global feed for domain: %s (no active monitors)", domain)
 				cancelFn()
-				delete(running, id)
-				delete(monitorCfg, id)
+				delete(feedRunning, domain)
 			}
 		}
 	}
@@ -115,12 +123,12 @@ func main() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	log.Println("Worker running. Polling for monitor changes every 5s...")
+	log.Println("Worker running globally. Polling for monitor changes every 5s...")
 
 	for {
 		select {
 		case <-sigChan:
-			log.Println("Shutdown signal received, stopping all monitors...")
+			log.Println("Shutdown signal received, stopping all feeds...")
 			cancel()
 			time.Sleep(time.Second)
 			return

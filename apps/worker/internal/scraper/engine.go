@@ -31,6 +31,9 @@ type Engine struct {
 	poolsMu      sync.RWMutex
 	scrapers     map[string]*HTMLScraper
 	scrapersMu   sync.RWMutex
+
+	activeMonitors []model.Monitor
+	monitorsMu     sync.RWMutex
 }
 
 func NewEngine(db *database.Store, pm *proxy.Manager) *Engine {
@@ -38,13 +41,21 @@ func NewEngine(db *database.Store, pm *proxy.Manager) *Engine {
 	poolSize := getEnvInt("CLIENT_POOL_SIZE", 5)
 	log.Printf("Seller enrichment (region/rating): %v, client pool size: %d", enrich, poolSize)
 	return &Engine{
-		db:           db,
-		serverProxy:  pm,
-		enrichSeller: enrich,
-		poolSize:     poolSize,
-		pools:        make(map[string]*ClientPool),
-		scrapers:     make(map[string]*HTMLScraper),
+		db:             db,
+		serverProxy:    pm,
+		enrichSeller:   enrich,
+		poolSize:       poolSize,
+		pools:          make(map[string]*ClientPool),
+		scrapers:       make(map[string]*HTMLScraper),
+		activeMonitors: make([]model.Monitor, 0),
 	}
+}
+
+func (e *Engine) UpdateMonitors(monitors []model.Monitor) {
+	e.monitorsMu.Lock()
+	defer e.monitorsMu.Unlock()
+	e.activeMonitors = monitors
+	log.Printf("[GlobalFeed] Updated monitor list, active count: %d", len(e.activeMonitors))
 }
 
 func (e *Engine) GetOrCreateScraper(pm *proxy.Manager, domain string, proxySource string) *HTMLScraper {
@@ -103,93 +114,93 @@ func (e *Engine) getProxyManager(m model.Monitor) *proxy.Manager {
 	return e.serverProxy
 }
 
-func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
-	pm := e.getProxyManager(m)
-	domain := model.RegionDomain(m.Region)
+func matchQuery(item model.VintedItem, query string) bool {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return true
+	}
+	t := strings.ToLower(item.Title)
+	b := strings.ToLower(item.BrandTitle)
 
-	proxySource := "server"
-	if m.ProxyGroupName.Valid && m.ProxyGroupName.String != "" {
-		proxySource = fmt.Sprintf("group:%s", m.ProxyGroupName.String)
+	words := strings.Fields(q)
+	for _, w := range words {
+		if !strings.Contains(t, w) && !strings.Contains(b, w) {
+			return false
+		}
+	}
+	return true
+}
+
+func matchPrice(item model.VintedItem, min, max *int) bool {
+	if min == nil && max == nil {
+		return true
+	}
+	priceStr := item.Price.Amount
+	price, err := strconv.ParseFloat(priceStr, 64)
+	if err != nil {
+		return true
 	}
 
+	if min != nil && price < float64(*min) {
+		return false
+	}
+	if max != nil && price > float64(*max) {
+		return false
+	}
+	return true
+}
+
+func matchSize(item model.VintedItem, sizeIDStr *string) bool {
+	// Local filtering of SizeID is difficult because item provides SizeTitle, not SizeID.
+	// So we pass all sizes.
+	return true
+}
+
+func (e *Engine) GlobalFeedTask(ctx context.Context, domain string, region string) {
+	pm := e.serverProxy
 	if pm.Count() == 0 {
-		log.Printf("[%d] ❌ ERROR: no valid proxies available (source: %s) — skipping monitor", m.ID, proxySource)
-		e.db.UpdateMonitorHealth(model.MonitorHealth{
-			MonitorID:       m.ID,
-			ConsecutiveErrs: -1,
-			LastError:       "no valid proxies available",
-			UpdatedAt:       time.Now().UTC().Format(time.RFC3339),
-		})
+		log.Printf("[GlobalFeed] ❌ ERROR: no valid proxies available")
 		return
 	}
-	log.Printf("[%d] proxy source: %s (%d proxies)", m.ID, proxySource, pm.Count())
 
-	pool := e.GetOrCreatePool(pm, domain, proxySource)
-	log.Printf("[%d] using client pool: %d clients", m.ID, pool.Size())
-
+	pool := e.GetOrCreatePool(pm, domain, "server")
 	var scraper *HTMLScraper
 	if e.enrichSeller {
-		scraper = e.GetOrCreateScraper(pm, domain, proxySource)
+		scraper = e.GetOrCreateScraper(pm, domain, "server")
 	}
 
-	apiURL := BuildVintedURL(m)
+	// Fetch without filters to get newest global items
+	apiURL := fmt.Sprintf("https://%s/api/v2/catalog/items?order=newest_first&per_page=40", domain)
 
 	interval := getEnvInt("CHECK_INTERVAL_MS", 500)
-	maxConsecutiveErrors := getEnvInt("MAX_CONSECUTIVE_ERRORS", 50)
 	raceFetchers := getEnvInt("RACE_FETCHERS", 2)
-	consecutiveErrors := 0
 	checks := 0
-	var totalErrors int64
 
-	log.Printf("[%d] started | query=%q | race=%d | url=%s", m.ID, m.Query, raceFetchers, apiURL)
-
-	reportHealth := func(lastErr string) {
-		h := model.MonitorHealth{
-			MonitorID:       m.ID,
-			TotalChecks:     int64(checks),
-			TotalErrors:     totalErrors,
-			ConsecutiveErrs: consecutiveErrors,
-			UpdatedAt:       time.Now().UTC().Format(time.RFC3339),
-		}
-		if lastErr != "" {
-			h.LastError = lastErr
-		}
-		e.db.UpdateMonitorHealth(h)
-	}
-
-	defer func() {
-		e.db.ClearMonitorHealth(m.ID)
-	}()
+	log.Printf("[GlobalFeed] started | race=%d | url=%s", raceFetchers, apiURL)
 
 	intervalDuration := time.Duration(interval) * time.Millisecond
+
+	// Use an in-memory ring buffer to track seen IDs locally to save DB hits
+	seenIDs := make(map[int64]time.Time)
 
 	for {
 		cycleStart := time.Now()
 
 		select {
 		case <-ctx.Done():
-			log.Printf("[%d] stopped gracefully", m.ID)
+			log.Printf("[GlobalFeed] stopped gracefully")
 			return
 		default:
 		}
 
+		// Cleanup seenIDs every 100 checks
 		checks++
-
-		if checks%20 == 0 {
-			if updated, err := e.db.GetMonitorByID(m.ID); err == nil {
-				if m.Status != "active" {
-					log.Printf("[%d] paused via dashboard", m.ID)
-					return
+		if checks%100 == 0 {
+			now := time.Now()
+			for id, t := range seenIDs {
+				if now.Sub(t) > 10*time.Minute {
+					delete(seenIDs, id)
 				}
-				if updated.Query != m.Query || updated.Region != m.Region ||
-					(updated.Proxies.Valid != m.Proxies.Valid) ||
-					(updated.Proxies.Valid && updated.Proxies.String != m.Proxies.String) {
-					log.Printf("[%d] config changed (query/region/proxy), will be restarted by sync loop", m.ID)
-					return
-				}
-				m.DiscordWebhook = updated.DiscordWebhook
-				m.WebhookActive = updated.WebhookActive
-				m.Status = updated.Status
 			}
 		}
 
@@ -262,137 +273,128 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		if !gotSuccess {
-			consecutiveErrors++
-			totalErrors++
-			if consecutiveErrors%5 == 0 {
-				reportHealth("all fetchers failed")
-				log.Printf("[%d] %d consecutive failures, backing off...", m.ID, consecutiveErrors)
-			}
-			if consecutiveErrors >= maxConsecutiveErrors {
-				log.Printf("[%d] ❌ auto-stopping: %d consecutive errors", m.ID, consecutiveErrors)
-				e.db.SetMonitorStatus(m.ID, "error")
-				return
-			}
-			backoff := time.Duration(300+consecutiveErrors*200) * time.Millisecond
-			if backoff > 3*time.Second {
-				backoff = 3 * time.Second
-			}
-			time.Sleep(backoff)
+			time.Sleep(time.Duration(1000) * time.Millisecond)
 			continue
 		}
 
-		consecutiveErrors = 0
-		if checks%5 == 0 || checks <= 3 {
-			reportHealth("")
-		}
-
-		ids := make([]int64, len(items))
-		for i, item := range items {
-			ids[i] = item.ID
-		}
-
-		newMap := e.db.BatchIsNew(m.ID, ids)
-
-		var newItems []model.VintedItem
+		// Filter out items we've already seen globally
+		var newGlobalItems []model.VintedItem
 		for _, item := range items {
-			if newMap[item.ID] {
-				newItems = append(newItems, item)
+			if _, exists := seenIDs[item.ID]; !exists {
+				newGlobalItems = append(newGlobalItems, item)
+				seenIDs[item.ID] = time.Now()
 			}
 		}
 
-		if len(newItems) > 0 {
-			log.Printf("[%d] #%d | %d items | %d new | %dms", m.ID, checks, len(items), len(newItems), time.Since(cycleStart).Milliseconds())
-		}
+		fmt.Printf("\r[GlobalFeed] #%d | %d items | %d new | %dms", checks, len(items), len(newGlobalItems), time.Since(cycleStart).Milliseconds())
 
-		if len(newItems) == 0 {
+		if len(newGlobalItems) == 0 {
 			if remaining := intervalDuration - time.Since(cycleStart); remaining > 0 {
 				time.Sleep(remaining)
 			}
 			continue
 		}
 
-		newIDs := make([]int64, len(newItems))
-		for i, item := range newItems {
-			newIDs[i] = item.ID
-		}
-		e.db.MarkItemsSeen(m.ID, newIDs)
+		e.monitorsMu.RLock()
+		activeMonitors := make([]model.Monitor, len(e.activeMonitors))
+		copy(activeMonitors, e.activeMonitors)
+		e.monitorsMu.RUnlock()
 
-		builtItems := e.buildItems(m, newItems)
-
-		if e.enrichSeller {
-			for i, vItem := range newItems {
-				if info, ok := LookupCachedSellerInfo(e.db, vItem.User.ID); ok {
-					builtItems[i].Location = info.Region
-					builtItems[i].Rating = info.Rating
+		for _, item := range newGlobalItems {
+			for _, m := range activeMonitors {
+				if m.Region != region {
+					continue
 				}
-			}
-		}
 
-		for _, item := range builtItems {
-			log.Printf("[%d] NEW: %s (%s) [%s]", m.ID, item.Title, item.Price, item.Size)
-		}
-		go func(ctx context.Context, items []model.Item, vItems []model.VintedItem, monitorID int, webhook string, webhookActive bool, query string, ps string, scr *HTMLScraper, dom string) {
-			if err := e.db.BatchSaveItems(items); err != nil {
-				log.Printf("[%d] batch save error: %v", monitorID, err)
-			}
-
-			for i := range items {
-				if err := e.db.PublishItem(items[i]); err != nil {
-					log.Printf("[%d] publish error: %v", monitorID, err)
+				if !matchQuery(item, m.Query) {
+					continue
 				}
-			}
+				if !matchPrice(item, m.PriceMin, m.PriceMax) {
+					continue
+				}
 
-			if e.enrichSeller && scr != nil {
-				sem := make(chan struct{}, 10)
-				var wg sync.WaitGroup
-				for i := range items {
-					if items[i].Location != "" {
-						continue
+				// Found a match for this monitor!
+				log.Printf("\n  NEW [GlobalFeed->Monitor %d]: %s (%s %s) [%s]", m.ID, item.Title, item.Price.Amount, item.Price.Currency, item.SizeTitle)
+
+				// Wrap in slice to reuse existing logic
+				vItemList := []model.VintedItem{item}
+				builtItems := e.buildItems(m, vItemList)
+
+				if e.enrichSeller {
+					if info, ok := LookupCachedSellerInfo(e.db, item.User.ID); ok {
+						builtItems[0].Location = info.Region
+						builtItems[0].Rating = info.Rating
 					}
-					select {
-					case <-ctx.Done():
-						return
-					default:
+				}
+
+				// Mark as seen in DB for this monitor so history works
+				e.db.MarkItemsSeen(m.ID, []int64{item.ID})
+
+				go func(ctx context.Context, items []model.Item, vItems []model.VintedItem, monitorID int, webhook string, webhookActive bool, query string, ps string, scr *HTMLScraper, dom string) {
+					if err := e.db.BatchSaveItems(items); err != nil {
+						log.Printf("[%d] batch save error: %v", monitorID, err)
 					}
 
-					itemURL := vItems[i].Url
-					if !strings.HasPrefix(itemURL, "http") {
-						itemURL = fmt.Sprintf("https://%s%s", dom, itemURL)
-					}
-
-					wg.Add(1)
-					go func(idx int, url string, userID int64) {
-						defer wg.Done()
-						sem <- struct{}{}
-						defer func() { <-sem }()
-
-						info := scr.FetchSellerInfo(url, userID)
-						if info.Region != "" && info.Region != "NaN" {
-							items[idx].Location = info.Region
-							items[idx].Rating = info.Rating
-
-							_ = e.db.UpdateItemSellerInfo(items[idx].ID, items[idx].Location, items[idx].Rating)
-
-							if err := e.db.PublishItem(items[idx]); err != nil {
-								log.Printf("[%d] publish update error: %v", monitorID, err)
-							}
+					for i := range items {
+						if err := e.db.PublishItem(items[i]); err != nil {
+							log.Printf("[%d] publish error: %v", monitorID, err)
 						}
-					}(i, itemURL, vItems[i].User.ID)
-				}
-				wg.Wait()
-			}
-
-			if webhook != "" && webhookActive {
-				for i := range items {
-					select {
-					case <-ctx.Done():
-						return
-					default:
 					}
-					discord.SendWebhook(webhook, items[i], query, ps)
-				}
+
+					if e.enrichSeller && scr != nil {
+						sem := make(chan struct{}, 10)
+						var wg sync.WaitGroup
+						for i := range items {
+							if items[i].Location != "" {
+								continue
+							}
+							select {
+							case <-ctx.Done():
+								return
+							default:
+							}
+
+							itemURL := vItems[i].Url
+							if !strings.HasPrefix(itemURL, "http") {
+								itemURL = fmt.Sprintf("https://%s%s", dom, itemURL)
+							}
+
+							wg.Add(1)
+							go func(idx int, url string, userID int64) {
+								defer wg.Done()
+								sem <- struct{}{}
+								defer func() { <-sem }()
+
+								info := scr.FetchSellerInfo(url, userID)
+								if info.Region != "" && info.Region != "NaN" {
+									items[idx].Location = info.Region
+									items[idx].Rating = info.Rating
+
+									_ = e.db.UpdateItemSellerInfo(items[idx].ID, items[idx].Location, items[idx].Rating)
+
+									if err := e.db.PublishItem(items[idx]); err != nil {
+										log.Printf("[%d] publish update error: %v", monitorID, err)
+									}
+								}
+							}(i, itemURL, vItems[i].User.ID)
+						}
+						wg.Wait()
+					}
+
+					if webhook != "" && webhookActive {
+						for i := range items {
+							select {
+							case <-ctx.Done():
+								return
+							default:
+							}
+							discord.SendWebhook(webhook, items[i], query, ps)
+						}
+					}
+				}(ctx, builtItems, vItemList, m.ID, m.DiscordWebhook.String, m.WebhookActive, m.Query, "server", scraper, domain)
+
 			}
-		}(ctx, builtItems, newItems, m.ID, m.DiscordWebhook.String, m.WebhookActive, m.Query, proxySource, scraper, domain)
+		}
 
 		if remaining := intervalDuration - time.Since(cycleStart); remaining > 0 {
 			time.Sleep(remaining)
