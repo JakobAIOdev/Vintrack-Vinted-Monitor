@@ -8,12 +8,12 @@ import (
 	"github.com/bogdanfinn/tls-client/profiles"
 )
 
-const chromeUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+const iosUA = "Vinted/24.11.1 (iPhone; iOS 15.6; Scale/3.00)"
 
 func newWarmupHeaders() http.Header {
 	return http.Header{
-		"User-Agent": {chromeUA},
-		"Accept":     {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"},
+		"User-Agent": {iosUA},
+		"Accept":     {"*/*"},
 	}
 }
 
@@ -38,19 +38,11 @@ func newPageHeaders(domain string) http.Header {
 
 func newAPIHeaders(domain string) http.Header {
 	return http.Header{
-		"User-Agent":         {chromeUA},
-		"Accept":             {"application/json, text/plain, */*"},
-		"Accept-Language":    {"de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"},
-		"Cache-Control":      {"no-cache"},
-		"Pragma":             {"no-cache"},
-		"Sec-Ch-Ua":          {`"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"`},
-		"Sec-Ch-Ua-Mobile":   {"?0"},
-		"Sec-Ch-Ua-Platform": {`"macOS"`},
-		"Sec-Fetch-Dest":     {"empty"},
-		"Sec-Fetch-Mode":     {"cors"},
-		"Sec-Fetch-Site":     {"same-origin"},
-		"X-Requested-With":   {"XMLHttpRequest"},
-		"Referer":            {fmt.Sprintf("https://%s/", domain)},
+		"User-Agent":      {iosUA},
+		"Accept":          {"application/json, text/plain, */*"},
+		"Accept-Language": {"de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"},
+		"X-App-Version":   {"24.11.1"},
+		"Platform":        {"ios"},
 	}
 }
 
@@ -61,7 +53,7 @@ type Client struct {
 func NewClient(proxyURL string) (*Client, error) {
 	options := []tls_client.HttpClientOption{
 		tls_client.WithTimeoutSeconds(3),
-		tls_client.WithClientProfile(profiles.Chrome_131),
+		tls_client.WithClientProfile(profiles.Safari_IOS_15_6),
 		tls_client.WithNotFollowRedirects(),
 		tls_client.WithCookieJar(tls_client.NewCookieJar()),
 	}
