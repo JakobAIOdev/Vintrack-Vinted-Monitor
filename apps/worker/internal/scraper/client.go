@@ -40,7 +40,7 @@ func newPageHeaders(domain string) http.Header {
 func newAPIHeaders(domain string) http.Header {
 	return http.Header{
 		"User-Agent":      {iosUA},
-		"Accept":          {"*/*"},
+		"Accept":          {"application/json", "text/plain", "*/*"},
 		"Accept-Language": {"de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"},
 		"Cache-Control":   {"no-cache"},
 		"Pragma":          {"no-cache"},
