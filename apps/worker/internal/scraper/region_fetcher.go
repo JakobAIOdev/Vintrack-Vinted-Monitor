@@ -16,6 +16,7 @@ import (
 	"vintrack-worker/internal/proxy"
 
 	http "github.com/bogdanfinn/fhttp"
+	"github.com/bogdanfinn/tls-client/profiles"
 )
 
 const maxHTMLResponseBytes = 1 * 1024 * 1024 // 1 MB
@@ -203,12 +204,12 @@ func NewHTMLScraper(pm *proxy.Manager, db *database.Store, domain string, poolSi
 }
 
 func (s *HTMLScraper) addClient() {
-	client, err := NewHTMLClient(s.pm.Next())
+	client, err := NewClient(s.pm.Next(), profiles.Chrome_131)
 	if err != nil {
 		log.Printf("scraper client creation: %v", err)
 		return
 	}
-	if err := client.WarmUpRegion(s.domain); err != nil {
+	if err := client.WarmUpRegionHTML(s.domain); err != nil {
 		log.Printf("scraper warmup: %v", err)
 	}
 	s.clients = append(s.clients, client)
@@ -231,11 +232,11 @@ func (s *HTMLScraper) replaceClient(bad *Client) {
 	for i, c := range s.clients {
 		if c == bad {
 			go func(idx int, domain string) {
-				nc, err := NewHTMLClient(s.pm.Next())
+				nc, err := NewClient(s.pm.Next(), profiles.Chrome_131)
 				if err != nil {
 					return
 				}
-				_ = nc.WarmUpRegion(domain)
+				_ = nc.WarmUpRegionHTML(domain)
 				s.mu.Lock()
 				if idx < len(s.clients) {
 					s.clients[idx] = nc

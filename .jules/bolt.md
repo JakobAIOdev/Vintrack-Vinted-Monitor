@@ -1,0 +1,3 @@
+## 2024-05-19 - Vinted iOS Search Delay Bypass
+**Learning:** The Vinted `catalog/items` API endpoint has an inherent 30-40s server-side search delay for desktop clients. To bypass this delay and retrieve real-time items without hitting Cloudflare 403s or cold index nodes, the worker must spoof Vinted iOS mobile app headers (e.g., `Vinted/...`) combined with a matching iOS Safari TLS profile (e.g., `profiles.Safari_IOS_15_6`) via `tls-client`. Generating random `search_session_id`s should be avoided as it increases latency.
+**Action:** Use iOS headers and TLS profile in `apps/worker` when fetching catalog items.

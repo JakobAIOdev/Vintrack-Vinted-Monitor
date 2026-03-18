@@ -4,6 +4,7 @@ import (
 	"log"
 	"sync"
 
+	"github.com/bogdanfinn/tls-client/profiles"
 	"vintrack-worker/internal/proxy"
 )
 
@@ -35,7 +36,7 @@ func NewClientPool(pm *proxy.Manager, domain string, size int) *ClientPool {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c, err := NewClient(pm.Next())
+			c, err := NewClient(pm.Next(), profiles.Safari_IOS_15_6)
 			if err != nil {
 				log.Printf("pool: client creation failed: %v", err)
 				return
@@ -51,7 +52,7 @@ func NewClientPool(pm *proxy.Manager, domain string, size int) *ClientPool {
 	wg.Wait()
 
 	if len(pool.clients) == 0 {
-		c, err := NewClient(pm.Next())
+		c, err := NewClient(pm.Next(), profiles.Safari_IOS_15_6)
 		if err == nil {
 			_ = c.WarmUpRegion(domain)
 			pool.clients = append(pool.clients, c)
@@ -88,7 +89,7 @@ func (p *ClientPool) RaceClients(n int) []*Client {
 
 func (p *ClientPool) Replace(bad *Client) {
 	go func() {
-		c, err := NewClient(p.pm.Next())
+		c, err := NewClient(p.pm.Next(), profiles.Safari_IOS_15_6)
 		if err != nil {
 			log.Printf("pool: replace failed: %v", err)
 			return
