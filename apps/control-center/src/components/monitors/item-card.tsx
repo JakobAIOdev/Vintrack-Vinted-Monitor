@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { ExternalLink, ImageOff, Heart, MessageCircle, Send, Loader2, XIcon, ChevronLeft, ChevronRight, Tag } from "lucide-react";
 import Link from "next/link";
@@ -42,7 +42,7 @@ interface ItemCardProps {
   showMonitor?: boolean;
 }
 
-export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
+export const ItemCard = React.memo(function ItemCard({ item, showMonitor = false }: ItemCardProps) {
   const { linked, likedIds, addLike, removeLike } = useVintedAccount();
   const liked = likedIds.has(Number(item.id));
   const [liking, setLiking] = useState(false);
@@ -644,7 +644,7 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
       </Dialog>
     </div>
   );
-}
+});
 
 export function ItemCardSkeleton() {
   return (
