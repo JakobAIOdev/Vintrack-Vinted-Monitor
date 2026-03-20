@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, memo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { ExternalLink, ImageOff, Heart, MessageCircle, Send, Loader2, XIcon, ChevronLeft, ChevronRight, Tag } from "lucide-react";
 import Link from "next/link";
@@ -42,7 +42,12 @@ interface ItemCardProps {
   showMonitor?: boolean;
 }
 
-export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
+// Bolt Optimization: Wrap ItemCard in React.memo
+// Why: Live lists receiving real-time updates via SSE (like live-feed) cause
+// the entire list component to re-render. Without memo, React re-renders O(N)
+// child components for every single new item event, causing massive CPU spikes
+// and jank when the list grows large.
+export const ItemCard = memo(function ItemCard({ item, showMonitor = false }: ItemCardProps) {
   const { linked, likedIds, addLike, removeLike } = useVintedAccount();
   const liked = likedIds.has(Number(item.id));
   const [liking, setLiking] = useState(false);
@@ -644,7 +649,7 @@ export function ItemCard({ item, showMonitor = false }: ItemCardProps) {
       </Dialog>
     </div>
   );
-}
+});
 
 export function ItemCardSkeleton() {
   return (
