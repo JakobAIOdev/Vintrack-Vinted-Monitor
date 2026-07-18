@@ -422,6 +422,10 @@ export function AdminClient({
     const [userMetricsLoadFailed, setUserMetricsLoadFailed] = useState(false);
     const userMetricsLoadedRef = useRef(false);
     const userMetricsRequestRef = useRef<Promise<void> | null>(null);
+    const userMetricsSnapshotRef = useRef<Record<
+        string,
+        AdminUserMetrics
+    > | null>(null);
     const [activeMonitorsLoaded, setActiveMonitorsLoaded] = useState(false);
     const [isLoadingActiveMonitors, setIsLoadingActiveMonitors] =
         useState(false);
@@ -563,6 +567,7 @@ export function AdminClient({
 
         const request = getAdminUserMetricsState()
             .then((metricsByUser) => {
+                userMetricsSnapshotRef.current = metricsByUser;
                 setUsers((currentUsers) =>
                     currentUsers.map((user) => ({
                         ...user,
@@ -593,6 +598,7 @@ export function AdminClient({
 
         const request = getAdminUsersState()
             .then((state) => {
+                const metricsByUser = userMetricsSnapshotRef.current;
                 setUsers((currentUsers) => {
                     const activeMonitorsByUser = new Map(
                         currentUsers.map((user) => [
@@ -603,6 +609,7 @@ export function AdminClient({
 
                     return state.users.map((user) => ({
                         ...user,
+                        metrics: metricsByUser?.[user.id] ?? user.metrics,
                         activeMonitors: activeMonitorsByUser.get(user.id) ?? [],
                     }));
                 });
@@ -612,7 +619,6 @@ export function AdminClient({
                 }));
                 usersLoadedRef.current = true;
                 setUsersLoaded(true);
-                loadAdminUserMetrics();
                 return true;
             })
             .catch(() => {
@@ -676,6 +682,7 @@ export function AdminClient({
         const params = new URLSearchParams(window.location.search);
         const tab = normalizeTab(params.get("tab"));
         setActiveTab(tab);
+        loadAdminUserMetrics();
         void loadAdminUsers();
         if (tab === "logs") loadAdminLogs();
         if (tab === "monitors") loadActiveMonitors();
@@ -1349,6 +1356,7 @@ export function AdminClient({
     const activeTabDefinition =
         ADMIN_TABS.find((tab) => tab.value === activeTab) ?? ADMIN_TABS[0];
     const ActiveTabIcon = activeTabDefinition.icon;
+    const areUserMetricsPending = !userMetricsLoaded && !userMetricsLoadFailed;
     const hasOperationalIssues = successRate24h !== null && successRate24h < 90;
 
     return (
@@ -1369,15 +1377,19 @@ export function AdminClient({
                     <div className="flex items-center gap-2">
                         <span
                             className={`h-2 w-2 rounded-full ${
-                                hasOperationalIssues
-                                    ? "bg-amber-500"
-                                    : "bg-emerald-500"
+                                areUserMetricsPending
+                                    ? "bg-muted-foreground"
+                                    : hasOperationalIssues
+                                      ? "bg-amber-500"
+                                      : "bg-emerald-500"
                             }`}
                         />
                         <span className="font-medium">
-                            {hasOperationalIssues
-                                ? "Needs attention"
-                                : "Operational"}
+                            {areUserMetricsPending
+                                ? "Loading"
+                                : hasOperationalIssues
+                                  ? "Needs attention"
+                                  : "Operational"}
                         </span>
                     </div>
                     {usersLoadFailed ? (
@@ -1454,22 +1466,34 @@ export function AdminClient({
                         />
                         <OverviewMetric
                             label="Running"
-                            value={runningMonitors}
-                            detail={`${pausedMonitors} paused monitors`}
+                            value={userMetricsLoaded ? runningMonitors : "—"}
+                            detail={
+                                userMetricsLoaded
+                                    ? `${pausedMonitors} paused monitors`
+                                    : "Loading monitor totals"
+                            }
                             icon={Activity}
                             iconClassName="bg-emerald-500/10 text-emerald-600"
                         />
                         <OverviewMetric
                             label="Canonical checks 24h"
-                            value={checks24h}
-                            detail={`${formatSuccessRate(successRate24h)} successful`}
+                            value={userMetricsLoaded ? checks24h : "—"}
+                            detail={
+                                userMetricsLoaded
+                                    ? `${formatSuccessRate(successRate24h)} successful`
+                                    : "Loading worker activity"
+                            }
                             icon={Gauge}
                             iconClassName="bg-sky-500/10 text-sky-600"
                         />
                         <OverviewMetric
                             label="New items 24h"
-                            value={newItems24h}
-                            detail="From completed monitor checks"
+                            value={userMetricsLoaded ? newItems24h : "—"}
+                            detail={
+                                userMetricsLoaded
+                                    ? "From completed monitor checks"
+                                    : "Loading item totals"
+                            }
                             icon={Boxes}
                             iconClassName="bg-rose-500/10 text-rose-600"
                         />
@@ -1501,9 +1525,11 @@ export function AdminClient({
                                     }
                                     className="rounded-md text-[10px] uppercase"
                                 >
-                                    {failedChecks24h > 0
-                                        ? `${failedChecks24h} failures`
-                                        : "Healthy"}
+                                    {areUserMetricsPending
+                                        ? "Loading"
+                                        : failedChecks24h > 0
+                                          ? `${failedChecks24h} failures`
+                                          : "Healthy"}
                                 </Badge>
                             </div>
 
@@ -1521,7 +1547,9 @@ export function AdminClient({
                                         Paused
                                     </p>
                                     <p className="mt-1 text-2xl font-semibold">
-                                        {pausedMonitors}
+                                        {userMetricsLoaded
+                                            ? pausedMonitors
+                                            : "—"}
                                     </p>
                                 </div>
                                 <div className="border-border/60 rounded-lg border px-4 py-3">
@@ -1529,7 +1557,7 @@ export function AdminClient({
                                         Canonical checks 24h
                                     </p>
                                     <p className="mt-1 text-2xl font-semibold">
-                                        {checks24h}
+                                        {userMetricsLoaded ? checks24h : "—"}
                                     </p>
                                 </div>
                                 <div className="border-border/60 rounded-lg border px-4 py-3">
@@ -1537,7 +1565,9 @@ export function AdminClient({
                                         Success rate
                                     </p>
                                     <p className="mt-1 text-2xl font-semibold">
-                                        {formatSuccessRate(successRate24h)}
+                                        {userMetricsLoaded
+                                            ? formatSuccessRate(successRate24h)
+                                            : "—"}
                                     </p>
                                 </div>
                             </div>
@@ -1548,7 +1578,9 @@ export function AdminClient({
                                         Successful checks
                                     </p>
                                     <p className="mt-1 text-xl font-semibold">
-                                        {successfulChecks24h}
+                                        {userMetricsLoaded
+                                            ? successfulChecks24h
+                                            : "—"}
                                     </p>
                                 </div>
                                 <div className="bg-muted/30 rounded-lg px-4 py-3">
@@ -1556,7 +1588,7 @@ export function AdminClient({
                                         New items 24h
                                     </p>
                                     <p className="mt-1 text-xl font-semibold">
-                                        {newItems24h}
+                                        {userMetricsLoaded ? newItems24h : "—"}
                                     </p>
                                 </div>
                                 <div className="bg-muted/30 rounded-lg px-4 py-3">

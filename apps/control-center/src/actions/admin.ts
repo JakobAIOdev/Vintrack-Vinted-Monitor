@@ -160,11 +160,7 @@ type AdminMetricCountRow = {
     failed_checks_24h?: bigint;
     avg_duration_ms_24h?: number | null;
     last_check_at?: Date | null;
-};
-
-type AdminLatestErrorRow = {
-    userId: string;
-    latest_error_24h: string | null;
+    latest_error_24h?: string | null;
 };
 
 type AdminUserMetrics = {
@@ -203,62 +199,65 @@ function emptyAdminUserMetrics(): AdminUserMetrics {
 
 async function loadAdminUserMetrics() {
     const metrics = new Map<string, AdminUserMetrics>();
-    const [monitorRows, runRows, errorRows] = await Promise.all([
-        db.$queryRaw<AdminMetricCountRow[]>`
+    const rows = await db.$queryRaw<AdminMetricCountRow[]>`
+        WITH monitor_totals AS (
             SELECT
                 "userId",
                 COUNT(*) FILTER (WHERE status = 'active')::bigint AS running_monitors,
                 COUNT(*) FILTER (WHERE status IS DISTINCT FROM 'active')::bigint AS paused_monitors
             FROM monitors
             GROUP BY "userId"
-        `.catch((error) => {
-            console.error("[admin] failed to load monitor totals", error);
-            return [];
-        }),
-        db.$queryRaw<AdminMetricCountRow[]>`
+        ),
+        run_totals AS (
             SELECT
                 m."userId",
-                COUNT(r.id)::bigint AS checks_24h,
-                COUNT(r.id) FILTER (WHERE r.status = 'success')::bigint AS successful_checks_24h,
-                COUNT(r.id) FILTER (WHERE r.status = 'failed')::bigint AS failed_checks_24h,
-                COALESCE(SUM(r.new_item_count), 0)::bigint AS new_items_24h,
-                AVG(r.duration_ms)::float AS avg_duration_ms_24h,
-                MAX(r.checked_at) AS last_check_at
-            FROM monitors m
-            LEFT JOIN monitor_runs r
-                ON r.monitor_id = m.id
-                AND r.checked_at >= NOW() - INTERVAL '24 hours'
-                AND r.fetch_source = 'canonical'
+                SUM(s.check_count)::bigint AS checks_24h,
+                SUM(s.successful_check_count)::bigint AS successful_checks_24h,
+                SUM(s.failed_check_count)::bigint AS failed_checks_24h,
+                SUM(s.new_item_count)::bigint AS new_items_24h,
+                CASE
+                    WHEN SUM(s.duration_sample_count) > 0
+                    THEN SUM(s.duration_total_ms)::double precision /
+                         SUM(s.duration_sample_count)::double precision
+                    ELSE NULL
+                END AS avg_duration_ms_24h,
+                MAX(s.last_checked_at) AS last_check_at,
+                (
+                    ARRAY_AGG(s.latest_error ORDER BY s.latest_error_at DESC)
+                    FILTER (WHERE s.latest_error IS NOT NULL)
+                )[1] AS latest_error_24h
+            FROM monitor_run_hourly_stats s
+            INNER JOIN monitors m ON m.id = s.monitor_id
+            WHERE s.fetch_source = 'canonical'
+              AND s.bucket_hour >=
+                  DATE_TRUNC('hour', NOW()) - INTERVAL '23 hours'
             GROUP BY m."userId"
-        `.catch((error) => {
-            console.error("[admin] failed to load 24h run metrics", error);
-            return [];
-        }),
-        db.$queryRaw<AdminLatestErrorRow[]>`
-            SELECT DISTINCT ON (m."userId")
-                m."userId",
-                r.error_message AS latest_error_24h
-            FROM monitors m
-            INNER JOIN monitor_runs r ON r.monitor_id = m.id
-            WHERE r.checked_at >= NOW() - INTERVAL '24 hours'
-              AND r.fetch_source = 'canonical'
-              AND r.error_message IS NOT NULL
-            ORDER BY m."userId", r.checked_at DESC
-        `.catch((error) => {
-            console.error("[admin] failed to load latest monitor errors", error);
-            return [];
-        }),
-    ]);
+        )
+        SELECT
+            monitor_totals."userId",
+            monitor_totals.running_monitors,
+            monitor_totals.paused_monitors,
+            COALESCE(run_totals.checks_24h, 0)::bigint AS checks_24h,
+            COALESCE(run_totals.successful_checks_24h, 0)::bigint
+                AS successful_checks_24h,
+            COALESCE(run_totals.failed_checks_24h, 0)::bigint
+                AS failed_checks_24h,
+            COALESCE(run_totals.new_items_24h, 0)::bigint AS new_items_24h,
+            run_totals.avg_duration_ms_24h,
+            run_totals.last_check_at,
+            run_totals.latest_error_24h
+        FROM monitor_totals
+        LEFT JOIN run_totals
+            ON run_totals."userId" = monitor_totals."userId"
+    `.catch((error) => {
+        console.error("[admin] failed to load hourly user metrics", error);
+        return [];
+    });
 
-    for (const row of monitorRows) {
+    for (const row of rows) {
         const current = metrics.get(row.userId) ?? emptyAdminUserMetrics();
         current.runningMonitors = Number(row.running_monitors ?? 0);
         current.pausedMonitors = Number(row.paused_monitors ?? 0);
-        metrics.set(row.userId, current);
-    }
-
-    for (const row of runRows) {
-        const current = metrics.get(row.userId) ?? emptyAdminUserMetrics();
         const checks = Number(row.checks_24h ?? 0);
         const successful = Number(row.successful_checks_24h ?? 0);
         current.checks24h = checks;
@@ -273,12 +272,7 @@ async function loadAdminUserMetrics() {
                 ? null
                 : Math.round(row.avg_duration_ms_24h);
         current.lastCheckAt = row.last_check_at ?? null;
-        metrics.set(row.userId, current);
-    }
-
-    for (const row of errorRows) {
-        const current = metrics.get(row.userId) ?? emptyAdminUserMetrics();
-        current.latestError24h = row.latest_error_24h;
+        current.latestError24h = row.latest_error_24h ?? null;
         metrics.set(row.userId, current);
     }
 
@@ -296,7 +290,7 @@ async function loadAdminUserMetrics() {
 
 const getCachedAdminUserMetrics = unstable_cache(
     loadAdminUserMetrics,
-    ["admin-user-metrics-v4"],
+    ["admin-user-metrics-v5"],
     { revalidate: 30 },
 );
 
