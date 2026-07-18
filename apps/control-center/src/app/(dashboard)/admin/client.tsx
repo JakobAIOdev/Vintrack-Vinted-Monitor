@@ -24,6 +24,10 @@ import {
     Boxes,
     Webhook,
     Gauge,
+    TrendingUp,
+    UserPlus,
+    FlaskConical,
+    Sparkles,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -51,6 +55,7 @@ import {
     setUserRole,
     setUserActiveMonitorLimit,
     getAdminActiveMonitors,
+    getAdminMemberInsights,
     getAdminUserMetricsState,
     getAdminUsersState,
     getAdminLogs,
@@ -115,6 +120,7 @@ type UserRow = {
 
 type AdminTab =
     | "overview"
+    | "insights"
     | "monitors"
     | "users"
     | "roles"
@@ -130,6 +136,38 @@ type AdminLogRow = {
     subject: string | null;
     actor: string | null;
     createdAt: Date;
+};
+
+type MemberInsights = {
+    summary: {
+        totalMembers: number;
+        newMembers7d: number;
+        newMembers30d: number;
+        signupGrowth30d: number | null;
+        usersWithMonitors: number;
+        activationRate: number;
+    };
+    growth: {
+        date: string;
+        newMembers: number;
+        cumulativeMembers: number;
+    }[];
+    roles: { role: string; count: number }[];
+    demo: {
+        users: number;
+        activeUsers: number;
+        expiredUsers: number;
+        convertedUsers: number;
+        adoptionRate: number;
+        conversionRate: number;
+    };
+    recentMembers: {
+        id: string;
+        name: string | null;
+        email: string | null;
+        role: string;
+        createdAt: string;
+    }[];
 };
 
 type MonitorLimits = {
@@ -262,6 +300,13 @@ const ADMIN_TABS: {
         description: "Live system capacity, monitor health, and recent issues.",
     },
     {
+        value: "insights",
+        label: "Member Insights",
+        icon: TrendingUp,
+        description:
+            "Member growth, activation, roles, and demo monitor adoption.",
+    },
+    {
         value: "monitors",
         label: "Running Monitors",
         icon: Monitor,
@@ -326,6 +371,142 @@ function OverviewMetric({
             <p className="text-muted-foreground mt-2 truncate text-[11px]">
                 {detail}
             </p>
+        </div>
+    );
+}
+
+function MemberGrowthChart({ data }: { data: MemberInsights["growth"] }) {
+    if (data.length === 0) {
+        return (
+            <div className="text-muted-foreground flex h-64 items-center justify-center text-sm">
+                No member history available yet.
+            </div>
+        );
+    }
+
+    const width = 900;
+    const height = 250;
+    const left = 18;
+    const right = 18;
+    const lineTop = 18;
+    const lineBottom = 176;
+    const barBottom = 232;
+    const maxCumulative = Math.max(
+        ...data.map((point) => point.cumulativeMembers),
+    );
+    const minCumulative = Math.min(
+        ...data.map((point) => point.cumulativeMembers),
+    );
+    const cumulativeRange = Math.max(1, maxCumulative - minCumulative);
+    const maxNewMembers = Math.max(1, ...data.map((point) => point.newMembers));
+    const plotWidth = width - left - right;
+    const slotWidth = plotWidth / data.length;
+    const pointX = (index: number) =>
+        left + (index / Math.max(1, data.length - 1)) * plotWidth;
+    const pointY = (value: number) =>
+        lineBottom -
+        ((value - minCumulative) / cumulativeRange) * (lineBottom - lineTop);
+    const linePoints = data
+        .map(
+            (point, index) =>
+                `${pointX(index)},${pointY(point.cumulativeMembers)}`,
+        )
+        .join(" ");
+    const areaPoints = `${left},${lineBottom} ${linePoints} ${width - right},${lineBottom}`;
+    const dateLabel = (value: string) =>
+        new Intl.DateTimeFormat("de-DE", {
+            day: "2-digit",
+            month: "short",
+        }).format(new Date(`${value}T12:00:00Z`));
+    const middlePoint = data[Math.floor(data.length / 2)];
+
+    return (
+        <div>
+            <div className="mb-4 flex flex-wrap items-center gap-4 text-xs">
+                <div className="flex items-center gap-2">
+                    <span className="bg-primary h-0.5 w-5 rounded-full" />
+                    <span className="text-muted-foreground">Total members</span>
+                </div>
+                <div className="flex items-center gap-2">
+                    <span className="bg-primary/30 h-2.5 w-2.5 rounded-sm" />
+                    <span className="text-muted-foreground">
+                        New members per day
+                    </span>
+                </div>
+                <span className="text-muted-foreground ml-auto">
+                    90 day view
+                </span>
+            </div>
+            <svg
+                viewBox={`0 0 ${width} ${height}`}
+                className="h-64 w-full overflow-visible"
+                role="img"
+                aria-label="Member growth over the last 90 days"
+            >
+                {[0, 1, 2, 3].map((line) => {
+                    const y = lineTop + ((lineBottom - lineTop) / 3) * line;
+                    return (
+                        <line
+                            key={line}
+                            x1={left}
+                            x2={width - right}
+                            y1={y}
+                            y2={y}
+                            className="stroke-border"
+                            strokeDasharray="4 6"
+                        />
+                    );
+                })}
+                <polygon
+                    points={areaPoints}
+                    className="fill-primary"
+                    opacity="0.08"
+                />
+                {data.map((point, index) => {
+                    const barHeight = (point.newMembers / maxNewMembers) * 38;
+                    return (
+                        <rect
+                            key={point.date}
+                            x={left + index * slotWidth + 1}
+                            y={barBottom - barHeight}
+                            width={Math.max(2, slotWidth - 2)}
+                            height={barHeight}
+                            rx="1.5"
+                            className="fill-primary"
+                            opacity="0.28"
+                        >
+                            <title>{`${dateLabel(point.date)}: ${point.newMembers} new · ${point.cumulativeMembers} total`}</title>
+                        </rect>
+                    );
+                })}
+                <polyline
+                    points={linePoints}
+                    fill="none"
+                    className="stroke-primary"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                />
+                {data.map((point, index) =>
+                    index % 14 === 0 || index === data.length - 1 ? (
+                        <circle
+                            key={point.date}
+                            cx={pointX(index)}
+                            cy={pointY(point.cumulativeMembers)}
+                            r="4"
+                            className="fill-background stroke-primary"
+                            strokeWidth="2.5"
+                        >
+                            <title>{`${dateLabel(point.date)}: ${point.cumulativeMembers} total members`}</title>
+                        </circle>
+                    ) : null,
+                )}
+            </svg>
+            <div className="text-muted-foreground flex justify-between text-[11px]">
+                <span>{dateLabel(data[0].date)}</span>
+                <span>{dateLabel(middlePoint.date)}</span>
+                <span>{dateLabel(data[data.length - 1].date)}</span>
+            </div>
         </div>
     );
 }
@@ -412,6 +593,14 @@ export function AdminClient({
     const [adminLogs, setAdminLogs] = useState<AdminLogRow[]>(logs);
     const [logsLoaded, setLogsLoaded] = useState(logs.length > 0);
     const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+    const [memberInsights, setMemberInsights] = useState<MemberInsights | null>(
+        null,
+    );
+    const [isLoadingMemberInsights, setIsLoadingMemberInsights] =
+        useState(false);
+    const [memberInsightsLoadFailed, setMemberInsightsLoadFailed] =
+        useState(false);
+    const memberInsightsRequestRef = useRef<Promise<void> | null>(null);
     const [usersLoaded, setUsersLoaded] = useState(initialUsers.length > 0);
     const [isLoadingUsers, setIsLoadingUsers] = useState(false);
     const [usersLoadFailed, setUsersLoadFailed] = useState(false);
@@ -557,6 +746,28 @@ export function AdminClient({
             .finally(() => setIsLoadingLogs(false));
     };
 
+    const loadMemberInsights = () => {
+        if (memberInsights || memberInsightsRequestRef.current) return;
+
+        setIsLoadingMemberInsights(true);
+        setMemberInsightsLoadFailed(false);
+
+        const request = getAdminMemberInsights()
+            .then((insights) => {
+                setMemberInsights(insights);
+            })
+            .catch(() => {
+                setMemberInsightsLoadFailed(true);
+                toast.error("Failed to load member insights");
+            })
+            .finally(() => {
+                memberInsightsRequestRef.current = null;
+                setIsLoadingMemberInsights(false);
+            });
+
+        memberInsightsRequestRef.current = request;
+    };
+
     const loadAdminUserMetrics = () => {
         if (userMetricsLoadedRef.current || userMetricsRequestRef.current) {
             return;
@@ -684,6 +895,7 @@ export function AdminClient({
         setActiveTab(tab);
         loadAdminUserMetrics();
         void loadAdminUsers();
+        if (tab === "insights") loadMemberInsights();
         if (tab === "logs") loadAdminLogs();
         if (tab === "monitors") loadActiveMonitors();
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -698,6 +910,7 @@ export function AdminClient({
         if (["overview", "monitors", "users", "roles"].includes(tab)) {
             void loadAdminUsers();
         }
+        if (tab === "insights") loadMemberInsights();
         if (tab === "logs") loadAdminLogs();
         if (tab === "monitors") loadActiveMonitors();
     };
@@ -1358,6 +1571,10 @@ export function AdminClient({
     const ActiveTabIcon = activeTabDefinition.icon;
     const areUserMetricsPending = !userMetricsLoaded && !userMetricsLoadFailed;
     const hasOperationalIssues = successRate24h !== null && successRate24h < 90;
+    const maxInsightRoleCount = Math.max(
+        1,
+        ...(memberInsights?.roles.map((role) => role.count) ?? []),
+    );
 
     return (
         <div className="space-y-6">
@@ -1788,6 +2005,310 @@ export function AdminClient({
                         </div>
                     </div>
                 </>
+            ) : null}
+
+            {activeTab === "insights" ? (
+                <div className="space-y-4">
+                    {isLoadingMemberInsights && !memberInsights ? (
+                        <div className="border-border/60 bg-card text-muted-foreground flex min-h-72 items-center justify-center rounded-lg border text-sm">
+                            Loading member insights...
+                        </div>
+                    ) : memberInsightsLoadFailed && !memberInsights ? (
+                        <div className="border-border/60 bg-card flex min-h-72 flex-col items-center justify-center gap-3 rounded-lg border px-6 text-center">
+                            <AlertTriangle className="h-6 w-6 text-amber-500" />
+                            <div>
+                                <p className="text-sm font-medium">
+                                    Member insights could not be loaded
+                                </p>
+                                <p className="text-muted-foreground mt-1 text-xs">
+                                    The rest of the admin panel is still
+                                    available.
+                                </p>
+                            </div>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={loadMemberInsights}
+                            >
+                                Retry
+                            </Button>
+                        </div>
+                    ) : memberInsights ? (
+                        <>
+                            <div className="border-border/60 bg-border/60 grid gap-px overflow-hidden rounded-lg border sm:grid-cols-2 xl:grid-cols-5">
+                                <OverviewMetric
+                                    label="Total members"
+                                    value={memberInsights.summary.totalMembers}
+                                    detail="All registered accounts"
+                                    icon={Users}
+                                    iconClassName="bg-muted text-muted-foreground"
+                                />
+                                <OverviewMetric
+                                    label="New in 7 days"
+                                    value={memberInsights.summary.newMembers7d}
+                                    detail="Recent member acquisition"
+                                    icon={UserPlus}
+                                    iconClassName="bg-sky-500/10 text-sky-600"
+                                />
+                                <OverviewMetric
+                                    label="New in 30 days"
+                                    value={memberInsights.summary.newMembers30d}
+                                    detail={
+                                        memberInsights.summary
+                                            .signupGrowth30d === null
+                                            ? "No previous baseline"
+                                            : `${memberInsights.summary.signupGrowth30d >= 0 ? "+" : ""}${memberInsights.summary.signupGrowth30d}% vs previous 30d`
+                                    }
+                                    icon={TrendingUp}
+                                    iconClassName="bg-emerald-500/10 text-emerald-600"
+                                />
+                                <OverviewMetric
+                                    label="Activated"
+                                    value={`${memberInsights.summary.activationRate}%`}
+                                    detail={`${memberInsights.summary.usersWithMonitors} members created a monitor`}
+                                    icon={Monitor}
+                                    iconClassName="bg-violet-500/10 text-violet-600"
+                                />
+                                <OverviewMetric
+                                    label="Tried demo"
+                                    value={memberInsights.demo.users}
+                                    detail={`${memberInsights.demo.adoptionRate}% of all members`}
+                                    icon={FlaskConical}
+                                    iconClassName="bg-amber-500/10 text-amber-600"
+                                />
+                            </div>
+
+                            <div className="border-border/60 bg-card rounded-lg border p-5">
+                                <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                    <div>
+                                        <p className="text-foreground text-sm font-semibold">
+                                            Member Growth
+                                        </p>
+                                        <p className="text-muted-foreground text-xs">
+                                            Daily signups and cumulative member
+                                            count over the last 90 days.
+                                        </p>
+                                    </div>
+                                    <Badge
+                                        variant="outline"
+                                        className="w-fit rounded-md text-[10px] uppercase"
+                                    >
+                                        Live cohorts
+                                    </Badge>
+                                </div>
+                                <MemberGrowthChart
+                                    data={memberInsights.growth}
+                                />
+                            </div>
+
+                            <div className="grid gap-4 lg:grid-cols-2">
+                                <div className="border-border/60 bg-card rounded-lg border p-5">
+                                    <div className="mb-5 flex items-start justify-between gap-4">
+                                        <div>
+                                            <p className="text-foreground text-sm font-semibold">
+                                                Demo Monitor Journey
+                                            </p>
+                                            <p className="text-muted-foreground text-xs">
+                                                Unique members who interacted
+                                                with the onboarding demo.
+                                            </p>
+                                        </div>
+                                        <div className="rounded-lg bg-amber-500/10 p-2 text-amber-600">
+                                            <Sparkles className="h-4 w-4" />
+                                        </div>
+                                    </div>
+                                    <div className="space-y-4">
+                                        {[
+                                            {
+                                                label: "Started a demo",
+                                                value: memberInsights.demo
+                                                    .users,
+                                                detail: `${memberInsights.demo.adoptionRate}% adoption`,
+                                                color: "bg-sky-500",
+                                            },
+                                            {
+                                                label: "Active demo now",
+                                                value: memberInsights.demo
+                                                    .activeUsers,
+                                                detail: "Currently within the demo window",
+                                                color: "bg-emerald-500",
+                                            },
+                                            {
+                                                label: "Kept it running",
+                                                value: memberInsights.demo
+                                                    .convertedUsers,
+                                                detail: `${memberInsights.demo.conversionRate}% demo conversion`,
+                                                color: "bg-violet-500",
+                                            },
+                                            {
+                                                label: "Demo expired",
+                                                value: memberInsights.demo
+                                                    .expiredUsers,
+                                                detail: "Reached the demo limit",
+                                                color: "bg-amber-500",
+                                            },
+                                        ].map((stage) => (
+                                            <div key={stage.label}>
+                                                <div className="mb-1.5 flex items-end justify-between gap-3">
+                                                    <div>
+                                                        <p className="text-sm font-medium">
+                                                            {stage.label}
+                                                        </p>
+                                                        <p className="text-muted-foreground text-[11px]">
+                                                            {stage.detail}
+                                                        </p>
+                                                    </div>
+                                                    <span className="text-lg font-semibold tabular-nums">
+                                                        {stage.value}
+                                                    </span>
+                                                </div>
+                                                <div className="bg-muted h-2 overflow-hidden rounded-full">
+                                                    <div
+                                                        className={`h-full rounded-full ${stage.color}`}
+                                                        style={{
+                                                            width: `${memberInsights.demo.users > 0 ? Math.max(stage.value > 0 ? 3 : 0, Math.round((stage.value / memberInsights.demo.users) * 100)) : 0}%`,
+                                                        }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="border-border/60 bg-card rounded-lg border p-5">
+                                    <div className="mb-5">
+                                        <p className="text-foreground text-sm font-semibold">
+                                            Role Distribution
+                                        </p>
+                                        <p className="text-muted-foreground text-xs">
+                                            Current account mix across access
+                                            levels.
+                                        </p>
+                                    </div>
+                                    <div className="space-y-5">
+                                        {memberInsights.roles.map((role) => (
+                                            <div key={role.role}>
+                                                <div className="mb-2 flex items-center justify-between gap-3">
+                                                    <div className="flex items-center gap-2">
+                                                        {getRoleBadge(
+                                                            role.role,
+                                                        )}
+                                                        <span className="text-muted-foreground text-xs">
+                                                            {Math.round(
+                                                                (role.count /
+                                                                    Math.max(
+                                                                        1,
+                                                                        memberInsights
+                                                                            .summary
+                                                                            .totalMembers,
+                                                                    )) *
+                                                                    100,
+                                                            )}
+                                                            %
+                                                        </span>
+                                                    </div>
+                                                    <span className="text-sm font-semibold tabular-nums">
+                                                        {role.count}
+                                                    </span>
+                                                </div>
+                                                <div className="bg-muted h-2.5 overflow-hidden rounded-full">
+                                                    <div
+                                                        className={`h-full rounded-full ${
+                                                            role.role ===
+                                                            "admin"
+                                                                ? "bg-red-500"
+                                                                : role.role ===
+                                                                    "premium"
+                                                                  ? "bg-amber-500"
+                                                                  : "bg-slate-400"
+                                                        }`}
+                                                        style={{
+                                                            width: `${Math.max(3, Math.round((role.count / maxInsightRoleCount) * 100))}%`,
+                                                        }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <div className="bg-muted/30 mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border">
+                                        <div className="bg-card px-4 py-3">
+                                            <p className="text-muted-foreground text-[11px] uppercase">
+                                                With monitor
+                                            </p>
+                                            <p className="mt-1 text-xl font-semibold">
+                                                {
+                                                    memberInsights.summary
+                                                        .usersWithMonitors
+                                                }
+                                            </p>
+                                        </div>
+                                        <div className="bg-card px-4 py-3">
+                                            <p className="text-muted-foreground text-[11px] uppercase">
+                                                Not activated
+                                            </p>
+                                            <p className="mt-1 text-xl font-semibold">
+                                                {Math.max(
+                                                    0,
+                                                    memberInsights.summary
+                                                        .totalMembers -
+                                                        memberInsights.summary
+                                                            .usersWithMonitors,
+                                                )}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="border-border/60 bg-card overflow-hidden rounded-lg border">
+                                <div className="border-border/60 flex items-start justify-between gap-4 border-b px-5 py-4">
+                                    <div>
+                                        <p className="text-foreground text-sm font-semibold">
+                                            Newest Members
+                                        </p>
+                                        <p className="text-muted-foreground text-xs">
+                                            Most recently created accounts.
+                                        </p>
+                                    </div>
+                                    <UserPlus className="text-muted-foreground h-4 w-4" />
+                                </div>
+                                <div className="divide-border/50 divide-y">
+                                    {memberInsights.recentMembers.map(
+                                        (member) => (
+                                            <div
+                                                key={member.id}
+                                                className="flex flex-col gap-2 px-5 py-3 sm:flex-row sm:items-center"
+                                            >
+                                                <div className="min-w-0 flex-1">
+                                                    <p className="truncate text-sm font-medium">
+                                                        {member.name ??
+                                                            "Unknown member"}
+                                                    </p>
+                                                    <p className="text-muted-foreground truncate text-xs">
+                                                        {member.email ??
+                                                            "No email"}
+                                                    </p>
+                                                </div>
+                                                <div className="flex items-center justify-between gap-4 sm:justify-end">
+                                                    {getRoleBadge(member.role)}
+                                                    <span className="text-muted-foreground min-w-32 text-right text-xs">
+                                                        {formatCreatedAt(
+                                                            new Date(
+                                                                member.createdAt,
+                                                            ),
+                                                        )}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        ),
+                                    )}
+                                </div>
+                            </div>
+                        </>
+                    ) : null}
+                </div>
             ) : null}
 
             {activeTab === "monitors" ? (

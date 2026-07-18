@@ -15,6 +15,7 @@ INSERT INTO "User" (
     id,
     name,
     email,
+    "createdAt",
     role,
     monitor_onboarding_status,
     dedupe_monitor_alerts
@@ -23,6 +24,7 @@ SELECT
     'dev-seed-user-' || LPAD(seed_no::text, 4, '0'),
     'Dev Member ' || LPAD(seed_no::text, 3, '0'),
     'dev.member.' || LPAD(seed_no::text, 3, '0') || '@vintrack.test',
+    NOW() - ((seed_no % 180) || ' days')::interval,
     CASE
         WHEN seed_no % 50 = 0 THEN 'admin'
         WHEN seed_no % 4 = 0 THEN 'premium'
@@ -67,6 +69,7 @@ INSERT INTO monitors (
     region,
     status,
     created_at,
+    demo_expires_at,
     webhook_active,
     telegram_active,
     proxy_group_id,
@@ -87,6 +90,11 @@ SELECT
     ],
     'paused',
     NOW() - (((seed.seed_no + monitor_no) % 180) || ' days')::interval,
+    CASE
+        WHEN monitor_no = 1 AND seed.seed_no % 5 = 0
+        THEN NOW() - ((1 + seed.seed_no % 14) || ' days')::interval
+        ELSE NULL
+    END,
     seed.seed_no % 2 = 0,
     seed.seed_no % 7 = 0,
     proxy_group.id,
@@ -148,6 +156,29 @@ SELECT
 FROM generate_series(1, 300) AS seed(seed_no)
 JOIN "User" AS user_row
     ON user_row.id = 'dev-seed-user-' || LPAD(seed.seed_no::text, 4, '0');
+
+INSERT INTO audit_events (
+    "userId",
+    action,
+    target_type,
+    target_id,
+    status,
+    metadata,
+    created_at
+)
+SELECT
+    user_row.id,
+    'monitor.demo_converted',
+    'monitor',
+    MIN(monitor.id)::text,
+    'success',
+    jsonb_build_object('devSeed', true),
+    NOW() - ((seed.seed_no % 30) || ' days')::interval
+FROM generate_series(9, 300, 9) AS seed(seed_no)
+JOIN "User" AS user_row
+    ON user_row.id = 'dev-seed-user-' || LPAD(seed.seed_no::text, 4, '0')
+JOIN monitors AS monitor ON monitor."userId" = user_row.id
+GROUP BY user_row.id, seed.seed_no;
 
 INSERT INTO monitor_limits (scope, active_limit)
 SELECT

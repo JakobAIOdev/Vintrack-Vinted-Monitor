@@ -44,4 +44,24 @@ test.describe("admin running monitors", () => {
             page.getByText("No running monitors match your search"),
         ).toBeVisible();
     });
+
+    test("shows member growth and demo insights", async ({ page }) => {
+        await page.goto("/admin?tab=insights");
+
+        await expect(
+            page.getByRole("tab", { name: "Member Insights" }),
+        ).toHaveAttribute("aria-selected", "true");
+        await expect(page.getByText("Member Growth")).toBeVisible();
+        await expect(
+            page.getByRole("img", {
+                name: "Member growth over the last 90 days",
+            }),
+        ).toBeVisible();
+        await expect(page.getByText("Demo Monitor Journey")).toBeVisible();
+        await expect(page.getByText("Role Distribution")).toBeVisible();
+        await expect(page.getByText("Newest Members")).toBeVisible();
+        await expect(
+            page.getByRole("main").getByText("E2E User"),
+        ).toBeVisible();
+    });
 });
