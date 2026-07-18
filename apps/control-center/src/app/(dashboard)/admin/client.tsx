@@ -51,6 +51,7 @@ import {
     setUserRole,
     setUserActiveMonitorLimit,
     getAdminActiveMonitors,
+    getAdminUsersState,
     getAdminLogs,
     getFreeProxyAdminState,
     getAdminUserDetails,
@@ -410,6 +411,11 @@ export function AdminClient({
     const [adminLogs, setAdminLogs] = useState<AdminLogRow[]>(logs);
     const [logsLoaded, setLogsLoaded] = useState(logs.length > 0);
     const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+    const [usersLoaded, setUsersLoaded] = useState(initialUsers.length > 0);
+    const [isLoadingUsers, setIsLoadingUsers] = useState(false);
+    const [usersLoadFailed, setUsersLoadFailed] = useState(false);
+    const usersLoadedRef = useRef(initialUsers.length > 0);
+    const usersRequestRef = useRef<Promise<boolean> | null>(null);
     const [activeMonitorsLoaded, setActiveMonitorsLoaded] = useState(false);
     const [isLoadingActiveMonitors, setIsLoadingActiveMonitors] =
         useState(false);
@@ -541,14 +547,65 @@ export function AdminClient({
             .finally(() => setIsLoadingLogs(false));
     };
 
+    const loadAdminUsers = () => {
+        if (usersLoadedRef.current) return Promise.resolve(true);
+        if (usersRequestRef.current) return usersRequestRef.current;
+
+        setIsLoadingUsers(true);
+        setUsersLoadFailed(false);
+
+        const request = getAdminUsersState()
+            .then((state) => {
+                setUsers((currentUsers) => {
+                    const activeMonitorsByUser = new Map(
+                        currentUsers.map((user) => [
+                            user.id,
+                            user.activeMonitors,
+                        ]),
+                    );
+
+                    return state.users.map((user) => ({
+                        ...user,
+                        activeMonitors: activeMonitorsByUser.get(user.id) ?? [],
+                    }));
+                });
+                setMonitorLimits((current) => ({
+                    ...current,
+                    users: state.userLimits,
+                }));
+                usersLoadedRef.current = true;
+                setUsersLoaded(true);
+                return true;
+            })
+            .catch(() => {
+                setUsersLoadFailed(true);
+                toast.error("Failed to load member metrics");
+                return false;
+            })
+            .finally(() => {
+                usersRequestRef.current = null;
+                setIsLoadingUsers(false);
+            });
+
+        usersRequestRef.current = request;
+        return request;
+    };
+
     const loadActiveMonitors = () => {
         if (activeMonitorsLoaded || activeMonitorsRequestRef.current) return;
 
         setIsLoadingActiveMonitors(true);
         setActiveMonitorsLoadFailed(false);
 
-        const request = getAdminActiveMonitors()
+        const request = loadAdminUsers()
+            .then((loaded) =>
+                loaded ? getAdminActiveMonitors() : Promise.resolve(null),
+            )
             .then((monitors) => {
+                if (!monitors) {
+                    setActiveMonitorsLoadFailed(true);
+                    return;
+                }
                 const monitorsByUser = new Map<string, ActiveMonitor[]>();
 
                 for (const { userId, ...monitor } of monitors) {
@@ -581,6 +638,7 @@ export function AdminClient({
         const params = new URLSearchParams(window.location.search);
         const tab = normalizeTab(params.get("tab"));
         setActiveTab(tab);
+        void loadAdminUsers();
         if (tab === "logs") loadAdminLogs();
         if (tab === "monitors") loadActiveMonitors();
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -592,6 +650,9 @@ export function AdminClient({
         url.searchParams.set("tab", tab);
         window.history.replaceState(null, "", url.toString());
 
+        if (["overview", "monitors", "users", "roles"].includes(tab)) {
+            void loadAdminUsers();
+        }
         if (tab === "logs") loadAdminLogs();
         if (tab === "monitors") loadActiveMonitors();
     };
@@ -1281,9 +1342,22 @@ export function AdminClient({
                                 : "Operational"}
                         </span>
                     </div>
-                    <span className="text-muted-foreground">
-                        {runningMonitors} running monitors
-                    </span>
+                    {usersLoadFailed ? (
+                        <button
+                            type="button"
+                            className="text-amber-600 hover:underline dark:text-amber-400"
+                            onClick={() => void loadAdminUsers()}
+                            disabled={isLoadingUsers}
+                        >
+                            Retry member metrics
+                        </button>
+                    ) : (
+                        <span className="text-muted-foreground">
+                            {usersLoaded
+                                ? `${runningMonitors} running monitors`
+                                : "Loading member metrics..."}
+                        </span>
+                    )}
                     <span className="text-muted-foreground">
                         {readyFreeProxyRegionCount} proxy regions ready
                     </span>

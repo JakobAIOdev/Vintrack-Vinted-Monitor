@@ -55,6 +55,8 @@ model User {
   vinted_session         vinted_sessions?
   audit_events           audit_events[]
   alert_events           alert_events[]
+
+  @@index([name])
 }
 
 model monitor_limits {
@@ -113,6 +115,9 @@ model monitors {
   monitor_events  monitor_events[]
   alert_events    alert_events[]
   item_detections monitor_item_detections[]
+
+  @@index([userId])
+  @@index([status, userId])
 }
 
 model free_proxies {
@@ -352,6 +357,8 @@ model proxy_groups {
   bandwidth_reset_at    DateTime?  @db.Timestamp(6)
   created_at            DateTime?  @default(now()) @db.Timestamp(6)
   monitors              monitors[]
+
+  @@index([userId])
 }
 
 model vinted_sessions {

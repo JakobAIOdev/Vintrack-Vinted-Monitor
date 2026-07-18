@@ -3,7 +3,7 @@
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { Prisma } from "@prisma/client";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, unstable_cache } from "next/cache";
 import { monitorStatusTelegramText, sendTelegramMessage } from "@/lib/telegram";
 import { getTelegramConnection } from "@/lib/telegram-connection";
 import {
@@ -11,6 +11,7 @@ import {
     normalizeMonitorLimitInput,
     roleLimitScope,
     setMonitorLimit,
+    USER_MONITOR_LIMIT_PREFIX,
     userLimitScope,
 } from "@/lib/monitor-limits";
 
@@ -148,6 +149,147 @@ type ParsedProxy = {
     host: string;
     port: number;
 };
+
+type AdminMetricCountRow = {
+    userId: string;
+    running_monitors?: bigint;
+    paused_monitors?: bigint;
+    new_items_24h?: bigint;
+    checks_24h?: bigint;
+    successful_checks_24h?: bigint;
+    failed_checks_24h?: bigint;
+    avg_duration_ms_24h?: number | null;
+    last_check_at?: Date | null;
+};
+
+type AdminLatestErrorRow = {
+    userId: string;
+    latest_error_24h: string | null;
+};
+
+type AdminUserMetrics = {
+    runningMonitors: number;
+    pausedMonitors: number;
+    totalItems: number;
+    newItems24h: number;
+    checks24h: number;
+    successfulChecks24h: number;
+    failedChecks24h: number;
+    successRate24h: number | null;
+    avgDurationMs24h: number | null;
+    lastCheckAt: Date | null;
+    latestError24h: string | null;
+};
+
+type CachedAdminUserMetrics = Omit<AdminUserMetrics, "lastCheckAt"> & {
+    lastCheckAt: string | null;
+};
+
+function emptyAdminUserMetrics(): AdminUserMetrics {
+    return {
+        runningMonitors: 0,
+        pausedMonitors: 0,
+        totalItems: 0,
+        newItems24h: 0,
+        checks24h: 0,
+        successfulChecks24h: 0,
+        failedChecks24h: 0,
+        successRate24h: null,
+        avgDurationMs24h: null,
+        lastCheckAt: null,
+        latestError24h: null,
+    };
+}
+
+async function loadAdminUserMetrics() {
+    const metrics = new Map<string, AdminUserMetrics>();
+    const [monitorRows, runRows, errorRows] = await Promise.all([
+        db.$queryRaw<AdminMetricCountRow[]>`
+            SELECT
+                "userId",
+                COUNT(*) FILTER (WHERE status = 'active')::bigint AS running_monitors,
+                COUNT(*) FILTER (WHERE status IS DISTINCT FROM 'active')::bigint AS paused_monitors
+            FROM monitors
+            GROUP BY "userId"
+        `,
+        db.$queryRaw<AdminMetricCountRow[]>`
+            SELECT
+                m."userId",
+                COUNT(r.id)::bigint AS checks_24h,
+                COUNT(r.id) FILTER (WHERE r.status = 'success')::bigint AS successful_checks_24h,
+                COUNT(r.id) FILTER (WHERE r.status = 'failed')::bigint AS failed_checks_24h,
+                COALESCE(SUM(r.new_item_count), 0)::bigint AS new_items_24h,
+                AVG(r.duration_ms)::float AS avg_duration_ms_24h,
+                MAX(r.checked_at) AS last_check_at
+            FROM monitors m
+            LEFT JOIN monitor_runs r
+                ON r.monitor_id = m.id
+                AND r.checked_at >= NOW() - INTERVAL '24 hours'
+                AND r.fetch_source = 'canonical'
+            GROUP BY m."userId"
+        `,
+        db.$queryRaw<AdminLatestErrorRow[]>`
+            SELECT DISTINCT ON (m."userId")
+                m."userId",
+                r.error_message AS latest_error_24h
+            FROM monitors m
+            INNER JOIN monitor_runs r ON r.monitor_id = m.id
+            WHERE r.checked_at >= NOW() - INTERVAL '24 hours'
+              AND r.fetch_source = 'canonical'
+              AND r.error_message IS NOT NULL
+            ORDER BY m."userId", r.checked_at DESC
+        `,
+    ]);
+
+    for (const row of monitorRows) {
+        const current = metrics.get(row.userId) ?? emptyAdminUserMetrics();
+        current.runningMonitors = Number(row.running_monitors ?? 0);
+        current.pausedMonitors = Number(row.paused_monitors ?? 0);
+        metrics.set(row.userId, current);
+    }
+
+    for (const row of runRows) {
+        const current = metrics.get(row.userId) ?? emptyAdminUserMetrics();
+        const checks = Number(row.checks_24h ?? 0);
+        const successful = Number(row.successful_checks_24h ?? 0);
+        current.checks24h = checks;
+        current.successfulChecks24h = successful;
+        current.failedChecks24h = Number(row.failed_checks_24h ?? 0);
+        current.newItems24h = Number(row.new_items_24h ?? 0);
+        current.successRate24h =
+            checks > 0 ? Math.round((successful / checks) * 100) : null;
+        current.avgDurationMs24h =
+            row.avg_duration_ms_24h === null ||
+            row.avg_duration_ms_24h === undefined
+                ? null
+                : Math.round(row.avg_duration_ms_24h);
+        current.lastCheckAt = row.last_check_at ?? null;
+        metrics.set(row.userId, current);
+    }
+
+    for (const row of errorRows) {
+        const current = metrics.get(row.userId) ?? emptyAdminUserMetrics();
+        current.latestError24h = row.latest_error_24h;
+        metrics.set(row.userId, current);
+    }
+
+    return Array.from(metrics.entries()).map(
+        ([userId, values]) =>
+            [
+                userId,
+                {
+                    ...values,
+                    lastCheckAt: values.lastCheckAt?.toISOString() ?? null,
+                },
+            ] as [string, CachedAdminUserMetrics],
+    );
+}
+
+const getCachedAdminUserMetrics = unstable_cache(
+    loadAdminUserMetrics,
+    ["admin-user-metrics-v4"],
+    { revalidate: 30 },
+);
 
 function canonicalProxyUrl(value: string | URL) {
     let url: URL;
@@ -962,6 +1104,60 @@ export async function getUsers() {
     });
 
     return users;
+}
+
+export async function getAdminUsersState() {
+    await requireAdmin();
+
+    const [users, metricEntries, userLimitRows] = await Promise.all([
+        db.user.findMany({
+            orderBy: { name: "asc" },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                image: true,
+                role: true,
+                _count: {
+                    select: {
+                        monitors: true,
+                        proxy_groups: true,
+                    },
+                },
+            },
+        }),
+        getCachedAdminUserMetrics(),
+        db.monitor_limits.findMany({
+            where: { scope: { startsWith: USER_MONITOR_LIMIT_PREFIX } },
+            select: { scope: true, active_limit: true },
+        }),
+    ]);
+    const metricsByUser = new Map<string, AdminUserMetrics>(
+        metricEntries.map(([userId, metrics]) => [
+            userId,
+            {
+                ...metrics,
+                lastCheckAt: metrics.lastCheckAt
+                    ? new Date(metrics.lastCheckAt)
+                    : null,
+            },
+        ]),
+    );
+
+    return {
+        users: users.map((user) => ({
+            ...user,
+            monitors: [],
+            activeMonitors: [],
+            metrics: metricsByUser.get(user.id) ?? emptyAdminUserMetrics(),
+        })),
+        userLimits: Object.fromEntries(
+            userLimitRows.map((row) => [
+                row.scope.slice(USER_MONITOR_LIMIT_PREFIX.length),
+                row.active_limit,
+            ]),
+        ),
+    };
 }
 
 export async function getAdminActiveMonitors() {

@@ -275,13 +275,15 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 	}
 	for _, region := range regions {
 		batchSize := perRegionBatch
+		bootstrap := false
 		activeCount, err := store.CountActiveFreeProxies(region)
 		if err != nil {
 			log.Printf("free proxy active count failed for %s: %v", region, err)
 		} else if activeCount < targetActive {
 			batchSize = bootstrapBatch
+			bootstrap = true
 		}
-		regionProxies, err := store.GetFreeProxiesDueForCheck([]string{region}, batchSize)
+		regionProxies, err := store.GetFreeProxiesDueForCheck([]string{region}, batchSize, bootstrap)
 		if err != nil {
 			log.Printf("free proxy health load failed for %s: %v", region, err)
 			continue

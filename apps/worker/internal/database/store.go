@@ -578,7 +578,7 @@ func (s *Store) EnsureFreeProxyHealthRows(regions []string, limit int) error {
 	return nil
 }
 
-func (s *Store) GetFreeProxiesDueForCheck(regions []string, limit int) ([]FreeProxyCandidate, error) {
+func (s *Store) GetFreeProxiesDueForCheck(regions []string, limit int, bootstrap bool) ([]FreeProxyCandidate, error) {
 	if limit <= 0 {
 		limit = 200
 	}
@@ -595,15 +595,16 @@ func (s *Store) GetFreeProxiesDueForCheck(regions []string, limit int) ([]FreePr
 		  AND (fph.next_check_at IS NULL OR fph.next_check_at <= NOW())
 		ORDER BY
 		  CASE
-			WHEN fph.status = 'pending' AND fph.success_streak > 0 THEN 0
-			WHEN fph.status = 'cooldown' THEN 1
-			WHEN fph.status = 'active' THEN 2
-			ELSE 3
+			WHEN $3 AND fph.status = 'pending' AND fph.success_streak = 0 AND fph.last_checked_at IS NULL THEN 0
+			WHEN fph.status = 'pending' AND fph.success_streak > 0 THEN 1
+			WHEN fph.status = 'cooldown' THEN 2
+			WHEN fph.status = 'active' THEN 3
+			ELSE 4
 		  END,
 		  fph.success_streak DESC,
 		  fph.last_checked_at ASC NULLS FIRST,
 		  fph.score DESC
-		LIMIT $2`, pq.Array(regions), limit)
+		LIMIT $2`, pq.Array(regions), limit, bootstrap)
 	if err != nil {
 		return nil, err
 	}
@@ -627,10 +628,7 @@ func (s *Store) RecordFreeProxySuccess(proxyURL string, region string, latencyMs
 	if _, err := s.db.Exec(`
 		WITH updated_health AS (
 		UPDATE free_proxy_health fph
-		SET status = CASE
-				WHEN fph.status = 'active' OR fph.success_streak + 1 >= 2 THEN 'active'
-				ELSE 'pending'
-			END,
+		SET status = 'active',
 			success_streak = fph.success_streak + 1,
 			failure_streak = 0,
 			success_count = fph.success_count + 1,
@@ -639,10 +637,7 @@ func (s *Store) RecordFreeProxySuccess(proxyURL string, region string, latencyMs
 			last_checked_at = NOW(),
 			last_success_at = NOW(),
 			last_error = NULL,
-			next_check_at = CASE
-				WHEN fph.status = 'active' OR fph.success_streak + 1 >= 2 THEN NOW() + INTERVAL '10 minutes'
-				ELSE NOW() + INTERVAL '30 seconds'
-			END,
+			next_check_at = NOW() + INTERVAL '10 minutes',
 			score = LEAST(100, 50 + ((fph.success_streak + 1) * 10) - GREATEST(0, $3 - 1000) / 100),
 			updated_at = NOW()
 		FROM free_proxies fp
