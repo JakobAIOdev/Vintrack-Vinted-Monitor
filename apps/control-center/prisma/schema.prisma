@@ -41,6 +41,7 @@ model User {
   email                     String?   @unique
   emailVerified             DateTime?
   image                     String?
+  createdAt                 DateTime  @default(now()) @db.Timestamp(6)
   role                      String    @default("free") @db.VarChar(20)
   monitor_onboarding_status String    @default("pending") @db.VarChar(20)
   dedupe_monitor_alerts     Boolean   @default(false)
@@ -57,6 +58,7 @@ model User {
   alert_events           alert_events[]
 
   @@index([name])
+  @@index([createdAt])
 }
 
 model monitor_limits {
@@ -109,9 +111,10 @@ model monitors {
   telegram_active   Boolean   @default(false)
 
   proxy_group_id  Int?
-  proxy_source    String                    @default("server") @db.VarChar(20)
-  proxy_group     proxy_groups?             @relation(fields: [proxy_group_id], references: [id], onDelete: SetNull)
+  proxy_source    String                     @default("server") @db.VarChar(20)
+  proxy_group     proxy_groups?              @relation(fields: [proxy_group_id], references: [id], onDelete: SetNull)
   monitor_runs    monitor_runs[]
+  hourly_stats    monitor_run_hourly_stats[]
   monitor_events  monitor_events[]
   alert_events    alert_events[]
   item_detections monitor_item_detections[]
@@ -188,6 +191,25 @@ model monitor_runs {
   @@index([monitor_id, fetch_source, checked_at])
   @@index([checked_at, monitor_id])
   @@index([status])
+}
+
+model monitor_run_hourly_stats {
+  monitor_id             Int
+  monitor                monitors  @relation(fields: [monitor_id], references: [id], onDelete: Cascade)
+  bucket_hour            DateTime  @db.Timestamp(6)
+  fetch_source           String    @default("canonical") @db.VarChar(20)
+  check_count            BigInt    @default(0)
+  successful_check_count BigInt    @default(0)
+  failed_check_count     BigInt    @default(0)
+  new_item_count         BigInt    @default(0)
+  duration_total_ms      BigInt    @default(0)
+  duration_sample_count  BigInt    @default(0)
+  last_checked_at        DateTime  @db.Timestamp(6)
+  latest_error           String?   @db.Text
+  latest_error_at        DateTime? @db.Timestamp(6)
+
+  @@id([monitor_id, fetch_source, bucket_hour])
+  @@index([fetch_source, bucket_hour])
 }
 
 model monitor_item_detections {
