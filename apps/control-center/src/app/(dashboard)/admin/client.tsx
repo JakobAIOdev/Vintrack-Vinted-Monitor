@@ -51,6 +51,7 @@ import {
     setUserRole,
     setUserActiveMonitorLimit,
     getAdminActiveMonitors,
+    getAdminUserMetricsState,
     getAdminUsersState,
     getAdminLogs,
     getFreeProxyAdminState,
@@ -416,6 +417,11 @@ export function AdminClient({
     const [usersLoadFailed, setUsersLoadFailed] = useState(false);
     const usersLoadedRef = useRef(initialUsers.length > 0);
     const usersRequestRef = useRef<Promise<boolean> | null>(null);
+    const [userMetricsLoaded, setUserMetricsLoaded] = useState(false);
+    const [isLoadingUserMetrics, setIsLoadingUserMetrics] = useState(false);
+    const [userMetricsLoadFailed, setUserMetricsLoadFailed] = useState(false);
+    const userMetricsLoadedRef = useRef(false);
+    const userMetricsRequestRef = useRef<Promise<void> | null>(null);
     const [activeMonitorsLoaded, setActiveMonitorsLoaded] = useState(false);
     const [isLoadingActiveMonitors, setIsLoadingActiveMonitors] =
         useState(false);
@@ -547,6 +553,37 @@ export function AdminClient({
             .finally(() => setIsLoadingLogs(false));
     };
 
+    const loadAdminUserMetrics = () => {
+        if (userMetricsLoadedRef.current || userMetricsRequestRef.current) {
+            return;
+        }
+
+        setIsLoadingUserMetrics(true);
+        setUserMetricsLoadFailed(false);
+
+        const request = getAdminUserMetricsState()
+            .then((metricsByUser) => {
+                setUsers((currentUsers) =>
+                    currentUsers.map((user) => ({
+                        ...user,
+                        metrics: metricsByUser[user.id] ?? user.metrics,
+                    })),
+                );
+                userMetricsLoadedRef.current = true;
+                setUserMetricsLoaded(true);
+            })
+            .catch(() => {
+                setUserMetricsLoadFailed(true);
+                toast.error("Failed to load member metrics");
+            })
+            .finally(() => {
+                userMetricsRequestRef.current = null;
+                setIsLoadingUserMetrics(false);
+            });
+
+        userMetricsRequestRef.current = request;
+    };
+
     const loadAdminUsers = () => {
         if (usersLoadedRef.current) return Promise.resolve(true);
         if (usersRequestRef.current) return usersRequestRef.current;
@@ -575,11 +612,12 @@ export function AdminClient({
                 }));
                 usersLoadedRef.current = true;
                 setUsersLoaded(true);
+                loadAdminUserMetrics();
                 return true;
             })
             .catch(() => {
                 setUsersLoadFailed(true);
-                toast.error("Failed to load member metrics");
+                toast.error("Failed to load members");
                 return false;
             })
             .finally(() => {
@@ -1349,13 +1387,24 @@ export function AdminClient({
                             onClick={() => void loadAdminUsers()}
                             disabled={isLoadingUsers}
                         >
+                            Retry members
+                        </button>
+                    ) : userMetricsLoadFailed ? (
+                        <button
+                            type="button"
+                            className="text-amber-600 hover:underline dark:text-amber-400"
+                            onClick={loadAdminUserMetrics}
+                            disabled={isLoadingUserMetrics}
+                        >
                             Retry member metrics
                         </button>
                     ) : (
                         <span className="text-muted-foreground">
-                            {usersLoaded
-                                ? `${runningMonitors} running monitors`
-                                : "Loading member metrics..."}
+                            {!usersLoaded
+                                ? "Loading members..."
+                                : userMetricsLoaded
+                                  ? `${runningMonitors} running monitors`
+                                  : "Loading member metrics..."}
                         </span>
                     )}
                     <span className="text-muted-foreground">

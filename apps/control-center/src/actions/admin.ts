@@ -211,7 +211,10 @@ async function loadAdminUserMetrics() {
                 COUNT(*) FILTER (WHERE status IS DISTINCT FROM 'active')::bigint AS paused_monitors
             FROM monitors
             GROUP BY "userId"
-        `,
+        `.catch((error) => {
+            console.error("[admin] failed to load monitor totals", error);
+            return [];
+        }),
         db.$queryRaw<AdminMetricCountRow[]>`
             SELECT
                 m."userId",
@@ -227,7 +230,10 @@ async function loadAdminUserMetrics() {
                 AND r.checked_at >= NOW() - INTERVAL '24 hours'
                 AND r.fetch_source = 'canonical'
             GROUP BY m."userId"
-        `,
+        `.catch((error) => {
+            console.error("[admin] failed to load 24h run metrics", error);
+            return [];
+        }),
         db.$queryRaw<AdminLatestErrorRow[]>`
             SELECT DISTINCT ON (m."userId")
                 m."userId",
@@ -238,7 +244,10 @@ async function loadAdminUserMetrics() {
               AND r.fetch_source = 'canonical'
               AND r.error_message IS NOT NULL
             ORDER BY m."userId", r.checked_at DESC
-        `,
+        `.catch((error) => {
+            console.error("[admin] failed to load latest monitor errors", error);
+            return [];
+        }),
     ]);
 
     for (const row of monitorRows) {
@@ -1109,7 +1118,7 @@ export async function getUsers() {
 export async function getAdminUsersState() {
     await requireAdmin();
 
-    const [users, metricEntries, userLimitRows] = await Promise.all([
+    const [users, userLimitRows] = await Promise.all([
         db.user.findMany({
             orderBy: { name: "asc" },
             select: {
@@ -1126,13 +1135,34 @@ export async function getAdminUsersState() {
                 },
             },
         }),
-        getCachedAdminUserMetrics(),
         db.monitor_limits.findMany({
             where: { scope: { startsWith: USER_MONITOR_LIMIT_PREFIX } },
             select: { scope: true, active_limit: true },
         }),
     ]);
-    const metricsByUser = new Map<string, AdminUserMetrics>(
+
+    return {
+        users: users.map((user) => ({
+            ...user,
+            monitors: [],
+            activeMonitors: [],
+            metrics: emptyAdminUserMetrics(),
+        })),
+        userLimits: Object.fromEntries(
+            userLimitRows.map((row) => [
+                row.scope.slice(USER_MONITOR_LIMIT_PREFIX.length),
+                row.active_limit,
+            ]),
+        ),
+    };
+}
+
+export async function getAdminUserMetricsState() {
+    await requireAdmin();
+
+    const metricEntries = await getCachedAdminUserMetrics();
+
+    return Object.fromEntries(
         metricEntries.map(([userId, metrics]) => [
             userId,
             {
@@ -1143,21 +1173,6 @@ export async function getAdminUsersState() {
             },
         ]),
     );
-
-    return {
-        users: users.map((user) => ({
-            ...user,
-            monitors: [],
-            activeMonitors: [],
-            metrics: metricsByUser.get(user.id) ?? emptyAdminUserMetrics(),
-        })),
-        userLimits: Object.fromEntries(
-            userLimitRows.map((row) => [
-                row.scope.slice(USER_MONITOR_LIMIT_PREFIX.length),
-                row.active_limit,
-            ]),
-        ),
-    };
 }
 
 export async function getAdminActiveMonitors() {
