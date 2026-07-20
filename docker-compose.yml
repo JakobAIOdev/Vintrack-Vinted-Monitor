@@ -1,3 +1,9 @@
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   caddy:
     image: caddy:2-alpine
@@ -15,6 +21,7 @@ services:
       - caddy_config:/config
     depends_on:
       - control-center
+    logging: *default-logging
     restart: unless-stopped
 
   postgres:
@@ -33,6 +40,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    logging: *default-logging
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -47,6 +56,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    logging: *default-logging
+    restart: unless-stopped
 
   control-center:
     build:
@@ -80,6 +91,7 @@ services:
         condition: service_healthy
       control-center-migrate:
         condition: service_completed_successfully
+    logging: *default-logging
     restart: unless-stopped
 
   control-center-migrate:
@@ -94,6 +106,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    logging: *default-logging
     restart: "no"
 
   vinted-service:
@@ -117,6 +130,7 @@ services:
         condition: service_healthy
       control-center-migrate:
         condition: service_completed_successfully
+    logging: *default-logging
     restart: unless-stopped
 
   worker:
@@ -164,6 +178,7 @@ services:
         condition: service_healthy
       control-center-migrate:
         condition: service_completed_successfully
+    logging: *default-logging
     restart: unless-stopped
 
   id-scanner:
@@ -199,6 +214,7 @@ services:
         condition: service_healthy
       control-center-migrate:
         condition: service_completed_successfully
+    logging: *default-logging
     restart: unless-stopped
 
   proxy-maintainer:
@@ -213,6 +229,8 @@ services:
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=
       - PROXY_FILE=/app/proxies.txt
+      - MONITOR_RUN_RETENTION_HOURS=${MONITOR_RUN_RETENTION_HOURS:-24}
+      - MONITOR_RUN_STATS_RETENTION_DAYS=${MONITOR_RUN_STATS_RETENTION_DAYS:-90}
       - DETECTION_RETENTION_DAYS=${DETECTION_RETENTION_DAYS:-14}
       - PREINDEX_PROBE_RETENTION_HOURS=${PREINDEX_PROBE_RETENTION_HOURS:-48}
       - PREINDEX_SAMPLE_RETENTION_DAYS=${PREINDEX_SAMPLE_RETENTION_DAYS:-14}
@@ -226,6 +244,7 @@ services:
         condition: service_healthy
       control-center-migrate:
         condition: service_completed_successfully
+    logging: *default-logging
     restart: unless-stopped
 
 volumes:

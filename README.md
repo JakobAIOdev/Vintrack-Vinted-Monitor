@@ -471,6 +471,10 @@ DASHBOARD_URL=https://your-domain.com
 TELEGRAM_BOT_TOKEN=your-telegram-bot-token
 TELEGRAM_BOT_USERNAME=your_bot_username_without_at
 TELEGRAM_WEBHOOK_SECRET=your-random-webhook-secret
+
+# Optional — bounded operational telemetry retention
+MONITOR_RUN_RETENTION_HOURS=24
+MONITOR_RUN_STATS_RETENTION_DAYS=90
 ```
 
 ### Telegram Setup for Self-Hosted Instances

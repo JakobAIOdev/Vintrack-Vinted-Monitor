@@ -41,6 +41,13 @@ type telemetryEvent struct {
 	occurredAt time.Time
 }
 
+const (
+	defaultMonitorRunRetentionHours       = 24
+	defaultMonitorRunStatsRetentionDays   = 90
+	monitorRunPruneBatchSize              = 10_000
+	monitorRunPruneMaximumBatchesPerCycle = 100
+)
+
 type proxyGroupBandwidthDelta struct {
 	txBytes int64
 	rxBytes int64
@@ -1345,6 +1352,77 @@ func (s *Store) PruneDetectionTelemetry(retentionDays int) {
 		retentionDays,
 	); err != nil {
 		log.Printf("detection telemetry cleanup failed: %v", err)
+	}
+}
+
+func (s *Store) PruneMonitorRuns(retentionHours int) {
+	if retentionHours < 1 {
+		retentionHours = defaultMonitorRunRetentionHours
+	}
+
+	var totalDeleted int64
+	for batch := 0; batch < monitorRunPruneMaximumBatchesPerCycle; batch++ {
+		result, err := s.db.Exec(`
+			WITH expired AS (
+				SELECT id
+				FROM monitor_runs
+				WHERE checked_at < NOW() - ($1::text || ' hours')::interval
+				ORDER BY checked_at
+				LIMIT $2
+			)
+			DELETE FROM monitor_runs AS run
+			USING expired
+			WHERE run.id = expired.id`,
+			retentionHours,
+			monitorRunPruneBatchSize,
+		)
+		if err != nil {
+			log.Printf("monitor run cleanup failed after deleting %d rows: %v", totalDeleted, err)
+			return
+		}
+
+		deleted, err := result.RowsAffected()
+		if err != nil {
+			log.Printf("monitor run cleanup could not read affected rows: %v", err)
+			return
+		}
+		totalDeleted += deleted
+		if deleted < monitorRunPruneBatchSize {
+			if totalDeleted > 0 {
+				log.Printf("monitor run cleanup deleted %d rows older than %d hours", totalDeleted, retentionHours)
+			}
+			return
+		}
+	}
+
+	log.Printf(
+		"monitor run cleanup deleted %d rows older than %d hours; additional expired rows will be removed next cycle",
+		totalDeleted,
+		retentionHours,
+	)
+}
+
+func (s *Store) PruneMonitorRunStats(retentionDays int) {
+	if retentionDays < 1 {
+		retentionDays = defaultMonitorRunStatsRetentionDays
+	}
+
+	result, err := s.db.Exec(
+		`DELETE FROM monitor_run_hourly_stats WHERE bucket_hour < NOW() - ($1::text || ' days')::interval`,
+		retentionDays,
+	)
+	if err != nil {
+		log.Printf("monitor run stats cleanup failed: %v", err)
+		return
+	}
+
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		log.Printf("monitor run stats cleanup could not read affected rows: %v", err)
+		return
+	}
+	if deleted > 0 {
+		log.Printf("monitor run stats cleanup deleted %d rows older than %d days", deleted, retentionDays)
 	}
 }
 

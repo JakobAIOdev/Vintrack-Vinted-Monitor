@@ -24,7 +24,10 @@ import (
 	"github.com/joho/godotenv"
 )
 
-var freeProxyCheckRunning atomic.Bool
+var (
+	freeProxyCheckRunning   atomic.Bool
+	telemetryCleanupRunning atomic.Bool
+)
 
 const proxyScrapeFallbackURL = "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text"
 
@@ -130,21 +133,33 @@ func runMonitorWorker(ctx context.Context, cancel context.CancelFunc, sigChan <-
 }
 
 func runProxyMaintainer(ctx context.Context, cancel context.CancelFunc, sigChan <-chan os.Signal, store *database.Store) {
-	go func() {
-		importFreeProxies(ctx, store)
-		checkFreeProxies(ctx, store)
+	pruneTelemetry := func() {
+		if !telemetryCleanupRunning.CompareAndSwap(false, true) {
+			log.Println("Telemetry cleanup is still running; skipping overlapping cycle")
+			return
+		}
+		defer telemetryCleanupRunning.Store(false)
+
+		store.PruneMonitorRuns(settingInt(store, "MONITOR_RUN_RETENTION_HOURS", 24))
+		store.PruneMonitorRunStats(settingInt(store, "MONITOR_RUN_STATS_RETENTION_DAYS", 90))
 		store.PruneDetectionTelemetry(settingInt(store, "DETECTION_RETENTION_DAYS", 14))
 		store.PrunePreindexTelemetry(
 			settingInt(store, "PREINDEX_PROBE_RETENTION_HOURS", 48),
 			settingInt(store, "PREINDEX_SAMPLE_RETENTION_DAYS", 14),
 		)
+	}
+
+	go func() {
+		pruneTelemetry()
+		importFreeProxies(ctx, store)
+		checkFreeProxies(ctx, store)
 	}()
 
 	healthTicker := time.NewTicker(15 * time.Second)
 	defer healthTicker.Stop()
 	importTicker := time.NewTicker(5 * time.Minute)
 	defer importTicker.Stop()
-	cleanupTicker := time.NewTicker(24 * time.Hour)
+	cleanupTicker := time.NewTicker(time.Hour)
 	defer cleanupTicker.Stop()
 
 	for {
@@ -158,13 +173,7 @@ func runProxyMaintainer(ctx context.Context, cancel context.CancelFunc, sigChan 
 		case <-importTicker.C:
 			go importFreeProxies(ctx, store)
 		case <-cleanupTicker.C:
-			go func() {
-				store.PruneDetectionTelemetry(settingInt(store, "DETECTION_RETENTION_DAYS", 14))
-				store.PrunePreindexTelemetry(
-					settingInt(store, "PREINDEX_PROBE_RETENTION_HOURS", 48),
-					settingInt(store, "PREINDEX_SAMPLE_RETENTION_DAYS", 14),
-				)
-			}()
+			go pruneTelemetry()
 		}
 	}
 }
