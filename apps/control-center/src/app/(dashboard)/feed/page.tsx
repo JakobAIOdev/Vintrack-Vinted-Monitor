@@ -37,7 +37,7 @@ export default function FeedPage() {
         const fetchFeed = async () => {
             try {
                 const [feedRes, summaryRes] = await Promise.all([
-                    fetch("/api/feed"),
+                    fetch(`/api/feed?limit=${itemCap}`),
                     fetch("/api/monitors/summary"),
                 ]);
 

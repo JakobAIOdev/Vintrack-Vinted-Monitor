@@ -6,16 +6,20 @@ import {
     getBannedSellerIds,
     visibleSellerWhere,
 } from "@/lib/seller-bans";
+import { normalizeLiveFeedItemCap } from "@/lib/live-feed";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
     const session = await auth();
     if (!session?.user?.id) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     try {
+        const itemCap = normalizeLiveFeedItemCap(
+            new URL(request.url).searchParams.get("limit"),
+        );
         const userMonitors = await db.monitors.findMany({
             where: { userId: session.user.id },
             select: { id: true },
@@ -35,7 +39,7 @@ export async function GET() {
                 ...visibleSellerWhere(bannedSellerIds),
             },
             orderBy: { found_at: "desc" },
-            take: 100,
+            take: itemCap,
             select: {
                 id: true,
                 monitor_id: true,
