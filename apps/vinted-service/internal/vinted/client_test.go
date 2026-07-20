@@ -97,6 +97,7 @@ func TestLocale(t *testing.T) {
 		{"www.vinted.nl", "nl-NL"},
 		{"www.vinted.pl", "pl-PL"},
 		{"www.vinted.co.uk", "en-GB"},
+		{"www.vinted.ie", "en-IE"},
 		{"www.vinted.com", "en-US"},
 		{"www.vinted.xyz", "de-DE"}, // fallback
 	}
@@ -109,6 +110,32 @@ func TestLocale(t *testing.T) {
 				t.Errorf("locale() for %q = %q, want %q", tt.domain, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestPortal(t *testing.T) {
+	tests := []struct {
+		domain   string
+		expected string
+	}{
+		{"www.vinted.de", "de"},
+		{"www.vinted.co.uk", "uk"},
+		{"www.vinted.ie", "ie"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.domain, func(t *testing.T) {
+			c := &Client{session: &session.VintedSession{Domain: tt.domain}}
+			if got := c.portal(); got != tt.expected {
+				t.Errorf("portal() for %q = %q, want %q", tt.domain, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestDomainForPortal(t *testing.T) {
+	if got := domainForPortal("ie"); got != "www.vinted.ie" {
+		t.Errorf("domainForPortal(\"ie\") = %q, want %q", got, "www.vinted.ie")
 	}
 }
 
