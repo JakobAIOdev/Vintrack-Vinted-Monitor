@@ -139,6 +139,8 @@ func (c *Client) portal() string {
 		return "pl"
 	case strings.Contains(c.session.Domain, "vinted.co.uk"):
 		return "uk"
+	case strings.Contains(c.session.Domain, "vinted.ie"):
+		return "ie"
 	case strings.Contains(c.session.Domain, "vinted.com"):
 		return "com"
 	default:
@@ -168,6 +170,8 @@ func (c *Client) locale() string {
 		return "pl-PL"
 	case strings.Contains(c.session.Domain, "vinted.co.uk"):
 		return "en-GB"
+	case strings.Contains(c.session.Domain, "vinted.ie"):
+		return "en-IE"
 	case strings.Contains(c.session.Domain, "vinted.com"):
 		return "en-US"
 	default:
@@ -2506,6 +2510,8 @@ func domainForPortal(portal string) string {
 		return "www.vinted.pl"
 	case "uk":
 		return "www.vinted.co.uk"
+	case "ie":
+		return "www.vinted.ie"
 	case "com":
 		return "www.vinted.com"
 	default:

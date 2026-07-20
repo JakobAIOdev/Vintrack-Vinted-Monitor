@@ -12,6 +12,7 @@ func TestNormalizeVintedDomain(t *testing.T) {
 		{input: "www.vinted.es", want: "www.vinted.es"},
 		{input: "https://vinted.it/catalog", want: "www.vinted.it"},
 		{input: "https://www.vinted.co.uk/member/1", want: "www.vinted.co.uk"},
+		{input: "https://www.vinted.ie/member/1", want: "www.vinted.ie"},
 	}
 
 	for _, tt := range tests {

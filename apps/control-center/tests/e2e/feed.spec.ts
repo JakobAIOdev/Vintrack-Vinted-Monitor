@@ -42,6 +42,24 @@ test.describe("dashboard feed", () => {
         ).toBeVisible();
     });
 
+    test("requests the selected item limit", async ({ page }) => {
+        await page.goto("/feed");
+
+        const feedResponse = page.waitForResponse((response) => {
+            const url = new URL(response.url());
+            return (
+                url.pathname === "/api/feed" &&
+                url.searchParams.get("limit") === "200"
+            );
+        });
+
+        await page
+            .getByRole("combobox", { name: "Live feed item limit" })
+            .selectOption("200");
+
+        expect((await feedResponse).ok()).toBe(true);
+    });
+
     test("opens and closes the item image preview", async ({ page }) => {
         await page.goto("/feed");
 

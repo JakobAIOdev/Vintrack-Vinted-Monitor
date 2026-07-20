@@ -43,6 +43,7 @@ export const REGIONS: Region[] = [
     { code: "at", label: "Austria", flag: "🇦🇹", domain: "vinted.at" },
     { code: "lu", label: "Luxembourg", flag: "🇱🇺", domain: "vinted.lu" },
     { code: "uk", label: "United Kingdom", flag: "🇬🇧", domain: "vinted.co.uk" },
+    { code: "ie", label: "Ireland", flag: "🇮🇪", domain: "vinted.ie" },
     { code: "cz", label: "Czech Republic", flag: "🇨🇿", domain: "vinted.cz" },
     { code: "sk", label: "Slovakia", flag: "🇸🇰", domain: "vinted.sk" },
     { code: "lt", label: "Lithuania", flag: "🇱🇹", domain: "vinted.lt" },

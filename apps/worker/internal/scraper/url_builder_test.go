@@ -176,6 +176,7 @@ func TestBuildVintedURL_Regions(t *testing.T) {
 		"de": "www.vinted.de",
 		"fr": "www.vinted.fr",
 		"uk": "www.vinted.co.uk",
+		"ie": "www.vinted.ie",
 		"it": "www.vinted.it",
 		"nl": "www.vinted.nl",
 	}

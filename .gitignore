@@ -64,9 +64,6 @@ test-results/
 apps/control-center/playwright-report/
 apps/control-center/test-results/
 
-edge-scanner/
-id-scanner/
-ios-details/
-ios-monitor/
-vinted-dataset-service/
-vinted-uploader/
+dev/
+logs/
+promo/

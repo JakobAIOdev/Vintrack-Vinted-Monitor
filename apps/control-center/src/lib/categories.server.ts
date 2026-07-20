@@ -12,6 +12,10 @@ import {
 
 const regionCache = new Map<string, Promise<CategoryNode[]>>();
 
+const DATASET_FALLBACK_REGION_BY_REGION: Record<string, string> = {
+    ie: "uk",
+};
+
 async function pathExists(targetPath: string) {
     try {
         await fs.access(targetPath);
@@ -33,8 +37,13 @@ async function getDatasetOutputDir() {
 async function readRegionTree(region: string): Promise<RawCategoryTree> {
     const outputDir = await getDatasetOutputDir();
     const normalizedRegion = region.toLowerCase();
+    const regionalFallback =
+        DATASET_FALLBACK_REGION_BY_REGION[normalizedRegion];
     const candidates = [
         path.join(outputDir, normalizedRegion, "groups.json"),
+        ...(regionalFallback
+            ? [path.join(outputDir, regionalFallback, "groups.json")]
+            : []),
         path.join(outputDir, "de", "groups.json"),
     ];
 
