@@ -41,7 +41,7 @@ model User {
   email                     String?   @unique
   emailVerified             DateTime?
   image                     String?
-  createdAt                 DateTime  @default(now()) @db.Timestamp(6)
+  createdAt                 DateTime? @default(now()) @db.Timestamp(6)
   role                      String    @default("free") @db.VarChar(20)
   monitor_onboarding_status String    @default("pending") @db.VarChar(20)
   dedupe_monitor_alerts     Boolean   @default(false)
