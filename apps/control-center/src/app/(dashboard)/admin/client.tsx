@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import {
     Activity,
     AlertTriangle,
+    ArrowDownRight,
+    ArrowUpRight,
     BarChart3,
     CheckCircle2,
     ChevronDown,
@@ -13,6 +15,7 @@ import {
     Crown,
     User,
     Monitor,
+    Minus,
     Globe,
     Server,
     Search,
@@ -142,15 +145,16 @@ type MemberInsights = {
     summary: {
         totalMembers: number;
         newMembers7d: number;
+        signupGrowth7d: number | null;
         newMembers30d: number;
         signupGrowth30d: number | null;
+        membersWithoutSignupDate: number;
         usersWithMonitors: number;
         activationRate: number;
     };
     growth: {
         date: string;
         newMembers: number;
-        cumulativeMembers: number;
     }[];
     roles: { role: string; count: number }[];
     demo: {
@@ -166,7 +170,8 @@ type MemberInsights = {
         name: string | null;
         email: string | null;
         role: string;
-        createdAt: string;
+        monitorCount: number;
+        createdAt: string | null;
     }[];
 };
 
@@ -375,6 +380,119 @@ function OverviewMetric({
     );
 }
 
+type MemberMetricTone = "neutral" | "sky" | "violet" | "amber";
+
+function MemberMetricCard({
+    label,
+    value,
+    detail,
+    icon: Icon,
+    tone,
+    change,
+    changeLabel,
+    progress,
+}: {
+    label: string;
+    value: number | string;
+    detail: string;
+    icon: typeof BarChart3;
+    tone: MemberMetricTone;
+    change?: number | null;
+    changeLabel?: string;
+    progress?: number;
+}) {
+    const toneStyles: Record<
+        MemberMetricTone,
+        { icon: string; glow: string; progress: string }
+    > = {
+        neutral: {
+            icon: "bg-muted text-foreground",
+            glow: "bg-foreground/5",
+            progress: "bg-foreground/70",
+        },
+        sky: {
+            icon: "bg-sky-500/10 text-sky-500",
+            glow: "bg-sky-500/10",
+            progress: "bg-sky-500",
+        },
+        violet: {
+            icon: "bg-violet-500/10 text-violet-500",
+            glow: "bg-violet-500/10",
+            progress: "bg-violet-500",
+        },
+        amber: {
+            icon: "bg-amber-500/10 text-amber-500",
+            glow: "bg-amber-500/10",
+            progress: "bg-amber-500",
+        },
+    };
+    const styles = toneStyles[tone];
+    const ChangeIcon =
+        change === null || change === 0
+            ? Minus
+            : change !== undefined && change > 0
+              ? ArrowUpRight
+              : ArrowDownRight;
+    const changeClassName =
+        change === null || change === 0
+            ? "bg-muted text-muted-foreground"
+            : change !== undefined && change > 0
+              ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+              : "bg-rose-500/10 text-rose-600 dark:text-rose-400";
+
+    return (
+        <div className="border-border/60 bg-card relative overflow-hidden rounded-xl border p-5 shadow-sm">
+            <div
+                className={`pointer-events-none absolute -top-12 -right-12 h-28 w-28 rounded-full blur-2xl ${styles.glow}`}
+            />
+            <div className="relative">
+                <div className="flex items-start justify-between gap-3">
+                    <div>
+                        <p className="text-muted-foreground text-[11px] font-semibold tracking-wide uppercase">
+                            {label}
+                        </p>
+                        <p className="mt-2 text-3xl font-semibold tracking-tight tabular-nums">
+                            {value}
+                        </p>
+                    </div>
+                    <span
+                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${styles.icon}`}
+                    >
+                        <Icon className="h-4 w-4" />
+                    </span>
+                </div>
+                <div className="mt-3 flex min-h-5 items-center gap-2">
+                    {change !== undefined ? (
+                        <span
+                            className={`inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums ${changeClassName}`}
+                        >
+                            <ChangeIcon className="h-3 w-3" />
+                            {change === null
+                                ? "No baseline"
+                                : `${change > 0 ? "+" : ""}${change}%`}
+                        </span>
+                    ) : null}
+                    <p className="text-muted-foreground truncate text-[11px]">
+                        {change !== undefined && changeLabel
+                            ? changeLabel
+                            : detail}
+                    </p>
+                </div>
+                {progress !== undefined ? (
+                    <div className="bg-muted mt-3 h-1.5 overflow-hidden rounded-full">
+                        <div
+                            className={`h-full rounded-full ${styles.progress}`}
+                            style={{
+                                width: `${Math.max(progress > 0 ? 3 : 0, Math.min(100, progress))}%`,
+                            }}
+                        />
+                    </div>
+                ) : null}
+            </div>
+        </div>
+    );
+}
+
 function MemberGrowthChart({ data }: { data: MemberInsights["growth"] }) {
     if (data.length === 0) {
         return (
@@ -384,123 +502,174 @@ function MemberGrowthChart({ data }: { data: MemberInsights["growth"] }) {
         );
     }
 
-    const width = 900;
+    const width = 960;
     const height = 250;
-    const left = 18;
-    const right = 18;
-    const lineTop = 18;
-    const lineBottom = 176;
-    const barBottom = 232;
-    const maxCumulative = Math.max(
-        ...data.map((point) => point.cumulativeMembers),
-    );
-    const minCumulative = Math.min(
-        ...data.map((point) => point.cumulativeMembers),
-    );
-    const cumulativeRange = Math.max(1, maxCumulative - minCumulative);
-    const maxNewMembers = Math.max(1, ...data.map((point) => point.newMembers));
+    const left = 42;
+    const right = 12;
+    const top = 12;
+    const bottom = 226;
     const plotWidth = width - left - right;
     const slotWidth = plotWidth / data.length;
-    const pointX = (index: number) =>
-        left + (index / Math.max(1, data.length - 1)) * plotWidth;
+    const rollingAverage = data.map((_, index) => {
+        if (index < 6) return null;
+        const sevenDays = data.slice(index - 6, index + 1);
+        return sevenDays.reduce((sum, point) => sum + point.newMembers, 0) / 7;
+    });
+    const maxDaily = Math.max(1, ...data.map((point) => point.newMembers));
+    const roughStep = maxDaily / 4;
+    const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+    const normalizedStep = roughStep / magnitude;
+    const stepMultiplier =
+        maxDaily <= 4
+            ? 1 / magnitude
+            : normalizedStep < 1.5
+              ? 1
+              : normalizedStep < 3
+                ? 2
+                : normalizedStep < 7
+                  ? 5
+                  : 10;
+    const tickStep = Math.max(1, stepMultiplier * magnitude);
+    const chartMax = Math.ceil(maxDaily / tickStep) * tickStep;
+    const tickValues = Array.from(
+        { length: Math.round(chartMax / tickStep) + 1 },
+        (_, index) => index * tickStep,
+    );
+    const pointX = (index: number) => left + (index + 0.5) * slotWidth;
     const pointY = (value: number) =>
-        lineBottom -
-        ((value - minCumulative) / cumulativeRange) * (lineBottom - lineTop);
-    const linePoints = data
-        .map(
-            (point, index) =>
-                `${pointX(index)},${pointY(point.cumulativeMembers)}`,
+        bottom - (value / chartMax) * (bottom - top);
+    const averagePoints = rollingAverage
+        .map((average, index) =>
+            average === null ? null : `${pointX(index)},${pointY(average)}`,
         )
+        .filter((point): point is string => point !== null)
         .join(" ");
-    const areaPoints = `${left},${lineBottom} ${linePoints} ${width - right},${lineBottom}`;
+    const averageAreaPoints = averagePoints
+        ? `${pointX(6)},${bottom} ${averagePoints} ${pointX(data.length - 1)},${bottom}`
+        : "";
     const dateLabel = (value: string) =>
         new Intl.DateTimeFormat("de-DE", {
             day: "2-digit",
             month: "short",
         }).format(new Date(`${value}T12:00:00Z`));
     const middlePoint = data[Math.floor(data.length / 2)];
+    const totalSignups = data.reduce((sum, point) => sum + point.newMembers, 0);
+    const currentAverage = rollingAverage[data.length - 1];
 
     return (
         <div>
             <div className="mb-4 flex flex-wrap items-center gap-4 text-xs">
                 <div className="flex items-center gap-2">
-                    <span className="bg-primary h-0.5 w-5 rounded-full" />
-                    <span className="text-muted-foreground">Total members</span>
+                    <span className="h-2.5 w-2.5 rounded-sm bg-sky-500/50" />
+                    <span className="text-muted-foreground">Daily signups</span>
                 </div>
                 <div className="flex items-center gap-2">
-                    <span className="bg-primary/30 h-2.5 w-2.5 rounded-sm" />
-                    <span className="text-muted-foreground">
-                        New members per day
-                    </span>
+                    <span className="h-0.5 w-5 rounded-full bg-emerald-500" />
+                    <span className="text-muted-foreground">7-day average</span>
                 </div>
-                <span className="text-muted-foreground ml-auto">
-                    90 day view
+                <span className="text-muted-foreground ml-auto tabular-nums">
+                    {totalSignups} signups in 90 days
+                    {currentAverage !== null
+                        ? ` · ${currentAverage.toFixed(1)}/day now`
+                        : ""}
                 </span>
             </div>
             <svg
                 viewBox={`0 0 ${width} ${height}`}
                 className="h-64 w-full overflow-visible"
                 role="img"
-                aria-label="Member growth over the last 90 days"
+                aria-label="Member signups over the last 90 days"
             >
-                {[0, 1, 2, 3].map((line) => {
-                    const y = lineTop + ((lineBottom - lineTop) / 3) * line;
-                    return (
-                        <line
-                            key={line}
-                            x1={left}
-                            x2={width - right}
-                            y1={y}
-                            y2={y}
-                            className="stroke-border"
-                            strokeDasharray="4 6"
+                <desc>
+                    {`${totalSignups} signups over 90 days. The bars show daily signups and the line shows the seven-day average.`}
+                </desc>
+                <defs>
+                    <linearGradient
+                        id="member-average-area"
+                        x1="0"
+                        y1="0"
+                        x2="0"
+                        y2="1"
+                    >
+                        <stop
+                            offset="0%"
+                            className="text-emerald-500"
+                            stopColor="currentColor"
+                            stopOpacity="0.2"
                         />
+                        <stop
+                            offset="100%"
+                            className="text-emerald-500"
+                            stopColor="currentColor"
+                            stopOpacity="0"
+                        />
+                    </linearGradient>
+                </defs>
+                {tickValues.map((value) => {
+                    const y = pointY(value);
+                    return (
+                        <g key={value}>
+                            <line
+                                x1={left}
+                                x2={width - right}
+                                y1={y}
+                                y2={y}
+                                className="stroke-border"
+                                strokeDasharray="4 6"
+                            />
+                            <text
+                                x={left - 10}
+                                y={y + 4}
+                                textAnchor="end"
+                                className="fill-muted-foreground text-[10px] tabular-nums"
+                            >
+                                {value}
+                            </text>
+                        </g>
                     );
                 })}
-                <polygon
-                    points={areaPoints}
-                    className="fill-primary"
-                    opacity="0.08"
-                />
+                {averageAreaPoints ? (
+                    <polygon
+                        points={averageAreaPoints}
+                        fill="url(#member-average-area)"
+                    />
+                ) : null}
                 {data.map((point, index) => {
-                    const barHeight = (point.newMembers / maxNewMembers) * 38;
+                    const y = pointY(point.newMembers);
                     return (
                         <rect
                             key={point.date}
-                            x={left + index * slotWidth + 1}
-                            y={barBottom - barHeight}
-                            width={Math.max(2, slotWidth - 2)}
-                            height={barHeight}
+                            x={left + index * slotWidth + 1.25}
+                            y={y}
+                            width={Math.max(2, slotWidth - 2.5)}
+                            height={Math.max(0, bottom - y)}
                             rx="1.5"
-                            className="fill-primary"
-                            opacity="0.28"
+                            className="fill-sky-500"
+                            opacity={index >= data.length - 7 ? "0.72" : "0.34"}
                         >
-                            <title>{`${dateLabel(point.date)}: ${point.newMembers} new · ${point.cumulativeMembers} total`}</title>
+                            <title>{`${dateLabel(point.date)}: ${point.newMembers} signup${point.newMembers === 1 ? "" : "s"}`}</title>
                         </rect>
                     );
                 })}
-                <polyline
-                    points={linePoints}
-                    fill="none"
-                    className="stroke-primary"
-                    strokeWidth="3"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                />
-                {data.map((point, index) =>
-                    index % 14 === 0 || index === data.length - 1 ? (
+                {averagePoints ? (
+                    <>
+                        <polyline
+                            points={averagePoints}
+                            fill="none"
+                            className="stroke-emerald-500"
+                            strokeWidth="3"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                        />
                         <circle
-                            key={point.date}
-                            cx={pointX(index)}
-                            cy={pointY(point.cumulativeMembers)}
+                            cx={pointX(data.length - 1)}
+                            cy={pointY(currentAverage ?? 0)}
                             r="4"
-                            className="fill-background stroke-primary"
+                            className="fill-background stroke-emerald-500"
                             strokeWidth="2.5"
-                        >
-                            <title>{`${dateLabel(point.date)}: ${point.cumulativeMembers} total members`}</title>
-                        </circle>
-                    ) : null,
-                )}
+                        />
+                    </>
+                ) : null}
             </svg>
             <div className="text-muted-foreground flex justify-between text-[11px]">
                 <span>{dateLabel(data[0].date)}</span>
@@ -1571,10 +1740,20 @@ export function AdminClient({
     const ActiveTabIcon = activeTabDefinition.icon;
     const areUserMetricsPending = !userMetricsLoaded && !userMetricsLoadFailed;
     const hasOperationalIssues = successRate24h !== null && successRate24h < 90;
-    const maxInsightRoleCount = Math.max(
-        1,
-        ...(memberInsights?.roles.map((role) => role.count) ?? []),
-    );
+    const membersWithoutMonitors = memberInsights
+        ? Math.max(
+              0,
+              memberInsights.summary.totalMembers -
+                  memberInsights.summary.usersWithMonitors,
+          )
+        : 0;
+    const activatedWithoutDemo = memberInsights
+        ? Math.max(
+              0,
+              memberInsights.summary.usersWithMonitors -
+                  memberInsights.demo.users,
+          )
+        : 0;
 
     return (
         <div className="space-y-6">
@@ -2008,7 +2187,7 @@ export function AdminClient({
             ) : null}
 
             {activeTab === "insights" ? (
-                <div className="space-y-4">
+                <div className="space-y-5">
                     {isLoadingMemberInsights && !memberInsights ? (
                         <div className="border-border/60 bg-card text-muted-foreground flex min-h-72 items-center justify-center rounded-lg border text-sm">
                             Loading member insights...
@@ -2036,275 +2215,471 @@ export function AdminClient({
                         </div>
                     ) : memberInsights ? (
                         <>
-                            <div className="border-border/60 bg-border/60 grid gap-px overflow-hidden rounded-lg border sm:grid-cols-2 xl:grid-cols-5">
-                                <OverviewMetric
+                            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                                <MemberMetricCard
                                     label="Total members"
                                     value={memberInsights.summary.totalMembers}
-                                    detail="All registered accounts"
+                                    detail={`${memberInsights.summary.newMembers30d} joined in the last 30 days`}
                                     icon={Users}
-                                    iconClassName="bg-muted text-muted-foreground"
+                                    tone="neutral"
                                 />
-                                <OverviewMetric
-                                    label="New in 7 days"
+                                <MemberMetricCard
+                                    label="New this week"
                                     value={memberInsights.summary.newMembers7d}
-                                    detail="Recent member acquisition"
+                                    detail="Member acquisition this week"
                                     icon={UserPlus}
-                                    iconClassName="bg-sky-500/10 text-sky-600"
-                                />
-                                <OverviewMetric
-                                    label="New in 30 days"
-                                    value={memberInsights.summary.newMembers30d}
-                                    detail={
-                                        memberInsights.summary
-                                            .signupGrowth30d === null
-                                            ? "No previous baseline"
-                                            : `${memberInsights.summary.signupGrowth30d >= 0 ? "+" : ""}${memberInsights.summary.signupGrowth30d}% vs previous 30d`
+                                    tone="sky"
+                                    change={
+                                        memberInsights.summary.signupGrowth7d
                                     }
-                                    icon={TrendingUp}
-                                    iconClassName="bg-emerald-500/10 text-emerald-600"
+                                    changeLabel="vs previous 7 days"
                                 />
-                                <OverviewMetric
-                                    label="Activated"
+                                <MemberMetricCard
+                                    label="Activation rate"
                                     value={`${memberInsights.summary.activationRate}%`}
                                     detail={`${memberInsights.summary.usersWithMonitors} members created a monitor`}
                                     icon={Monitor}
-                                    iconClassName="bg-violet-500/10 text-violet-600"
+                                    tone="violet"
+                                    progress={
+                                        memberInsights.summary.activationRate
+                                    }
                                 />
-                                <OverviewMetric
-                                    label="Tried demo"
-                                    value={memberInsights.demo.users}
-                                    detail={`${memberInsights.demo.adoptionRate}% of all members`}
+                                <MemberMetricCard
+                                    label="Demo conversion"
+                                    value={`${memberInsights.demo.conversionRate}%`}
+                                    detail={`${memberInsights.demo.convertedUsers} of ${memberInsights.demo.users} demo users kept it running`}
                                     icon={FlaskConical}
-                                    iconClassName="bg-amber-500/10 text-amber-600"
+                                    tone="amber"
+                                    progress={
+                                        memberInsights.demo.conversionRate
+                                    }
                                 />
                             </div>
 
-                            <div className="border-border/60 bg-card rounded-lg border p-5">
-                                <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                                    <div>
-                                        <p className="text-foreground text-sm font-semibold">
-                                            Member Growth
-                                        </p>
-                                        <p className="text-muted-foreground text-xs">
-                                            Daily signups and cumulative member
-                                            count over the last 90 days.
-                                        </p>
+                            <div className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm">
+                                <div className="border-border/50 flex flex-col gap-4 border-b px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+                                    <div className="flex items-start gap-3">
+                                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-500">
+                                            <TrendingUp className="h-4 w-4" />
+                                        </span>
+                                        <div>
+                                            <p className="text-foreground text-sm font-semibold">
+                                                Member growth
+                                            </p>
+                                            <p className="text-muted-foreground mt-0.5 text-xs">
+                                                Daily registrations and the
+                                                rolling 7-day trend.
+                                            </p>
+                                        </div>
                                     </div>
-                                    <Badge
-                                        variant="outline"
-                                        className="w-fit rounded-md text-[10px] uppercase"
-                                    >
-                                        Live cohorts
-                                    </Badge>
+                                    <div className="flex items-center gap-3 sm:text-right">
+                                        <div>
+                                            <p className="text-lg font-semibold tabular-nums">
+                                                {
+                                                    memberInsights.summary
+                                                        .newMembers30d
+                                                }
+                                            </p>
+                                            <p className="text-muted-foreground text-[10px] uppercase">
+                                                Last 30 days
+                                            </p>
+                                        </div>
+                                        <span
+                                            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold tabular-nums ${
+                                                memberInsights.summary
+                                                    .signupGrowth30d === null ||
+                                                memberInsights.summary
+                                                    .signupGrowth30d === 0
+                                                    ? "bg-muted text-muted-foreground"
+                                                    : memberInsights.summary
+                                                            .signupGrowth30d > 0
+                                                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                                      : "bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                                            }`}
+                                        >
+                                            {memberInsights.summary
+                                                .signupGrowth30d === null ? (
+                                                <Minus className="h-3 w-3" />
+                                            ) : memberInsights.summary
+                                                  .signupGrowth30d > 0 ? (
+                                                <ArrowUpRight className="h-3 w-3" />
+                                            ) : memberInsights.summary
+                                                  .signupGrowth30d < 0 ? (
+                                                <ArrowDownRight className="h-3 w-3" />
+                                            ) : (
+                                                <Minus className="h-3 w-3" />
+                                            )}
+                                            {memberInsights.summary
+                                                .signupGrowth30d === null
+                                                ? "No baseline"
+                                                : `${memberInsights.summary.signupGrowth30d > 0 ? "+" : ""}${memberInsights.summary.signupGrowth30d}%`}
+                                        </span>
+                                    </div>
                                 </div>
-                                <MemberGrowthChart
-                                    data={memberInsights.growth}
-                                />
+                                <div className="px-5 py-5 sm:px-6">
+                                    <MemberGrowthChart
+                                        data={memberInsights.growth}
+                                    />
+                                    {memberInsights.summary
+                                        .membersWithoutSignupDate > 0 ? (
+                                        <div className="border-border/60 bg-muted/30 mt-4 flex gap-2 rounded-lg border px-3 py-2.5">
+                                            <AlertTriangle className="text-muted-foreground mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                            <p className="text-muted-foreground text-[11px] leading-relaxed">
+                                                {
+                                                    memberInsights.summary
+                                                        .membersWithoutSignupDate
+                                                }{" "}
+                                                legacy accounts are excluded
+                                                from time-based metrics because
+                                                their original signup date was
+                                                never recorded.
+                                            </p>
+                                        </div>
+                                    ) : null}
+                                </div>
                             </div>
 
-                            <div className="grid gap-4 lg:grid-cols-2">
-                                <div className="border-border/60 bg-card rounded-lg border p-5">
+                            <div className="grid gap-4 lg:grid-cols-5">
+                                <div className="border-border/60 bg-card rounded-xl border p-5 shadow-sm sm:p-6 lg:col-span-3">
                                     <div className="mb-5 flex items-start justify-between gap-4">
                                         <div>
                                             <p className="text-foreground text-sm font-semibold">
-                                                Demo Monitor Journey
+                                                Activation funnel
                                             </p>
-                                            <p className="text-muted-foreground text-xs">
-                                                Unique members who interacted
-                                                with the onboarding demo.
+                                            <p className="text-muted-foreground mt-0.5 text-xs">
+                                                From registration to a retained
+                                                demo monitor.
                                             </p>
                                         </div>
-                                        <div className="rounded-lg bg-amber-500/10 p-2 text-amber-600">
+                                        <span className="rounded-lg bg-violet-500/10 p-2 text-violet-500">
                                             <Sparkles className="h-4 w-4" />
-                                        </div>
+                                        </span>
                                     </div>
-                                    <div className="space-y-4">
+
+                                    <div className="space-y-3">
                                         {[
                                             {
-                                                label: "Started a demo",
-                                                value: memberInsights.demo
-                                                    .users,
-                                                detail: `${memberInsights.demo.adoptionRate}% adoption`,
-                                                color: "bg-sky-500",
+                                                label: "Registered",
+                                                value: memberInsights.summary
+                                                    .totalMembers,
+                                                detail: "All member accounts",
+                                                color: "bg-slate-500",
                                             },
                                             {
-                                                label: "Active demo now",
-                                                value: memberInsights.demo
-                                                    .activeUsers,
-                                                detail: "Currently within the demo window",
-                                                color: "bg-emerald-500",
-                                            },
-                                            {
-                                                label: "Kept it running",
-                                                value: memberInsights.demo
-                                                    .convertedUsers,
-                                                detail: `${memberInsights.demo.conversionRate}% demo conversion`,
+                                                label: "Activated",
+                                                value: memberInsights.summary
+                                                    .usersWithMonitors,
+                                                detail: `${memberInsights.summary.activationRate}% created a monitor`,
                                                 color: "bg-violet-500",
                                             },
                                             {
-                                                label: "Demo expired",
+                                                label: "Tried the demo",
                                                 value: memberInsights.demo
-                                                    .expiredUsers,
-                                                detail: "Reached the demo limit",
-                                                color: "bg-amber-500",
+                                                    .users,
+                                                detail: `${memberInsights.demo.adoptionRate}% of all members`,
+                                                color: "bg-sky-500",
                                             },
-                                        ].map((stage) => (
-                                            <div key={stage.label}>
-                                                <div className="mb-1.5 flex items-end justify-between gap-3">
-                                                    <div>
-                                                        <p className="text-sm font-medium">
-                                                            {stage.label}
-                                                        </p>
-                                                        <p className="text-muted-foreground text-[11px]">
-                                                            {stage.detail}
-                                                        </p>
+                                            {
+                                                label: "Converted",
+                                                value: memberInsights.demo
+                                                    .convertedUsers,
+                                                detail: `${memberInsights.demo.conversionRate}% of demo users`,
+                                                color: "bg-emerald-500",
+                                            },
+                                        ].map((stage, index) => {
+                                            const share = Math.round(
+                                                (stage.value /
+                                                    Math.max(
+                                                        1,
+                                                        memberInsights.summary
+                                                            .totalMembers,
+                                                    )) *
+                                                    100,
+                                            );
+
+                                            return (
+                                                <div
+                                                    key={stage.label}
+                                                    className="border-border/50 bg-muted/20 rounded-lg border px-4 py-3"
+                                                >
+                                                    <div className="mb-2 flex items-center gap-3">
+                                                        <span className="bg-background text-muted-foreground flex h-6 w-6 shrink-0 items-center justify-center rounded-md border text-[10px] font-semibold">
+                                                            {index + 1}
+                                                        </span>
+                                                        <div className="min-w-0 flex-1">
+                                                            <p className="truncate text-xs font-medium">
+                                                                {stage.label}
+                                                            </p>
+                                                            <p className="text-muted-foreground truncate text-[10px]">
+                                                                {stage.detail}
+                                                            </p>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <p className="text-base font-semibold tabular-nums">
+                                                                {stage.value}
+                                                            </p>
+                                                            <p className="text-muted-foreground text-[10px] tabular-nums">
+                                                                {share}% of
+                                                                total
+                                                            </p>
+                                                        </div>
                                                     </div>
-                                                    <span className="text-lg font-semibold tabular-nums">
-                                                        {stage.value}
-                                                    </span>
+                                                    <div className="bg-muted h-1.5 overflow-hidden rounded-full">
+                                                        <div
+                                                            className={`h-full rounded-full ${stage.color}`}
+                                                            style={{
+                                                                width: `${Math.max(stage.value > 0 ? 2 : 0, share)}%`,
+                                                            }}
+                                                        />
+                                                    </div>
                                                 </div>
-                                                <div className="bg-muted h-2 overflow-hidden rounded-full">
-                                                    <div
-                                                        className={`h-full rounded-full ${stage.color}`}
-                                                        style={{
-                                                            width: `${memberInsights.demo.users > 0 ? Math.max(stage.value > 0 ? 3 : 0, Math.round((stage.value / memberInsights.demo.users) * 100)) : 0}%`,
-                                                        }}
-                                                    />
-                                                </div>
+                                            );
+                                        })}
+                                    </div>
+
+                                    <div className="mt-4 rounded-lg border border-violet-500/20 bg-violet-500/[0.06] px-4 py-3">
+                                        <p className="text-xs font-semibold text-violet-700 dark:text-violet-300">
+                                            Biggest activation opportunity
+                                        </p>
+                                        <p className="mt-1 text-[11px] leading-relaxed text-violet-700/80 dark:text-violet-300/80">
+                                            {membersWithoutMonitors > 0
+                                                ? `${membersWithoutMonitors} members have not created a monitor yet. ${activatedWithoutDemo} activated members have not tried the demo.`
+                                                : "Every member has created at least one monitor."}
+                                        </p>
+                                    </div>
+
+                                    <div className="mt-4 grid grid-cols-3 gap-2">
+                                        {[
+                                            [
+                                                "Active demos",
+                                                memberInsights.demo.activeUsers,
+                                            ],
+                                            [
+                                                "Expired",
+                                                memberInsights.demo
+                                                    .expiredUsers,
+                                            ],
+                                            [
+                                                "Converted",
+                                                memberInsights.demo
+                                                    .convertedUsers,
+                                            ],
+                                        ].map(([label, value]) => (
+                                            <div
+                                                key={label}
+                                                className="bg-muted/30 rounded-lg px-3 py-2.5 text-center"
+                                            >
+                                                <p className="text-base font-semibold tabular-nums">
+                                                    {value}
+                                                </p>
+                                                <p className="text-muted-foreground mt-0.5 text-[10px]">
+                                                    {label}
+                                                </p>
                                             </div>
                                         ))}
                                     </div>
                                 </div>
 
-                                <div className="border-border/60 bg-card rounded-lg border p-5">
+                                <div className="border-border/60 bg-card rounded-xl border p-5 shadow-sm sm:p-6 lg:col-span-2">
                                     <div className="mb-5">
                                         <p className="text-foreground text-sm font-semibold">
-                                            Role Distribution
+                                            Account mix
                                         </p>
-                                        <p className="text-muted-foreground text-xs">
-                                            Current account mix across access
-                                            levels.
+                                        <p className="text-muted-foreground mt-0.5 text-xs">
+                                            Actual share of members by role.
                                         </p>
                                     </div>
-                                    <div className="space-y-5">
-                                        {memberInsights.roles.map((role) => (
-                                            <div key={role.role}>
-                                                <div className="mb-2 flex items-center justify-between gap-3">
-                                                    <div className="flex items-center gap-2">
-                                                        {getRoleBadge(
-                                                            role.role,
-                                                        )}
-                                                        <span className="text-muted-foreground text-xs">
-                                                            {Math.round(
-                                                                (role.count /
-                                                                    Math.max(
-                                                                        1,
-                                                                        memberInsights
-                                                                            .summary
-                                                                            .totalMembers,
-                                                                    )) *
-                                                                    100,
-                                                            )}
-                                                            %
-                                                        </span>
-                                                    </div>
-                                                    <span className="text-sm font-semibold tabular-nums">
-                                                        {role.count}
-                                                    </span>
-                                                </div>
-                                                <div className="bg-muted h-2.5 overflow-hidden rounded-full">
-                                                    <div
-                                                        className={`h-full rounded-full ${
+
+                                    <div className="bg-muted flex h-3 overflow-hidden rounded-full">
+                                        {memberInsights.roles.map((role) => {
+                                            const share =
+                                                (role.count /
+                                                    Math.max(
+                                                        1,
+                                                        memberInsights.summary
+                                                            .totalMembers,
+                                                    )) *
+                                                100;
+
+                                            return (
+                                                <div
+                                                    key={role.role}
+                                                    className={`h-full min-w-0 ${
+                                                        role.role === "admin"
+                                                            ? "bg-rose-500"
+                                                            : role.role ===
+                                                                "premium"
+                                                              ? "bg-amber-500"
+                                                              : "bg-slate-400"
+                                                    }`}
+                                                    style={{
+                                                        width: `${share}%`,
+                                                    }}
+                                                    title={`${role.role}: ${role.count} (${Math.round(share)}%)`}
+                                                />
+                                            );
+                                        })}
+                                    </div>
+
+                                    <div className="mt-5 space-y-2.5">
+                                        {memberInsights.roles.map((role) => {
+                                            const share = Math.round(
+                                                (role.count /
+                                                    Math.max(
+                                                        1,
+                                                        memberInsights.summary
+                                                            .totalMembers,
+                                                    )) *
+                                                    100,
+                                            );
+
+                                            return (
+                                                <div
+                                                    key={role.role}
+                                                    className="border-border/50 flex items-center gap-3 rounded-lg border px-3 py-3"
+                                                >
+                                                    <span
+                                                        className={`h-2.5 w-2.5 shrink-0 rounded-full ${
                                                             role.role ===
                                                             "admin"
-                                                                ? "bg-red-500"
+                                                                ? "bg-rose-500"
                                                                 : role.role ===
                                                                     "premium"
                                                                   ? "bg-amber-500"
                                                                   : "bg-slate-400"
                                                         }`}
-                                                        style={{
-                                                            width: `${Math.max(3, Math.round((role.count / maxInsightRoleCount) * 100))}%`,
-                                                        }}
                                                     />
+                                                    <div className="min-w-0 flex-1">
+                                                        {getRoleBadge(
+                                                            role.role,
+                                                        )}
+                                                    </div>
+                                                    <span className="text-muted-foreground text-xs tabular-nums">
+                                                        {share}%
+                                                    </span>
+                                                    <span className="min-w-8 text-right text-sm font-semibold tabular-nums">
+                                                        {role.count}
+                                                    </span>
                                                 </div>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
 
-                                    <div className="bg-muted/30 mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border">
-                                        <div className="bg-card px-4 py-3">
-                                            <p className="text-muted-foreground text-[11px] uppercase">
-                                                With monitor
-                                            </p>
-                                            <p className="mt-1 text-xl font-semibold">
+                                    <div className="border-border/50 mt-5 border-t pt-5">
+                                        <div className="flex items-end justify-between gap-3">
+                                            <div>
+                                                <p className="text-muted-foreground text-[10px] font-medium uppercase">
+                                                    Activated members
+                                                </p>
+                                                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                                    {
+                                                        memberInsights.summary
+                                                            .usersWithMonitors
+                                                    }
+                                                </p>
+                                            </div>
+                                            <p className="text-muted-foreground pb-1 text-xs tabular-nums">
                                                 {
                                                     memberInsights.summary
-                                                        .usersWithMonitors
+                                                        .activationRate
                                                 }
-                                            </p>
-                                        </div>
-                                        <div className="bg-card px-4 py-3">
-                                            <p className="text-muted-foreground text-[11px] uppercase">
-                                                Not activated
-                                            </p>
-                                            <p className="mt-1 text-xl font-semibold">
-                                                {Math.max(
-                                                    0,
-                                                    memberInsights.summary
-                                                        .totalMembers -
-                                                        memberInsights.summary
-                                                            .usersWithMonitors,
-                                                )}
+                                                % of total
                                             </p>
                                         </div>
                                     </div>
                                 </div>
                             </div>
 
-                            <div className="border-border/60 bg-card overflow-hidden rounded-lg border">
-                                <div className="border-border/60 flex items-start justify-between gap-4 border-b px-5 py-4">
+                            <div className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm">
+                                <div className="border-border/50 flex items-start justify-between gap-4 border-b px-5 py-4 sm:px-6">
                                     <div>
                                         <p className="text-foreground text-sm font-semibold">
-                                            Newest Members
+                                            Newest members
                                         </p>
-                                        <p className="text-muted-foreground text-xs">
-                                            Most recently created accounts.
+                                        <p className="text-muted-foreground mt-0.5 text-xs">
+                                            Recent signups and their activation
+                                            status.
                                         </p>
                                     </div>
-                                    <UserPlus className="text-muted-foreground h-4 w-4" />
+                                    <Badge
+                                        variant="outline"
+                                        className="rounded-full px-2.5 text-[10px]"
+                                    >
+                                        {memberInsights.recentMembers.length}{" "}
+                                        latest
+                                    </Badge>
                                 </div>
-                                <div className="divide-border/50 divide-y">
-                                    {memberInsights.recentMembers.map(
-                                        (member) => (
-                                            <div
-                                                key={member.id}
-                                                className="flex flex-col gap-2 px-5 py-3 sm:flex-row sm:items-center"
-                                            >
-                                                <div className="min-w-0 flex-1">
-                                                    <p className="truncate text-sm font-medium">
-                                                        {member.name ??
-                                                            "Unknown member"}
-                                                    </p>
-                                                    <p className="text-muted-foreground truncate text-xs">
-                                                        {member.email ??
-                                                            "No email"}
-                                                    </p>
-                                                </div>
-                                                <div className="flex items-center justify-between gap-4 sm:justify-end">
-                                                    {getRoleBadge(member.role)}
-                                                    <span className="text-muted-foreground min-w-32 text-right text-xs">
-                                                        {formatCreatedAt(
-                                                            new Date(
-                                                                member.createdAt,
-                                                            ),
-                                                        )}
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        ),
-                                    )}
-                                </div>
+                                {memberInsights.recentMembers.length > 0 ? (
+                                    <div className="bg-border/50 grid gap-px sm:grid-cols-2 xl:grid-cols-4">
+                                        {memberInsights.recentMembers.map(
+                                            (member) => {
+                                                const memberLabel =
+                                                    member.name ??
+                                                    member.email ??
+                                                    "Unknown member";
+
+                                                return (
+                                                    <div
+                                                        key={member.id}
+                                                        className="bg-card hover:bg-muted/20 min-w-0 p-4 transition-colors"
+                                                    >
+                                                        <div className="flex items-start gap-3">
+                                                            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-sky-500/20 to-violet-500/20 text-xs font-semibold text-sky-700 dark:text-sky-300">
+                                                                {memberLabel
+                                                                    .charAt(0)
+                                                                    .toUpperCase()}
+                                                            </span>
+                                                            <div className="min-w-0 flex-1">
+                                                                <p className="truncate text-sm font-medium">
+                                                                    {member.name ??
+                                                                        "Unknown member"}
+                                                                </p>
+                                                                <p className="text-muted-foreground truncate text-[11px]">
+                                                                    {member.email ??
+                                                                        "No email"}
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                        <div className="mt-4 flex flex-wrap items-center gap-1.5">
+                                                            {getRoleBadge(
+                                                                member.role,
+                                                            )}
+                                                            <Badge
+                                                                variant="outline"
+                                                                className={`rounded-md text-[9px] ${
+                                                                    member.monitorCount >
+                                                                    0
+                                                                        ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                                                        : "text-muted-foreground"
+                                                                }`}
+                                                            >
+                                                                {member.monitorCount >
+                                                                0
+                                                                    ? `${member.monitorCount} monitor${member.monitorCount === 1 ? "" : "s"}`
+                                                                    : "Not activated"}
+                                                            </Badge>
+                                                        </div>
+                                                        <p className="text-muted-foreground mt-3 text-[10px] tabular-nums">
+                                                            Joined{" "}
+                                                            {formatCreatedAt(
+                                                                member.createdAt
+                                                                    ? new Date(
+                                                                          member.createdAt,
+                                                                      )
+                                                                    : null,
+                                                            )}
+                                                        </p>
+                                                    </div>
+                                                );
+                                            },
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div className="text-muted-foreground px-6 py-10 text-center text-sm">
+                                        No recent members with a known signup
+                                        date.
+                                    </div>
+                                )}
                             </div>
                         </>
                     ) : null}

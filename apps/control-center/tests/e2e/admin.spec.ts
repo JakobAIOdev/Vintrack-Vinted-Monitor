@@ -51,15 +51,15 @@ test.describe("admin running monitors", () => {
         await expect(
             page.getByRole("tab", { name: "Member Insights" }),
         ).toHaveAttribute("aria-selected", "true");
-        await expect(page.getByText("Member Growth")).toBeVisible();
+        await expect(page.getByText("Member growth")).toBeVisible();
         await expect(
             page.getByRole("img", {
-                name: "Member growth over the last 90 days",
+                name: "Member signups over the last 90 days",
             }),
         ).toBeVisible();
-        await expect(page.getByText("Demo Monitor Journey")).toBeVisible();
-        await expect(page.getByText("Role Distribution")).toBeVisible();
-        await expect(page.getByText("Newest Members")).toBeVisible();
+        await expect(page.getByText("Activation funnel")).toBeVisible();
+        await expect(page.getByText("Account mix")).toBeVisible();
+        await expect(page.getByText("Newest members")).toBeVisible();
         await expect(
             page.getByRole("main").getByText("E2E User"),
         ).toBeVisible();

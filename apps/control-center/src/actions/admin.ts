@@ -184,14 +184,15 @@ type CachedAdminUserMetrics = Omit<AdminUserMetrics, "lastCheckAt"> & {
 type AdminMemberSummaryRow = {
     total_members: bigint;
     new_members_7d: bigint;
+    new_members_previous_7d: bigint;
     new_members_30d: bigint;
     new_members_previous_30d: bigint;
+    members_without_signup_date: bigint;
 };
 
 type AdminMemberGrowthRow = {
     day: Date;
     new_members: bigint;
-    cumulative_members: bigint;
 };
 
 type AdminMemberRoleRow = {
@@ -330,12 +331,19 @@ async function loadAdminMemberInsights() {
                         WHERE "createdAt" >= NOW() - INTERVAL '7 days'
                     )::bigint AS new_members_7d,
                     COUNT(*) FILTER (
+                        WHERE "createdAt" >= NOW() - INTERVAL '14 days'
+                          AND "createdAt" < NOW() - INTERVAL '7 days'
+                    )::bigint AS new_members_previous_7d,
+                    COUNT(*) FILTER (
                         WHERE "createdAt" >= NOW() - INTERVAL '30 days'
                     )::bigint AS new_members_30d,
                     COUNT(*) FILTER (
                         WHERE "createdAt" >= NOW() - INTERVAL '60 days'
                           AND "createdAt" < NOW() - INTERVAL '30 days'
-                    )::bigint AS new_members_previous_30d
+                    )::bigint AS new_members_previous_30d,
+                    COUNT(*) FILTER (
+                        WHERE "createdAt" IS NULL
+                    )::bigint AS members_without_signup_date
                 FROM "User"
             `,
             db.$queryRaw<AdminMemberGrowthRow[]>`
@@ -353,24 +361,12 @@ async function loadAdminMemberInsights() {
                     FROM "User"
                     WHERE "createdAt" >= CURRENT_DATE - INTERVAL '89 days'
                     GROUP BY "createdAt"::date
-                ),
-                members_before_range AS (
-                    SELECT COUNT(*)::bigint AS member_count
-                    FROM "User"
-                    WHERE "createdAt" < CURRENT_DATE - INTERVAL '89 days'
                 )
                 SELECT
                     days.day,
                     COALESCE(daily_members.new_members, 0)::bigint
-                        AS new_members,
-                    (
-                        members_before_range.member_count +
-                        SUM(COALESCE(daily_members.new_members, 0)) OVER (
-                            ORDER BY days.day
-                        )
-                    )::bigint AS cumulative_members
+                        AS new_members
                 FROM days
-                CROSS JOIN members_before_range
                 LEFT JOIN daily_members ON daily_members.day = days.day
                 ORDER BY days.day
             `,
@@ -446,6 +442,7 @@ async function loadAdminMemberInsights() {
                         AS converted_demo_users
             `,
             db.user.findMany({
+                where: { createdAt: { not: null } },
                 orderBy: { createdAt: "desc" },
                 take: 8,
                 select: {
@@ -454,6 +451,7 @@ async function loadAdminMemberInsights() {
                     email: true,
                     role: true,
                     createdAt: true,
+                    _count: { select: { monitors: true } },
                 },
             }),
         ]);
@@ -461,6 +459,8 @@ async function loadAdminMemberInsights() {
     const summary = summaryRows[0];
     const demo = demoRows[0];
     const totalMembers = Number(summary?.total_members ?? 0);
+    const newMembers7d = Number(summary?.new_members_7d ?? 0);
+    const previous7d = Number(summary?.new_members_previous_7d ?? 0);
     const newMembers30d = Number(summary?.new_members_30d ?? 0);
     const previous30d = Number(summary?.new_members_previous_30d ?? 0);
     const usersWithMonitors = Number(demo?.users_with_monitors ?? 0);
@@ -470,7 +470,13 @@ async function loadAdminMemberInsights() {
     return {
         summary: {
             totalMembers,
-            newMembers7d: Number(summary?.new_members_7d ?? 0),
+            newMembers7d,
+            signupGrowth7d:
+                previous7d > 0
+                    ? Math.round(
+                          ((newMembers7d - previous7d) / previous7d) * 100,
+                      )
+                    : null,
             newMembers30d,
             signupGrowth30d:
                 previous30d > 0
@@ -478,6 +484,9 @@ async function loadAdminMemberInsights() {
                           ((newMembers30d - previous30d) / previous30d) * 100,
                       )
                     : null,
+            membersWithoutSignupDate: Number(
+                summary?.members_without_signup_date ?? 0,
+            ),
             usersWithMonitors,
             activationRate:
                 totalMembers > 0
@@ -487,7 +496,6 @@ async function loadAdminMemberInsights() {
         growth: growthRows.map((row) => ({
             date: row.day.toISOString().slice(0, 10),
             newMembers: Number(row.new_members),
-            cumulativeMembers: Number(row.cumulative_members),
         })),
         roles: roleRows.map((row) => ({
             role: row.role,
@@ -507,16 +515,17 @@ async function loadAdminMemberInsights() {
                     ? Math.round((convertedDemoUsers / demoUsers) * 100)
                     : 0,
         },
-        recentMembers: recentMembers.map((member) => ({
+        recentMembers: recentMembers.map(({ _count, ...member }) => ({
             ...member,
-            createdAt: member.createdAt.toISOString(),
+            monitorCount: _count.monitors,
+            createdAt: member.createdAt?.toISOString() ?? null,
         })),
     };
 }
 
 const getCachedAdminMemberInsights = unstable_cache(
     loadAdminMemberInsights,
-    ["admin-member-insights-v1"],
+    ["admin-member-insights-v3"],
     { revalidate: 60 },
 );
 
