@@ -23,6 +23,7 @@ import {
     getFreeProxyRegionHealth,
     type FreeProxyOption,
 } from "@/components/monitors/monitor-form-sections";
+import { QuietHoursSection } from "@/components/monitors/quiet-hours-section";
 import { Switch } from "@/components/ui/switch";
 import { getStatusLocaleForRegionCodes } from "@/lib/regions";
 import {
@@ -68,6 +69,12 @@ type MonitorData = {
     query: string;
     anti_keywords: string | null;
     query_delay_ms: number;
+    quiet_hours_enabled: boolean;
+    quiet_hours_start_minute: number;
+    quiet_hours_end_minute: number;
+    quiet_hours_mode: "pause" | "slow";
+    quiet_hours_delay_ms: number;
+    quiet_hours_timezone: string;
     price_min: number | null;
     price_max: number | null;
     size_id: string | null;
@@ -673,6 +680,17 @@ export default function EditMonitorPage() {
                                 />
                             </div>
                         </FormSection>
+
+                        <QuietHoursSection
+                            defaultValue={{
+                                enabled: monitor.quiet_hours_enabled,
+                                startMinute: monitor.quiet_hours_start_minute,
+                                endMinute: monitor.quiet_hours_end_minute,
+                                mode: monitor.quiet_hours_mode,
+                                delayMs: monitor.quiet_hours_delay_ms,
+                                timezone: monitor.quiet_hours_timezone,
+                            }}
+                        />
 
                         <FormSection
                             title="Notifications"

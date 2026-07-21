@@ -11,6 +11,7 @@ import {
     DEFAULT_QUERY_DELAY_MS,
     normalizeQueryDelayMs,
 } from "@/lib/monitor-delay";
+import { normalizeQuietHours } from "@/lib/monitor-schedule";
 import { getMonitorActivationState } from "@/lib/monitor-limits";
 import { getFreeProxyPoolHealth } from "@/lib/free-proxy-health";
 import { getMonitorPreset } from "@/lib/monitor-presets";
@@ -103,6 +104,7 @@ export async function createMonitor(formData: FormData) {
     const query = formData.get("query") as string;
     const antiKeywords = normalizeAntiKeywords(formData.get("anti_keywords"));
     const queryDelayMs = normalizeQueryDelayMs(formData.get("query_delay_ms"));
+    const quietHours = normalizeQuietHours(formData, queryDelayMs);
     const priceMin = formData.get("price_min")
         ? Number(formData.get("price_min"))
         : null;
@@ -154,6 +156,12 @@ export async function createMonitor(formData: FormData) {
                 query: normalizedQuery,
                 anti_keywords: antiKeywords,
                 query_delay_ms: queryDelayMs,
+                quiet_hours_enabled: quietHours.enabled,
+                quiet_hours_start_minute: quietHours.startMinute,
+                quiet_hours_end_minute: quietHours.endMinute,
+                quiet_hours_mode: quietHours.mode,
+                quiet_hours_delay_ms: quietHours.delayMs,
+                quiet_hours_timezone: quietHours.timezone,
                 price_min: priceMin,
                 price_max: priceMax,
                 size_id: sizeId,
@@ -514,6 +522,7 @@ export async function updateMonitor(id: number, formData: FormData) {
     const query = formData.get("query") as string;
     const antiKeywords = normalizeAntiKeywords(formData.get("anti_keywords"));
     const queryDelayMs = normalizeQueryDelayMs(formData.get("query_delay_ms"));
+    const quietHours = normalizeQuietHours(formData, queryDelayMs);
     const priceMin = formData.get("price_min")
         ? Number(formData.get("price_min"))
         : null;
@@ -567,6 +576,12 @@ export async function updateMonitor(id: number, formData: FormData) {
             query: normalizedQuery,
             anti_keywords: antiKeywords,
             query_delay_ms: queryDelayMs,
+            quiet_hours_enabled: quietHours.enabled,
+            quiet_hours_start_minute: quietHours.startMinute,
+            quiet_hours_end_minute: quietHours.endMinute,
+            quiet_hours_mode: quietHours.mode,
+            quiet_hours_delay_ms: quietHours.delayMs,
+            quiet_hours_timezone: quietHours.timezone,
             price_min: priceMin,
             price_max: priceMax,
             size_id: sizeId,
@@ -603,6 +618,7 @@ export async function updateMonitorAndReturn(id: number, formData: FormData) {
     const query = formData.get("query") as string;
     const antiKeywords = normalizeAntiKeywords(formData.get("anti_keywords"));
     const queryDelayMs = normalizeQueryDelayMs(formData.get("query_delay_ms"));
+    const quietHours = normalizeQuietHours(formData, queryDelayMs);
     const priceMin = formData.get("price_min")
         ? Number(formData.get("price_min"))
         : null;
@@ -655,6 +671,12 @@ export async function updateMonitorAndReturn(id: number, formData: FormData) {
             query: normalizedQuery,
             anti_keywords: antiKeywords,
             query_delay_ms: queryDelayMs,
+            quiet_hours_enabled: quietHours.enabled,
+            quiet_hours_start_minute: quietHours.startMinute,
+            quiet_hours_end_minute: quietHours.endMinute,
+            quiet_hours_mode: quietHours.mode,
+            quiet_hours_delay_ms: quietHours.delayMs,
+            quiet_hours_timezone: quietHours.timezone,
             price_min: priceMin,
             price_max: priceMax,
             size_id: sizeId,

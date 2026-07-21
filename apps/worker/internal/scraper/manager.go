@@ -4,8 +4,10 @@ import (
 	"context"
 	"log"
 	"sync"
+	"time"
 
 	"vintrack-worker/internal/database"
+	"vintrack-worker/internal/model"
 )
 
 type Manager struct {
@@ -15,6 +17,7 @@ type Manager struct {
 	monitorCfg       map[int]string
 	discoveryRunning map[string]context.CancelFunc
 	discoveryCfg     map[string]string
+	scheduledPaused  map[int]bool
 	mu               sync.Mutex
 }
 
@@ -26,6 +29,7 @@ func NewManager(store *database.Store, engine *Engine) *Manager {
 		monitorCfg:       make(map[int]string),
 		discoveryRunning: make(map[string]context.CancelFunc),
 		discoveryCfg:     make(map[string]string),
+		scheduledPaused:  make(map[int]bool),
 	}
 }
 
@@ -47,13 +51,29 @@ func (m *Manager) Sync(ctx context.Context) {
 	defer m.mu.Unlock()
 
 	activeIDs := make(map[int]bool, len(monitors))
+	returnedIDs := make(map[int]bool, len(monitors))
+	discoveryMonitors := make([]model.Monitor, 0, len(monitors))
+	now := time.Now()
 
 	for i := range monitors {
 		mon := &monitors[i]
+		returnedIDs[mon.ID] = true
 		if mon.ProxySource == "free" {
 			mon.FreeProxyVersion = m.engine.FreeProxyRegionVersion(mon.Region)
 		} else if mon.ProxyGroupID == nil {
 			mon.ServerProxyVersion = m.engine.ServerProxyVersion()
+		}
+		quietHoursActive := monitorQuietHoursActive(*mon, now)
+		if !quietHoursActive {
+			discoveryMonitors = append(discoveryMonitors, *mon)
+		}
+		if monitorScheduledPause(*mon, now) {
+			m.scheduledPaused[mon.ID] = true
+			continue
+		}
+		if m.scheduledPaused[mon.ID] {
+			mon.SuppressStartupNotice = true
+			delete(m.scheduledPaused, mon.ID)
 		}
 		activeIDs[mon.ID] = true
 		hash := monitorConfigFingerprint(*mon)
@@ -82,8 +102,13 @@ func (m *Manager) Sync(ctx context.Context) {
 			delete(m.monitorCfg, id)
 		}
 	}
+	for id := range m.scheduledPaused {
+		if !returnedIDs[id] {
+			delete(m.scheduledPaused, id)
+		}
+	}
 
-	discoverySpecs := BuildDiscoverySpecs(monitors, m.engine.discoveryMode)
+	discoverySpecs := BuildDiscoverySpecs(discoveryMonitors, m.engine.discoveryMode)
 	for key, spec := range discoverySpecs {
 		if cancelFn, exists := m.discoveryRunning[key]; exists {
 			if m.discoveryCfg[key] == spec.Fingerprint {

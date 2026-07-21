@@ -45,6 +45,13 @@ func TestMonitorConfigFingerprintIncludesRuntimeFilters(t *testing.T) {
 		{name: "query", mutate: func(m *model.Monitor) { m.Query = "adidas" }},
 		{name: "anti keywords", mutate: func(m *model.Monitor) { v := "damaged"; m.AntiKeywords = &v }},
 		{name: "query delay", mutate: func(m *model.Monitor) { m.QueryDelayMs = 2000 }},
+		{name: "quiet hours", mutate: func(m *model.Monitor) {
+			m.QuietHoursEnabled = true
+			m.QuietHoursStartMinute = 1380
+			m.QuietHoursEndMinute = 420
+			m.QuietHoursMode = "pause"
+			m.QuietHoursTimezone = "Europe/Berlin"
+		}},
 		{name: "price min", mutate: func(m *model.Monitor) { v := 11; m.PriceMin = &v }},
 		{name: "price max", mutate: func(m *model.Monitor) { v := 51; m.PriceMax = &v }},
 		{name: "size", mutate: func(m *model.Monitor) { v := "3,4"; m.SizeID = &v }},

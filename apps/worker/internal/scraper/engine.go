@@ -254,7 +254,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	}
 
 	apiURL := BuildVintedURL(m)
-	interval := resolveQueryDelayMs(m.QueryDelayMs)
+	interval := monitorQueryInterval(m, time.Now())
 	maxConsecutiveErrors := getEnvInt("MAX_CONSECUTIVE_ERRORS", 20)
 	timeoutDuration := time.Duration(getEnvInt("CATALOG_TIMEOUT_MS", 2000)) * time.Millisecond
 	if timeoutDuration < 500*time.Millisecond {
@@ -266,11 +266,11 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	var totalErrors int64
 	localSeen := make(map[int64]time.Time, 128)
 
-	log.Printf("[%d] started | name=%q | query=%q | delay=%dms | hedge=%dms | url=%s", m.ID, m.Name, m.Query, interval, getEnvInt("CATALOG_HEDGE_DELAY_MS", 250), apiURL)
-	if m.WebhookActive && m.DiscordWebhook.Valid && m.DiscordWebhook.String != "" {
+	log.Printf("[%d] started | name=%q | query=%q | delay=%s | hedge=%dms | url=%s", m.ID, m.Name, m.Query, interval, getEnvInt("CATALOG_HEDGE_DELAY_MS", 250), apiURL)
+	if !m.SuppressStartupNotice && m.WebhookActive && m.DiscordWebhook.Valid && m.DiscordWebhook.String != "" {
 		go discord.SendStartupWebhook(m.DiscordWebhook.String, m.Name)
 	}
-	if m.TelegramActive && m.TelegramChatID.Valid && m.TelegramChatID.String != "" {
+	if !m.SuppressStartupNotice && m.TelegramActive && m.TelegramChatID.Valid && m.TelegramChatID.String != "" {
 		go telegram.SendStartup(m.TelegramChatID.String, m.Name)
 	}
 
@@ -291,8 +291,6 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	defer func() {
 		e.db.ClearMonitorHealth(m.ID)
 	}()
-
-	intervalDuration := time.Duration(interval) * time.Millisecond
 
 	for {
 		cycleStart := time.Now()
@@ -433,7 +431,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 					rateLimitBackoff = 3 * time.Second
 				}
 			}
-			sleepMonitorCycle(ctx, cycleStart, intervalDuration+rateLimitBackoff)
+			sleepMonitorCycle(ctx, cycleStart, monitorQueryInterval(m, time.Now())+rateLimitBackoff)
 			continue
 		}
 
@@ -456,7 +454,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 				DurationMS: int(time.Since(cycleStart).Milliseconds()), ProxySource: proxySource,
 				FetchSource: "canonical", Region: m.Region,
 			})
-			sleepMonitorCycle(ctx, cycleStart, intervalDuration)
+			sleepMonitorCycle(ctx, cycleStart, monitorQueryInterval(m, time.Now()))
 			continue
 		}
 
@@ -485,7 +483,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 				DurationMS: int(time.Since(cycleStart).Milliseconds()), ItemCount: len(items),
 				ProxySource: proxySource, FetchSource: "canonical", Region: m.Region,
 			})
-			sleepMonitorCycle(ctx, cycleStart, intervalDuration)
+			sleepMonitorCycle(ctx, cycleStart, monitorQueryInterval(m, time.Now()))
 			continue
 		}
 
@@ -532,7 +530,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			DurationMS: int(time.Since(cycleStart).Milliseconds()), ItemCount: len(items),
 			NewItemCount: delivered, ProxySource: proxySource, FetchSource: "canonical", Region: m.Region,
 		})
-		sleepMonitorCycle(ctx, cycleStart, intervalDuration)
+		sleepMonitorCycle(ctx, cycleStart, monitorQueryInterval(m, time.Now()))
 	}
 }
 
