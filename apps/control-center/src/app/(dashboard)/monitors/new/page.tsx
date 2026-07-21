@@ -30,6 +30,10 @@ import {
 } from "@/lib/monitor-delay";
 import { buildVintedMonitorUrl } from "@/lib/vinted-url";
 import {
+    MAX_MONITOR_QUERY_LENGTH,
+    parseMonitorQueries,
+} from "@/lib/monitor-query";
+import {
     getMonitorPreset,
     type MonitorPreset,
     type MonitorPresetKey,
@@ -193,7 +197,10 @@ export default function NewMonitorPage() {
     };
 
     const handleCreate = async (formData: FormData) => {
-        const createPromise = createMonitor(formData);
+        const createPromise = createMonitor(formData).then((result) => {
+            if (!result.ok) throw new Error(result.message);
+            return result;
+        });
 
         try {
             await toast.promise(createPromise, {
@@ -281,6 +288,7 @@ export default function NewMonitorPage() {
         colorIds: selectedColors,
         statusIds: selectedStatuses,
     });
+    const queryAlternativeCount = parseMonitorQueries(query).length;
     const selectedRegionFreeProxyHealth = getFreeProxyRegionHealth(
         freeProxy,
         selectedRegion,
@@ -419,7 +427,7 @@ export default function NewMonitorPage() {
 
                             <div className="space-y-2">
                                 <Label htmlFor="query" className="text-[13px]">
-                                    Keywords{" "}
+                                    Search Queries{" "}
                                     <span className="text-muted-foreground font-normal">
                                         (optional)
                                     </span>
@@ -427,16 +435,21 @@ export default function NewMonitorPage() {
                                 <Input
                                     name="query"
                                     id="query"
-                                    placeholder="e.g. Nike Dunk Low Grey"
+                                    placeholder="e.g. ps1, playstation 1, ps one"
                                     value={query}
+                                    maxLength={MAX_MONITOR_QUERY_LENGTH}
                                     onChange={(event) =>
                                         setQuery(event.target.value)
                                     }
                                 />
                                 <p className="text-muted-foreground text-[12px]">
-                                    Optional Vinted text search. Leave empty if
-                                    you only want to filter by category, brand,
-                                    price, size, etc.
+                                    Separate alternative searches with commas.
+                                    Vintrack rotates them without increasing the
+                                    polling rate
+                                    {queryAlternativeCount > 1
+                                        ? ` (${queryAlternativeCount} searches)`
+                                        : ""}
+                                    .
                                 </p>
                             </div>
 
@@ -921,8 +934,9 @@ export default function NewMonitorPage() {
                                 <div className="border-border/70 bg-muted/20 rounded-xl border p-3">
                                     <div className="flex items-center justify-between gap-3">
                                         <p className="text-muted-foreground text-[12px]">
-                                            This is the exact Vinted catalog URL
-                                            for the current filter setup.
+                                            {queryAlternativeCount > 1
+                                                ? `Showing the first of ${queryAlternativeCount} rotating search URLs.`
+                                                : "This is the exact Vinted catalog URL for the current filter setup."}
                                         </p>
                                         <a
                                             href={previewUrl}

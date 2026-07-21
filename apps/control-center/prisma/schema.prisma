@@ -90,7 +90,7 @@ model monitors {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   name                     String    @db.VarChar(255)
-  query                    String    @db.VarChar(255)
+  query                    String    @db.Text
   anti_keywords            String?   @db.VarChar(1000)
   query_delay_ms           Int       @default(1500)
   quiet_hours_enabled      Boolean   @default(false)

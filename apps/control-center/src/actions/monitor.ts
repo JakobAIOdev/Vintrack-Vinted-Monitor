@@ -18,6 +18,10 @@ import { getMonitorPreset } from "@/lib/monitor-presets";
 import { REGIONS } from "@/lib/regions";
 import { logAuditEvent } from "@/lib/audit";
 import { getNextDemoMonitorExpiry } from "@/lib/demo-monitor";
+import {
+    getMonitorQueryValidationError,
+    normalizeMonitorQuery,
+} from "@/lib/monitor-query";
 
 function normalizeAntiKeywords(value: FormDataEntryValue | null) {
     const normalized = String(value ?? "").trim();
@@ -93,7 +97,18 @@ async function resolveMonitorProxySelection(
     return { proxyGroupId: null, proxySource: "server" };
 }
 
-export async function createMonitor(formData: FormData) {
+export type CreateMonitorResult =
+    | {
+          ok: true;
+          redirectTo: string;
+          started: boolean;
+          activeLimit: number | null;
+      }
+    | { ok: false; message: string };
+
+export async function createMonitor(
+    formData: FormData,
+): Promise<CreateMonitorResult> {
     const session = await auth();
     if (!session?.user?.id) {
         throw new Error("Not logged in!");
@@ -101,7 +116,7 @@ export async function createMonitor(formData: FormData) {
     const userId = session.user.id;
 
     const name = formData.get("name") as string;
-    const query = formData.get("query") as string;
+    const normalizedQuery = normalizeMonitorQuery(formData.get("query"));
     const antiKeywords = normalizeAntiKeywords(formData.get("anti_keywords"));
     const queryDelayMs = normalizeQueryDelayMs(formData.get("query_delay_ms"));
     const quietHours = normalizeQuietHours(formData, queryDelayMs);
@@ -125,11 +140,16 @@ export async function createMonitor(formData: FormData) {
     const appliedPreset = getMonitorPreset(formData.get("preset_key"));
 
     const normalizedName = name?.trim() ?? "";
-    const normalizedQuery = query?.trim() ?? "";
+    const queryValidationError =
+        getMonitorQueryValidationError(normalizedQuery);
 
-    if (!normalizedName) throw new Error("Name is required");
-    if (normalizedName.length > 255) throw new Error("Name is too long");
-    if (normalizedQuery.length > 255) throw new Error("Keywords are too long");
+    if (!normalizedName) return { ok: false, message: "Name is required." };
+    if (normalizedName.length > 255) {
+        return { ok: false, message: "Name is too long." };
+    }
+    if (queryValidationError) {
+        return { ok: false, message: queryValidationError };
+    }
 
     const { proxyGroupId, proxySource } = await resolveMonitorProxySelection(
         userId,
@@ -245,6 +265,7 @@ export async function createMonitor(formData: FormData) {
 
     revalidatePath("/dashboard");
     return {
+        ok: true,
         redirectTo: `/monitors/${monitor.id}`,
         started: initialStatus === "active",
         activeLimit: activationState.activeLimit,
@@ -519,7 +540,7 @@ export async function updateMonitor(id: number, formData: FormData) {
     if (!session?.user?.id) throw new Error("Unauthorized");
 
     const name = formData.get("name") as string;
-    const query = formData.get("query") as string;
+    const normalizedQuery = normalizeMonitorQuery(formData.get("query"));
     const antiKeywords = normalizeAntiKeywords(formData.get("anti_keywords"));
     const queryDelayMs = normalizeQueryDelayMs(formData.get("query_delay_ms"));
     const quietHours = normalizeQuietHours(formData, queryDelayMs);
@@ -543,11 +564,11 @@ export async function updateMonitor(id: number, formData: FormData) {
     const proxyGroupRaw = formData.get("proxy_group_id") as string;
 
     const normalizedName = name?.trim() ?? "";
-    const normalizedQuery = query?.trim() ?? "";
-
     if (!normalizedName) throw new Error("Name is required");
     if (normalizedName.length > 255) throw new Error("Name is too long");
-    if (normalizedQuery.length > 255) throw new Error("Keywords are too long");
+    const queryValidationError =
+        getMonitorQueryValidationError(normalizedQuery);
+    if (queryValidationError) throw new Error(queryValidationError);
 
     // Verify the monitor belongs to this user
     const existing = await db.monitors.findFirst({
@@ -610,12 +631,19 @@ export async function updateMonitor(id: number, formData: FormData) {
     redirect(`/monitors/${id}`);
 }
 
-export async function updateMonitorAndReturn(id: number, formData: FormData) {
+export type UpdateMonitorResult =
+    | { success: true; redirectTo: string }
+    | { success: false; message: string };
+
+export async function updateMonitorAndReturn(
+    id: number,
+    formData: FormData,
+): Promise<UpdateMonitorResult> {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Unauthorized");
 
     const name = formData.get("name") as string;
-    const query = formData.get("query") as string;
+    const normalizedQuery = normalizeMonitorQuery(formData.get("query"));
     const antiKeywords = normalizeAntiKeywords(formData.get("anti_keywords"));
     const queryDelayMs = normalizeQueryDelayMs(formData.get("query_delay_ms"));
     const quietHours = normalizeQuietHours(formData, queryDelayMs);
@@ -639,11 +667,18 @@ export async function updateMonitorAndReturn(id: number, formData: FormData) {
     const proxyGroupRaw = formData.get("proxy_group_id") as string;
 
     const normalizedName = name?.trim() ?? "";
-    const normalizedQuery = query?.trim() ?? "";
+    const queryValidationError =
+        getMonitorQueryValidationError(normalizedQuery);
 
-    if (!normalizedName) throw new Error("Name is required");
-    if (normalizedName.length > 255) throw new Error("Name is too long");
-    if (normalizedQuery.length > 255) throw new Error("Keywords are too long");
+    if (!normalizedName) {
+        return { success: false, message: "Name is required." };
+    }
+    if (normalizedName.length > 255) {
+        return { success: false, message: "Name is too long." };
+    }
+    if (queryValidationError) {
+        return { success: false, message: queryValidationError };
+    }
 
     const existing = await db.monitors.findFirst({
         where: { id, userId: session.user.id },

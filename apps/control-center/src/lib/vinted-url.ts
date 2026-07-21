@@ -1,4 +1,5 @@
 import { getRegionDomain } from "@/lib/regions";
+import { parseMonitorQueries } from "@/lib/monitor-query";
 
 type BuildVintedMonitorUrlInput = {
     region: string;
@@ -42,7 +43,7 @@ export function buildVintedMonitorUrl({
 }: BuildVintedMonitorUrlInput) {
     const domain = getRegionDomain(region);
     const params = new URLSearchParams();
-    const normalizedQuery = query?.trim() ?? "";
+    const normalizedQuery = parseMonitorQueries(query ?? "")[0] ?? "";
     const normalizedPriceMin =
         typeof priceMin === "number"
             ? String(priceMin)

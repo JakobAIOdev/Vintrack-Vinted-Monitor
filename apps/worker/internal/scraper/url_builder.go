@@ -9,10 +9,16 @@ import (
 )
 
 func BuildVintedURL(m model.Monitor) string {
+	_, query := monitorQueryForCheck(parseMonitorQueries(m.Query), 1)
+	return BuildVintedURLForQuery(m, query)
+}
+
+func BuildVintedURLForQuery(m model.Monitor, query string) string {
 	perPage := os.Getenv("VINTED_PER_PAGE")
 	if perPage == "" {
 		perPage = "20"
 	}
+	m.Query = strings.TrimSpace(query)
 	return buildVintedURL(m, perPage, true, 1)
 }
 
