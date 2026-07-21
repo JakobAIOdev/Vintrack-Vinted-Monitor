@@ -3,21 +3,19 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+    MAX_MONITOR_ANTI_KEYWORDS_COUNT,
+    MAX_MONITOR_ANTI_KEYWORDS_LENGTH,
+    MAX_MONITOR_ANTI_KEYWORD_LENGTH,
+    parseMonitorAntiKeywords,
+} from "@/lib/monitor-anti-keywords";
 import { Plus, X } from "lucide-react";
-import { useMemo, useState, type ClipboardEvent, type KeyboardEvent } from "react";
-
-function parseKeywords(value: string) {
-    const seen = new Set<string>();
-    return value
-        .split(/[,\n\r]+/)
-        .map((keyword) => keyword.trim())
-        .filter((keyword) => {
-            const key = keyword.toLowerCase();
-            if (!key || seen.has(key)) return false;
-            seen.add(key);
-            return true;
-        });
-}
+import {
+    useMemo,
+    useState,
+    type ClipboardEvent,
+    type KeyboardEvent,
+} from "react";
 
 type AntiKeywordInputProps = {
     name: string;
@@ -29,18 +27,26 @@ export function AntiKeywordInput({
     defaultValue,
 }: AntiKeywordInputProps) {
     const [keywords, setKeywords] = useState<string[]>(() =>
-        parseKeywords(defaultValue || ""),
+        parseMonitorAntiKeywords(defaultValue || ""),
     );
     const [draft, setDraft] = useState("");
 
     const serialized = useMemo(() => keywords.join(","), [keywords]);
+    const exceedsLimit =
+        keywords.length > MAX_MONITOR_ANTI_KEYWORDS_COUNT ||
+        serialized.length > MAX_MONITOR_ANTI_KEYWORDS_LENGTH ||
+        keywords.some(
+            (keyword) => keyword.length > MAX_MONITOR_ANTI_KEYWORD_LENGTH,
+        );
 
     const addKeywords = (value: string) => {
-        const next = parseKeywords(value);
+        const next = parseMonitorAntiKeywords(value);
         if (next.length === 0) return;
 
         setKeywords((current) => {
-            const seen = new Set(current.map((keyword) => keyword.toLowerCase()));
+            const seen = new Set(
+                current.map((keyword) => keyword.toLowerCase()),
+            );
             const merged = [...current];
             for (const keyword of next) {
                 const key = keyword.toLowerCase();
@@ -87,6 +93,7 @@ export function AntiKeywordInput({
                     onChange={(event) => setDraft(event.target.value)}
                     onKeyDown={handleKeyDown}
                     onPaste={handlePaste}
+                    maxLength={MAX_MONITOR_ANTI_KEYWORD_LENGTH}
                     placeholder="e.g. damaged, fake, replica"
                     className="flex-1"
                 />
@@ -102,6 +109,15 @@ export function AntiKeywordInput({
                     <Plus className="h-4 w-4" />
                 </Button>
             </div>
+            <p
+                className={`text-[11px] ${
+                    exceedsLimit ? "text-destructive" : "text-muted-foreground"
+                }`}
+            >
+                {keywords.length} / {MAX_MONITOR_ANTI_KEYWORDS_COUNT} anti
+                keywords · {serialized.length} /{" "}
+                {MAX_MONITOR_ANTI_KEYWORDS_LENGTH} characters
+            </p>
             {keywords.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
                     {keywords.map((keyword) => (

@@ -91,7 +91,7 @@ model monitors {
 
   name                     String    @db.VarChar(255)
   query                    String    @db.Text
-  anti_keywords            String?   @db.VarChar(1000)
+  anti_keywords            String?   @db.Text
   query_delay_ms           Int       @default(1500)
   quiet_hours_enabled      Boolean   @default(false)
   quiet_hours_start_minute Int       @default(0)
