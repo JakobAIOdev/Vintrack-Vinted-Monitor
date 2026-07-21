@@ -14,6 +14,7 @@ import {
     Zap,
     Pencil,
     Timer,
+    Clock3,
 } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +29,7 @@ import {
 } from "@/lib/regions";
 import { getStatusLabels } from "@/lib/statuses";
 import { formatQueryDelay } from "@/lib/monitor-delay";
+import { formatQuietHours } from "@/lib/monitor-schedule";
 import { getMonitorActivationState } from "@/lib/monitor-limits";
 import { ProxyHealthCard } from "@/components/monitors/proxy-health";
 import { MonitorLiveProvider } from "@/components/monitors/monitor-live-context";
@@ -213,6 +215,35 @@ export default async function MonitorPage({
                                     <Timer className="h-3 w-3" />{" "}
                                     {formatQueryDelay(monitor.query_delay_ms)}
                                 </span>
+                                {monitor.quiet_hours_enabled && (
+                                    <>
+                                        <span className="text-muted-foreground/50">
+                                            ·
+                                        </span>
+                                        <span
+                                            className="flex items-center gap-1"
+                                            title={monitor.quiet_hours_timezone}
+                                        >
+                                            <Clock3 className="h-3 w-3" />
+                                            {formatQuietHours({
+                                                enabled: true,
+                                                startMinute:
+                                                    monitor.quiet_hours_start_minute,
+                                                endMinute:
+                                                    monitor.quiet_hours_end_minute,
+                                                mode:
+                                                    monitor.quiet_hours_mode ===
+                                                    "slow"
+                                                        ? "slow"
+                                                        : "pause",
+                                                delayMs:
+                                                    monitor.quiet_hours_delay_ms,
+                                                timezone:
+                                                    monitor.quiet_hours_timezone,
+                                            })}
+                                        </span>
+                                    </>
+                                )}
                                 <span className="text-muted-foreground/50">
                                     ·
                                 </span>

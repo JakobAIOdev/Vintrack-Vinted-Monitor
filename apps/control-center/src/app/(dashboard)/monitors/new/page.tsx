@@ -20,6 +20,7 @@ import {
     getFreeProxyRegionHealth,
     type FreeProxyOption,
 } from "@/components/monitors/monitor-form-sections";
+import { QuietHoursSection } from "@/components/monitors/quiet-hours-section";
 import { Switch } from "@/components/ui/switch";
 import { getStatusLocaleForRegionCodes } from "@/lib/regions";
 import {
@@ -713,6 +714,8 @@ export default function NewMonitorPage() {
                                 />
                             </div>
                         </FormSection>
+
+                        <QuietHoursSection />
 
                         <FormSection
                             title="Notifications"

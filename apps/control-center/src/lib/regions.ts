@@ -55,6 +55,30 @@ export const REGIONS: Region[] = [
     { code: "fi", label: "Finland", flag: "🇫🇮", domain: "vinted.fi" },
 ];
 
+const TIMEZONE_BY_REGION: Record<string, string> = {
+    de: "Europe/Berlin",
+    fr: "Europe/Paris",
+    it: "Europe/Rome",
+    es: "Europe/Madrid",
+    nl: "Europe/Amsterdam",
+    pl: "Europe/Warsaw",
+    pt: "Europe/Lisbon",
+    be: "Europe/Brussels",
+    at: "Europe/Vienna",
+    lu: "Europe/Luxembourg",
+    uk: "Europe/London",
+    ie: "Europe/Dublin",
+    cz: "Europe/Prague",
+    sk: "Europe/Bratislava",
+    lt: "Europe/Vilnius",
+    se: "Europe/Stockholm",
+    dk: "Europe/Copenhagen",
+    ro: "Europe/Bucharest",
+    hu: "Europe/Budapest",
+    hr: "Europe/Zagreb",
+    fi: "Europe/Helsinki",
+};
+
 const REGIONS_BY_CODE: Record<string, Region> = Object.create(null);
 for (const region of REGIONS) {
     REGIONS_BY_CODE[region.code] = region;
@@ -68,6 +92,10 @@ export function getRegionLabel(code: string): string {
 
 export function getRegionDomain(code: string): string {
     return REGIONS_BY_CODE[code]?.domain ?? "vinted.de";
+}
+
+export function getRegionTimezone(code: string): string {
+    return TIMEZONE_BY_REGION[code] ?? "Europe/Berlin";
 }
 
 export function getRegionFlag(code: string): string {
