@@ -22,12 +22,10 @@ import {
     getMonitorQueryValidationError,
     normalizeMonitorQuery,
 } from "@/lib/monitor-query";
-
-function normalizeAntiKeywords(value: FormDataEntryValue | null) {
-    const normalized = String(value ?? "").trim();
-    if (normalized.length > 1000) throw new Error("Anti keywords are too long");
-    return normalized || null;
-}
+import {
+    getMonitorAntiKeywordsValidationError,
+    normalizeMonitorAntiKeywords,
+} from "@/lib/monitor-anti-keywords";
 
 async function sendTelegramStatusIfConfigured(
     monitor: { name: string; userId: string; telegram_active: boolean },
@@ -117,7 +115,9 @@ export async function createMonitor(
 
     const name = formData.get("name") as string;
     const normalizedQuery = normalizeMonitorQuery(formData.get("query"));
-    const antiKeywords = normalizeAntiKeywords(formData.get("anti_keywords"));
+    const antiKeywords = normalizeMonitorAntiKeywords(
+        formData.get("anti_keywords"),
+    );
     const queryDelayMs = normalizeQueryDelayMs(formData.get("query_delay_ms"));
     const quietHours = normalizeQuietHours(formData, queryDelayMs);
     const priceMin = formData.get("price_min")
@@ -142,6 +142,8 @@ export async function createMonitor(
     const normalizedName = name?.trim() ?? "";
     const queryValidationError =
         getMonitorQueryValidationError(normalizedQuery);
+    const antiKeywordsValidationError =
+        getMonitorAntiKeywordsValidationError(antiKeywords);
 
     if (!normalizedName) return { ok: false, message: "Name is required." };
     if (normalizedName.length > 255) {
@@ -149,6 +151,9 @@ export async function createMonitor(
     }
     if (queryValidationError) {
         return { ok: false, message: queryValidationError };
+    }
+    if (antiKeywordsValidationError) {
+        return { ok: false, message: antiKeywordsValidationError };
     }
 
     const { proxyGroupId, proxySource } = await resolveMonitorProxySelection(
@@ -541,7 +546,9 @@ export async function updateMonitor(id: number, formData: FormData) {
 
     const name = formData.get("name") as string;
     const normalizedQuery = normalizeMonitorQuery(formData.get("query"));
-    const antiKeywords = normalizeAntiKeywords(formData.get("anti_keywords"));
+    const antiKeywords = normalizeMonitorAntiKeywords(
+        formData.get("anti_keywords"),
+    );
     const queryDelayMs = normalizeQueryDelayMs(formData.get("query_delay_ms"));
     const quietHours = normalizeQuietHours(formData, queryDelayMs);
     const priceMin = formData.get("price_min")
@@ -569,6 +576,11 @@ export async function updateMonitor(id: number, formData: FormData) {
     const queryValidationError =
         getMonitorQueryValidationError(normalizedQuery);
     if (queryValidationError) throw new Error(queryValidationError);
+    const antiKeywordsValidationError =
+        getMonitorAntiKeywordsValidationError(antiKeywords);
+    if (antiKeywordsValidationError) {
+        throw new Error(antiKeywordsValidationError);
+    }
 
     // Verify the monitor belongs to this user
     const existing = await db.monitors.findFirst({
@@ -644,7 +656,9 @@ export async function updateMonitorAndReturn(
 
     const name = formData.get("name") as string;
     const normalizedQuery = normalizeMonitorQuery(formData.get("query"));
-    const antiKeywords = normalizeAntiKeywords(formData.get("anti_keywords"));
+    const antiKeywords = normalizeMonitorAntiKeywords(
+        formData.get("anti_keywords"),
+    );
     const queryDelayMs = normalizeQueryDelayMs(formData.get("query_delay_ms"));
     const quietHours = normalizeQuietHours(formData, queryDelayMs);
     const priceMin = formData.get("price_min")
@@ -669,6 +683,8 @@ export async function updateMonitorAndReturn(
     const normalizedName = name?.trim() ?? "";
     const queryValidationError =
         getMonitorQueryValidationError(normalizedQuery);
+    const antiKeywordsValidationError =
+        getMonitorAntiKeywordsValidationError(antiKeywords);
 
     if (!normalizedName) {
         return { success: false, message: "Name is required." };
@@ -678,6 +694,9 @@ export async function updateMonitorAndReturn(
     }
     if (queryValidationError) {
         return { success: false, message: queryValidationError };
+    }
+    if (antiKeywordsValidationError) {
+        return { success: false, message: antiKeywordsValidationError };
     }
 
     const existing = await db.monitors.findFirst({

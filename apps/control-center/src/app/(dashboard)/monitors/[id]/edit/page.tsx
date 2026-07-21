@@ -450,7 +450,8 @@ export default function EditMonitorPage() {
                                 />
                                 <p className="text-muted-foreground text-[12px]">
                                     New items matching any anti keyword in title
-                                    or description will be skipped.
+                                    or description will be skipped. Duplicate
+                                    entries are removed automatically.
                                 </p>
                             </div>
 
