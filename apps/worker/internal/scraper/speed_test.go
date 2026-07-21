@@ -251,6 +251,17 @@ func TestMatchesDiscoveryAppliesLocalTextFilters(t *testing.T) {
 	}
 }
 
+func TestMatchesDiscoveryAcceptsAnyCommaSeparatedQuery(t *testing.T) {
+	monitor := model.Monitor{Query: "console ps1, playstation 1 bundle, ps one"}
+
+	if !matchesDiscovery(model.VintedItem{Title: "Sony PS One boxed"}, monitor) {
+		t.Fatal("item matching the third query alternative was rejected")
+	}
+	if matchesDiscovery(model.VintedItem{Title: "PlayStation 2 bundle"}, monitor) {
+		t.Fatal("item matching only part of an alternative was accepted")
+	}
+}
+
 func TestBuildDiscoveryURLKeepsFiltersAndDropsQuery(t *testing.T) {
 	t.Setenv("DISCOVERY_PER_PAGE", "96")
 	price := 25

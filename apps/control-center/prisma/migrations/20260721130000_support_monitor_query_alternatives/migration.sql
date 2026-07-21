@@ -1,0 +1,2 @@
+ALTER TABLE "monitors"
+ALTER COLUMN "query" TYPE TEXT;

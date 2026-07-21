@@ -299,7 +299,7 @@ export default function GuidePage() {
                                 </h3>
                                 <StepList
                                     steps={[
-                                        "Use a specific query such as Nike Dunk Low instead of Shoes.",
+                                        "Use a specific query such as Nike Dunk Low, or separate alternative searches with commas.",
                                         "Choose the Vinted region where you want to receive listings.",
                                         "Add only filters that materially improve the results.",
                                         "Select a Ready Free Pool region or your own proxy group.",
@@ -312,9 +312,11 @@ export default function GuidePage() {
                                 </p>
                                 <p className="text-muted-foreground mt-3 text-sm leading-6">
                                     Use anti-keywords for recurring unwanted
-                                    results. Keep the query readable and let
-                                    category, brand, size, and condition filters
-                                    do the precise work.
+                                    results. Comma-separated searches are
+                                    rotated at the configured polling rate. Keep
+                                    each query readable and let category, brand,
+                                    size, and condition filters do the precise
+                                    work.
                                 </p>
                                 <Button asChild size="sm" className="mt-5">
                                     <Link href="/monitors/new">

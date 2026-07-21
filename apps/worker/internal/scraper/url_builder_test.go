@@ -32,6 +32,28 @@ func TestBuildVintedURL_BasicQuery(t *testing.T) {
 	}
 }
 
+func TestBuildVintedURLUsesFirstQueryAlternative(t *testing.T) {
+	m := model.Monitor{Query: "console ps1, playstation 1, ps one", Region: "de"}
+	parsed, err := url.Parse(BuildVintedURL(m))
+	if err != nil {
+		t.Fatalf("Failed to parse URL: %v", err)
+	}
+	if got := parsed.Query().Get("search_text"); got != "console ps1" {
+		t.Fatalf("search_text = %q, want first alternative", got)
+	}
+}
+
+func TestBuildVintedURLForQueryUsesSelectedAlternative(t *testing.T) {
+	m := model.Monitor{Query: "console ps1, playstation 1, ps one", Region: "de"}
+	parsed, err := url.Parse(BuildVintedURLForQuery(m, "playstation 1"))
+	if err != nil {
+		t.Fatalf("Failed to parse URL: %v", err)
+	}
+	if got := parsed.Query().Get("search_text"); got != "playstation 1" {
+		t.Fatalf("search_text = %q, want selected alternative", got)
+	}
+}
+
 func TestBuildVintedURL_WithPriceFilters(t *testing.T) {
 	min, max := 10, 50
 	m := model.Monitor{

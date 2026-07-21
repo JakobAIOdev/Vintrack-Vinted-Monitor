@@ -253,7 +253,14 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		enricher = e.GetOrCreateEnricher(pm, domain, proxyKey, trafficRecorder, proxySource)
 	}
 
-	apiURL := BuildVintedURL(m)
+	monitorQueries := parseMonitorQueries(m.Query)
+	if len(monitorQueries) == 0 {
+		monitorQueries = []string{""}
+	}
+	queryURLs := make([]string, len(monitorQueries))
+	for index, query := range monitorQueries {
+		queryURLs[index] = BuildVintedURLForQuery(m, query)
+	}
 	interval := monitorQueryInterval(m, time.Now())
 	maxConsecutiveErrors := getEnvInt("MAX_CONSECUTIVE_ERRORS", 20)
 	timeoutDuration := time.Duration(getEnvInt("CATALOG_TIMEOUT_MS", 2000)) * time.Millisecond
@@ -262,11 +269,11 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	}
 	consecutiveErrors := 0
 	checks := 0
-	initialized := false
+	initializedQueries := make([]bool, len(monitorQueries))
 	var totalErrors int64
 	localSeen := make(map[int64]time.Time, 128)
 
-	log.Printf("[%d] started | name=%q | query=%q | delay=%s | hedge=%dms | url=%s", m.ID, m.Name, m.Query, interval, getEnvInt("CATALOG_HEDGE_DELAY_MS", 250), apiURL)
+	log.Printf("[%d] started | name=%q | queries=%d | delay=%s | hedge=%dms | url=%s", m.ID, m.Name, len(monitorQueries), interval, getEnvInt("CATALOG_HEDGE_DELAY_MS", 250), queryURLs[0])
 	if !m.SuppressStartupNotice && m.WebhookActive && m.DiscordWebhook.Valid && m.DiscordWebhook.String != "" {
 		go discord.SendStartupWebhook(m.DiscordWebhook.String, m.Name)
 	}
@@ -368,6 +375,8 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			}
 		}
 
+		queryIndex, _ := monitorQueryForCheck(monitorQueries, checks)
+		apiURL := queryURLs[queryIndex]
 		fetchCtx, cancelFetch := context.WithTimeout(ctx, timeoutDuration)
 		result := e.fetchCatalogHedged(fetchCtx, pool, apiURL, domain)
 		cancelFetch()
@@ -442,8 +451,8 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 		items := result.items
 		if len(items) == 0 {
-			if !initialized {
-				initialized = true
+			if !initializedQueries[queryIndex] {
+				initializedQueries[queryIndex] = true
 				log.Printf("[%d] initial scan completed with no items", m.ID)
 			}
 			if checks%10 == 0 {
@@ -459,7 +468,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		now := time.Now()
-		if !initialized {
+		if !initializedQueries[queryIndex] {
 			seedIDs := make([]int64, len(items))
 			for i, item := range items {
 				seedIDs[i] = item.ID
@@ -477,7 +486,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 				}, false)
 			}
 			log.Printf("[%d] initial scan seeded %d items without notifications", m.ID, len(items))
-			initialized = true
+			initializedQueries[queryIndex] = true
 			e.db.RecordMonitorRun(model.MonitorRun{
 				MonitorID: m.ID, Status: "success", StatusCode: 200,
 				DurationMS: int(time.Since(cycleStart).Milliseconds()), ItemCount: len(items),

@@ -279,10 +279,8 @@ func discoveryFailureBackoff(proxySource string, consecutiveFailures int) time.D
 
 func matchesDiscovery(item model.VintedItem, monitor model.Monitor) bool {
 	haystack := strings.ToLower(item.Title + "\n" + item.BrandTitle)
-	for _, term := range strings.Fields(strings.ToLower(strings.TrimSpace(monitor.Query))) {
-		if !strings.Contains(haystack, term) {
-			return false
-		}
+	if !matchesMonitorQuery(haystack, monitor.Query) {
+		return false
 	}
 	antiKeywordHaystack := haystack + "\n" + strings.ToLower(item.Description)
 	for _, keyword := range parseAntiKeywords(monitor.AntiKeywords) {
