@@ -13,6 +13,7 @@ import {
     LIVE_FEED_ITEM_CAP_OPTIONS,
     normalizeLiveFeedItemCap,
 } from "@/lib/live-feed";
+import { useMonitorItemStream } from "@/components/monitors/monitor-stream-context";
 
 type FeedSummary = {
     activeMonitors: number;
@@ -64,66 +65,48 @@ export default function FeedPage() {
         fetchFeed();
     }, [itemCap]);
 
-    useEffect(() => {
-        const eventSource = new EventSource("/api/stream");
-
-        eventSource.onmessage = (event) => {
-            try {
-                const newItem: ItemData = JSON.parse(event.data);
-                const liveItem: ItemData = {
-                    ...newItem,
-                    isLive: true,
-                    monitor_name: newItem.monitor_name || null,
-                };
-
-                setItems((prev) => {
-                    const newId = String(newItem.id);
-                    const existingIdx = prev.findIndex(
-                        (i) => String(i.id) === newId,
-                    );
-                    if (existingIdx !== -1) {
-                        const existing = prev[existingIdx];
-                        const merged = {
-                            ...existing,
-                            monitor_name:
-                                newItem.monitor_name || existing.monitor_name,
-                            location: newItem.location || existing.location,
-                            rating: newItem.rating || existing.rating,
-                            seller_id: newItem.seller_id || existing.seller_id,
-                            seller_login:
-                                newItem.seller_login || existing.seller_login,
-                            seller_profile_url:
-                                newItem.seller_profile_url ||
-                                existing.seller_profile_url,
-                            total_price:
-                                newItem.total_price || existing.total_price,
-                        };
-                        const updated = [...prev];
-                        updated[existingIdx] = merged;
-                        return updated;
-                    }
-                    return capFeedItems(
-                        [{ ...liveItem, id: newId }, ...prev],
-                        itemCap,
-                    );
-                });
-
-                setTimeout(() => {
-                    setItems((curr) =>
-                        curr.map((item) =>
-                            String(item.id) === String(newItem.id)
-                                ? { ...item, isLive: false }
-                                : item,
-                        ),
-                    );
-                }, 30000);
-            } catch (e) {
-                console.error("SSE Error", e);
-            }
+    useMonitorItemStream((newItem) => {
+        const newId = String(newItem.id);
+        const liveItem: ItemData = {
+            ...newItem,
+            id: newId,
+            isLive: true,
+            monitor_name: newItem.monitor_name || null,
         };
 
-        return () => eventSource.close();
-    }, [itemCap]);
+        setItems((prev) => {
+            const existingIdx = prev.findIndex((i) => String(i.id) === newId);
+            if (existingIdx !== -1) {
+                const existing = prev[existingIdx];
+                const merged = {
+                    ...existing,
+                    monitor_name: newItem.monitor_name || existing.monitor_name,
+                    location: newItem.location || existing.location,
+                    rating: newItem.rating || existing.rating,
+                    seller_id: newItem.seller_id || existing.seller_id,
+                    seller_login: newItem.seller_login || existing.seller_login,
+                    seller_profile_url:
+                        newItem.seller_profile_url ||
+                        existing.seller_profile_url,
+                    total_price: newItem.total_price || existing.total_price,
+                };
+                const updated = [...prev];
+                updated[existingIdx] = merged;
+                return updated;
+            }
+            return capFeedItems([liveItem, ...prev], itemCap);
+        });
+
+        setTimeout(() => {
+            setItems((curr) =>
+                curr.map((item) =>
+                    String(item.id) === newId
+                        ? { ...item, isLive: false }
+                        : item,
+                ),
+            );
+        }, 30000);
+    });
 
     const handleItemCapChange = (value: string) => {
         const nextCap = normalizeLiveFeedItemCap(value);
