@@ -10,9 +10,13 @@ import {
     Loader2,
     Menu,
     Star,
+    Volume1,
+    Volume2,
+    VolumeX,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useVintedAccount } from "@/components/account-provider";
+import { useMonitorStreamContext } from "@/components/monitors/monitor-stream-context";
 import { cn } from "@/lib/utils";
 
 type NotificationEntry = {
@@ -279,6 +283,7 @@ interface HeaderProps {
 
 export function Header({ onMenuClick }: HeaderProps) {
     const pathname = usePathname();
+    const { soundEnabled, soundReady, toggleSound } = useMonitorStreamContext();
 
     const getBreadcrumbs = (): { label: string; isCurrent: boolean }[] => {
         if (pathname === "/dashboard")
@@ -331,6 +336,43 @@ export function Header({ onMenuClick }: HeaderProps) {
             </div>
 
             <div className="flex items-center gap-3 md:gap-4">
+                <button
+                    type="button"
+                    onClick={() => void toggleSound()}
+                    className={cn(
+                        "border-border/80 bg-background/70 hover:border-border hover:bg-accent hover:text-accent-foreground inline-flex h-8 w-8 items-center justify-center rounded-lg border shadow-sm transition-colors",
+                        soundEnabled
+                            ? soundReady
+                                ? "text-emerald-600 dark:text-emerald-400"
+                                : "text-amber-600 dark:text-amber-400"
+                            : "text-muted-foreground",
+                    )}
+                    aria-label={
+                        soundEnabled
+                            ? soundReady
+                                ? "Disable item alert sound"
+                                : "Activate item alert sound"
+                            : "Enable item alert sound"
+                    }
+                    aria-pressed={soundEnabled}
+                    title={
+                        soundEnabled
+                            ? soundReady
+                                ? "Item alert sound on"
+                                : "Click to activate item alert sound"
+                            : "Item alert sound off"
+                    }
+                >
+                    {soundEnabled ? (
+                        soundReady ? (
+                            <Volume2 className="h-4 w-4" />
+                        ) : (
+                            <Volume1 className="h-4 w-4" />
+                        )
+                    ) : (
+                        <VolumeX className="h-4 w-4" />
+                    )}
+                </button>
                 <NotificationBell />
                 <ThemeToggle compact className="hidden sm:inline-flex" />
                 <a

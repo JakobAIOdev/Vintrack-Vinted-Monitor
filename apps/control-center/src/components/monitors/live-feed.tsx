@@ -8,10 +8,8 @@ import {
     type ItemData,
 } from "@/components/monitors/item-card";
 import { useMonitorLiveContext } from "@/components/monitors/monitor-live-context";
-import {
-    capFeedItems,
-    DEFAULT_LIVE_FEED_ITEM_CAP,
-} from "@/lib/live-feed";
+import { capFeedItems, DEFAULT_LIVE_FEED_ITEM_CAP } from "@/lib/live-feed";
+import { useMonitorItemStream } from "@/components/monitors/monitor-stream-context";
 
 const MONITOR_LIVE_FEED_ITEM_CAP = DEFAULT_LIVE_FEED_ITEM_CAP;
 
@@ -45,82 +43,62 @@ export function LiveFeed({ monitorId }: { monitorId: number }) {
         fetchItems();
     }, [incrementItemCount, monitorId]);
 
-    useEffect(() => {
-        const eventSource = new EventSource("/api/stream");
+    useMonitorItemStream((newItem) => {
+        if (newItem.monitor_id !== monitorId) return;
 
-        eventSource.onmessage = (event) => {
-            try {
-                const newItem: ItemData = JSON.parse(event.data);
-
-                if (newItem.monitor_id === monitorId) {
-                    const newId = String(newItem.id);
-                    const liveItem: ItemData = {
-                        ...newItem,
-                        id: newId,
-                        isLive: true,
-                    };
-                    const isExisting = seenItemIds.current.has(newId);
-
-                    if (!isExisting) {
-                        seenItemIds.current.add(newId);
-                        incrementItemCount();
-                    }
-
-                    setItems((prev) => {
-                        const existingIdx = prev.findIndex(
-                            (i) => String(i.id) === newId,
-                        );
-                        if (existingIdx !== -1) {
-                            const existing = prev[existingIdx];
-                            const merged = {
-                                ...existing,
-                                location: newItem.location || existing.location,
-                                rating: newItem.rating || existing.rating,
-                                seller_id:
-                                    newItem.seller_id || existing.seller_id,
-                                seller_login:
-                                    newItem.seller_login ||
-                                    existing.seller_login,
-                                seller_profile_url:
-                                    newItem.seller_profile_url ||
-                                    existing.seller_profile_url,
-                                total_price:
-                                    newItem.total_price || existing.total_price,
-                                extra_images:
-                                    newItem.extra_images ||
-                                    existing.extra_images,
-                            };
-                            const updated = [...prev];
-                            updated[existingIdx] = merged;
-                            return updated;
-                        }
-                        const nextItems = capFeedItems(
-                            [liveItem, ...prev],
-                            MONITOR_LIVE_FEED_ITEM_CAP,
-                        );
-                        seenItemIds.current = new Set(
-                            nextItems.map((item) => String(item.id)),
-                        );
-                        return nextItems;
-                    });
-
-                    setTimeout(() => {
-                        setItems((curr) =>
-                            curr.map((item) =>
-                                String(item.id) === String(newItem.id)
-                                    ? { ...item, isLive: false }
-                                    : item,
-                            ),
-                        );
-                    }, 10000);
-                }
-            } catch (e) {
-                console.error("SSE Parse Error", e);
-            }
+        const newId = String(newItem.id);
+        const liveItem: ItemData = {
+            ...newItem,
+            id: newId,
+            isLive: true,
         };
+        const isExisting = seenItemIds.current.has(newId);
 
-        return () => eventSource.close();
-    }, [incrementItemCount, monitorId]);
+        if (!isExisting) {
+            seenItemIds.current.add(newId);
+            incrementItemCount();
+        }
+
+        setItems((prev) => {
+            const existingIdx = prev.findIndex((i) => String(i.id) === newId);
+            if (existingIdx !== -1) {
+                const existing = prev[existingIdx];
+                const merged = {
+                    ...existing,
+                    location: newItem.location || existing.location,
+                    rating: newItem.rating || existing.rating,
+                    seller_id: newItem.seller_id || existing.seller_id,
+                    seller_login: newItem.seller_login || existing.seller_login,
+                    seller_profile_url:
+                        newItem.seller_profile_url ||
+                        existing.seller_profile_url,
+                    total_price: newItem.total_price || existing.total_price,
+                    extra_images: newItem.extra_images || existing.extra_images,
+                };
+                const updated = [...prev];
+                updated[existingIdx] = merged;
+                return updated;
+            }
+            const nextItems = capFeedItems(
+                [liveItem, ...prev],
+                MONITOR_LIVE_FEED_ITEM_CAP,
+            );
+            seenItemIds.current = new Set(
+                nextItems.map((item) => String(item.id)),
+            );
+            return nextItems;
+        });
+
+        setTimeout(() => {
+            setItems((curr) =>
+                curr.map((item) =>
+                    String(item.id) === newId
+                        ? { ...item, isLive: false }
+                        : item,
+                ),
+            );
+        }, 10000);
+    });
 
     const handleSellerBanned = (sellerId: string) => {
         setItems((current) => {

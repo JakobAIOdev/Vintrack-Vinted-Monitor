@@ -1,4 +1,91 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+async function installBrowserAlertMocks(page: Page) {
+    await page.addInitScript(() => {
+        type AlertTestWindow = typeof window & {
+            __vintrackOscillatorStarts: number;
+            __emitVintrackItem: (item: Record<string, unknown>) => void;
+        };
+
+        const testWindow = window as AlertTestWindow;
+        testWindow.__vintrackOscillatorStarts = 0;
+
+        const audioParam = {
+            setValueAtTime: () => undefined,
+            exponentialRampToValueAtTime: () => undefined,
+        };
+
+        class MockAudioContext {
+            state = "running";
+            currentTime = 0;
+            destination = {};
+
+            createGain() {
+                return {
+                    gain: audioParam,
+                    connect: () => undefined,
+                    disconnect: () => undefined,
+                };
+            }
+
+            createOscillator() {
+                return {
+                    type: "sine",
+                    frequency: audioParam,
+                    connect: () => undefined,
+                    start: () => {
+                        testWindow.__vintrackOscillatorStarts += 1;
+                    },
+                    stop: () => undefined,
+                };
+            }
+
+            resume() {
+                this.state = "running";
+                return Promise.resolve();
+            }
+
+            close() {
+                this.state = "closed";
+                return Promise.resolve();
+            }
+        }
+
+        Object.defineProperty(window, "AudioContext", {
+            configurable: true,
+            value: MockAudioContext,
+        });
+
+        const eventSources: MockEventSource[] = [];
+
+        class MockEventSource {
+            onmessage: ((event: MessageEvent<string>) => void) | null = null;
+            closed = false;
+
+            constructor(public readonly url: string) {
+                eventSources.push(this);
+            }
+
+            close() {
+                this.closed = true;
+            }
+        }
+
+        Object.defineProperty(window, "EventSource", {
+            configurable: true,
+            value: MockEventSource,
+        });
+
+        testWindow.__emitVintrackItem = (item) => {
+            const event = {
+                data: JSON.stringify(item),
+            } as MessageEvent<string>;
+            for (const source of eventSources) {
+                if (!source.closed) source.onmessage?.(event);
+            }
+        };
+    });
+}
 
 test.describe("dashboard feed", () => {
     test.skip(
@@ -72,7 +159,10 @@ test.describe("dashboard feed", () => {
 
         const preview = page.locator('img[alt="Preview"]');
         await expect(preview).toBeVisible();
-        await expect(preview).toHaveAttribute("src", "/mock-images/vinted-1.svg");
+        await expect(preview).toHaveAttribute(
+            "src",
+            "/mock-images/vinted-1.svg",
+        );
 
         await page.keyboard.press("Escape");
         await expect(preview).toBeHidden();
@@ -91,14 +181,120 @@ test.describe("dashboard feed", () => {
 
         await page.goto("/feed");
 
-        await expect(
-            page.getByText("E2E Nike Dunk Low Retro"),
-        ).toBeVisible();
+        await expect(page.getByText("E2E Nike Dunk Low Retro")).toBeVisible();
         await expect(
             page.getByText("E2E Carhartt Detroit Jacket"),
         ).not.toBeVisible();
 
         const unbanRes = await request.delete("/api/seller-bans/880002");
         expect(unbanRes.ok()).toBeTruthy();
+    });
+
+    test("plays and persists one browser sound for an item burst", async ({
+        page,
+    }) => {
+        await installBrowserAlertMocks(page);
+        await page.goto("/feed");
+
+        await expect(page.getByText("E2E Nike Dunk Low Retro")).toBeVisible();
+        expect(
+            await page.evaluate(
+                () =>
+                    (
+                        window as typeof window & {
+                            __vintrackOscillatorStarts: number;
+                        }
+                    ).__vintrackOscillatorStarts,
+            ),
+        ).toBe(0);
+
+        await page
+            .getByRole("button", { name: "Enable item alert sound" })
+            .click();
+        await expect(
+            page.getByRole("button", { name: "Disable item alert sound" }),
+        ).toHaveAttribute("aria-pressed", "true");
+
+        const previewStarts = await page.evaluate(
+            () =>
+                (
+                    window as typeof window & {
+                        __vintrackOscillatorStarts: number;
+                    }
+                ).__vintrackOscillatorStarts,
+        );
+        expect(previewStarts).toBe(4);
+        expect(
+            await page.evaluate(() =>
+                localStorage.getItem("vintrack.browserAlerts.enabled"),
+            ),
+        ).toBe("true");
+
+        await page.evaluate(() => {
+            const emit = (
+                window as typeof window & {
+                    __emitVintrackItem: (item: Record<string, unknown>) => void;
+                }
+            ).__emitVintrackItem;
+            const baseItem = {
+                monitor_id: 910001,
+                brand: "Test Brand",
+                price: "20.00 EUR",
+                total_price: "23.70 EUR",
+                size: "M",
+                condition: "Very good",
+                url: "https://www.vinted.de/items/9999001",
+                image_url: "/mock-images/vinted-1.svg",
+                extra_images: null,
+                found_at: new Date().toISOString(),
+                monitor_name: "E2E Mock Feed",
+                location: "DE",
+                rating: "5.0",
+                seller_id: "990001",
+                seller_login: "sound_test",
+                seller_profile_url: null,
+            };
+
+            emit({
+                ...baseItem,
+                id: "9999001",
+                title: "Sound Test Item One",
+            });
+            emit({
+                ...baseItem,
+                id: "9999002",
+                title: "Sound Test Item Two",
+                url: "https://www.vinted.de/items/9999002",
+            });
+        });
+
+        await expect(page.getByText("Sound Test Item One")).toBeVisible();
+        await expect(page.getByText("Sound Test Item Two")).toBeVisible();
+        await expect
+            .poll(() =>
+                page.evaluate(
+                    () =>
+                        (
+                            window as typeof window & {
+                                __vintrackOscillatorStarts: number;
+                            }
+                        ).__vintrackOscillatorStarts,
+                ),
+            )
+            .toBe(previewStarts + 4);
+
+        await page.reload();
+        await expect(
+            page.getByRole("button", { name: "Disable item alert sound" }),
+        ).toHaveAttribute("aria-pressed", "true");
+
+        await page
+            .getByRole("button", { name: "Disable item alert sound" })
+            .click();
+        expect(
+            await page.evaluate(() =>
+                localStorage.getItem("vintrack.browserAlerts.enabled"),
+            ),
+        ).toBe("false");
     });
 });
