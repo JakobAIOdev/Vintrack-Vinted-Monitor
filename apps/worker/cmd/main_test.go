@@ -134,7 +134,7 @@ func TestSelectFreeProxyImportCandidatesHonorsRemainingPoolCapacity(t *testing.T
 	}
 }
 
-func TestSelectFreeProxyImportCandidatesDoesNotGrowOversizedPool(t *testing.T) {
+func TestSelectFreeProxyImportCandidatesRotatesOversizedPool(t *testing.T) {
 	sources := [][]freeProxyImportCandidate{{
 		{ProxyURL: "http://new:80", Source: "iplocate"},
 		{ProxyURL: "http://existing-a:80", Source: "iplocate"},
@@ -153,11 +153,11 @@ func TestSelectFreeProxyImportCandidatesDoesNotGrowOversizedPool(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("selected candidate count = %d, want 3", len(got))
 	}
-	if newCount != 0 {
-		t.Fatalf("new candidate count = %d, want 0", newCount)
+	if newCount != 1 {
+		t.Fatalf("new candidate count = %d, want 1", newCount)
 	}
-	if _, selected := existing["http://new:80"]; selected {
-		t.Fatal("oversized pool unexpectedly selected a new proxy")
+	if got[0].ProxyURL != "http://new:80" {
+		t.Fatalf("first selected candidate = %q, want new proxy", got[0].ProxyURL)
 	}
 }
 
@@ -205,6 +205,19 @@ func TestIPLocateCountryFromURL(t *testing.T) {
 	for rawURL, want := range tests {
 		if got := iplocateCountryFromURL(rawURL); got != want {
 			t.Errorf("iplocateCountryFromURL(%q) = %q, want %q", rawURL, got, want)
+		}
+	}
+}
+
+func TestFreeProxySourcePrefersKnownURLProvider(t *testing.T) {
+	tests := map[string]string{
+		"https://raw.githubusercontent.com/iplocate/free-proxy-list/main/all-proxies.txt": "iplocate",
+		proxyScrapeFallbackURL: "proxyscrape",
+	}
+
+	for importURL, want := range tests {
+		if got := freeProxySource(nil, importURL); got != want {
+			t.Errorf("freeProxySource(nil, %q) = %q, want %q", importURL, got, want)
 		}
 	}
 }

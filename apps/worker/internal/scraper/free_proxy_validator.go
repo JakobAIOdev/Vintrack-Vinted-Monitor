@@ -42,12 +42,15 @@ func ValidateFreeProxy(ctx context.Context, proxyURL string, region string, maxL
 }
 
 func freeProxyRequestTimeout(ctx context.Context, maxLatencyMs int) time.Duration {
-	timeout := time.Duration(maxLatencyMs/2) * time.Millisecond
+	if maxLatencyMs <= 0 {
+		maxLatencyMs = 2500
+	}
+	timeout := time.Duration(maxLatencyMs) * time.Millisecond
 	if timeout < 500*time.Millisecond {
 		timeout = 500 * time.Millisecond
 	}
-	if timeout > 2*time.Second {
-		timeout = 2 * time.Second
+	if timeout > 5*time.Second {
+		timeout = 5 * time.Second
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
