@@ -940,24 +940,17 @@ export async function getFreeProxyAdminState() {
                 region,
                 COUNT(*) FILTER (
                     WHERE status = 'active'
-                      AND success_streak > 0
-                      AND last_status_code = 200
-                      AND last_error IS NULL
                       AND last_success_at >= NOW() - INTERVAL '20 minutes'
                 )::bigint AS active_count,
                 COUNT(*) FILTER (
                     WHERE status = 'pending'
                       AND success_streak > 0
-                      AND last_status_code = 200
-                      AND last_error IS NULL
                       AND last_success_at >= NOW() - INTERVAL '20 minutes'
                 )::bigint AS warming_count,
                 COUNT(*) FILTER (
                     WHERE status = 'pending'
                       AND (
                         success_streak = 0
-                        OR last_status_code IS DISTINCT FROM 200
-                        OR last_error IS NOT NULL
                         OR last_success_at IS NULL
                         OR last_success_at < NOW() - INTERVAL '20 minutes'
                       )
@@ -967,10 +960,7 @@ export async function getFreeProxyAdminState() {
                        OR (
                         status = 'active'
                         AND (
-                            success_streak = 0
-                            OR last_status_code IS DISTINCT FROM 200
-                            OR last_error IS NOT NULL
-                            OR last_success_at IS NULL
+                            last_success_at IS NULL
                             OR last_success_at < NOW() - INTERVAL '20 minutes'
                         )
                       )

@@ -463,11 +463,20 @@ func importFreeProxies(ctx context.Context, store *database.Store) {
 		log.Printf("free proxy batch import failed after %d candidates: %v", processed, err)
 		return
 	}
+	selectedProxyURLs := make([]string, 0, len(selectedCandidates))
+	for _, candidate := range selectedCandidates {
+		selectedProxyURLs = append(selectedProxyURLs, candidate.ProxyURL)
+	}
+	pruned, err := store.PruneUnselectedFreeProxies(selectedProxyURLs)
+	if err != nil {
+		log.Printf("free proxy stale candidate prune failed: %v", err)
+	}
 	if processed > 0 {
 		log.Printf(
-			"free proxy import refreshed %d candidates (%d new) from %d available sources",
+			"free proxy import refreshed %d candidates (%d new, %d stale removed) from %d available sources",
 			processed,
 			newCandidates,
+			pruned,
 			len(sourceCandidates),
 		)
 	}
@@ -482,26 +491,16 @@ func selectFreeProxyImportCandidates(
 		return nil, 0
 	}
 
-	remainingCapacity := max(0, maxPoolSize-len(existingProxyURLs))
-	scanLimit := maxPoolSize + min(len(existingProxyURLs), maxPoolSize)
-	orderedCandidates := interleaveFreeProxyImportCandidates(sources, scanLimit)
+	orderedCandidates := interleaveFreeProxyImportCandidates(sources, maxPoolSize)
 	selectedCandidates := make([]database.FreeProxyRecord, 0, maxPoolSize)
-	refreshedExisting := 0
 	newCandidates := 0
 
 	for _, candidate := range orderedCandidates {
 		storedProxyURL, exists := existingProxyURLs[candidate.ProxyURL]
 		proxyURL := candidate.ProxyURL
 		if exists {
-			if refreshedExisting >= maxPoolSize {
-				continue
-			}
-			refreshedExisting++
 			proxyURL = storedProxyURL
 		} else {
-			if newCandidates >= remainingCapacity {
-				continue
-			}
 			newCandidates++
 			existingProxyURLs[candidate.ProxyURL] = candidate.ProxyURL
 		}
@@ -679,6 +678,12 @@ func freeProxySource(store *database.Store, importURL string) string {
 	if region := iplocateCountryFromURL(importURL); region != "" {
 		return "iplocate:" + region
 	}
+	if strings.Contains(importURL, "iplocate/free-proxy-list") {
+		return "iplocate"
+	}
+	if strings.Contains(importURL, "proxyscrape") {
+		return "proxyscrape"
+	}
 	if source := settingString(store, "free_proxy_import_source", ""); source != "" {
 		if strings.HasPrefix(source, "iplocate") {
 			return "iplocate"
@@ -686,12 +691,6 @@ func freeProxySource(store *database.Store, importURL string) string {
 		if strings.HasPrefix(source, "proxyscrape") {
 			return "proxyscrape"
 		}
-	}
-	if strings.Contains(importURL, "iplocate/free-proxy-list") {
-		return "iplocate"
-	}
-	if strings.Contains(importURL, "proxyscrape") {
-		return "proxyscrape"
 	}
 	return "manual"
 }

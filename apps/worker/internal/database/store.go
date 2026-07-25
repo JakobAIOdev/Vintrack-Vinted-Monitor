@@ -351,9 +351,6 @@ func (s *Store) GetActiveFreeProxies(region string, limit int) ([]string, error)
 			fph.status = 'active'
 			OR (fph.status = 'pending' AND fph.success_streak > 0)
 		  )
-		  AND fph.success_streak > 0
-		  AND fph.last_status_code = 200
-		  AND fph.last_error IS NULL
 		  AND fph.last_success_at >= NOW() - INTERVAL '20 minutes'
 		  AND fp.status <> 'disabled'
 		  AND (fph.next_check_at IS NULL OR fph.next_check_at <= NOW() + INTERVAL '15 minutes')
@@ -514,6 +511,26 @@ func (s *Store) UpsertFreeProxy(proxyURL string, protocol string, host string, p
 		Source:   source,
 	}})
 	return err
+}
+
+func (s *Store) PruneUnselectedFreeProxies(keepProxyURLs []string) (int64, error) {
+	if len(keepProxyURLs) == 0 {
+		return 0, nil
+	}
+	result, err := s.db.Exec(`
+		DELETE FROM free_proxies fp
+		WHERE (fp.source LIKE 'iplocate%' OR fp.source = 'proxyscrape')
+		  AND NOT (fp.proxy_url = ANY($1))
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM free_proxy_health fph
+			WHERE fph.proxy_id = fp.id
+			  AND fph.last_success_at >= NOW() - INTERVAL '30 minutes'
+		  )`, pq.Array(keepProxyURLs))
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (s *Store) EnsureFreeProxyHealthRows(regions []string, limit int) error {
@@ -702,6 +719,7 @@ func (s *Store) RecordFreeProxyFailure(proxyURL string, region string, statusCod
 			status = CASE
 				WHEN fph.status = 'pending' AND fph.success_streak = 0 THEN 'dead'
 				WHEN fph.status = 'cooldown' AND fph.failure_streak + 1 >= $5 THEN 'dead'
+				WHEN fph.status = 'active' AND fph.failure_streak + 1 < $5 THEN 'active'
 				WHEN fph.status = 'active' THEN 'cooldown'
 				WHEN fph.failure_streak + 1 >= $5 THEN 'cooldown'
 				ELSE 'cooldown'
@@ -767,9 +785,6 @@ func (s *Store) CountActiveFreeProxies(region string) (int, error) {
 			fph.status = 'active'
 			OR (fph.status = 'pending' AND fph.success_streak > 0)
 		  )
-		  AND fph.success_streak > 0
-		  AND fph.last_status_code = 200
-		  AND fph.last_error IS NULL
 		  AND fph.last_success_at >= NOW() - INTERVAL '20 minutes'
 		  AND fp.status <> 'disabled'`, region).Scan(&count)
 	return count, err
