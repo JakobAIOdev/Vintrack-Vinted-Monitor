@@ -938,10 +938,43 @@ export async function getFreeProxyAdminState() {
         db.$queryRaw<FreeProxyRegionRow[]>`
             SELECT
                 region,
-                COUNT(*) FILTER (WHERE status = 'active')::bigint AS active_count,
-                COUNT(*) FILTER (WHERE status = 'pending' AND success_streak > 0)::bigint AS warming_count,
-                COUNT(*) FILTER (WHERE status = 'pending' AND success_streak = 0)::bigint AS pending_count,
-                COUNT(*) FILTER (WHERE status = 'cooldown')::bigint AS cooldown_count,
+                COUNT(*) FILTER (
+                    WHERE status = 'active'
+                      AND success_streak > 0
+                      AND last_status_code = 200
+                      AND last_error IS NULL
+                      AND last_success_at >= NOW() - INTERVAL '20 minutes'
+                )::bigint AS active_count,
+                COUNT(*) FILTER (
+                    WHERE status = 'pending'
+                      AND success_streak > 0
+                      AND last_status_code = 200
+                      AND last_error IS NULL
+                      AND last_success_at >= NOW() - INTERVAL '20 minutes'
+                )::bigint AS warming_count,
+                COUNT(*) FILTER (
+                    WHERE status = 'pending'
+                      AND (
+                        success_streak = 0
+                        OR last_status_code IS DISTINCT FROM 200
+                        OR last_error IS NOT NULL
+                        OR last_success_at IS NULL
+                        OR last_success_at < NOW() - INTERVAL '20 minutes'
+                      )
+                )::bigint AS pending_count,
+                COUNT(*) FILTER (
+                    WHERE status = 'cooldown'
+                       OR (
+                        status = 'active'
+                        AND (
+                            success_streak = 0
+                            OR last_status_code IS DISTINCT FROM 200
+                            OR last_error IS NOT NULL
+                            OR last_success_at IS NULL
+                            OR last_success_at < NOW() - INTERVAL '20 minutes'
+                        )
+                      )
+                )::bigint AS cooldown_count,
                 COUNT(*) FILTER (WHERE status = 'dead')::bigint AS dead_count,
                 COUNT(*) FILTER (
                     WHERE last_checked_at >= NOW() - INTERVAL '24 hours'
@@ -952,7 +985,11 @@ export async function getFreeProxyAdminState() {
                     WHERE last_checked_at >= NOW() - INTERVAL '24 hours'
                 )::bigint AS recent_check_count,
                 percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms)
-                    FILTER (WHERE latency_ms IS NOT NULL) AS median_latency_ms,
+                    FILTER (
+                        WHERE latency_ms IS NOT NULL
+                          AND last_status_code = 200
+                          AND last_error IS NULL
+                    ) AS median_latency_ms,
                 MAX(last_checked_at) AS last_checked_at
             FROM free_proxy_health
             GROUP BY region

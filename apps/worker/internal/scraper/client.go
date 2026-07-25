@@ -276,7 +276,10 @@ func (c *Client) WarmUpRegionContext(ctx context.Context, domain string) error {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 			c.FlushTrackedTraffic()
-			return fmt.Errorf("warmup %s returned %d", currentDomain, resp.StatusCode)
+			return &httpStatusError{
+				operation:  fmt.Sprintf("warmup %s", currentDomain),
+				statusCode: resp.StatusCode,
+			}
 		}
 
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))

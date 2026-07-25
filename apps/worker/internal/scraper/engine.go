@@ -3,6 +3,7 @@ package scraper
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -263,10 +264,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	}
 	interval := monitorQueryInterval(m, time.Now())
 	maxConsecutiveErrors := getEnvInt("MAX_CONSECUTIVE_ERRORS", 20)
-	timeoutDuration := time.Duration(getEnvInt("CATALOG_TIMEOUT_MS", 2000)) * time.Millisecond
-	if timeoutDuration < 500*time.Millisecond {
-		timeoutDuration = 500 * time.Millisecond
-	}
+	timeoutDuration := catalogTimeoutForProxySource(proxySource)
 	consecutiveErrors := 0
 	checks := 0
 	initializedQueries := make([]bool, len(monitorQueries))
@@ -381,23 +379,16 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		result := e.fetchCatalogHedged(fetchCtx, pool, apiURL, domain)
 		cancelFetch()
 		gotSuccess := result.err == nil && result.status == 200
-		if gotSuccess {
-			e.recordFreeProxySuccess(proxySource, result.client, m.Region, int(result.duration.Milliseconds()))
-		} else if result.client != nil {
-			message := fmt.Sprintf("status %d", result.status)
-			if result.err != nil {
-				message = result.err.Error()
-			}
-			e.recordFreeProxyFailure(proxySource, result.client, m.Region, result.status, message)
-		}
+		e.recordFreeProxyAttempts(proxySource, m.Region, result)
 
 		if !gotSuccess {
+			failureMessage := catalogFailureMessage(result)
 			e.db.RecordMonitorRun(model.MonitorRun{
 				MonitorID:    m.ID,
 				Status:       "failed",
 				StatusCode:   result.status,
 				DurationMS:   int(time.Since(cycleStart).Milliseconds()),
-				ErrorMessage: "all fetchers failed",
+				ErrorMessage: failureMessage,
 				ProxySource:  proxySource,
 				FetchSource:  "canonical",
 				Region:       m.Region,
@@ -405,8 +396,8 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			consecutiveErrors++
 			totalErrors++
 			if consecutiveErrors%5 == 0 {
-				reportHealth("all fetchers failed")
-				log.Printf("[%d] %d consecutive failures, backing off...", m.ID, consecutiveErrors)
+				reportHealth(failureMessage)
+				log.Printf("[%d] %d consecutive failures (%s), backing off...", m.ID, consecutiveErrors, failureMessage)
 				if consecutiveErrors == 15 || consecutiveErrors == 30 {
 					if m.WebhookActive && m.DiscordWebhook.String != "" {
 						discord.SendProxyWarningWebhook(m.DiscordWebhook.String, m.Name, consecutiveErrors)
@@ -543,6 +534,33 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	}
 }
 
+func catalogTimeoutForProxySource(proxySource string) time.Duration {
+	timeoutMS := getEnvInt("CATALOG_TIMEOUT_MS", 2000)
+	if proxySource == "free" {
+		freeTimeoutMS := getEnvInt("FREE_PROXY_CATALOG_TIMEOUT_MS", 3500)
+		if freeTimeoutMS > timeoutMS {
+			timeoutMS = freeTimeoutMS
+		}
+	}
+	if timeoutMS < 500 {
+		timeoutMS = 500
+	}
+	return time.Duration(timeoutMS) * time.Millisecond
+}
+
+func catalogFailureMessage(result catalogFetchResult) string {
+	switch {
+	case result.status != 0 && result.err != nil:
+		return fmt.Sprintf("catalog fetch returned %d: %v", result.status, result.err)
+	case result.status != 0:
+		return fmt.Sprintf("catalog fetch returned %d", result.status)
+	case result.err != nil:
+		return fmt.Sprintf("catalog fetch failed: %v", result.err)
+	default:
+		return "all catalog fetch attempts failed"
+	}
+}
+
 func waitForProxyManager(ctx context.Context, manager *proxy.Manager, interval time.Duration) bool {
 	if manager.Count() > 0 {
 		return true
@@ -613,6 +631,40 @@ func (e *Engine) recordFreeProxySuccess(proxySource string, client *Client, regi
 		return
 	}
 	e.db.RecordFreeProxySuccess(client.ProxyURL, region, latencyMs)
+}
+
+func (e *Engine) recordFreeProxyAttempts(proxySource string, region string, result catalogFetchResult) {
+	if proxySource != "free" {
+		return
+	}
+
+	if len(result.attempts) == 0 {
+		if result.err == nil && result.status == 200 {
+			e.recordFreeProxySuccess(proxySource, result.client, region, int(result.duration.Milliseconds()))
+		} else if result.client != nil && !errors.Is(result.err, context.Canceled) {
+			message := fmt.Sprintf("status %d", result.status)
+			if result.err != nil {
+				message = result.err.Error()
+			}
+			e.recordFreeProxyFailure(proxySource, result.client, region, result.status, message)
+		}
+		return
+	}
+
+	for _, attempt := range result.attempts {
+		if attempt.err == nil && attempt.status == 200 {
+			e.recordFreeProxySuccess(proxySource, attempt.client, region, int(attempt.duration.Milliseconds()))
+			continue
+		}
+		if attempt.client == nil || errors.Is(attempt.err, context.Canceled) {
+			continue
+		}
+		message := fmt.Sprintf("status %d", attempt.status)
+		if attempt.err != nil {
+			message = attempt.err.Error()
+		}
+		e.recordFreeProxyFailure(proxySource, attempt.client, region, attempt.status, message)
+	}
 }
 
 func (e *Engine) recordFreeProxyFailure(proxySource string, client *Client, region string, statusCode int, message string) {

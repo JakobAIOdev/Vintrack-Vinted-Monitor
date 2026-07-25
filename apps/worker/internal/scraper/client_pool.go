@@ -92,6 +92,14 @@ func newPoolClient(pm *proxy.Manager, trafficRecorder func(txBytes int64, rxByte
 }
 
 func (p *ClientPool) Acquire(exclude *Client) *Client {
+	excluded := make(map[*Client]bool, 1)
+	if exclude != nil {
+		excluded[exclude] = true
+	}
+	return p.AcquireExcluding(excluded)
+}
+
+func (p *ClientPool) AcquireExcluding(excluded map[*Client]bool) *Client {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -99,7 +107,7 @@ func (p *ClientPool) Acquire(exclude *Client) *Client {
 	var best *clientState
 	bestScore := float64(0)
 	for _, state := range p.states {
-		if state.client == exclude || state.cooldownUntil.After(now) || state.replacing {
+		if excluded[state.client] || state.cooldownUntil.After(now) || state.replacing {
 			continue
 		}
 		latency := state.ewmaLatencyMS
@@ -185,11 +193,9 @@ func (p *ClientPool) Report(client *Client, status int, latency time.Duration, e
 	case 401, 403:
 		cooldown = 30 * time.Second
 		client.ResetWarm(p.domain)
-		shouldReplace = state.failures >= 3
 	case 407:
 		cooldown = 5 * time.Minute
 		client.ResetWarm(p.domain)
-		shouldReplace = true
 	case 429:
 		cooldown = 10 * time.Second
 		client.ResetWarm(p.domain)
@@ -199,6 +205,7 @@ func (p *ClientPool) Report(client *Client, status int, latency time.Duration, e
 			shouldReplace = state.failures >= 2
 		}
 	}
+	shouldReplace = shouldReplace || shouldReplaceClientForStatus(status)
 	state.cooldownUntil = time.Now().Add(cooldown)
 	p.mu.Unlock()
 	if shouldReplace {
@@ -207,6 +214,10 @@ func (p *ClientPool) Report(client *Client, status int, latency time.Duration, e
 }
 
 func (p *ClientPool) Replace(bad *Client) {
+	if p.pm == nil {
+		return
+	}
+
 	p.mu.Lock()
 	state := p.findState(bad)
 	if state == nil || state.replacing {

@@ -31,7 +31,7 @@ func (VintedCatalogFetcher) FetchCatalog(ctx context.Context, client *Client, ap
 	}
 
 	if err := client.EnsureWarmContext(ctx, domain); err != nil {
-		return nil, 0, fmt.Errorf("warmup %s via %s: %w", domain, client.ProxyLabel(), err)
+		return nil, statusCodeFromError(err), fmt.Errorf("warmup %s via %s: %w", domain, client.ProxyLabel(), err)
 	}
 
 	for redirects := 0; redirects < 3; redirects++ {

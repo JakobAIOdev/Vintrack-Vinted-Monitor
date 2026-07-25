@@ -14,6 +14,14 @@ type catalogFetchResult struct {
 	err      error
 	client   *Client
 	duration time.Duration
+	attempts []catalogFetchAttempt
+}
+
+type catalogFetchAttempt struct {
+	status   int
+	err      error
+	client   *Client
+	duration time.Duration
 }
 
 func (e *Engine) fetchCatalogHedged(ctx context.Context, pool *ClientPool, apiURL string, domain string) catalogFetchResult {
@@ -28,14 +36,26 @@ func (e *Engine) fetchCatalogHedgedWithDelay(ctx context.Context, pool *ClientPo
 		return catalogFetchResult{items: items, status: status, err: err, duration: time.Since(startedAt)}
 	}
 
-	primary := pool.Acquire(nil)
+	maxAttempts := getEnvInt("CATALOG_MAX_ATTEMPTS", 5)
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	if pool.Size() < maxAttempts {
+		maxAttempts = pool.Size()
+	}
+
+	attempted := make(map[*Client]bool, maxAttempts)
+	primary := pool.AcquireExcluding(attempted)
 	if primary == nil {
 		return catalogFetchResult{err: fmt.Errorf("no healthy catalog client available")}
 	}
 
 	requestCtx, cancel := context.WithCancel(ctx)
-	results := make(chan catalogFetchResult, 2)
+	defer cancel()
+
+	results := make(chan catalogFetchResult, maxAttempts)
 	launch := func(client *Client) {
+		attempted[client] = true
 		go func() {
 			startedAt := time.Now()
 			items, status, err := e.fetcher.FetchCatalog(requestCtx, client, apiURL, domain)
@@ -50,64 +70,53 @@ func (e *Engine) fetchCatalogHedgedWithDelay(ctx context.Context, pool *ClientPo
 	launch(primary)
 	launched := 1
 	completed := 0
-	secondaryLaunched := false
 	if hedgeDelay < 0 {
 		hedgeDelay = 0
 	}
 	timer := time.NewTimer(hedgeDelay)
 	defer timer.Stop()
-	defer func() {
-		if completed >= launched {
-			cancel()
-		}
-	}()
+	hedgeTimer := timer.C
 
-	launchSecondary := func() bool {
-		if secondaryLaunched {
+	launchNext := func() bool {
+		if launched >= maxAttempts {
 			return false
 		}
-		secondaryLaunched = true
-		secondary := pool.Acquire(primary)
-		if secondary == nil {
+		next := pool.AcquireExcluding(attempted)
+		if next == nil {
 			return false
 		}
 		launched++
-		launch(secondary)
+		launch(next)
 		return true
 	}
 
 	last := catalogFetchResult{}
-	for completed < launched || !secondaryLaunched {
+	attempts := make([]catalogFetchAttempt, 0, maxAttempts)
+	for completed < launched {
 		select {
 		case result := <-results:
 			completed++
 			last = result
+			attempts = append(attempts, catalogFetchAttempt{
+				status: result.status, err: result.err, client: result.client, duration: result.duration,
+			})
 			if result.err == nil && result.status == 200 {
-				cancel()
+				result.attempts = attempts
 				return result
 			}
-			if !secondaryLaunched {
-				launchSecondary()
-			}
-			if completed >= launched && secondaryLaunched {
-				cancel()
-				return last
-			}
-		case <-timer.C:
-			launchSecondary()
-			if completed >= launched && secondaryLaunched {
-				cancel()
-				return last
-			}
+			launchNext()
+		case <-hedgeTimer:
+			hedgeTimer = nil
+			launchNext()
 		case <-ctx.Done():
-			cancel()
 			if last.err == nil {
 				last.err = ctx.Err()
 			}
+			last.attempts = attempts
 			return last
 		}
 	}
 
-	cancel()
+	last.attempts = attempts
 	return last
 }
