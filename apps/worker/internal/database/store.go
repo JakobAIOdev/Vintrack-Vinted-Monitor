@@ -351,6 +351,10 @@ func (s *Store) GetActiveFreeProxies(region string, limit int) ([]string, error)
 			fph.status = 'active'
 			OR (fph.status = 'pending' AND fph.success_streak > 0)
 		  )
+		  AND fph.success_streak > 0
+		  AND fph.last_status_code = 200
+		  AND fph.last_error IS NULL
+		  AND fph.last_success_at >= NOW() - INTERVAL '20 minutes'
 		  AND fp.status <> 'disabled'
 		  AND (fph.next_check_at IS NULL OR fph.next_check_at <= NOW() + INTERVAL '15 minutes')
 		ORDER BY
@@ -602,10 +606,10 @@ func (s *Store) GetFreeProxiesDueForCheck(regions []string, limit int, bootstrap
 		  AND (fph.next_check_at IS NULL OR fph.next_check_at <= NOW())
 		ORDER BY
 		  CASE
-			WHEN $3 AND fph.status = 'pending' AND fph.success_streak = 0 AND fph.last_checked_at IS NULL THEN 0
+			WHEN fph.status = 'active' THEN 0
 			WHEN fph.status = 'pending' AND fph.success_streak > 0 THEN 1
 			WHEN fph.status = 'cooldown' THEN 2
-			WHEN fph.status = 'active' THEN 3
+			WHEN $3 AND fph.status = 'pending' AND fph.success_streak = 0 AND fph.last_checked_at IS NULL THEN 3
 			ELSE 4
 		  END,
 		  fph.success_streak DESC,
@@ -692,7 +696,6 @@ func (s *Store) RecordFreeProxyFailure(proxyURL string, region string, statusCod
 			status = CASE
 				WHEN fph.status = 'pending' AND fph.success_streak = 0 THEN 'dead'
 				WHEN fph.status = 'cooldown' AND fph.failure_streak + 1 >= $5 THEN 'dead'
-				WHEN fph.status = 'active' AND fph.failure_streak + 1 < $5 THEN 'active'
 				WHEN fph.status = 'active' THEN 'cooldown'
 				WHEN fph.failure_streak + 1 >= $5 THEN 'cooldown'
 				ELSE 'cooldown'
@@ -700,7 +703,7 @@ func (s *Store) RecordFreeProxyFailure(proxyURL string, region string, statusCod
 			next_check_at = CASE
 				WHEN fph.status = 'pending' AND fph.success_streak = 0 THEN NULL
 				WHEN fph.status = 'cooldown' AND fph.failure_streak + 1 >= $5 THEN NULL
-				WHEN fph.status = 'active' AND fph.failure_streak + 1 < $5 THEN NOW() + INTERVAL '1 minute'
+				WHEN fph.status = 'active' THEN NOW() + INTERVAL '1 minute'
 				ELSE NOW() + ($6::text || ' minutes')::interval
 			END,
 			score = CASE
@@ -758,6 +761,10 @@ func (s *Store) CountActiveFreeProxies(region string) (int, error) {
 			fph.status = 'active'
 			OR (fph.status = 'pending' AND fph.success_streak > 0)
 		  )
+		  AND fph.success_streak > 0
+		  AND fph.last_status_code = 200
+		  AND fph.last_error IS NULL
+		  AND fph.last_success_at >= NOW() - INTERVAL '20 minutes'
 		  AND fp.status <> 'disabled'`, region).Scan(&count)
 	return count, err
 }

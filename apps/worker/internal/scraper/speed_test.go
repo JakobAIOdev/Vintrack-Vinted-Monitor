@@ -65,6 +65,46 @@ func TestFetchCatalogHedgedUsesFasterSecondary(t *testing.T) {
 	}
 }
 
+func TestFetchCatalogHedgedRotatesPastBlockedClients(t *testing.T) {
+	t.Setenv("CATALOG_MAX_ATTEMPTS", "4")
+	blockedOne := &Client{ProxyURL: "blocked-one", warmed: make(map[string]bool)}
+	blockedTwo := &Client{ProxyURL: "blocked-two", warmed: make(map[string]bool)}
+	blockedThree := &Client{ProxyURL: "blocked-three", warmed: make(map[string]bool)}
+	healthy := &Client{ProxyURL: "healthy", warmed: make(map[string]bool)}
+	pool := &ClientPool{states: []*clientState{
+		{client: blockedOne, ewmaLatencyMS: 10},
+		{client: blockedTwo, ewmaLatencyMS: 20},
+		{client: blockedThree, ewmaLatencyMS: 30},
+		{client: healthy, ewmaLatencyMS: 40},
+	}}
+	engine := &Engine{fetcher: timedCatalogFetcher{
+		delays: map[string]time.Duration{},
+		statuses: map[string]int{
+			"blocked-one":   403,
+			"blocked-two":   403,
+			"blocked-three": 403,
+			"healthy":       200,
+		},
+	}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := engine.fetchCatalogHedgedWithDelay(
+		ctx,
+		pool,
+		"https://example.test",
+		"example.test",
+		time.Hour,
+	)
+
+	if result.err != nil || result.status != 200 {
+		t.Fatalf("fetchCatalogHedgedWithDelay() = status %d, error %v", result.status, result.err)
+	}
+	if result.client != healthy {
+		t.Fatalf("winner = %v, want healthy fourth client", result.client)
+	}
+}
+
 func TestClientPoolPrefersHealthyIdleClient(t *testing.T) {
 	slow := &Client{ProxyURL: "slow"}
 	fast := &Client{ProxyURL: "fast"}
@@ -81,6 +121,28 @@ func TestClientPoolPrefersHealthyIdleClient(t *testing.T) {
 	pool.Report(fast, 429, 50*time.Millisecond, nil)
 	if got := pool.Acquire(nil); got != slow {
 		t.Fatalf("Acquire() after rate limit = %v, want slow non-cooled client", got)
+	}
+}
+
+func TestCatalogTimeoutForFreeProxyMatchesValidationBudget(t *testing.T) {
+	t.Setenv("CATALOG_TIMEOUT_MS", "2000")
+	t.Setenv("FREE_PROXY_CATALOG_TIMEOUT_MS", "3500")
+
+	if got := catalogTimeoutForProxySource("free"); got != 3500*time.Millisecond {
+		t.Fatalf("free catalog timeout = %s, want 3.5s", got)
+	}
+	if got := catalogTimeoutForProxySource("server"); got != 2*time.Second {
+		t.Fatalf("server catalog timeout = %s, want 2s", got)
+	}
+}
+
+func TestStatusCodeFromWrappedWarmupError(t *testing.T) {
+	err := errors.Join(
+		errors.New("catalog warmup failed"),
+		&httpStatusError{operation: "warmup www.vinted.nl", statusCode: 403},
+	)
+	if got := statusCodeFromError(err); got != 403 {
+		t.Fatalf("statusCodeFromError() = %d, want 403", got)
 	}
 }
 
