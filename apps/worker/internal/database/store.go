@@ -582,6 +582,12 @@ func (s *Store) EnsureFreeProxyHealthRows(regions []string, limit int) error {
 			INSERT INTO free_proxy_health (proxy_id, region, status, next_check_at, updated_at)
 			SELECT desired.id, $1, 'pending', NOW(), NOW()
 			FROM desired
+			WHERE NOT EXISTS (
+				SELECT 1
+				FROM free_proxy_health current_health
+				WHERE current_health.proxy_id = desired.id
+				  AND current_health.region = $1
+			)
 			ON CONFLICT (proxy_id, region) DO NOTHING`, region, limit); err != nil {
 			return err
 		}
