@@ -1,0 +1,82 @@
+name: Bug report
+description: Report a reproducible problem in Vintrack
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Search existing issues first and remove all secrets, tokens, webhook URLs, proxy credentials, and personal data.
+
+        For security vulnerabilities, follow the [security policy](https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/security/policy) instead.
+  - type: input
+    id: version
+    attributes:
+      label: Vintrack version
+      description: Release tag or commit SHA
+      placeholder: v2.0.25
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Docker Compose
+        - Local development
+        - Public demo
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Control center
+        - Worker
+        - Vinted service
+        - Browser extension
+        - Proxy maintenance
+        - Documentation or setup
+        - Unknown
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Explain the observed behavior and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Configure ...
+        2. Start ...
+        3. Open ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste a short, redacted excerpt. Do not attach complete environment files or database dumps.
+      render: shell
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, architecture, Docker/Node/Go versions, browser, and any relevant reverse proxy.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and discussions.
+          required: true
+        - label: I removed credentials, session data, proxy details, and personal information.
+          required: true

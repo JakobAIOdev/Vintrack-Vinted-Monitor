@@ -1,0 +1,55 @@
+name: Feature request
+description: Propose a focused improvement to Vintrack
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Explain the user problem before the implementation. Large changes should be discussed before development starts.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow is difficult or impossible today, and who is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe the desired behavior, not only the UI or implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: How do you handle this today, and what other approaches did you consider?
+  - type: dropdown
+    id: component
+    attributes:
+      label: Primary component
+      options:
+        - Control center
+        - Worker
+        - Vinted service
+        - Browser extension
+        - Proxy maintenance
+        - Documentation or setup
+        - Cross-component
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add mockups, examples, compatibility constraints, or relevant links.
+  - type: checkboxes
+    id: responsible-use
+    attributes:
+      label: Responsible use
+      options:
+        - label: This request does not depend on bypassing authentication barriers, CAPTCHAs, rate limits, or other access controls.
+          required: true

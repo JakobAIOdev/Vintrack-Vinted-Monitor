@@ -5,22 +5,25 @@
 <h1 align="center">Vintrack</h1>
 
 <p align="center">
-  <b>Open-source Vinted monitoring platform for resellers.</b><br/>
-  Real-time scraping · Health-checked free starter proxies · Discord & Telegram alerts · Account linking · Dashboard
+  <strong>Self-hosted Vinted monitoring for focused searches and fast alerts.</strong>
+  <br />
+  Go workers, a live Next.js dashboard, health-scored proxy sessions, Discord and Telegram notifications, and optional linked-account actions.
 </p>
 
 <p align="center">
-  <a href="#features"><img src="https://img.shields.io/badge/monitors-unlimited-22c55e?style=flat-square" alt="Monitors" /></a>
-  <a href="#tech-stack"><img src="https://img.shields.io/badge/Next.js-16-000?style=flat-square&logo=next.js" alt="Next.js" /></a>
-  <a href="#tech-stack"><img src="https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go" /></a>
-  <a href="#tech-stack"><img src="https://img.shields.io/badge/PostgreSQL-15-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL" /></a>
-  <a href="#tech-stack"><img src="https://img.shields.io/badge/Redis-7-DC382D?style=flat-square&logo=redis&logoColor=white" alt="Redis" /></a>
-  <a href="#self-hosting"><img src="https://img.shields.io/badge/deploy-one_command-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker" /></a>
-  <a href="#free-starter-proxy-pools"><img src="https://img.shields.io/badge/free_proxy_pools-health_checked-10b981?style=flat-square" alt="Health-checked free proxy pools" /></a>
+  <a href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/actions/workflows/ci.yml"><img src="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
+  <a href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest"><img src="https://img.shields.io/github/v/release/JakobAIOdev/Vintrack-Vinted-Monitor?display_name=tag" alt="Latest release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e" alt="MIT license" /></a>
+  <a href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/stargazers"><img src="https://img.shields.io/github/stars/JakobAIOdev/Vintrack-Vinted-Monitor?style=flat" alt="GitHub stars" /></a>
+  <a href="https://discord.gg/WbEpEjaWjP"><img src="https://img.shields.io/badge/Discord-community-5865F2?logo=discord&logoColor=white" alt="Discord community" /></a>
 </p>
 
 <p align="center">
-  <b>⭐ If you find Vintrack useful, please consider giving it a star on GitHub! It helps the project grow and reach more people. ⭐</b>
+  <a href="https://vintrack.jakobaio.dev">Live demo</a> ·
+  <a href="docs/getting-started.md">Get started</a> ·
+  <a href="docs/configuration.md">Configuration</a> ·
+  <a href="docs/architecture.md">Architecture</a> ·
+  <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
 <p align="center">
@@ -29,610 +32,458 @@
   </a>
 </p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/topic-vinted-blue?style=flat-square" alt="Vinted" />
-  <img src="https://img.shields.io/badge/topic-bot-blue?style=flat-square" alt="Bot" />
-  <img src="https://img.shields.io/badge/topic-scraper-blue?style=flat-square" alt="Scraper" />
-  <img src="https://img.shields.io/badge/topic-reselling-blue?style=flat-square" alt="Reselling" />
-  <img src="https://img.shields.io/badge/topic-monitor-blue?style=flat-square" alt="Monitor" />
-</p>
+---
 
 <p align="center">
-  <a href="#live-demo">Live Demo</a> •
-  <a href="#browser-extension">Browser Extension</a> •
-  <a href="#self-hosting">Self-Hosting</a> •
-  <a href="#features">Features</a> •
-  <a href="#community--support">Community</a> •
-  <a href="#architecture">Architecture</a> •
-  <a href="#api-contracts">API Contracts</a> •
-  <a href="#screenshots">Screenshots</a> •
-  <a href="#contributing">Contributing</a>
+  <img src="docs/screenshots/preview.webp" width="900" alt="Vintrack dashboard, monitor creation, live feed, and notifications" />
 </p>
 
----
-
-## Live Demo
-
-You can try Vintrack without hosting anything yourself:
-
-- **URL:** https://vintrack.jakobaio.dev
-- **Login:** sign up with Discord OAuth
-- **Default role:** new accounts start as **Free**
-- **Free Proxy Pool:** ready regions can be tested without purchasing proxies first
-- **Browser extension:** download the latest Chrome ZIP or Firefox XPI from GitHub releases
-- **Support:** join the Discord server if you need help: https://discord.gg/WbEpEjaWjP
-
-### Demo Quick Start
-
-1. Open https://vintrack.jakobaio.dev and sign in with Discord.
-2. Create a monitor and select **Free Proxy Pool** when its Vinted region is marked **Ready**. If the region is degraded or unavailable, add your own proxy group under **Proxies**.
-3. Open **Monitors** or the dashboard and create a monitor with your Vinted search, region, price, size, brand, and country filters.
-4. Enable notifications:
-   - **Discord:** paste your Discord webhook URL in the monitor notification dialog.
-   - **Telegram:** click **Connect Telegram**, send the generated `/connect ...` command to the bot shown in the dialog, then enable Telegram for the monitor.
-5. Watch new items in the dashboard, live feed, Discord, or Telegram.
-6. Optional: install the browser extension and link your Vinted account from the **Account** page to like items, send offers, message sellers, and keep your Vinted session synced.
-
-### Demo Notes
-
-- The Free Proxy Pool is shared, best-effort starter infrastructure. Availability, latency, and supported regions change with live pool health.
-- Free proxies are used only for catalog monitoring. Linked-account actions such as likes, offers, messages, and checkout never use the free pool.
-- Server proxies are not guaranteed for free accounts. Personal proxy groups remain the reliable fallback for dedicated capacity.
-- The demo is shared infrastructure, so monitoring reliability can vary.
-- Telegram users never need a bot token or chat ID. The public demo shows the bot username during the connect flow.
-- Discord notifications require your own Discord webhook URL.
-- Vinted account linking is optional, but it is required for actions such as liking items, sending offers, sending messages, and checkout-link tools.
-
----
-
-## Why Vintrack?
-
-Vinted doesn't have a proper notification system — you either refresh manually or miss the deal. Vintrack solves this by monitoring listings and sending alerts to Discord or Telegram **before anyone else** can see the item.
-
-Built for resellers who need speed. Open-sourced for the community.
-
-- **Sub-2s detection** — catch items faster than any other tool
-- **Anti-detection** — TLS fingerprint rotation with proxy support
-- **Free starter proxy pools** — try ready Vinted regions before buying a proxy plan
-- **Granular filters** — price, size, category, brand, color, and country/region
-- **Direct Interaction** — Like items, send offers, and message sellers from the dashboard
-- **Browser session sync** — Chrome extension keeps linked Vinted sessions fresh without copying tokens manually
-- **Experimental checkout tooling** — browser-assisted checkout link creation with checkout-link history
-- **Full dashboard** — no CLI needed, everything from the browser
-- **One-command deploy** — `docker compose up` and you're live
-
----
-
-## Features
-
-### Real-Time Monitoring
-
-Create unlimited monitors with custom search queries. Each monitor keeps its canonical Vinted search and can also join an optional query-free discovery feed that applies the same catalog filters and matches keywords locally. Catalog requests use health-scored proxy sessions and delayed hedging; Redis atomically deduplicates both paths.
-
-See [Worker speed and hybrid discovery](docs/worker-speed.md) for rollout, proxy capacity, metrics, and tuning controls.
-The optional bounded ID experiment is documented in [Pre-index shadow scanner](docs/preindex-shadow.md).
-
-### Advanced Filters
-
-Fine-tune every monitor with:
-
-- **Search query** — keyword-based filtering
-- **Price range** — min/max price boundaries
-- **Categories** — over 900+ Vinted categories supported
-- **Brands** — filter by specific brands
-- **Colors** — filter by item colors
-- **Sizes** — clothing size filtering
-- **Seller Origin** — filter by seller country (e.g. only show items from France or Italy)
-- **Region** — choose the Vinted market per monitor (e.g. `vinted.de`, `vinted.hu`, `vinted.fr`)
-
-### Vinted Account Linking & Interactions
-
-Link your Vinted account directly in the dashboard to interact with listings without leaving Vintrack:
-
-- **Like / Unlike items** — one-click like/unlike from the feed or monitor view
-- **Send Offers** — make price offers directly to sellers (with built-in 60% minimum price validation)
-- **Message Sellers** — start a conversation or ask questions instantly
-- **Browser-assisted checkout** — Vintrack opens the native Vinted checkout flow in your browser and stores checkout links for recovery
-- **Multi-Image Preview** — view extra images and high-res gallery directly in the dashboard
-- **Account management** — link/unlink with region selection (12 EU markets)
-- **Browser Sync Extension** — automatically refreshes the linked session when you log in to Vinted in the same browser
-- **Status monitoring** — see your linked account status, username, and domain at a glance
-
-The recommended linking flow is the browser extension. Install it once, sign in to Vinted in the same browser, then connect it from the Vintrack Account page. Manual token linking still exists as a fallback, but normal users should not need it.
-
-### API Contracts
-
-Internal service contracts live in [`docs/openapi`](./docs/openapi). The first documented contract is the Vinted Service API used by the control center and browser extension.
-
-### Browser Extension
-
-The extension is the easiest way to use linked Vinted accounts on the live demo and in self-hosted installs.
-
-- Chrome download: [vintrack-browser-sync-extension.zip](https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest/download/vintrack-browser-sync-extension.zip)
-- Firefox download: [vintrack-browser-sync-extension-firefox.xpi](https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest/download/vintrack-browser-sync-extension-firefox.xpi)
-- Source: `apps/vintrack-browser-sync-extension`
-- Install in Chrome: open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the extracted extension folder
-- Install in Firefox: open `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on**, and select the Firefox build during development. For normal users, publish a Mozilla-signed `.xpi`.
-- Connect in Vintrack: open **Account**, click **Download Extension** if needed, then **Link With Installed Extension**
-- What it syncs: `access_token_web`, Vinted domain, browser user agent, and the Vintrack light/dark theme
-- What it does not sync: the full cookie header or full cookie jar
-- Version enforcement: set `BROWSER_EXTENSION_LATEST_VERSION` for the update notice and `BROWSER_EXTENSION_MIN_VERSION` to block outdated or legacy extensions until they are replaced
-
-For distribution, attach `vintrack-browser-sync-extension.zip` and the Mozilla-signed `vintrack-browser-sync-extension-firefox.xpi` to every GitHub release. The live demo and documentation can point to `/releases/latest/download/...`, so users do not need to browse the repo.
-
-### Experimental Buy Disclaimer
-
-Vintrack includes an experimental buy module for controlled checkout tests. It is intentionally separated from the normal monitoring workflow.
-
-- The buy module is experimental and may break when Vinted changes authentication or checkout protection.
-- Use a dedicated buy account for this module, not your main personal Vinted account.
-- The browser-assisted checkout flow uses the shipping address and checkout context already stored on your linked Vinted account.
-- Vintrack opens the native Vinted checkout link; the user chooses the payment method and completes payment manually.
-- Vintrack does not replace or override your delivery address or payment method in this flow.
-- The extension is strongly recommended, otherwise automatic session recovery may fail.
-- Use experimental buy actions only if you understand that Vinted may reserve an item before payment is completed.
-
-### Discord & Telegram Notifications
-
-Rich alerts sent instantly when a new item is found:
-
-- Item image, title, price (including fees), size, condition
-- Seller region & rating (enriched via HTML scraping)
-- Direct buy link + app deep link + dashboard link
-- Discord webhooks per monitor
-- Telegram account connection via one-time bot code — users never see the bot token or chat ID
-- Per-monitor notification toggles
-
-### Live Feed
-
-Server-Sent Events (SSE) stream items directly to the dashboard in real-time. See every new listing appear the moment it's detected — no manual refresh needed.
-
-### Free Starter Proxy Pools
-
-New users can select **Free Proxy Pool** for Vinted regions currently marked **Ready** in the monitor form. Vintrack manages this pool continuously:
-
-- Imports candidates from configured public proxy sources
-- Creates separate health state for each Vinted region
-- Validates candidates against Vinted before they enter rotation
-- Requires repeated successful checks before activation
-- Moves failing proxies into cooldown or marks them dead
-- Exposes regional pool health to normal users during monitor creation
-- Keeps account actions off the shared pool
-
-The pool is intended for onboarding and short tests, not guaranteed production capacity. Public proxies can disappear or become blocked without notice. For sustained monitoring, use a personal proxy group or configured server proxies.
-
-### Proxy System
-
-Three proxy sources are available:
-
-- **Free Proxy Pool** — shared, health-checked starter capacity for ready regions
-- **Server proxies** — shared managed pool for premium users
-- **User proxy groups** — BYOP (Bring Your Own Proxies) for dedicated capacity
-- Automatic rotation with `tls-client` TLS fingerprint spoofing
-- Input validation — garbage lines are silently skipped
-- Supports `http://`, `https://`, `socks4://`, `socks5://`, and `host:port:user:pass` formats
-- Note: `vinted.co.uk` does not support IPv6 proxies. Use IPv4 proxies for UK monitors.
-
-### Multi-User & Roles
-
-Built-in role system with Discord or OIDC authentication:
-| Role | Free Pool* | Server Proxies | Own Proxies | Admin Panel |
-|------|:-:|:-:|:-:|:-:|
-| **Free** | ✅ | ❌ | ✅ | ❌ |
-| **Premium** | ✅ | ✅ | ✅ | ❌ |
-| **Admin** | ✅ | ✅ | ✅ | ✅ |
-
-\* Only while the pool is enabled and the selected region is healthy.
-
----
-
-## Community & Support
-
-Need help, want to exchange setups with other users, or report a bug?
-
-- Join the Vintrack Discord server: https://discord.gg/WbEpEjaWjP
-- Use the server for community support, feature feedback, setup questions, and bug reports
-- For reproducible code issues, GitHub issues and PRs are still welcome
-
----
-
-## Screenshots
-
-<p align="center">
-  <img src="docs/screenshots/preview.gif" width="720" alt="Preview" />
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/overview.webp" width="49%" alt="Dashboard" />
-  <img src="docs/screenshots/live-feed.webp" width="49%" alt="Live Feed" />
-</p>
-<p align="center">
-  <img src="docs/screenshots/create-monitor.webp" width="49%" alt="Create Monitor" />
-  <img src="docs/screenshots/user-management.webp" width="49%" alt="Admin Panel" />
-</p>
-<p align="center">
-  <img src="docs/screenshots/send-message.webp" width="49%" alt="Send Message Dialog" />
-  <img src="docs/screenshots/send-offer.webp" width="49%" alt="Send Offer Dialog" />
-</p>
-<p align="center">
-  <img src="docs/screenshots/account.webp" width="49%" alt="Account Page" />
-  <img src="docs/screenshots/discord-embed.webp" width="49%" alt="Discord Alert" />
-</p>
-
----
-
-## Architecture
-
-```
-                         ┌──────────────────┐
-                         │     Internet     │
-                         └────────┬─────────┘
-                                  │
-                         ┌────────▼─────────┐
-                         │      Caddy       │
-                         │  (Auto HTTPS)    │
-                         └────────┬─────────┘
-                                  │
-                    ┌─────────────▼──────────────┐
-                    │      Control Center        │
-                    │  Next.js 16 · React 19     │
-                    │  Prisma · NextAuth · SSE   │
-                    └──┬──────────┬──────────┬───┘
-                       │          │          │
-          ┌────────────▼──┐  ┌────▼────────┐ │
-          │  PostgreSQL   │  │    Redis    │ │
-          │   (Storage)   │  │(Cache+Dedup)│ │
-          └────────────▲──┘  └──▲────────▲─┘ │
-                       │        │        │   │
-              ┌────────┴────────┴──┐  ┌──┴───▼──────────┐
-              │     Go Worker      │  │ Vinted Service  │
-              │ tls-client · proxy │  │ Account linking │
-              │  rotation · scrape │  │ Likes · Offers  │
-              └──────┬──────────┬──┘  └────────┬────────┘
-                     │          │              │
-            ┌────────▼──┐  ┌───▼───────┐  ┌───▼────────┐
-            │ Vinted API │ │ Alerts    │  │ Vinted API │
-            │ (Proxied)  │ │Discord/TG │  │  (Authed)  │
-            └────────────  └───────────┘  └────────────┘
-```
-
-**Data flow:**
-
-1. User creates a monitor via the dashboard
-2. Go Worker detects the new monitor within 5s and starts a goroutine
-3. Goroutine polls Vinted API through rotating proxies
-4. New items are deduplicated via Redis, stored in PostgreSQL, published via SSE
-5. Discord and Telegram notifications fire immediately for configured monitors
-6. Users with a linked Vinted account can like items, send offers, and message sellers directly via the Vinted Service
-
----
-
-## Tech Stack
-
-| Layer              | Technology                                      | Purpose                        |
-| ------------------ | ----------------------------------------------- | ------------------------------ |
-| **Frontend**       | Next.js 16, React 19, Tailwind CSS 4, shadcn/ui | Dashboard & UI                 |
-| **Backend**        | Next.js Server Actions, API Routes              | API & auth                     |
-| **Worker**         | Go 1.25, tls-client, goroutines                 | High-perf scraping             |
-| **Vinted Service** | Go 1.25, TLS client, Redis sessions             | Account linking & item actions |
-| **Database**       | PostgreSQL 15 + Prisma ORM                      | Persistent storage             |
-| **Cache**          | Redis 7                                         | Deduplication & SSE pub/sub    |
-| **Auth**           | NextAuth.js v5 (Discord + OIDC)                 | Authentication                 |
-| **Proxy**          | tls-client with SOCKS4/5 & HTTP(S)              | Anti-detection                 |
-| **Reverse Proxy**  | Caddy 2                                         | Auto HTTPS via Let's Encrypt   |
-| **Deployment**     | Docker Compose                                  | One-command orchestration      |
-
----
-
-## Self-Hosting
-
-Use this section if you want to run your own Vintrack instance instead of using the public demo.
-
-### What You Need
-
-Before starting, prepare:
-
-- [Docker](https://docs.docker.com/get-docker/) & Docker Compose v2
-- [Discord Developer App](https://discord.com/developers/applications) (for OAuth2 login) **or** an OIDC provider (e.g. Authentik, Google, Keycloak)
-- Optional dedicated proxies for sustained Vinted monitoring (residential recommended). The managed Free Proxy Pool can cover initial tests in ready regions.
-- A public HTTPS domain for production
-- Optional: a Telegram bot from [@BotFather](https://t.me/BotFather) if you want Telegram notifications
-
-### Proxy Recommendation (Referral)
-
-If you need proxies, I currently recommend **Webshare Proxy Server** as the better option. Webshare also offers a small amount of free proxies, which can be enough for short initial tests.
-
-- Referral link: https://www.webshare.io/?referral_code=qhu9q567qrqp
-- You can check your proxies here to see whether they work with Vinted: https://proxy6.net/checker
-
-### 1. Clone the Repository
+## What is Vintrack?
+
+Vintrack is an open-source platform for monitoring new Vinted listings. Create
+targeted monitors, process catalog updates through isolated Go workers, and
+deliver matching items to the dashboard, Discord, or Telegram.
+
+It is designed for operators who want transparent infrastructure they can run
+themselves:
+
+- **Focused monitoring** — search, price, category, brand, color, size, seller
+  country, and Vinted region filters.
+- **Live results** — Redis-backed deduplication, PostgreSQL persistence, and an
+  SSE live feed.
+- **Flexible notifications** — per-monitor Discord webhooks and Telegram
+  connection flows.
+- **Observable proxy pools** — personal, server-managed, and optional
+  health-checked starter pools with regional status.
+- **Optional account actions** — link an authorized Vinted account to like
+  items, send offers, message sellers, and open browser-assisted checkout.
+- **Browser session sync** — Chrome and Firefox builds keep an explicitly linked
+  account session current without copying a full browser cookie jar.
+
+Vintrack is an independent project and is not affiliated with, endorsed by, or
+operated by Vinted.
+
+## Try the live demo
+
+Open **[vintrack.jakobaio.dev](https://vintrack.jakobaio.dev)** and sign in with
+Discord. New users start with the Free role and can create monitors using their
+own proxies or a shared starter pool when a region is marked ready.
+
+The demo is shared, best-effort infrastructure rather than an SLA-backed hosted
+service. Pool health and regional availability can change. Linked-account
+actions never use the shared free proxy pool.
+
+### Demo quick start
+
+1. Sign in with Discord and open **Monitors**.
+2. Create a monitor and choose the matching Vinted market, for example
+   `vinted.de`, `vinted.fr`, or `vinted.it`.
+3. Add the search query and any price, category, brand, color, size, condition,
+   or seller-country filters.
+4. Select **Free Proxy Pool** when the region is marked ready, or use a personal
+   proxy group for dedicated capacity.
+5. Enable notifications:
+   - **Discord:** paste a webhook URL into the monitor's notification dialog.
+   - **Telegram:** select **Connect Telegram** and send the generated one-time
+     command to the bot shown in Vintrack.
+6. Watch matching listings in the monitor view, live feed, Discord, or Telegram.
+
+Optionally install the browser extension and open **Account → Link With Installed
+Extension** to connect a Vinted account you control.
+
+### Demo notes
+
+- Free-pool availability and supported regions depend on current health checks.
+- Personal proxy groups are the reliable choice for dedicated capacity.
+- Telegram users never need the bot token or a numeric chat ID.
+- Discord alerts require a webhook created in a server you are authorized to
+  manage.
+- Account linking is optional and is required only for likes, offers, messages,
+  wardrobe access, and checkout-link tools.
+- The extension syncs limited session information; it does not upload the full
+  browser cookie jar.
+- The demo can enforce role-based resource limits because it is shared
+  infrastructure. Self-hosted operators control their own policy.
+
+[Read the five-minute demo walkthrough →](docs/getting-started.md#try-the-live-demo)
+
+## Self-host in five minutes
+
+### Requirements
+
+- Docker Engine with Docker Compose v2
+- Git
+- `make` and OpenSSL for the guided initializer
+- a Discord OAuth application **or** an OIDC provider
+- a public domain with ports 80/443 for production HTTPS
+
+### Start locally
 
 ```bash
-git clone https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor
+git clone https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor.git vintrack
 cd vintrack
+make init
 ```
 
-### 2. Create the Environment File
+`make init` creates `.env`, generates the two required encryption secrets, and
+creates the local proxy file. It never replaces an existing `.env` or changes
+non-placeholder secrets; missing or template secret values are filled in.
 
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and configure at least the required auth values:
-
-```env
-# Generate with: openssl rand -base64 32
-AUTH_SECRET=your-random-secret
-
-# From Discord Developer Portal
-AUTH_DISCORD_ID=your-discord-client-id
-AUTH_DISCORD_SECRET=your-discord-client-secret
-
-# Local development
-AUTH_URL=http://localhost:3000
-DASHBOARD_URL=http://localhost:3000
-```
-
-For production, both URLs must use your public HTTPS domain:
-
-```env
-AUTH_URL=https://your-domain.com
-DASHBOARD_URL=https://your-domain.com
-```
-
-`DASHBOARD_URL` is used for dashboard links in notifications. If it is missing or set to `localhost`, Telegram item alerts still send, but the Telegram dashboard button is omitted because Telegram rejects local URLs.
-
-### 3. Configure Discord OAuth
-
-In the Discord Developer Portal:
-
-1. Create an application.
-2. Open **OAuth2**.
-3. Add your redirect URL:
-   - Local: `http://localhost:3000/api/auth/callback/discord`
-   - Production: `https://your-domain.com/api/auth/callback/discord`
-4. Copy the client ID and client secret into `.env`.
-
-### 3b. Configure OIDC (Optional)
-
-If you want to use an OIDC-compliant identity provider (Authentik, Google, Keycloak, etc.) instead of Discord:
-
-1. Create an application in your OIDC provider.
-2. Set the callback URL:
-   - Local: `http://localhost:3000/api/auth/callback/oidc`
-   - Production: `https://your-domain.com/api/auth/callback/oidc`
-3. Add the following to your `.env` file:
-
-```env
-AUTH_OIDC_ISSUER=https://your-oidc-provider.com/application/o/your-app/
-AUTH_OIDC_CLIENT_ID=your-oidc-client-id
-AUTH_OIDC_CLIENT_SECRET=your-oidc-client-secret
-AUTH_OIDC_NAME=Authentik
-```
-
-The `AUTH_OIDC_NAME` value is the display name shown on the login button (defaults to "SSO"). When all three OIDC variables are set, OIDC replaces Discord as the login method — the Discord button is hidden and Discord env vars are ignored. Existing Discord-only installations are unaffected as long as the OIDC variables are not set.
-
-If you switch an existing installation from Discord to OIDC, existing Discord accounts are not automatically linked to OIDC accounts. Make sure at least one administrator can sign in through the new provider, or update the relevant user role in the database after the first OIDC login.
-
-### 4. Configure Proxy Sources
-
-After the first admin login, open **Admin Panel → Settings** to enable the Free Proxy Pool, choose import sources and starter regions, and set validation thresholds. The worker continuously imports, validates, cools down, and rotates candidates.
-
-For dedicated capacity, add one proxy per line:
-
-```bash
-nano apps/worker/proxies.txt
-```
-
-Example:
-
-```txt
-http://user:pass@host:port
-```
-
-Users can add personal proxy groups from the dashboard. Premium and admin users can use server proxies when configured. Any user can select the Free Proxy Pool when the feature is enabled and the monitor region is healthy.
-
-### 5. Start Vintrack
+Add your Discord OAuth or OIDC credentials to `.env`, then start the stack:
 
 ```bash
 docker compose up -d --build
 ```
 
-Open:
+Open [http://localhost:3000](http://localhost:3000), which matches the default
+`AUTH_URL`. Caddy also exposes [http://localhost](http://localhost); if you use
+that as the canonical local URL, change `AUTH_URL`, `DASHBOARD_URL`, and the
+identity-provider callback to the same origin.
 
-```txt
-http://localhost:3000
+For Discord OAuth, register:
+
+```text
+http://localhost:3000/api/auth/callback/discord
 ```
 
-### Environment Variables Reference
+For OIDC, use:
 
-The most important variables are:
-
-```env
-# Required — generate with: openssl rand -base64 32
-AUTH_SECRET=your-random-secret
-
-# Required — from Discord Developer Portal
-AUTH_DISCORD_ID=your-discord-client-id
-AUTH_DISCORD_SECRET=your-discord-client-secret
-
-# Required in production — public app URL used by auth and dashboard links
-AUTH_URL=https://your-domain.com
-DASHBOARD_URL=https://your-domain.com
-
-# Optional — OIDC authentication (replaces Discord, e.g. Authentik, Google, Keycloak)
-# Uncomment and set all three required values to use OIDC instead of Discord.
-# AUTH_OIDC_ISSUER=https://your-oidc-provider.com/application/o/your-app/
-# AUTH_OIDC_CLIENT_ID=your-oidc-client-id
-# AUTH_OIDC_CLIENT_SECRET=your-oidc-client-secret
-# AUTH_OIDC_NAME=Authentik
-
-# Optional — Telegram notifications
-TELEGRAM_BOT_TOKEN=your-telegram-bot-token
-TELEGRAM_BOT_USERNAME=your_bot_username_without_at
-TELEGRAM_WEBHOOK_SECRET=your-random-webhook-secret
-
-# Optional — bounded operational telemetry retention
-MONITOR_RUN_RETENTION_HOURS=24
-MONITOR_RUN_STATS_RETENTION_DAYS=90
+```text
+http://localhost:3000/api/auth/callback/oidc
 ```
 
-### Telegram Setup for Self-Hosted Instances
+A production deployment must use the same public hostname in `AUTH_URL`,
+`DASHBOARD_URL`, `VINTRACK_SITE_ADDRESS`, and the identity-provider callback.
+Keep `AUTH_SECRET` and `VINTED_SESSION_ENCRYPTION_KEY` stable after the instance
+contains users or linked sessions.
 
-Telegram support uses a secure connect-code flow. The bot token stays on the server; users connect from the dashboard by sending a generated `/connect VT-...` command to your bot.
+For a public deployment, read the complete
+[Getting Started](docs/getting-started.md#self-host-vintrack) and
+[Configuration](docs/configuration.md) guides before exposing the service.
 
-1. Create a Telegram bot with [@BotFather](https://t.me/BotFather).
-2. Set these variables in the root `.env`:
+<details>
+<summary><strong>Production deployment and update checklist</strong></summary>
 
-```env
-TELEGRAM_BOT_TOKEN=your-telegram-bot-token
-TELEGRAM_BOT_USERNAME=your_bot_username_without_at
-TELEGRAM_WEBHOOK_SECRET=your-random-webhook-secret
-```
+Before the first deployment:
 
-3. Make sure `DASHBOARD_URL` points to your public HTTPS dashboard:
+- point the public hostname to the server;
+- expose ports 80 and 443 to Caddy;
+- use public HTTPS URLs for auth and notification links;
+- configure the production OAuth/OIDC callback;
+- protect and back up `.env`;
+- configure reliable proxy capacity and conservative monitor intervals;
+- validate with `docker compose config --quiet`.
 
-```env
-DASHBOARD_URL=https://your-domain.com
-```
-
-4. After deploying Vintrack on HTTPS, register the webhook:
-
-```bash
-curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook?url=https://your-domain.com/api/telegram/webhook&secret_token=$TELEGRAM_WEBHOOK_SECRET"
-```
-
-5. Verify delivery:
-
-```bash
-curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getWebhookInfo"
-```
-
-6. In Vintrack, open a monitor's notification dialog, click **Connect Telegram**, send the generated command to the bot shown in the dialog, then enable Telegram for that monitor.
-
-Users do not need to know the bot token or chat ID. They only need the bot username shown in Vintrack and the one-time connect command.
-
-### Local Telegram Testing
-
-Telegram webhooks require a public HTTPS URL. For local testing, expose `localhost:3000` with ngrok or Cloudflare Tunnel.
-
-Example with an ngrok URL:
-
-```env
-AUTH_URL=http://localhost:3000
-DASHBOARD_URL=https://your-ngrok-subdomain.ngrok-free.dev
-TELEGRAM_BOT_TOKEN=your-telegram-bot-token
-TELEGRAM_BOT_USERNAME=your_bot_username_without_at
-TELEGRAM_WEBHOOK_SECRET=your-random-webhook-secret
-```
-
-Then register the webhook against the tunnel URL:
-
-```bash
-curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook?url=https://your-ngrok-subdomain.ngrok-free.dev/api/telegram/webhook&secret_token=$TELEGRAM_WEBHOOK_SECRET"
-```
-
-Recreate the services after changing `.env`:
-
-```bash
-docker compose up -d --force-recreate control-center worker
-```
-
-### Production Deployment
-
-For a first production deployment from the published images:
+Start from published images:
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
-If you want to build the images directly on the server instead:
+For updates, back up PostgreSQL and `.env`, then apply committed migrations
+before recreating the application services:
 
 ```bash
-docker compose up -d --build
-```
-
-Make sure your domain points to the server and ports `80` and `443` are available for Caddy.
-
-### Production Updates & Database Migrations
-
-For release updates on a server, pull the new images and run the migration service before recreating the app services:
-
-```bash
-git pull
+git pull --ff-only
 docker compose pull
 docker compose up --force-recreate control-center-migrate
 docker compose up -d --force-recreate control-center worker vinted-service caddy
 ```
 
-The `control-center-migrate` service uses the same pulled `control-center` image and runs `npx prisma migrate deploy`, so new Prisma migrations are applied even when deploying with `docker compose pull`.
+Vintrack uses `prisma migrate deploy`. Do not use
+`prisma db push --accept-data-loss` against production.
 
-Do not use `prisma db push --accept-data-loss` in production. Schema changes should be represented as committed Prisma migrations.
+</details>
 
-### Proxy Formats
+## Feature overview
 
-Vintrack accepts multiple proxy formats (one per line in `apps/worker/proxies.txt`):
+| Area | Capabilities |
+| --- | --- |
+| Monitoring | Per-monitor intervals, regional catalog sessions, local matching, delayed request hedging, Redis deduplication |
+| Filters | Query, price, category, brand, color, size, condition, seller country, Vinted market |
+| Alerts | Rich Discord embeds, Telegram bot connections, per-monitor notification controls |
+| Dashboard | Monitor management, live feed, operational overview, roles, proxy pool health |
+| Proxies | HTTP(S), SOCKS4/5, authenticated formats, user groups, shared pools, regional validation and cooldown |
+| Account actions | Optional session linking, likes, offers, messages, image galleries, browser-assisted checkout |
+| Identity | Discord OAuth or standards-based OIDC, role-based Free/Premium/Admin access |
+| Operations | Docker Compose, Caddy HTTPS, PostgreSQL migrations, bounded logs and telemetry retention |
 
-```
+### Monitoring and filters
+
+Each monitor keeps its canonical regional Vinted search. The worker maintains
+isolated catalog sessions, performs bounded attempts, and uses Redis to
+atomically deduplicate new listings before persistence and alert delivery.
+
+Monitor filters include:
+
+- text search;
+- minimum and maximum price;
+- categories and subcategories;
+- brands;
+- colors;
+- clothing and shoe sizes;
+- item condition;
+- seller country;
+- Vinted market or region.
+
+An optional query-free discovery path can match keywords locally against the
+same catalog filters. It is disabled by default and should be evaluated in
+shadow mode before active use.
+
+### Alerts and live feed
+
+New matches can appear in the SSE-powered dashboard feed and in either alert
+channel:
+
+- **Discord:** per-monitor webhooks with image, title, item price, total price,
+  size, condition, seller details, and direct links.
+- **Telegram:** users connect to the operator's bot with a one-time code and can
+  enable delivery per monitor.
+
+Notification delivery uses bounded worker pools so slow webhooks do not block
+catalog processing.
+
+### Linked-account actions
+
+An explicitly linked Vinted account enables:
+
+- like and unlike actions from item cards;
+- price offers with built-in minimum-price validation;
+- new seller conversations and replies;
+- wardrobe and liked-item views;
+- multi-image previews and higher-resolution galleries;
+- browser-assisted checkout links with recovery history;
+- account status and regional-domain visibility.
+
+Linked-account actions are handled by the separate Vinted service and never use
+the shared free proxy pool.
+
+### Browser extension
+
+The browser extension is the recommended way to link an account you are
+authorized to use. It syncs the Vinted web access token, selected domain, browser
+user agent, and Vintrack theme; it does **not** copy the complete cookie jar.
+
+- [Chrome ZIP](https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest/download/vintrack-browser-sync-extension.zip)
+- [Firefox XPI](https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest/download/vintrack-browser-sync-extension-firefox.xpi)
+- [Extension documentation](apps/vintrack-browser-sync-extension/README.md)
+
+For Chrome, extract the ZIP, open `chrome://extensions`, enable **Developer
+mode**, and select **Load unpacked**. Firefox development builds can be loaded
+from `about:debugging#/runtime/this-firefox`; normal installations should use
+the signed release XPI.
+
+Account actions and checkout support are optional and can break when upstream
+authentication or checkout flows change. Use a dedicated test account, review
+each action, and complete purchases in Vinted's native checkout.
+
+### Experimental checkout boundary
+
+Vintrack does not replace Vinted's payment or delivery flow. It prepares or
+stores a native checkout link, opens that link in the browser, and leaves
+payment method selection and final confirmation to the user. Upstream changes
+can break this experimental module, and an item may be reserved before payment
+is completed.
+
+### Free starter proxy pools
+
+When enabled by an administrator, supported regions can expose a shared starter
+pool to normal users. The proxy-maintainer worker:
+
+- imports candidates from configured public sources;
+- keeps independent health state per Vinted region;
+- validates candidates against the selected regional catalog;
+- requires repeated successful checks before activation;
+- places failing routes into cooldown and retires persistently dead entries;
+- publishes regional readiness to the monitor form;
+- uses bounded validation batches to protect the database and worker host.
+
+The free pool is intended for onboarding and short evaluations. Public routes
+can disappear, change IP, become slow, or lose upstream access without notice.
+It is not used for linked-account actions.
+
+### Proxy sources and behavior
+
+Vintrack supports three operational sources:
+
+1. **Free Proxy Pool** — optional shared starter capacity for healthy regions.
+2. **Server proxies** — an operator-managed shared pool for eligible roles.
+3. **Personal proxy groups** — user-provided, dedicated capacity.
+
+Accepted static formats in `apps/worker/proxies.txt` include:
+
+```text
 http://user:pass@host:port
+https://user:pass@host:port
+socks4://user:pass@host:port
 socks5://user:pass@host:port
 host:port:user:pass
 host:port
 ```
 
-Invalid lines are automatically skipped with a warning in logs.
+Invalid lines are skipped. UK monitors require IPv4 proxies.
 
----
+The worker keeps dedicated clients on stable proxy sessions, processes canonical
+catalog searches, and can optionally evaluate a query-free discovery feed.
+Health state, cooldowns, and per-region availability determine which shared
+proxies may enter rotation.
 
-## Roadmap
+Shared public proxies are useful for evaluation, not guaranteed production
+capacity. Sustained deployments should use proxies the operator controls and
+monitor regional health.
 
-- [x] Vinted Account Linking
-- [x] Like / Unlike items
-- [x] Send offers to sellers
-- [x] Send messages to sellers
-- [x] One-click buy
-- [ ] Auto-buy with price rules
-- [ ] Auto Chat Module
-- [ ] Price history tracking & charts
-- [ ] Saved searches / favorites
-- [ ] Rate limiting per user
-- [ ] API tokens for external integrations
-- [ ] Mobile app (React Native)
+#### Optional proxy provider
 
----
+Vintrack is provider-agnostic and works with supported proxy formats from any
+provider. If you need a starting point, the maintainer currently uses
+[Webshare Proxy Server](https://www.webshare.io/?referral_code=qhu9q567qrqp).
+Webshare may also offer limited free capacity for initial tests.
 
-## Contributing
+> **Referral disclosure:** The Webshare URL is a referral link and may support
+> Vintrack at no additional cost to you. Webshare is optional; review current
+> pricing, regions, limits, and terms before purchasing.
 
-Contributions are welcome! Here's how:
+You can test whether a proxy can reach Vinted with the
+[Proxy6 checker](https://proxy6.net/checker). Treat third-party checkers as
+external services and never submit reusable credentials unless you trust their
+data-handling policy.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+- [Worker performance and discovery](docs/worker-speed.md)
+- [Pre-index shadow experiment](docs/preindex-shadow.md)
+- [Complete proxy configuration](docs/configuration.md#proxy-sources)
 
-Please make sure to:
+### Roles and access
 
-- Follow existing code style
-- Test your changes with `docker compose up --build`
-- Update documentation if needed
+| Role | Free Pool* | Server Proxies | Personal Proxies | Admin Panel |
+| --- | :---: | :---: | :---: | :---: |
+| **Free** | Yes | No | Yes | No |
+| **Premium** | Yes | Yes | Yes | No |
+| **Admin** | Yes | Yes | Yes | Yes |
 
----
+\* Available only when enabled and healthy for the selected region. Operators
+can define additional resource policy for their own deployment.
+
+## Product tour
+
+<p align="center">
+  <img src="docs/screenshots/overview.webp" width="49%" alt="Vintrack dashboard overview" />
+  <img src="docs/screenshots/live-feed.webp" width="49%" alt="Live listing feed" />
+</p>
+<p align="center">
+  <img src="docs/screenshots/create-monitor.webp" width="49%" alt="Monitor creation form" />
+  <img src="docs/screenshots/user-management.webp" width="49%" alt="User and role management" />
+</p>
+<p align="center">
+  <img src="docs/screenshots/send-message.webp" width="49%" alt="Seller message dialog" />
+  <img src="docs/screenshots/send-offer.webp" width="49%" alt="Price offer dialog" />
+</p>
+<p align="center">
+  <img src="docs/screenshots/account.webp" width="49%" alt="Linked Vinted account page" />
+  <img src="docs/screenshots/discord-embed.webp" width="49%" alt="Discord listing notification" />
+</p>
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Browser["Browser / Extension"] --> Caddy["Caddy"]
+    Caddy --> Web["Control Center<br/>Next.js"]
+    Web --> DB[("PostgreSQL")]
+    Web <--> Redis[("Redis")]
+    Worker["Go Worker"] --> DB
+    Worker <--> Redis
+    Worker --> Catalog["Vinted catalog"]
+    Worker --> Alerts["Discord / Telegram"]
+    Web --> Service["Vinted Service<br/>Go"]
+    Service --> DB
+    Service <--> Redis
+    Service --> Actions["Authorized account actions"]
+```
+
+1. The control center stores monitor configuration in PostgreSQL.
+2. Go workers fetch catalog data through configured regional sessions.
+3. Redis coordinates deduplication, caching, and live-feed events.
+4. Matching listings are persisted and dispatched to enabled alert channels.
+5. The separate Vinted service handles explicitly linked account actions.
+
+[Explore components, trust boundaries, and data flow →](docs/architecture.md)
+
+## Technology
+
+| Layer | Technology | Responsibility |
+| --- | --- | --- |
+| Web | Next.js 16, React 19, Tailwind CSS 4 | Dashboard, APIs, auth, and live feed |
+| Worker | Go, `tls-client`, goroutines | Catalog sessions, matching, proxy health, and alerts |
+| Account service | Go, `tls-client` | Linked sessions and authorized item actions |
+| Database | PostgreSQL 15, Prisma | Persistent application and operational state |
+| Coordination | Redis 7 | Deduplication, cache, pub/sub, and session-adjacent state |
+| Identity | Auth.js / NextAuth v5 | Discord OAuth and optional OIDC |
+| Edge | Caddy 2 | Reverse proxy and automatic HTTPS |
+| Operations | Docker Compose | Service orchestration and migrations |
+
+Internal service contracts are documented in
+[OpenAPI](docs/openapi/README.md).
+
+## Repository layout
+
+```text
+apps/
+├── control-center/                 Next.js dashboard, auth, API, and Prisma
+├── worker/                         Catalog monitoring and proxy maintenance
+├── vinted-service/                 Linked-account actions
+├── id-scanner/                     Standalone experimental utility
+└── vintrack-browser-sync-extension/
+docs/                               Setup, operations, API, and design notes
+requests/                           Example request payloads
+scripts/                            Initialization and validation helpers
+```
+
+## Documentation
+
+| Guide | Use it for |
+| --- | --- |
+| [Getting Started](docs/getting-started.md) | Live demo, local setup, and production deployment |
+| [Configuration](docs/configuration.md) | Authentication, URLs, notifications, proxies, and tuning |
+| [Architecture](docs/architecture.md) | Components, data flow, and security boundaries |
+| [Development](docs/development.md) | Local workflows, mock data, tests, and project conventions |
+| [Troubleshooting](docs/troubleshooting.md) | Logs, startup failures, auth, proxy, and migration issues |
+| [Testing](docs/testing.md) | Unit, build, and end-to-end validation |
+| [OpenAPI](docs/openapi/README.md) | Internal Vinted service contract |
+
+## Responsible use
+
+Vintrack is intended for lawful, authorized monitoring and account automation.
+You are responsible for your deployment, request rate, data handling, and
+compliance with applicable law and third-party terms.
+
+Do not use Vintrack to bypass authentication barriers, CAPTCHAs, rate limits, or
+other access controls. Never commit session tokens, cookies, OAuth secrets,
+webhook URLs, proxy credentials, database dumps, or personal data.
+
+See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
+
+## Contributing and support
+
+Bug reports, focused features, documentation, and tests are welcome. Please read
+[CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md) before opening a pull request.
+
+- [GitHub Issues](https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/issues)
+- [Vintrack Discord](https://discord.gg/WbEpEjaWjP)
+- [Security policy](SECURITY.md)
+- [Changelog](CHANGELOG.md)
 
 ## Acknowledgements
 
-- [vinted-dataset](https://github.com/teddy-vltn/vinted-dataset) by [@teddy-vltn](https://github.com/teddy-vltn) — Categories, brands, and sizes data used in the filter system
-
----
+Category, brand, and size data is based on
+[vinted-dataset](https://github.com/teddy-vltn/vinted-dataset) by
+[@teddy-vltn](https://github.com/teddy-vltn).
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
-
----
+Vintrack is available under the [MIT License](LICENSE).
 
 <p align="center">
-  <sub>Built with ❤️ for the reselling community</sub><br/>
-  <sub>If Vintrack helped you catch a deal, consider giving it a ⭐</sub>
+  <sub>If Vintrack is useful to you, a star or contribution helps the project reach more builders.</sub>
 </p>
