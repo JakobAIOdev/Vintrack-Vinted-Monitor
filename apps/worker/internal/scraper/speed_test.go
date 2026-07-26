@@ -5,11 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
 	"vintrack-worker/internal/model"
 	"vintrack-worker/internal/proxy"
+
+	http "github.com/bogdanfinn/fhttp"
 )
 
 type timedCatalogFetcher struct {
@@ -377,8 +380,32 @@ func TestConfiguredClientFingerprint(t *testing.T) {
 		t.Fatalf("configuredClientFingerprint() = %#v", got)
 	}
 	t.Setenv("TLS_PROFILE", "unsupported")
-	if got := configuredClientFingerprint(); got.name != "chrome_144" {
-		t.Fatalf("unsupported profile fallback = %q, want chrome_144", got.name)
+	if got := configuredClientFingerprint(); got.name != "chrome_146" {
+		t.Fatalf("unsupported profile fallback = %q, want chrome_146", got.name)
+	}
+}
+
+func TestWarmupHeadersMatchBrowserNavigation(t *testing.T) {
+	t.Setenv("TLS_PROFILE", "chrome_146")
+	headers := newWarmupHeaders("www.vinted.de")
+
+	for key, want := range map[string]string{
+		"Upgrade-Insecure-Requests": "1",
+		"Sec-Fetch-Site":            "none",
+		"Sec-Fetch-Mode":            "navigate",
+		"Sec-Fetch-User":            "?1",
+		"Sec-Fetch-Dest":            "document",
+		"Priority":                  "u=0, i",
+	} {
+		if got := headers.Get(key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	if got := headers.Get("User-Agent"); !strings.Contains(got, "Chrome/146.") {
+		t.Errorf("User-Agent = %q, want Chrome 146", got)
+	}
+	if len(headers[http.HeaderOrderKey]) == 0 {
+		t.Fatal("warmup header order is empty")
 	}
 }
 

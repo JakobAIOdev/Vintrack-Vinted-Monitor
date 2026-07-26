@@ -30,7 +30,13 @@ var (
 	telemetryCleanupRunning atomic.Bool
 )
 
-const proxyScrapeFallbackURL = "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text"
+const (
+	proxyScrapeFallbackURL = "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text"
+	proxiflyProxyListURL   = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/all/data.txt"
+	databaySOCKS4ListURL   = "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/socks4.txt"
+	databaySOCKS5ListURL   = "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/socks5.txt"
+	monosansProxyListURL   = "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt"
+)
 
 const (
 	freeProxyCheckCycleTimeout = 5 * time.Minute
@@ -834,6 +840,18 @@ func freeProxyImportURLsContext(ctx context.Context, store *database.Store, impo
 	if !seen[proxyScrapeFallbackURL] {
 		urls = append(urls, proxyScrapeFallbackURL)
 	}
+	for _, sourceURL := range []string{
+		proxiflyProxyListURL,
+		databaySOCKS5ListURL,
+		databaySOCKS4ListURL,
+		monosansProxyListURL,
+	} {
+		if seen[sourceURL] {
+			continue
+		}
+		seen[sourceURL] = true
+		urls = append(urls, sourceURL)
+	}
 	return urls
 }
 
@@ -850,6 +868,22 @@ func freeProxySourceContext(ctx context.Context, store *database.Store, importUR
 	}
 	if strings.Contains(importURL, "proxyscrape") {
 		return "proxyscrape"
+	}
+	if strings.Contains(importURL, "proxifly/free-proxy-list") {
+		return "proxifly"
+	}
+	if strings.Contains(importURL, "databay-labs/free-proxy-list") {
+		switch {
+		case strings.Contains(importURL, "/socks5.txt"):
+			return "databay:socks5"
+		case strings.Contains(importURL, "/socks4.txt"):
+			return "databay:socks4"
+		default:
+			return "databay"
+		}
+	}
+	if strings.Contains(importURL, "monosans/proxy-list") {
+		return "monosans"
 	}
 	if source, err := settingStringContext(ctx, store, "free_proxy_import_source", ""); err == nil && source != "" {
 		if strings.HasPrefix(source, "iplocate") {
@@ -885,11 +919,11 @@ func iplocateCountryFromURL(importURL string) string {
 
 func defaultSchemeForImportURL(importURL string) string {
 	switch {
-	case strings.Contains(importURL, "/protocols/https"):
+	case strings.Contains(importURL, "/protocols/https") || strings.Contains(importURL, "/https.txt"):
 		return "https"
-	case strings.Contains(importURL, "/protocols/socks4"):
+	case strings.Contains(importURL, "/protocols/socks4") || strings.Contains(importURL, "/socks4.txt"):
 		return "socks4"
-	case strings.Contains(importURL, "/protocols/socks5"):
+	case strings.Contains(importURL, "/protocols/socks5") || strings.Contains(importURL, "/socks5.txt"):
 		return "socks5"
 	default:
 		return "http"
