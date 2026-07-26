@@ -32,7 +32,7 @@ func configuredClientFingerprint() clientFingerprint {
 	case "chrome_146":
 		return clientFingerprint{name: "chrome_146", version: "146", profile: profiles.Chrome_146}
 	default:
-		return clientFingerprint{name: "chrome_144", version: "144", profile: profiles.Chrome_144}
+		return clientFingerprint{name: "chrome_146", version: "146", profile: profiles.Chrome_146}
 	}
 }
 
@@ -74,9 +74,26 @@ func hostFromURL(rawURL string, fallback string) string {
 
 func newWarmupHeaders(domain string) http.Header {
 	return http.Header{
-		"User-Agent":      {configuredChromeUA()},
-		"Accept":          {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"},
-		"Accept-Language": {acceptLanguageForDomain(domain)},
+		"Upgrade-Insecure-Requests": {"1"},
+		"User-Agent":                {configuredChromeUA()},
+		"Accept":                    {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"},
+		"Sec-Fetch-Site":            {"none"},
+		"Sec-Fetch-Mode":            {"navigate"},
+		"Sec-Fetch-User":            {"?1"},
+		"Sec-Fetch-Dest":            {"document"},
+		"Accept-Language":           {acceptLanguageForDomain(domain)},
+		"Priority":                  {"u=0, i"},
+		http.HeaderOrderKey: {
+			"upgrade-insecure-requests",
+			"user-agent",
+			"accept",
+			"sec-fetch-site",
+			"sec-fetch-mode",
+			"sec-fetch-user",
+			"sec-fetch-dest",
+			"accept-language",
+			"priority",
+		},
 	}
 }
 

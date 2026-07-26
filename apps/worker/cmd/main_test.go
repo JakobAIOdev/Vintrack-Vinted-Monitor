@@ -237,11 +237,29 @@ func TestFreeProxySourcePrefersKnownURLProvider(t *testing.T) {
 	tests := map[string]string{
 		"https://raw.githubusercontent.com/iplocate/free-proxy-list/main/all-proxies.txt": "iplocate",
 		proxyScrapeFallbackURL: "proxyscrape",
+		proxiflyProxyListURL:   "proxifly",
+		databaySOCKS4ListURL:   "databay:socks4",
+		databaySOCKS5ListURL:   "databay:socks5",
+		monosansProxyListURL:   "monosans",
 	}
 
 	for importURL, want := range tests {
 		if got := freeProxySource(nil, importURL); got != want {
 			t.Errorf("freeProxySource(nil, %q) = %q, want %q", importURL, got, want)
+		}
+	}
+}
+
+func TestDefaultSchemeForImportURL(t *testing.T) {
+	tests := map[string]string{
+		databaySOCKS4ListURL: "socks4",
+		databaySOCKS5ListURL: "socks5",
+		proxiflyProxyListURL: "http",
+	}
+
+	for importURL, want := range tests {
+		if got := defaultSchemeForImportURL(importURL); got != want {
+			t.Errorf("defaultSchemeForImportURL(%q) = %q, want %q", importURL, got, want)
 		}
 	}
 }

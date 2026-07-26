@@ -457,7 +457,11 @@ func (s *Store) UpsertFreeProxiesContext(ctx context.Context, proxies []FreeProx
 				source = EXCLUDED.source,
 				status = CASE
 					WHEN free_proxies.status = 'disabled'
-					  AND (EXCLUDED.source LIKE 'iplocate%' OR EXCLUDED.source = 'proxyscrape')
+					  AND (
+						EXCLUDED.source LIKE 'iplocate%'
+						OR EXCLUDED.source IN ('proxyscrape', 'proxifly', 'monosans')
+						OR EXCLUDED.source LIKE 'databay%'
+					  )
 					  AND (
 						free_proxies.last_error LIKE 'invalid config:%'
 						OR free_proxies.last_checked_at IS NULL
@@ -468,7 +472,11 @@ func (s *Store) UpsertFreeProxiesContext(ctx context.Context, proxies []FreeProx
 				END,
 				last_error = CASE
 					WHEN free_proxies.status = 'disabled'
-					  AND (EXCLUDED.source LIKE 'iplocate%' OR EXCLUDED.source = 'proxyscrape')
+					  AND (
+						EXCLUDED.source LIKE 'iplocate%'
+						OR EXCLUDED.source IN ('proxyscrape', 'proxifly', 'monosans')
+						OR EXCLUDED.source LIKE 'databay%'
+					  )
 					  AND (
 						free_proxies.last_error LIKE 'invalid config:%'
 						OR free_proxies.last_checked_at IS NULL
@@ -498,7 +506,11 @@ func (s *Store) UpsertFreeProxiesContext(ctx context.Context, proxies []FreeProx
 			FROM free_proxies fp
 			WHERE fp.id = fph.proxy_id
 			  AND fp.proxy_url = ANY($1)
-			  AND (fp.source LIKE 'iplocate%' OR fp.source = 'proxyscrape')
+			  AND (
+				fp.source LIKE 'iplocate%'
+				OR fp.source IN ('proxyscrape', 'proxifly', 'monosans')
+				OR fp.source LIKE 'databay%'
+			  )
 			  AND (
 				(fph.status IN ('dead', 'cooldown') AND fph.last_error LIKE 'invalid config:%')
 				OR (
@@ -544,7 +556,11 @@ func (s *Store) PruneUnselectedFreeProxiesContext(ctx context.Context, keepProxy
 	}
 	result, err := s.db.ExecContext(ctx, `
 		DELETE FROM free_proxies fp
-		WHERE (fp.source LIKE 'iplocate%' OR fp.source = 'proxyscrape')
+		WHERE (
+				fp.source LIKE 'iplocate%'
+				OR fp.source IN ('proxyscrape', 'proxifly', 'monosans')
+				OR fp.source LIKE 'databay%'
+			  )
 		  AND NOT (fp.proxy_url = ANY($1))
 		  AND NOT EXISTS (
 			SELECT 1
@@ -665,10 +681,25 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 			  CASE
 				WHEN fph.status = 'active' THEN 0
 				WHEN fph.status = 'pending' AND fph.success_streak > 0 THEN 1
-				WHEN fph.status = 'cooldown' THEN 2
-				WHEN $3 AND fph.status = 'pending' AND fph.success_streak = 0 AND fph.last_checked_at IS NULL THEN 3
+				WHEN $3 AND fph.status = 'pending' AND fph.success_streak = 0 AND fph.last_checked_at IS NULL THEN 2
+				WHEN fph.status = 'cooldown' THEN 3
 				ELSE 4
 			  END,
+			  CASE
+				WHEN $3 AND fph.status = 'pending' AND fph.success_streak = 0 AND fph.last_checked_at IS NULL
+				THEN CASE fp.protocol
+					WHEN 'socks5' THEN 0
+					WHEN 'socks4' THEN 1
+					WHEN 'http' THEN 2
+					WHEN 'https' THEN 3
+					ELSE 4
+				END
+				ELSE 0
+			  END,
+			  CASE
+				WHEN $3 AND fph.status = 'pending' AND fph.success_streak = 0 AND fph.last_checked_at IS NULL
+				THEN fp.created_at
+			  END DESC,
 			  fph.success_streak DESC,
 			  fph.last_checked_at ASC NULLS FIRST,
 			  fph.score DESC

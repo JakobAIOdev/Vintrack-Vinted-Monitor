@@ -27,7 +27,7 @@ Shadow discovery also runs on a healthy shared free-proxy pool so its timing can
 
 | Variable                           |      Default | Purpose                                                                                                            |
 | ---------------------------------- | -----------: | ------------------------------------------------------------------------------------------------------------------ |
-| `TLS_PROFILE`                      | `chrome_144` | TLS and browser-header profile (`chrome_131`, `chrome_133`, `chrome_144`, or `chrome_146`).                        |
+| `TLS_PROFILE`                      | `chrome_146` | TLS and browser-header profile (`chrome_131`, `chrome_133`, `chrome_144`, or `chrome_146`).                        |
 | `CLIENT_POOL_SIZE`                 |          `5` | Warm proxy sessions retained per domain and proxy source.                                                          |
 | `CATALOG_TIMEOUT_MS`               |       `2000` | Deadline for a catalog cycle.                                                                                      |
 | `CATALOG_HEDGE_DELAY_MS`           |        `250` | Starts a second request on another healthy proxy if the first request has not completed.                           |
@@ -53,6 +53,8 @@ Shadow discovery also runs on a healthy shared free-proxy pool so its timing can
 | `DETECTION_RETENTION_DAYS`         |         `14` | Retention for discovery/canonical comparison telemetry.                                                            |
 
 Client selection favors low-latency, successful, idle sessions. HTTP 401/403/407/429 responses cool down the affected session, and hedged-request losers are canceled without being counted as failures. Free discovery uses its own stable client pool, so free-pool refreshes no longer restart the feed or disturb canonical catalog sessions.
+
+The automatic free-proxy import combines IPLocate and ProxyScrape with measured, frequently refreshed Proxifly, Databay SOCKS4/SOCKS5, and Monosans feeds. Candidates are deduplicated before storage, interleaved across providers, and still have to pass the target Vinted region check before they become usable.
 
 ## Alert semantics
 
