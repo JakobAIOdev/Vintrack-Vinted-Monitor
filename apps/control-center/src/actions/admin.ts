@@ -141,6 +141,7 @@ type FreeProxyRegionRow = {
     recent_check_count: bigint;
     median_latency_ms: number | null;
     last_checked_at: Date | null;
+    stalled: boolean;
 };
 
 type ParsedProxy = {
@@ -980,7 +981,18 @@ export async function getFreeProxyAdminState() {
                           AND last_status_code = 200
                           AND last_error IS NULL
                     ) AS median_latency_ms,
-                MAX(last_checked_at) AS last_checked_at
+                MAX(last_checked_at) AS last_checked_at,
+                COALESCE(
+                    MAX(last_checked_at) < NOW() - INTERVAL '10 minutes',
+                    TRUE
+                )
+                AND COUNT(*) FILTER (
+                    WHERE status IN ('pending', 'active', 'cooldown')
+                      AND (
+                        next_check_at IS NULL
+                        OR next_check_at <= NOW()
+                      )
+                ) > 0 AS stalled
             FROM free_proxy_health
             GROUP BY region
             ORDER BY region
@@ -1056,6 +1068,7 @@ export async function getFreeProxyAdminState() {
                         ? null
                         : Math.round(row.median_latency_ms),
                 lastCheckedAt: row.last_checked_at,
+                stalled: row.stalled,
                 healthy:
                     Number(row.active_count) + Number(row.warming_count) >=
                     settings.minActivePerRegion,

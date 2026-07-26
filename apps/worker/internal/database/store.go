@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -304,8 +305,12 @@ func (s *Store) SetUserRegion(userID int64, region string) {
 }
 
 func (s *Store) GetSettingValue(key string) (string, bool, error) {
+	return s.GetSettingValueContext(context.Background(), key)
+}
+
+func (s *Store) GetSettingValueContext(ctx context.Context, key string) (string, bool, error) {
 	var value string
-	err := s.db.QueryRow(`SELECT value FROM app_settings WHERE key = $1`, key).Scan(&value)
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM app_settings WHERE key = $1`, key).Scan(&value)
 	if err == sql.ErrNoRows {
 		return "", false, nil
 	}
@@ -316,7 +321,11 @@ func (s *Store) GetSettingValue(key string) (string, bool, error) {
 }
 
 func (s *Store) GetActiveFreeProxyRegions() ([]string, error) {
-	rows, err := s.db.Query(`
+	return s.GetActiveFreeProxyRegionsContext(context.Background())
+}
+
+func (s *Store) GetActiveFreeProxyRegionsContext(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT region
 		FROM monitors
 		WHERE status = 'active'
@@ -339,10 +348,14 @@ func (s *Store) GetActiveFreeProxyRegions() ([]string, error) {
 }
 
 func (s *Store) GetActiveFreeProxies(region string, limit int) ([]string, error) {
+	return s.GetActiveFreeProxiesContext(context.Background(), region, limit)
+}
+
+func (s *Store) GetActiveFreeProxiesContext(ctx context.Context, region string, limit int) ([]string, error) {
 	if limit <= 0 {
 		limit = 500
 	}
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT fp.proxy_url
 		FROM free_proxy_health fph
 		JOIN free_proxies fp ON fp.id = fph.proxy_id
@@ -377,7 +390,11 @@ func (s *Store) GetActiveFreeProxies(region string, limit int) ([]string, error)
 }
 
 func (s *Store) GetFreeProxyURLSet() (map[string]struct{}, error) {
-	rows, err := s.db.Query(`SELECT proxy_url FROM free_proxies`)
+	return s.GetFreeProxyURLSetContext(context.Background())
+}
+
+func (s *Store) GetFreeProxyURLSetContext(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT proxy_url FROM free_proxies`)
 	if err != nil {
 		return nil, err
 	}
@@ -395,6 +412,10 @@ func (s *Store) GetFreeProxyURLSet() (map[string]struct{}, error) {
 }
 
 func (s *Store) UpsertFreeProxies(proxies []FreeProxyRecord) (int, error) {
+	return s.UpsertFreeProxiesContext(context.Background(), proxies)
+}
+
+func (s *Store) UpsertFreeProxiesContext(ctx context.Context, proxies []FreeProxyRecord) (int, error) {
 	const batchSize = 500
 	processed := 0
 
@@ -458,16 +479,16 @@ func (s *Store) UpsertFreeProxies(proxies []FreeProxyRecord) (int, error) {
 				END,
 				updated_at = NOW()`)
 
-		tx, err := s.db.Begin()
+		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return processed, err
 		}
-		result, err := tx.Exec(query.String(), args...)
+		result, err := tx.ExecContext(ctx, query.String(), args...)
 		if err != nil {
 			_ = tx.Rollback()
 			return processed, err
 		}
-		if _, err := tx.Exec(`
+		if _, err := tx.ExecContext(ctx, `
 			UPDATE free_proxy_health fph
 			SET status = 'pending',
 				failure_streak = 0,
@@ -514,10 +535,14 @@ func (s *Store) UpsertFreeProxy(proxyURL string, protocol string, host string, p
 }
 
 func (s *Store) PruneUnselectedFreeProxies(keepProxyURLs []string) (int64, error) {
+	return s.PruneUnselectedFreeProxiesContext(context.Background(), keepProxyURLs)
+}
+
+func (s *Store) PruneUnselectedFreeProxiesContext(ctx context.Context, keepProxyURLs []string) (int64, error) {
 	if len(keepProxyURLs) == 0 {
 		return 0, nil
 	}
-	result, err := s.db.Exec(`
+	result, err := s.db.ExecContext(ctx, `
 		DELETE FROM free_proxies fp
 		WHERE (fp.source LIKE 'iplocate%' OR fp.source = 'proxyscrape')
 		  AND NOT (fp.proxy_url = ANY($1))
@@ -534,19 +559,23 @@ func (s *Store) PruneUnselectedFreeProxies(keepProxyURLs []string) (int64, error
 }
 
 func (s *Store) EnsureFreeProxyHealthRows(regions []string, limit int) error {
+	return s.EnsureFreeProxyHealthRowsContext(context.Background(), regions, limit)
+}
+
+func (s *Store) EnsureFreeProxyHealthRowsContext(ctx context.Context, regions []string, limit int) error {
 	if len(regions) == 0 {
-		_, err := s.db.Exec(`DELETE FROM free_proxy_health`)
+		_, err := s.db.ExecContext(ctx, `DELETE FROM free_proxy_health`)
 		return err
 	}
 	if limit <= 0 {
 		limit = 1000
 	}
-	if _, err := s.db.Exec(`
+	if _, err := s.db.ExecContext(ctx, `
 		DELETE FROM free_proxy_health
 		WHERE NOT (region = ANY($1))`, pq.Array(regions)); err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(`
+	if _, err := s.db.ExecContext(ctx, `
 		DELETE FROM free_proxy_health fph
 		USING free_proxies fp
 		WHERE fp.id = fph.proxy_id
@@ -558,7 +587,7 @@ func (s *Store) EnsureFreeProxyHealthRows(regions []string, limit int) error {
 	}
 
 	for _, region := range regions {
-		if _, err := s.db.Exec(`
+		if _, err := s.db.ExecContext(ctx, `
 			WITH desired AS (
 				SELECT fp.id
 				FROM free_proxies fp
@@ -613,32 +642,52 @@ func (s *Store) EnsureFreeProxyHealthRows(regions []string, limit int) error {
 }
 
 func (s *Store) GetFreeProxiesDueForCheck(regions []string, limit int, bootstrap bool) ([]FreeProxyCandidate, error) {
+	return s.ClaimFreeProxiesDueForCheck(context.Background(), regions, limit, bootstrap)
+}
+
+func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []string, limit int, bootstrap bool) ([]FreeProxyCandidate, error) {
 	if limit <= 0 {
 		limit = 200
 	}
 	if len(regions) == 0 {
 		regions = []string{"de"}
 	}
-	rows, err := s.db.Query(`
-		SELECT fp.proxy_url, fph.region
-		FROM free_proxy_health fph
-		JOIN free_proxies fp ON fp.id = fph.proxy_id
-		WHERE fph.region = ANY($1)
-		  AND fp.status <> 'disabled'
-		  AND fph.status IN ('pending', 'active', 'cooldown')
-		  AND (fph.next_check_at IS NULL OR fph.next_check_at <= NOW())
-		ORDER BY
-		  CASE
-			WHEN fph.status = 'active' THEN 0
-			WHEN fph.status = 'pending' AND fph.success_streak > 0 THEN 1
-			WHEN fph.status = 'cooldown' THEN 2
-			WHEN $3 AND fph.status = 'pending' AND fph.success_streak = 0 AND fph.last_checked_at IS NULL THEN 3
-			ELSE 4
-		  END,
-		  fph.success_streak DESC,
-		  fph.last_checked_at ASC NULLS FIRST,
-		  fph.score DESC
-		LIMIT $2`, pq.Array(regions), limit, bootstrap)
+	rows, err := s.db.QueryContext(ctx, `
+		WITH due AS (
+			SELECT fph.id
+			FROM free_proxy_health fph
+			JOIN free_proxies fp ON fp.id = fph.proxy_id
+			WHERE fph.region = ANY($1)
+			  AND fp.status <> 'disabled'
+			  AND fph.status IN ('pending', 'active', 'cooldown')
+			  AND (fph.next_check_at IS NULL OR fph.next_check_at <= NOW())
+			ORDER BY
+			  CASE
+				WHEN fph.status = 'active' THEN 0
+				WHEN fph.status = 'pending' AND fph.success_streak > 0 THEN 1
+				WHEN fph.status = 'cooldown' THEN 2
+				WHEN $3 AND fph.status = 'pending' AND fph.success_streak = 0 AND fph.last_checked_at IS NULL THEN 3
+				ELSE 4
+			  END,
+			  fph.success_streak DESC,
+			  fph.last_checked_at ASC NULLS FIRST,
+			  fph.score DESC
+			LIMIT $2
+			FOR UPDATE OF fph SKIP LOCKED
+		), claimed AS (
+			UPDATE free_proxy_health fph
+			SET next_check_at = NOW() + INTERVAL '10 minutes'
+			FROM due
+			WHERE fph.id = due.id
+			RETURNING fph.proxy_id, fph.region
+		)
+		SELECT fp.proxy_url, claimed.region
+		FROM claimed
+		JOIN free_proxies fp ON fp.id = claimed.proxy_id`,
+		pq.Array(regions),
+		limit,
+		bootstrap,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -656,10 +705,18 @@ func (s *Store) GetFreeProxiesDueForCheck(regions []string, limit int, bootstrap
 }
 
 func (s *Store) RecordFreeProxySuccess(proxyURL string, region string, latencyMs int) {
-	if proxyURL == "" {
-		return
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.RecordFreeProxySuccessContext(ctx, proxyURL, region, latencyMs); err != nil {
+		log.Printf("free proxy success update failed: %v", err)
 	}
-	if _, err := s.db.Exec(`
+}
+
+func (s *Store) RecordFreeProxySuccessContext(ctx context.Context, proxyURL string, region string, latencyMs int) error {
+	if proxyURL == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
 		WITH updated_health AS (
 		UPDATE free_proxy_health fph
 		SET status = 'active',
@@ -688,14 +745,29 @@ func (s *Store) RecordFreeProxySuccess(proxyURL string, region string, latencyMs
 			last_success_at = NOW(),
 			last_error = NULL,
 			updated_at = NOW()
-		WHERE fp.id IN (SELECT proxy_id FROM updated_health)`, proxyURL, region, latencyMs); err != nil {
-		log.Printf("free proxy success update failed: %v", err)
-	}
+		WHERE fp.id IN (SELECT proxy_id FROM updated_health)`, proxyURL, region, latencyMs)
+	return err
 }
 
 func (s *Store) RecordFreeProxyFailure(proxyURL string, region string, statusCode int, message string, failureThreshold int, quarantineMinutes int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.RecordFreeProxyFailureContext(
+		ctx,
+		proxyURL,
+		region,
+		statusCode,
+		message,
+		failureThreshold,
+		quarantineMinutes,
+	); err != nil {
+		log.Printf("free proxy failure update failed: %v", err)
+	}
+}
+
+func (s *Store) RecordFreeProxyFailureContext(ctx context.Context, proxyURL string, region string, statusCode int, message string, failureThreshold int, quarantineMinutes int) error {
 	if proxyURL == "" {
-		return
+		return nil
 	}
 	if failureThreshold < 1 {
 		failureThreshold = 3
@@ -706,7 +778,7 @@ func (s *Store) RecordFreeProxyFailure(proxyURL string, region string, statusCod
 	if len(message) > 1000 {
 		message = message[:1000]
 	}
-	if _, err := s.db.Exec(`
+	_, err := s.db.ExecContext(ctx, `
 		WITH updated_health AS (
 		UPDATE free_proxy_health fph
 		SET failure_streak = fph.failure_streak + 1,
@@ -717,21 +789,20 @@ func (s *Store) RecordFreeProxyFailure(proxyURL string, region string, statusCod
 			last_failure_at = NOW(),
 			last_error = $4,
 			status = CASE
-				WHEN fph.status = 'pending' AND fph.success_streak = 0 THEN 'dead'
 				WHEN fph.status = 'cooldown' AND fph.failure_streak + 1 >= $5 THEN 'dead'
 				WHEN fph.status = 'active' AND fph.failure_streak + 1 < $5 THEN 'active'
 				WHEN fph.status = 'active' THEN 'cooldown'
-				WHEN fph.failure_streak + 1 >= $5 THEN 'cooldown'
+				WHEN fph.failure_streak + 1 >= $5 THEN 'dead'
 				ELSE 'cooldown'
 			END,
 			next_check_at = CASE
-				WHEN fph.status = 'pending' AND fph.success_streak = 0 THEN NULL
 				WHEN fph.status = 'cooldown' AND fph.failure_streak + 1 >= $5 THEN NULL
-				WHEN fph.status = 'active' THEN NOW() + INTERVAL '1 minute'
+				WHEN fph.status <> 'active' AND fph.failure_streak + 1 >= $5 THEN NULL
+				WHEN fph.status = 'active' AND fph.failure_streak + 1 < $5 THEN NOW() + INTERVAL '1 minute'
 				ELSE NOW() + ($6::text || ' minutes')::interval
 			END,
 			score = CASE
-				WHEN fph.status = 'pending' AND fph.success_streak = 0 THEN 0
+				WHEN fph.status <> 'active' AND fph.failure_streak + 1 >= $5 THEN 0
 				ELSE GREATEST(0, fph.score - 40)
 			END,
 			updated_at = NOW()
@@ -747,13 +818,20 @@ func (s *Store) RecordFreeProxyFailure(proxyURL string, region string, statusCod
 			last_failure_at = NOW(),
 			last_error = $4,
 			updated_at = NOW()
-		WHERE fp.id IN (SELECT proxy_id FROM updated_health)`, proxyURL, region, statusCode, message, failureThreshold, quarantineMinutes); err != nil {
-		log.Printf("free proxy failure update failed: %v", err)
-	}
+		WHERE fp.id IN (SELECT proxy_id FROM updated_health)`, proxyURL, region, statusCode, message, failureThreshold, quarantineMinutes)
+	return err
 }
 
 func (s *Store) DisableGloballyDeadFreeProxies() {
-	if _, err := s.db.Exec(`
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.DisableGloballyDeadFreeProxiesContext(ctx); err != nil {
+		log.Printf("free proxy dead disable failed: %v", err)
+	}
+}
+
+func (s *Store) DisableGloballyDeadFreeProxiesContext(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
 		UPDATE free_proxies fp
 		SET status = 'disabled',
 			updated_at = NOW(),
@@ -769,14 +847,17 @@ func (s *Store) DisableGloballyDeadFreeProxies() {
 			FROM free_proxy_health fph
 			WHERE fph.proxy_id = fp.id
 			  AND fph.status <> 'dead'
-		  )`); err != nil {
-		log.Printf("free proxy dead disable failed: %v", err)
-	}
+		  )`)
+	return err
 }
 
 func (s *Store) CountActiveFreeProxies(region string) (int, error) {
+	return s.CountActiveFreeProxiesContext(context.Background(), region)
+}
+
+func (s *Store) CountActiveFreeProxiesContext(ctx context.Context, region string) (int, error) {
 	var count int
-	err := s.db.QueryRow(`
+	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM free_proxy_health fph
 		JOIN free_proxies fp ON fp.id = fph.proxy_id

@@ -227,6 +227,7 @@ type FreeProxyState = {
         successRate: number | null;
         medianLatencyMs: number | null;
         lastCheckedAt: Date | null;
+        stalled: boolean;
         healthy: boolean;
     }[];
     recent: FreeProxyRow[];
@@ -869,6 +870,7 @@ export function AdminClient({
                   successRate: null,
                   medianLatencyMs: null,
                   lastCheckedAt: null,
+                  stalled: false,
                   healthy: false,
                   initializing: true,
               };
@@ -4033,6 +4035,8 @@ export function AdminClient({
                                                 >
                                                     {region.initializing
                                                         ? "Waiting"
+                                                        : region.stalled
+                                                          ? "Stalled"
                                                         : !region.healthy
                                                           ? "Degraded"
                                                           : region.active +
@@ -4044,7 +4048,7 @@ export function AdminClient({
                                                 <span className="text-muted-foreground">
                                                     {region.initializing
                                                         ? "Waiting for the worker to assign candidates"
-                                                        : `${region.active + region.warming} usable / ${freeProxySettings.targetActivePerRegion} target / ${region.active} active / ${region.warming} warming / ${region.pending} pending / ${region.cooldown} cooldown / ${region.dead} dead`}
+                                                        : `${region.stalled ? "Maintainer overdue · " : ""}${region.active + region.warming} usable / ${freeProxySettings.targetActivePerRegion} target / ${region.active} active / ${region.warming} warming / ${region.pending} pending / ${region.cooldown} cooldown / ${region.dead} dead`}
                                                 </span>
                                             </div>
                                             <div className="text-muted-foreground">

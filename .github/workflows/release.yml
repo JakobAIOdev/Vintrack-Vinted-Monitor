@@ -141,7 +141,7 @@ jobs:
               >> .env
 
             docker compose config --quiet
-            docker compose pull control-center control-center-migrate vinted-service worker
+            docker compose pull control-center control-center-migrate vinted-service worker proxy-maintainer
             docker compose up -d --remove-orphans
 
   create-release:

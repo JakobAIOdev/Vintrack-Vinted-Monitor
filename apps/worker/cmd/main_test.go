@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +28,28 @@ func TestFreeProxyValidationTimeout(t *testing.T) {
 				t.Fatalf("freeProxyValidationTimeout(%d) = %s, want %s", test.maxLatencyMs, got, test.want)
 			}
 		})
+	}
+}
+
+func TestWaitForFreeProxyBatchHonorsCycleCancellation(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if waitForFreeProxyBatch(ctx, &wg) {
+		t.Fatal("waitForFreeProxyBatch returned true for a canceled cycle")
+	}
+
+	wg.Done()
+}
+
+func TestWaitForFreeProxyBatchCompletes(t *testing.T) {
+	var wg sync.WaitGroup
+
+	if !waitForFreeProxyBatch(context.Background(), &wg) {
+		t.Fatal("waitForFreeProxyBatch returned false for a completed batch")
 	}
 }
 

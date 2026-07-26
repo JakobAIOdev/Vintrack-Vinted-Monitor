@@ -26,10 +26,18 @@ import (
 
 var (
 	freeProxyCheckRunning   atomic.Bool
+	freeProxyImportRunning  atomic.Bool
 	telemetryCleanupRunning atomic.Bool
 )
 
 const proxyScrapeFallbackURL = "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text"
+
+const (
+	freeProxyCheckCycleTimeout = 5 * time.Minute
+	freeProxyImportTimeout     = 2 * time.Minute
+	freeProxySourceTimeout     = 15 * time.Second
+	freeProxyWriteTimeout      = 5 * time.Second
+)
 
 type freeProxyImportCandidate struct {
 	ProxyURL string
@@ -223,18 +231,31 @@ func refreshServerProxies(store *database.Store, proxyManager *proxy.Manager) {
 }
 
 func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools) {
-	regions, err := freeProxyRegions(store)
+	refreshCtx, cancelRefresh := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelRefresh()
+
+	regions, err := freeProxyRegionsContext(refreshCtx, store)
 	if err != nil {
 		log.Printf("free proxy region refresh failed: %v", err)
 		return
 	}
 	freeProxyPools.Retain(regions)
-	if !settingBool(store, "free_proxy_enabled", false) {
+	enabled, err := settingBoolContext(refreshCtx, store, "free_proxy_enabled", false)
+	if err != nil {
+		log.Printf("free proxy enabled setting refresh failed: %v", err)
+		return
+	}
+	if !enabled {
 		freeProxyPools.Retain(nil)
 		return
 	}
+	maxPoolSize, err := settingIntContext(refreshCtx, store, "free_proxy_max_pool_size", 500)
+	if err != nil {
+		log.Printf("free proxy max pool setting refresh failed: %v", err)
+		return
+	}
 	for _, region := range regions {
-		activeCount, err := store.CountActiveFreeProxies(region)
+		activeCount, err := store.CountActiveFreeProxiesContext(refreshCtx, region)
 		if err != nil {
 			log.Printf("free proxy active count failed for %s: %v", region, err)
 			continue
@@ -243,7 +264,7 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 			freeProxyPools.Replace(region, "")
 			continue
 		}
-		proxies, err := store.GetActiveFreeProxies(region, settingInt(store, "free_proxy_max_pool_size", 500))
+		proxies, err := store.GetActiveFreeProxiesContext(refreshCtx, region, maxPoolSize)
 		if err != nil {
 			log.Printf("free proxy refresh failed for %s: %v", region, err)
 			continue
@@ -258,41 +279,94 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 	}
 	defer freeProxyCheckRunning.Store(false)
 
-	if !settingBool(store, "free_proxy_enabled", false) {
+	cycleCtx, cancelCycle := context.WithTimeout(ctx, freeProxyCheckCycleTimeout)
+	defer cancelCycle()
+
+	enabled, err := settingBoolContext(cycleCtx, store, "free_proxy_enabled", false)
+	if err != nil {
+		log.Printf("free proxy enabled setting load failed: %v", err)
 		return
 	}
-	regions, err := freeProxyRegions(store)
+	if !enabled {
+		return
+	}
+	regions, err := freeProxyRegionsContext(cycleCtx, store)
 	if err != nil {
 		log.Printf("free proxy health region load failed: %v", err)
 		return
 	}
-	maxPoolSize := settingInt(store, "free_proxy_max_pool_size", 500)
-	if err := store.EnsureFreeProxyHealthRows(regions, maxPoolSize); err != nil {
+	maxPoolSize, err := settingIntContext(cycleCtx, store, "free_proxy_max_pool_size", 500)
+	if err != nil {
+		log.Printf("free proxy max pool setting load failed: %v", err)
+		return
+	}
+	if err := store.EnsureFreeProxyHealthRowsContext(cycleCtx, regions, maxPoolSize); err != nil {
 		log.Printf("free proxy health row sync failed: %v", err)
 		return
 	}
 	regionBatches := make([][]database.FreeProxyCandidate, 0, len(regions))
-	perRegionBatch := settingInt(store, "FREE_PROXY_HEALTH_BATCH_PER_REGION", 40)
-	bootstrapBatch := settingInt(store, "FREE_PROXY_BOOTSTRAP_BATCH_PER_REGION", 120)
-	minActive := settingInt(store, "free_proxy_min_active_per_region", 25)
-	targetActive := settingInt(store, "free_proxy_target_active_per_region", max(50, minActive*2))
+	perRegionBatch, err := settingIntContext(cycleCtx, store, "FREE_PROXY_HEALTH_BATCH_PER_REGION", 40)
+	if err != nil {
+		log.Printf("free proxy health batch setting load failed: %v", err)
+		return
+	}
+	bootstrapBatch, err := settingIntContext(cycleCtx, store, "FREE_PROXY_BOOTSTRAP_BATCH_PER_REGION", 120)
+	if err != nil {
+		log.Printf("free proxy bootstrap batch setting load failed: %v", err)
+		return
+	}
+	minActive, err := settingIntContext(cycleCtx, store, "free_proxy_min_active_per_region", 25)
+	if err != nil {
+		log.Printf("free proxy min active setting load failed: %v", err)
+		return
+	}
+	targetActive, err := settingIntContext(cycleCtx, store, "free_proxy_target_active_per_region", max(50, minActive*2))
+	if err != nil {
+		log.Printf("free proxy target active setting load failed: %v", err)
+		return
+	}
 	if targetActive < minActive {
 		targetActive = minActive
 	}
 	if targetActive > maxPoolSize {
 		targetActive = maxPoolSize
 	}
+	threshold, err := settingIntContext(cycleCtx, store, "free_proxy_failure_threshold", 3)
+	if err != nil {
+		log.Printf("free proxy failure threshold setting load failed: %v", err)
+		return
+	}
+	quarantineMinutes, err := settingIntContext(cycleCtx, store, "free_proxy_quarantine_minutes", 30)
+	if err != nil {
+		log.Printf("free proxy quarantine setting load failed: %v", err)
+		return
+	}
+	maxLatencyMs, err := settingIntContext(cycleCtx, store, "free_proxy_max_latency_ms", 2500)
+	if err != nil {
+		log.Printf("free proxy max latency setting load failed: %v", err)
+		return
+	}
+	validationTimeout := freeProxyValidationTimeout(maxLatencyMs)
+	concurrency, err := settingIntContext(cycleCtx, store, "FREE_PROXY_HEALTH_CONCURRENCY", 48)
+	if err != nil {
+		log.Printf("free proxy health concurrency setting load failed: %v", err)
+		return
+	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
+
 	for _, region := range regions {
 		batchSize := perRegionBatch
 		bootstrap := false
-		activeCount, err := store.CountActiveFreeProxies(region)
+		activeCount, err := store.CountActiveFreeProxiesContext(cycleCtx, region)
 		if err != nil {
 			log.Printf("free proxy active count failed for %s: %v", region, err)
 		} else if activeCount < targetActive {
 			batchSize = bootstrapBatch
 			bootstrap = true
 		}
-		regionProxies, err := store.GetFreeProxiesDueForCheck([]string{region}, batchSize, bootstrap)
+		regionProxies, err := store.ClaimFreeProxiesDueForCheck(cycleCtx, []string{region}, batchSize, bootstrap)
 		if err != nil {
 			log.Printf("free proxy health load failed for %s: %v", region, err)
 			continue
@@ -302,14 +376,6 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 	proxies := interleaveFreeProxyCandidates(regionBatches)
 	if len(proxies) == 0 {
 		return
-	}
-	threshold := settingInt(store, "free_proxy_failure_threshold", 3)
-	quarantineMinutes := settingInt(store, "free_proxy_quarantine_minutes", 30)
-	maxLatencyMs := settingInt(store, "free_proxy_max_latency_ms", 2500)
-	validationTimeout := freeProxyValidationTimeout(maxLatencyMs)
-	concurrency := settingInt(store, "FREE_PROXY_HEALTH_CONCURRENCY", 100)
-	if concurrency < 1 {
-		concurrency = 1
 	}
 	log.Printf(
 		"free proxy check started: %d candidates across %d regions (concurrency %d, timeout %s)",
@@ -322,40 +388,102 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 	var wg sync.WaitGroup
 	var passed atomic.Int64
 	var failed atomic.Int64
+	var canceled atomic.Int64
+	var persistenceFailed atomic.Int64
+	var launched atomic.Int64
 	startedAt := time.Now()
+launchCandidates:
 	for _, candidate := range proxies {
 		candidate := candidate
+		select {
+		case sem <- struct{}{}:
+		case <-cycleCtx.Done():
+			break launchCandidates
+		}
 		wg.Add(1)
-		sem <- struct{}{}
+		launched.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			validationCtx, cancelValidation := context.WithTimeout(ctx, validationTimeout)
+			validationCtx, cancelValidation := context.WithTimeout(cycleCtx, validationTimeout)
 			result, err := scraper.ValidateFreeProxy(validationCtx, candidate.ProxyURL, candidate.Region, maxLatencyMs)
 			cancelValidation()
+			if cycleCtx.Err() != nil {
+				canceled.Add(1)
+				return
+			}
+
+			writeCtx, cancelWrite := context.WithTimeout(cycleCtx, freeProxyWriteTimeout)
+			defer cancelWrite()
 			if err != nil {
 				failed.Add(1)
-				store.RecordFreeProxyFailure(candidate.ProxyURL, candidate.Region, result.StatusCode, err.Error(), threshold, quarantineMinutes)
+				if writeErr := store.RecordFreeProxyFailureContext(
+					writeCtx,
+					candidate.ProxyURL,
+					candidate.Region,
+					result.StatusCode,
+					err.Error(),
+					threshold,
+					quarantineMinutes,
+				); writeErr != nil {
+					persistenceFailed.Add(1)
+				}
 				return
 			}
 			passed.Add(1)
-			store.RecordFreeProxySuccess(candidate.ProxyURL, candidate.Region, result.LatencyMs)
+			if writeErr := store.RecordFreeProxySuccessContext(
+				writeCtx,
+				candidate.ProxyURL,
+				candidate.Region,
+				result.LatencyMs,
+			); writeErr != nil {
+				persistenceFailed.Add(1)
+			}
 		}()
 	}
-	wg.Wait()
-	store.DisableGloballyDeadFreeProxies()
+	if !waitForFreeProxyBatch(cycleCtx, &wg) {
+		log.Printf(
+			"free proxy check timed out after %s: %d/%d launched, %d passed, %d failed, %d canceled, %d persistence failures",
+			time.Since(startedAt).Round(time.Second),
+			launched.Load(),
+			len(proxies),
+			passed.Load(),
+			failed.Load(),
+			canceled.Load(),
+			persistenceFailed.Load(),
+		)
+		return
+	}
+
+	writeCtx, cancelWrite := context.WithTimeout(cycleCtx, freeProxyWriteTimeout)
+	if err := store.DisableGloballyDeadFreeProxiesContext(writeCtx); err != nil {
+		log.Printf("free proxy dead disable failed: %v", err)
+	}
+	cancelWrite()
 	log.Printf(
-		"free proxy check completed: %d checked, %d passed, %d failed in %s",
+		"free proxy check completed: %d checked, %d passed, %d failed, %d canceled, %d persistence failures in %s",
 		passed.Load()+failed.Load(),
 		passed.Load(),
 		failed.Load(),
+		canceled.Load(),
+		persistenceFailed.Load(),
 		time.Since(startedAt).Round(time.Second),
 	)
+}
+
+func waitForFreeProxyBatch(ctx context.Context, wg *sync.WaitGroup) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func freeProxyValidationTimeout(maxLatencyMs int) time.Duration {
@@ -394,10 +522,28 @@ func interleaveFreeProxyCandidates(batches [][]database.FreeProxyCandidate) []da
 }
 
 func importFreeProxies(ctx context.Context, store *database.Store) {
-	if !settingBool(store, "free_proxy_enabled", false) || !settingBool(store, "free_proxy_auto_import_enabled", false) {
+	if !freeProxyImportRunning.CompareAndSwap(false, true) {
 		return
 	}
-	importURL, ok, err := store.GetSettingValue("free_proxy_import_url")
+	defer freeProxyImportRunning.Store(false)
+
+	importCtx, cancelImport := context.WithTimeout(ctx, freeProxyImportTimeout)
+	defer cancelImport()
+
+	enabled, err := settingBoolContext(importCtx, store, "free_proxy_enabled", false)
+	if err != nil {
+		log.Printf("free proxy import enabled setting failed: %v", err)
+		return
+	}
+	autoImportEnabled, err := settingBoolContext(importCtx, store, "free_proxy_auto_import_enabled", false)
+	if err != nil {
+		log.Printf("free proxy auto import setting failed: %v", err)
+		return
+	}
+	if !enabled || !autoImportEnabled {
+		return
+	}
+	importURL, ok, err := store.GetSettingValueContext(importCtx, "free_proxy_import_url")
 	if err != nil {
 		log.Printf("free proxy import setting failed: %v", err)
 		return
@@ -406,19 +552,28 @@ func importFreeProxies(ctx context.Context, store *database.Store) {
 		importURL = "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/all-proxies.txt"
 	}
 
-	maxImport := settingInt(store, "free_proxy_max_pool_size", 5000)
-	importURLs := freeProxyImportURLs(store, importURL)
+	maxImport, err := settingIntContext(importCtx, store, "free_proxy_max_pool_size", 5000)
+	if err != nil {
+		log.Printf("free proxy max import setting failed: %v", err)
+		return
+	}
+	importURLs := freeProxyImportURLsContext(importCtx, store, importURL)
 	if len(importURLs) == 0 {
 		return
 	}
 	sourceCandidates := make([][]freeProxyImportCandidate, 0, len(importURLs))
 	for _, sourceURL := range importURLs {
-		body, err := fetchFreeProxyList(ctx, sourceURL)
+		sourceCtx, cancelSource := context.WithTimeout(importCtx, freeProxySourceTimeout)
+		body, err := fetchFreeProxyList(sourceCtx, sourceURL)
+		cancelSource()
 		if err != nil {
 			log.Printf("free proxy import skipped %s: %v", sourceURL, err)
+			if importCtx.Err() != nil {
+				break
+			}
 			continue
 		}
-		source := freeProxySource(store, sourceURL)
+		source := freeProxySourceContext(importCtx, store, sourceURL)
 		defaultScheme := defaultSchemeForImportURL(sourceURL)
 		candidates := make([]freeProxyImportCandidate, 0)
 		seenSourceProxies := make(map[string]bool)
@@ -439,7 +594,7 @@ func importFreeProxies(ctx context.Context, store *database.Store) {
 		sourceCandidates = append(sourceCandidates, candidates)
 	}
 
-	storedProxyURLs, err := store.GetFreeProxyURLSet()
+	storedProxyURLs, err := store.GetFreeProxyURLSetContext(importCtx)
 	if err != nil {
 		log.Printf("free proxy import existing pool load failed: %v", err)
 		return
@@ -458,7 +613,7 @@ func importFreeProxies(ctx context.Context, store *database.Store) {
 		maxImport,
 	)
 
-	processed, err := store.UpsertFreeProxies(selectedCandidates)
+	processed, err := store.UpsertFreeProxiesContext(importCtx, selectedCandidates)
 	if err != nil {
 		log.Printf("free proxy batch import failed after %d candidates: %v", processed, err)
 		return
@@ -467,7 +622,7 @@ func importFreeProxies(ctx context.Context, store *database.Store) {
 	for _, candidate := range selectedCandidates {
 		selectedProxyURLs = append(selectedProxyURLs, candidate.ProxyURL)
 	}
-	pruned, err := store.PruneUnselectedFreeProxies(selectedProxyURLs)
+	pruned, err := store.PruneUnselectedFreeProxiesContext(importCtx, selectedProxyURLs)
 	if err != nil {
 		log.Printf("free proxy stale candidate prune failed: %v", err)
 	}
@@ -605,12 +760,16 @@ func canonicalFreeProxyURL(rawURL string) string {
 }
 
 func freeProxyRegions(store *database.Store) ([]string, error) {
-	activeRegions, err := store.GetActiveFreeProxyRegions()
+	return freeProxyRegionsContext(context.Background(), store)
+}
+
+func freeProxyRegionsContext(ctx context.Context, store *database.Store) ([]string, error) {
+	activeRegions, err := store.GetActiveFreeProxyRegionsContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	starterRegionValue := "de,fr,it,es,nl,be,at"
-	if value, ok, settingErr := store.GetSettingValue("free_proxy_starter_regions"); settingErr != nil {
+	if value, ok, settingErr := store.GetSettingValueContext(ctx, "free_proxy_starter_regions"); settingErr != nil {
 		return nil, settingErr
 	} else if ok {
 		starterRegionValue = value
@@ -630,6 +789,10 @@ func freeProxyRegions(store *database.Store) ([]string, error) {
 }
 
 func freeProxyImportURLs(store *database.Store, importURL string) []string {
+	return freeProxyImportURLsContext(context.Background(), store, importURL)
+}
+
+func freeProxyImportURLsContext(ctx context.Context, store *database.Store, importURL string) []string {
 	urls := make([]string, 0)
 	if !strings.Contains(importURL, "raw.githubusercontent.com/iplocate/free-proxy-list/main") {
 		return []string{importURL}
@@ -645,7 +808,7 @@ func freeProxyImportURLs(store *database.Store, importURL string) []string {
 		"ua": true, "us": true, "uz": true, "ve": true, "vn": true, "za": true,
 		"zw": true,
 	}
-	regions, err := freeProxyRegions(store)
+	regions, err := freeProxyRegionsContext(ctx, store)
 	if err != nil {
 		return []string{importURL}
 	}
@@ -675,6 +838,10 @@ func freeProxyImportURLs(store *database.Store, importURL string) []string {
 }
 
 func freeProxySource(store *database.Store, importURL string) string {
+	return freeProxySourceContext(context.Background(), store, importURL)
+}
+
+func freeProxySourceContext(ctx context.Context, store *database.Store, importURL string) string {
 	if region := iplocateCountryFromURL(importURL); region != "" {
 		return "iplocate:" + region
 	}
@@ -684,7 +851,7 @@ func freeProxySource(store *database.Store, importURL string) string {
 	if strings.Contains(importURL, "proxyscrape") {
 		return "proxyscrape"
 	}
-	if source := settingString(store, "free_proxy_import_source", ""); source != "" {
+	if source, err := settingStringContext(ctx, store, "free_proxy_import_source", ""); err == nil && source != "" {
 		if strings.HasPrefix(source, "iplocate") {
 			return "iplocate"
 		}
@@ -730,43 +897,67 @@ func defaultSchemeForImportURL(importURL string) string {
 }
 
 func settingBool(store *database.Store, key string, fallback bool) bool {
-	value, ok, err := store.GetSettingValue(key)
-	if err != nil || !ok {
-		return fallback
-	}
-	return strings.TrimSpace(value) == "true"
-}
-
-func settingString(store *database.Store, key string, fallback string) string {
-	value, ok, err := store.GetSettingValue(key)
-	if err != nil || !ok {
-		return fallback
-	}
-	value = strings.TrimSpace(value)
-	if value == "" {
+	value, err := settingBoolContext(context.Background(), store, key, fallback)
+	if err != nil {
 		return fallback
 	}
 	return value
 }
 
+func settingBoolContext(ctx context.Context, store *database.Store, key string, fallback bool) (bool, error) {
+	value, ok, err := store.GetSettingValueContext(ctx, key)
+	if err != nil || !ok {
+		return fallback, err
+	}
+	return strings.TrimSpace(value) == "true", nil
+}
+
+func settingString(store *database.Store, key string, fallback string) string {
+	value, err := settingStringContext(context.Background(), store, key, fallback)
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+func settingStringContext(ctx context.Context, store *database.Store, key string, fallback string) (string, error) {
+	value, ok, err := store.GetSettingValueContext(ctx, key)
+	if err != nil || !ok {
+		return fallback, err
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback, nil
+	}
+	return value, nil
+}
+
 func settingInt(store *database.Store, key string, fallback int) int {
+	value, err := settingIntContext(context.Background(), store, key, fallback)
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+func settingIntContext(ctx context.Context, store *database.Store, key string, fallback int) (int, error) {
 	if strings.ToUpper(key) == key {
 		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 			parsed, err := strconv.Atoi(value)
 			if err == nil && parsed > 0 {
-				return parsed
+				return parsed, nil
 			}
 		}
 	}
-	value, ok, err := store.GetSettingValue(key)
+	value, ok, err := store.GetSettingValueContext(ctx, key)
 	if err != nil || !ok {
-		return fallback
+		return fallback, err
 	}
 	parsed, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil || parsed <= 0 {
-		return fallback
+		return fallback, nil
 	}
-	return parsed
+	return parsed, nil
 }
 
 func mustEnv(key string) string {
