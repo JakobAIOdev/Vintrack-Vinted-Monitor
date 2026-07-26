@@ -45,6 +45,9 @@ Shadow discovery also runs on a healthy shared free-proxy pool so its timing can
 | `DISCORD_ALERT_WORKERS`            |          `8` | Dedicated Discord workers that cannot block dashboard/SSE or Telegram.                                             |
 | `TELEGRAM_ALERT_WORKERS`           |         `16` | Dedicated Telegram workers that cannot block dashboard/SSE or Discord.                                             |
 | `ENRICHMENT_WORKERS`               |          `8` | Concurrent persistence and seller-enrichment workers.                                                              |
+| `FREE_PROXY_HEALTH_CONCURRENCY`    |         `48` | Maximum parallel free-proxy validations in the isolated proxy-maintainer process.                                  |
+| `FREE_PROXY_HEALTH_BATCH_PER_REGION` |       `40` | Per-region validation batch once the target reserve is available.                                                  |
+| `FREE_PROXY_BOOTSTRAP_BATCH_PER_REGION` |   `120` | Per-region validation batch while the pool is below its target reserve.                                            |
 | `MONITOR_RUN_RETENTION_HOURS`      |         `24` | Retention for raw per-check monitor telemetry; hourly aggregates remain available separately.                      |
 | `MONITOR_RUN_STATS_RETENTION_DAYS` |         `90` | Retention for compact hourly monitor-run aggregates.                                                               |
 | `DETECTION_RETENTION_DAYS`         |         `14` | Retention for discovery/canonical comparison telemetry.                                                            |
