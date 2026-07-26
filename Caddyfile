@@ -1,3 +1,3 @@
-vintrack.jakobaio.dev {
+{$VINTRACK_SITE_ADDRESS:vintrack.jakobaio.dev} {
 	reverse_proxy control-center:3000
 }

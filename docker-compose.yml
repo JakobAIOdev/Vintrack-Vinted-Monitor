@@ -19,6 +19,8 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - caddy_data:/data
       - caddy_config:/config
+    environment:
+      VINTRACK_SITE_ADDRESS: ${VINTRACK_SITE_ADDRESS:-vintrack.jakobaio.dev}
     depends_on:
       - control-center
     logging: *default-logging

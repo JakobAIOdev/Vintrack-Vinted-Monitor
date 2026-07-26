@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Vintrack Discord
+    url: https://discord.gg/WbEpEjaWjP
+    about: Ask setup questions and get community support.
+  - name: Security vulnerability
+    url: https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/security/policy
+    about: Read the private reporting instructions before sharing any details.

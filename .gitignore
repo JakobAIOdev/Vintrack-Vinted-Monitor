@@ -8,6 +8,7 @@ GEMINI.md
 .codex
 .agents
 AGENTS.md
+codex-vinted-dev.md
 
 # --- Environment & Secrets ---
 .env
