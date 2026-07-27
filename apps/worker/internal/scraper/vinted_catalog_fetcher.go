@@ -24,7 +24,7 @@ func (VintedCatalogFetcher) RequiresNetwork() bool {
 }
 
 func (VintedCatalogFetcher) FetchCatalog(ctx context.Context, client *Client, apiURL string, domain string) ([]model.VintedItem, int, error) {
-	reqURL := apiURL + "&_=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
+	initialURL := apiURL + "&_=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
 
 	if client == nil {
 		return nil, 0, fmt.Errorf("live catalog fetcher requires a client")
@@ -34,6 +34,36 @@ func (VintedCatalogFetcher) FetchCatalog(ctx context.Context, client *Client, ap
 		return nil, statusCodeFromError(err), fmt.Errorf("warmup %s via %s: %w", domain, client.ProxyLabel(), err)
 	}
 
+	return fetchCatalogWith401Retry(
+		func() error {
+			client.ResetWarm(domain)
+			if err := client.EnsureWarmContext(ctx, domain); err != nil {
+				return fmt.Errorf("401 rewarm %s via %s: %w", domain, client.ProxyLabel(), err)
+			}
+			return nil
+		},
+		func() ([]model.VintedItem, int, error) {
+			return fetchCatalogAttempt(ctx, client, initialURL, domain)
+		},
+	)
+}
+
+func fetchCatalogWith401Retry(
+	rewarm func() error,
+	attempt func() ([]model.VintedItem, int, error),
+) ([]model.VintedItem, int, error) {
+	items, status, err := attempt()
+	if err != nil || status != 401 {
+		return items, status, err
+	}
+	if err := rewarm(); err != nil {
+		return nil, statusCodeFromError(err), err
+	}
+	return attempt()
+}
+
+func fetchCatalogAttempt(ctx context.Context, client *Client, initialURL string, domain string) ([]model.VintedItem, int, error) {
+	reqURL := initialURL
 	for redirects := 0; redirects < 3; redirects++ {
 		currentDomain := hostFromURL(reqURL, domain)
 
@@ -67,10 +97,11 @@ func (VintedCatalogFetcher) FetchCatalog(ctx context.Context, client *Client, ap
 		}
 
 		if resp.StatusCode != 200 {
+			statusCode := resp.StatusCode
 			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 			client.FlushTrackedTraffic()
-			return nil, resp.StatusCode, nil
+			return nil, statusCode, nil
 		}
 
 		limitedReader := io.LimitReader(resp.Body, maxAPIResponseBytes)
@@ -84,6 +115,5 @@ func (VintedCatalogFetcher) FetchCatalog(ctx context.Context, client *Client, ap
 		client.FlushTrackedTraffic()
 		return data.Items, 200, nil
 	}
-
-	return nil, 0, nil
+	return nil, 0, fmt.Errorf("catalog too many redirects for %s", domain)
 }

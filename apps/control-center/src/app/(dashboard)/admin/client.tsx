@@ -230,6 +230,18 @@ type FreeProxyState = {
         stalled: boolean;
         healthy: boolean;
     }[];
+    sourceDiagnostics: {
+        source: string;
+        protocol: string;
+        proxyCount: number;
+        checked: number;
+        successful: number;
+        successRate: number | null;
+        neverChecked: number;
+        active: number;
+        cooldown: number;
+        topErrorCode: string | null;
+    }[];
     recent: FreeProxyRow[];
 };
 
@@ -4037,13 +4049,13 @@ export function AdminClient({
                                                         ? "Waiting"
                                                         : region.stalled
                                                           ? "Stalled"
-                                                        : !region.healthy
-                                                          ? "Degraded"
-                                                          : region.active +
-                                                                  region.warming <
-                                                              freeProxySettings.targetActivePerRegion
-                                                            ? "Building"
-                                                            : "Ready"}
+                                                          : !region.healthy
+                                                            ? "Recovering"
+                                                            : region.active +
+                                                                    region.warming <
+                                                                freeProxySettings.targetActivePerRegion
+                                                              ? "Building"
+                                                              : "Ready"}
                                                 </Badge>
                                                 <span className="text-muted-foreground">
                                                     {region.initializing
@@ -4074,6 +4086,62 @@ export function AdminClient({
                                         No region health checks yet. Import
                                         proxies and let the worker validate
                                         them.
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="mt-5 rounded-lg border">
+                            <div className="border-border/60 border-b px-4 py-3">
+                                <p className="text-sm font-semibold">
+                                    Source and protocol yield
+                                </p>
+                                <p className="text-muted-foreground text-xs">
+                                    Last 24 hours. This makes starvation and
+                                    weak feeds visible without exposing proxy
+                                    addresses.
+                                </p>
+                            </div>
+                            <div className="divide-border/60 divide-y">
+                                {freeProxyState.sourceDiagnostics.length > 0 ? (
+                                    freeProxyState.sourceDiagnostics.map(
+                                        (diagnostic) => (
+                                            <div
+                                                key={`${diagnostic.source}:${diagnostic.protocol}`}
+                                                className="grid gap-2 px-4 py-3 text-xs sm:grid-cols-[170px_75px_100px_90px_100px_1fr]"
+                                            >
+                                                <span className="font-medium">
+                                                    {diagnostic.source}
+                                                </span>
+                                                <span className="uppercase">
+                                                    {diagnostic.protocol}
+                                                </span>
+                                                <span>
+                                                    {diagnostic.successful}/
+                                                    {diagnostic.checked} ok
+                                                </span>
+                                                <span>
+                                                    {diagnostic.successRate ===
+                                                    null
+                                                        ? "n/a"
+                                                        : `${diagnostic.successRate}%`}
+                                                </span>
+                                                <span>
+                                                    {diagnostic.active} active ·{" "}
+                                                    {diagnostic.neverChecked}{" "}
+                                                    new
+                                                </span>
+                                                <span className="text-muted-foreground">
+                                                    {diagnostic.topErrorCode
+                                                        ? `Top error: ${diagnostic.topErrorCode}`
+                                                        : "No recent error class"}
+                                                </span>
+                                            </div>
+                                        ),
+                                    )
+                                ) : (
+                                    <p className="text-muted-foreground px-4 py-6 text-sm">
+                                        No source diagnostics yet.
                                     </p>
                                 )}
                             </div>

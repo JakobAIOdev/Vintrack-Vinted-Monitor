@@ -2,11 +2,13 @@ package scraper
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +49,12 @@ func acceptLanguageForDomain(domain string) string {
 		return "en-GB,en;q=0.9"
 	case strings.Contains(domain, "vinted.ie"):
 		return "en-IE,en;q=0.9"
+	case strings.Contains(domain, "vinted.at"):
+		return "de-AT,de;q=0.9,en;q=0.7"
+	case strings.Contains(domain, "vinted.be"):
+		return "fr-BE,fr;q=0.9,nl-BE;q=0.8,nl;q=0.7,en;q=0.6"
+	case strings.Contains(domain, "vinted.lu"):
+		return "fr-LU,fr;q=0.9,de;q=0.8,en;q=0.7"
 	case strings.Contains(domain, "vinted.fr"):
 		return "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7"
 	case strings.Contains(domain, "vinted.es"):
@@ -59,6 +67,32 @@ func acceptLanguageForDomain(domain string) string {
 		return "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7"
 	case strings.Contains(domain, "vinted.pt"):
 		return "pt-PT,pt;q=0.9,en-US;q=0.8,en;q=0.7"
+	case strings.Contains(domain, "vinted.cz"):
+		return "cs-CZ,cs;q=0.9,en;q=0.7"
+	case strings.Contains(domain, "vinted.sk"):
+		return "sk-SK,sk;q=0.9,en;q=0.7"
+	case strings.Contains(domain, "vinted.lt"):
+		return "lt-LT,lt;q=0.9,en;q=0.7"
+	case strings.Contains(domain, "vinted.se"):
+		return "sv-SE,sv;q=0.9,en;q=0.7"
+	case strings.Contains(domain, "vinted.dk"):
+		return "da-DK,da;q=0.9,en;q=0.7"
+	case strings.Contains(domain, "vinted.ro"):
+		return "ro-RO,ro;q=0.9,en;q=0.7"
+	case strings.Contains(domain, "vinted.hu"):
+		return "hu-HU,hu;q=0.9,en;q=0.7"
+	case strings.Contains(domain, "vinted.hr"):
+		return "hr-HR,hr;q=0.9,en;q=0.7"
+	case strings.Contains(domain, "vinted.fi"):
+		return "fi-FI,fi;q=0.9,en;q=0.7"
+	case strings.Contains(domain, "vinted.si"):
+		return "sl-SI,sl;q=0.9,en;q=0.7"
+	case strings.Contains(domain, "vinted.ee"):
+		return "et-EE,et;q=0.9,en;q=0.7"
+	case strings.Contains(domain, "vinted.lv"):
+		return "lv-LV,lv;q=0.9,en;q=0.7"
+	case strings.Contains(domain, "vinted.gr"):
+		return "el-GR,el;q=0.9,en;q=0.7"
 	default:
 		return "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"
 	}
@@ -187,6 +221,11 @@ func proxyClientOptions(proxyURL string) []tls_client.HttpClientOption {
 			tls_client.WithProxyDialerFactory(contextAwareSOCKS5Dialer(proxyURL)),
 		}
 	}
+	if parsed.Scheme == "socks4" || parsed.Scheme == "socks4a" {
+		return []tls_client.HttpClientOption{
+			tls_client.WithProxyDialerFactory(contextAwareSOCKS4Dialer(proxyURL)),
+		}
+	}
 	return []tls_client.HttpClientOption{tls_client.WithProxyUrl(proxyURL)}
 }
 
@@ -222,6 +261,96 @@ func contextAwareSOCKS5Dialer(proxyURL string) tls_client.ProxyDialerFactory {
 type timeoutProxyDialer struct {
 	dialer  proxy.ContextDialer
 	timeout time.Duration
+}
+
+func contextAwareSOCKS4Dialer(proxyURL string) tls_client.ProxyDialerFactory {
+	return func(_ string, timeout time.Duration, localAddr *net.TCPAddr, _ http.Header, _ tls_client.Logger) (proxy.ContextDialer, error) {
+		parsed, err := url.Parse(proxyURL)
+		if err != nil {
+			return nil, err
+		}
+		if parsed.Host == "" {
+			return nil, fmt.Errorf("invalid SOCKS4 proxy URL %q", proxyURL)
+		}
+		user := ""
+		if parsed.User != nil {
+			user = parsed.User.Username()
+		}
+		return socks4ContextDialer{
+			proxyAddress: parsed.Host,
+			user:         user,
+			dialer:       net.Dialer{Timeout: timeout, LocalAddr: localAddr},
+			timeout:      timeout,
+		}, nil
+	}
+}
+
+type socks4ContextDialer struct {
+	proxyAddress string
+	user         string
+	dialer       net.Dialer
+	timeout      time.Duration
+}
+
+func (d socks4ContextDialer) DialContext(ctx context.Context, network string, address string) (net.Conn, error) {
+	if d.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d.timeout)
+		defer cancel()
+	}
+	conn, err := d.dialer.DialContext(ctx, "tcp", d.proxyAddress)
+	if err != nil {
+		return nil, err
+	}
+	success := false
+	defer func() {
+		if !success {
+			conn.Close()
+		}
+	}()
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, err
+		}
+	}
+
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return nil, fmt.Errorf("invalid SOCKS4 target port %q", portText)
+	}
+	request := []byte{4, 1, 0, 0, 0, 0, 0, 1}
+	binary.BigEndian.PutUint16(request[2:4], uint16(port))
+	if ip := net.ParseIP(host).To4(); ip != nil {
+		copy(request[4:8], ip)
+	} else {
+		request = append(request, []byte(d.user)...)
+		request = append(request, 0)
+		request = append(request, []byte(host)...)
+		request = append(request, 0)
+	}
+	if net.ParseIP(host).To4() != nil {
+		request = append(request, []byte(d.user)...)
+		request = append(request, 0)
+	}
+	if _, err := conn.Write(request); err != nil {
+		return nil, err
+	}
+	response := make([]byte, 8)
+	if _, err := io.ReadFull(conn, response); err != nil {
+		return nil, err
+	}
+	if response[1] != 90 {
+		return nil, fmt.Errorf("SOCKS4 proxy rejected connection with code %d", response[1])
+	}
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		return nil, err
+	}
+	success = true
+	return conn, nil
 }
 
 func (d timeoutProxyDialer) DialContext(ctx context.Context, network string, address string) (net.Conn, error) {

@@ -14,10 +14,14 @@ export type FreeProxyRegionHealth = {
     medianLatencyMs: number | null;
     lastCheckedAt: Date | null;
     healthy: boolean;
+    state: "ready" | "building" | "recovering" | "disabled";
+    neverChecked: number;
+    topErrorCode: string | null;
 };
 
 export type FreeProxyPoolHealth = {
     enabled: boolean;
+    state: "ready" | "building" | "recovering" | "disabled";
     minActivePerRegion: number;
     regions: Record<string, FreeProxyRegionHealth>;
     activeCount: number;
@@ -34,6 +38,8 @@ type FreeProxyHealthRow = {
     recent_check_count: bigint;
     median_latency_ms: number | null;
     last_checked_at: Date | null;
+    never_checked_count: bigint;
+    top_error_code: string | null;
 };
 
 export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
@@ -44,6 +50,7 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
         const now = new Date();
         return {
             enabled: true,
+            state: "ready",
             minActivePerRegion: 1,
             activeCount: 1,
             regions: {
@@ -59,6 +66,9 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                     medianLatencyMs: 120,
                     lastCheckedAt: now,
                     healthy: true,
+                    state: "ready",
+                    neverChecked: 0,
+                    topErrorCode: null,
                 },
             },
         };
@@ -124,6 +134,12 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                           AND last_error IS NULL
                     ) AS median_latency_ms,
                 MAX(last_checked_at) AS last_checked_at
+                ,
+                COUNT(*) FILTER (
+                    WHERE last_checked_at IS NULL
+                )::bigint AS never_checked_count,
+                mode() WITHIN GROUP (ORDER BY last_error_code)
+                    FILTER (WHERE last_error_code IS NOT NULL) AS top_error_code
             FROM free_proxy_health
             GROUP BY region
         `,
@@ -153,6 +169,9 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                     medianLatencyMs: null,
                     lastCheckedAt: null,
                     healthy: false,
+                    state: setting?.value === "true" ? "building" : "disabled",
+                    neverChecked: 0,
+                    topErrorCode: null,
                 };
                 return [region, emptyHealth];
             }
@@ -182,13 +201,34 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                         : Math.round(row.median_latency_ms),
                 lastCheckedAt: row.last_checked_at,
                 healthy: usable >= minActivePerRegion,
+                state:
+                    setting?.value !== "true"
+                        ? "disabled"
+                        : usable >= minActivePerRegion
+                          ? "ready"
+                          : row.last_checked_at === null
+                            ? "building"
+                            : "recovering",
+                neverChecked: Number(row.never_checked_count),
+                topErrorCode: row.top_error_code,
             };
             return [region, health];
         }),
     );
 
+    const enabled = setting?.value === "true";
+    const regionValues = Object.values(regions);
+    const state: FreeProxyPoolHealth["state"] = !enabled
+        ? "disabled"
+        : regionValues.some((region) => region.state === "ready")
+          ? "ready"
+          : regionValues.every((region) => region.state === "building")
+            ? "building"
+            : "recovering";
+
     return {
-        enabled: setting?.value === "true",
+        enabled,
+        state,
         minActivePerRegion,
         regions,
         activeCount: regions.de?.usable ?? 0,

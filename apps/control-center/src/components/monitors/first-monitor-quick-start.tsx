@@ -32,10 +32,8 @@ export type QuickStartPool = {
 
 function getDefaultReadyRegion(pool: QuickStartPool | null) {
     if (!pool?.enabled) return "";
-    if (pool.regions.de?.healthy) return "de";
-    return (
-        REGIONS.find((region) => pool.regions[region.code]?.healthy)?.code ?? ""
-    );
+    if (pool.regions.de) return "de";
+    return REGIONS.find((region) => pool.regions[region.code])?.code ?? "";
 }
 
 export function FirstMonitorQuickStart({
@@ -62,13 +60,11 @@ export function FirstMonitorQuickStart({
         [pool],
     );
     const selectedRegion =
-        pool?.enabled && pool.regions[preferredRegion]?.healthy
+        pool?.enabled && pool.regions[preferredRegion]
             ? preferredRegion
             : getDefaultReadyRegion(pool);
     const selectedRegionReady = Boolean(
-        pool?.enabled &&
-        selectedRegion &&
-        pool.regions[selectedRegion]?.healthy,
+        pool?.enabled && selectedRegion && pool.regions[selectedRegion],
     );
     const selectedPresetDefinition = useMemo(
         () => getMonitorPreset(selectedPreset)?.name ?? null,
@@ -214,12 +210,11 @@ export function FirstMonitorQuickStart({
                                             <option
                                                 key={region.code}
                                                 value={region.code}
-                                                disabled={!health?.healthy}
                                             >
                                                 {region.flag} {region.label} ·{" "}
                                                 {health?.healthy
                                                     ? `Ready (${health.usable})`
-                                                    : "Unavailable"}
+                                                    : `Recovering (${health?.usable ?? 0})`}
                                             </option>
                                         );
                                     })}
@@ -228,9 +223,9 @@ export function FirstMonitorQuickStart({
                         </div>
                         {!selectedRegionReady && (
                             <p className="mt-3 text-xs leading-5 text-amber-700 dark:text-amber-300">
-                                Quick start is temporarily unavailable because
-                                no Free Pool region is ready. You can still set
-                                up a monitor manually with another proxy source.
+                                The Free Proxy Pool is disabled right now. You
+                                can still set up a monitor manually with another
+                                proxy source.
                             </p>
                         )}
                     </div>

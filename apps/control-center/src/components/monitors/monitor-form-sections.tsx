@@ -143,12 +143,18 @@ export function RegionPoolStatus({
                                 variant={isHealthy ? "secondary" : "outline"}
                                 className="rounded-md uppercase"
                             >
-                                {isHealthy ? "Ready" : "Degraded"}
+                                {isHealthy
+                                    ? "Ready"
+                                    : freeProxy.enabled
+                                      ? "Recovering"
+                                      : "Disabled"}
                             </Badge>
                         </div>
                         <p className="text-muted-foreground mt-1 text-xs">
                             {freeProxy.enabled
-                                ? `${usable} usable of ${min} needed. ${regionHealth?.active ?? 0} active, ${regionHealth?.warming ?? 0} warming.`
+                                ? isHealthy
+                                    ? `${usable} usable of ${min} target. ${regionHealth?.active ?? 0} active, ${regionHealth?.warming ?? 0} warming.`
+                                    : `${usable} usable right now. The pool is rebuilding automatically and monitors stay active.`
                                 : "Free Proxy Pool is currently disabled by admin."}
                         </p>
                     </div>
@@ -178,8 +184,8 @@ export function RegionPoolStatus({
             </div>
             {!isHealthy && (
                 <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
-                    This region cannot use the shared free pool right now. Pick
-                    another region or use your own proxy group.
+                    The shared pool is recovering. You can still select it; the
+                    monitor will wait and resume automatically.
                 </p>
             )}
             {poolRegions.length > 0 && (
@@ -200,7 +206,9 @@ export function RegionPoolStatus({
                                 <button
                                     key={region.code}
                                     type="button"
-                                    disabled={!ready || !onSelectRegion}
+                                    disabled={
+                                        !freeProxy.enabled || !onSelectRegion
+                                    }
                                     onClick={() =>
                                         onSelectRegion?.(region.code)
                                     }
@@ -210,12 +218,12 @@ export function RegionPoolStatus({
                                             ? "border-primary bg-primary/5"
                                             : ready
                                               ? "border-emerald-500/20 bg-emerald-500/5 hover:border-emerald-500/40"
-                                              : "border-border/60 bg-muted/20 opacity-60",
+                                              : "border-amber-500/20 bg-amber-500/5 hover:border-amber-500/40",
                                     )}
                                     title={
                                         ready
                                             ? `Use ${region.label}`
-                                            : `${region.label} pool is degraded`
+                                            : `Use ${region.label} while its pool recovers`
                                     }
                                 >
                                     <span className="flex min-w-0 items-center gap-1.5">

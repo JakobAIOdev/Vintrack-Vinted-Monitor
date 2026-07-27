@@ -349,16 +349,16 @@ export function ProxiesClient({
                                             >
                                                 {region.healthy
                                                     ? "Ready"
-                                                    : "Checking"}
+                                                    : "Recovering"}
                                             </Badge>
                                         </div>
                                     ))}
                                 </div>
                                 <p className="text-muted-foreground mt-3 px-1 text-[11px] leading-5">
                                     Pool availability is live and best-effort.
-                                    Regions become selectable once at least{" "}
-                                    {freeProxyPool.minActivePerRegion} proxies
-                                    pass validation.
+                                    Every configured region remains selectable;
+                                    monitors wait and resume automatically while
+                                    the pool recovers.
                                 </p>
                             </div>
                         ) : (
