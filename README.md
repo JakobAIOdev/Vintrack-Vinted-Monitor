@@ -35,7 +35,11 @@
 ---
 
 <p align="center">
-  <img src="docs/screenshots/preview.webp" width="900" alt="Vintrack dashboard, monitor creation, live feed, and notifications" />
+  <a href="docs/screenshots/product-preview.mp4">
+    <img src="docs/screenshots/product-preview.webp" width="900" alt="Animated Vintrack live feed product preview" />
+  </a>
+  <br />
+  <sub>Auto-playing product tour · click to open the MP4</sub>
 </p>
 
 ## What is Vintrack?
@@ -367,20 +371,32 @@ can define additional resource policy for their own deployment.
 ## Product tour
 
 <p align="center">
-  <img src="docs/screenshots/overview.webp" width="49%" alt="Vintrack dashboard overview" />
-  <img src="docs/screenshots/live-feed.webp" width="49%" alt="Live listing feed" />
+  <img src="docs/screenshots/dashboard-overview.webp" width="49%" alt="Vintrack dashboard overview" />
+  <img src="docs/screenshots/live-feed.webp" width="49%" alt="Real-time listing feed" />
 </p>
 <p align="center">
   <img src="docs/screenshots/create-monitor.webp" width="49%" alt="Monitor creation form" />
-  <img src="docs/screenshots/user-management.webp" width="49%" alt="User and role management" />
+  <img src="docs/screenshots/monitor-details.webp" width="49%" alt="Monitor details and matching listings" />
 </p>
 <p align="center">
+  <img src="docs/screenshots/proxy-groups.webp" width="49%" alt="Proxy group management" />
+  <img src="docs/screenshots/admin-panel.webp" width="49%" alt="Administration panel" />
+</p>
+<p align="center">
+  <img src="docs/screenshots/linked-account.webp" width="49%" alt="Linked Vinted account" />
+  <img src="docs/screenshots/account-listings.webp" width="49%" alt="Vinted account listings" />
+</p>
+<p align="center">
+  <img src="docs/screenshots/conversations.webp" width="49%" alt="Vinted account conversations" />
   <img src="docs/screenshots/send-message.webp" width="49%" alt="Seller message dialog" />
+</p>
+<p align="center">
   <img src="docs/screenshots/send-offer.webp" width="49%" alt="Price offer dialog" />
 </p>
 <p align="center">
-  <img src="docs/screenshots/account.webp" width="49%" alt="Linked Vinted account page" />
-  <img src="docs/screenshots/discord-embed.webp" width="49%" alt="Discord listing notification" />
+  <img src="docs/screenshots/browser-extension.webp" width="30%" alt="Vintrack browser session sync extension" />
+  &nbsp;&nbsp;&nbsp;
+  <img src="docs/screenshots/discord-embed.webp" width="36%" alt="Discord listing notification" />
 </p>
 
 ## Architecture
