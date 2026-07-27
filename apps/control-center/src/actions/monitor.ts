@@ -45,8 +45,9 @@ async function sendTelegramStatusIfConfigured(
 }
 
 async function isFreeProxyPoolAvailable(region: string) {
+    void region;
     const health = await getFreeProxyPoolHealth();
-    return health.enabled && Boolean(health.regions[region]?.healthy);
+    return health.enabled;
 }
 
 async function resolveMonitorProxySelection(
@@ -62,9 +63,7 @@ async function resolveMonitorProxySelection(
 
     if (proxyGroupRaw === "free") {
         if (!(await isFreeProxyPoolAvailable(region))) {
-            throw new Error(
-                "Free proxy pool is not healthy for this region right now",
-            );
+            throw new Error("Free proxy pool is currently disabled");
         }
         return { proxyGroupId: null, proxySource: "free" };
     }
@@ -324,12 +323,12 @@ export async function createPresetMonitor(input: {
     }
 
     const freeProxy = await getFreeProxyPoolHealth();
-    if (!freeProxy.enabled || !freeProxy.regions[region]?.healthy) {
+    if (!freeProxy.enabled) {
         return {
             ok: false,
             code: "POOL_UNAVAILABLE",
             message:
-                "The Free Proxy Pool is not ready for this region right now. Choose another ready region or set up the monitor manually.",
+                "The Free Proxy Pool is currently disabled. Set up the monitor manually.",
         };
     }
 

@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"maps"
 	"reflect"
+	"slices"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -28,6 +31,16 @@ func TestFreeProxyValidationTimeout(t *testing.T) {
 				t.Fatalf("freeProxyValidationTimeout(%d) = %s, want %s", test.maxLatencyMs, got, test.want)
 			}
 		})
+	}
+}
+
+func TestFreeProxyTimeoutBatchFitsRecoveryCycleBudget(t *testing.T) {
+	const candidates = 960
+	const concurrency = 48
+	waves := (candidates + concurrency - 1) / concurrency
+	worstCase := time.Duration(waves) * freeProxyValidationTimeout(2500)
+	if worstCase > 90*time.Second {
+		t.Fatalf("timeout-only batch budget = %s, want at most 90s", worstCase)
 	}
 }
 
@@ -123,6 +136,71 @@ func TestInterleaveFreeProxyImportCandidatesKeepsFirstSourceAttribution(t *testi
 	}
 }
 
+func TestInterleaveFreeProxyImportCandidatesUsesProtocolQuotas(t *testing.T) {
+	sources := make([][]freeProxyImportCandidate, 4)
+	protocols := []string{"http", "https", "socks5", "socks4"}
+	for sourceIndex, protocol := range protocols {
+		for candidateIndex := 0; candidateIndex < 30; candidateIndex++ {
+			sources[sourceIndex] = append(sources[sourceIndex], freeProxyImportCandidate{
+				ProxyURL: "proxy-" + protocol + "-" + strconv.Itoa(candidateIndex),
+				Protocol: protocol,
+				Source:   "source-" + protocol,
+			})
+		}
+	}
+
+	got := interleaveFreeProxyImportCandidates(sources, 20)
+	counts := map[string]int{}
+	for _, candidate := range got {
+		if candidate.Protocol == "http" || candidate.Protocol == "https" {
+			counts["web"]++
+		} else {
+			counts[candidate.Protocol]++
+		}
+	}
+
+	if counts["web"] != 12 || counts["socks5"] != 5 || counts["socks4"] != 3 {
+		t.Fatalf("protocol counts = %#v, want web=12 socks5=5 socks4=3", counts)
+	}
+}
+
+func TestSelectFreeProxyImportCandidatesIsStableAcrossFeedReordering(t *testing.T) {
+	now := time.Now()
+	inventory := map[string]database.FreeProxyInventoryRecord{
+		"http://winner:80":   {ProxyURL: "http://winner:80", SuccessCount: 2, LastChecked: &now},
+		"http://untested:80": {ProxyURL: "http://untested:80"},
+		"http://failed:80":   {ProxyURL: "http://failed:80", LastChecked: &now},
+	}
+	first := []freeProxyImportCandidate{
+		{ProxyURL: "http://new:80", Protocol: "http", Source: "feed"},
+		{ProxyURL: "http://failed:80", Protocol: "http", Source: "feed"},
+		{ProxyURL: "http://untested:80", Protocol: "http", Source: "feed"},
+		{ProxyURL: "http://winner:80", Protocol: "http", Source: "feed"},
+	}
+	second := append([]freeProxyImportCandidate(nil), first...)
+	slices.Reverse(second)
+
+	gotFirst, _ := selectFreeProxyImportCandidates(
+		[][]freeProxyImportCandidate{first},
+		maps.Clone(inventory),
+		3,
+	)
+	gotSecond, _ := selectFreeProxyImportCandidates(
+		[][]freeProxyImportCandidate{second},
+		maps.Clone(inventory),
+		3,
+	)
+
+	if !reflect.DeepEqual(gotFirst, gotSecond) {
+		t.Fatalf("selection changed after feed reorder: %#v != %#v", gotFirst, gotSecond)
+	}
+	if gotFirst[0].ProxyURL != "http://winner:80" ||
+		gotFirst[1].ProxyURL != "http://untested:80" ||
+		gotFirst[2].ProxyURL != "http://new:80" {
+		t.Fatalf("selection priority = %#v, want winner, untested, new", gotFirst)
+	}
+}
+
 func TestSelectFreeProxyImportCandidatesHonorsRemainingPoolCapacity(t *testing.T) {
 	sources := [][]freeProxyImportCandidate{
 		{
@@ -135,16 +213,16 @@ func TestSelectFreeProxyImportCandidatesHonorsRemainingPoolCapacity(t *testing.T
 			{ProxyURL: "http://new-c:80", Source: "iplocate"},
 		},
 	}
-	existing := map[string]string{
-		"http://existing-a:80": "http://existing-a:80",
-		"http://existing-b:80": "http://existing-b:80",
+	existing := map[string]database.FreeProxyInventoryRecord{
+		"http://existing-a:80": {ProxyURL: "http://existing-a:80"},
+		"http://existing-b:80": {ProxyURL: "http://existing-b:80"},
 	}
 
 	got, newCount := selectFreeProxyImportCandidates(sources, existing, 3)
 	want := []database.FreeProxyRecord{
-		{ProxyURL: "http://existing-a:80", Source: "iplocate:de"},
-		{ProxyURL: "http://existing-b:80", Source: "iplocate"},
-		{ProxyURL: "http://new-a:80", Source: "iplocate:de"},
+		{ProxyURL: "http://existing-a:80", Source: "iplocate:de", Sources: []string{"iplocate:de"}},
+		{ProxyURL: "http://existing-b:80", Source: "iplocate", Sources: []string{"iplocate"}},
+		{ProxyURL: "http://new-a:80", Source: "iplocate:de", Sources: []string{"iplocate:de"}},
 	}
 
 	if !reflect.DeepEqual(got, want) {
@@ -158,18 +236,18 @@ func TestSelectFreeProxyImportCandidatesHonorsRemainingPoolCapacity(t *testing.T
 	}
 }
 
-func TestSelectFreeProxyImportCandidatesRotatesOversizedPool(t *testing.T) {
+func TestSelectFreeProxyImportCandidatesRetainsUntestedOversizedPool(t *testing.T) {
 	sources := [][]freeProxyImportCandidate{{
 		{ProxyURL: "http://new:80", Source: "iplocate"},
 		{ProxyURL: "http://existing-a:80", Source: "iplocate"},
 		{ProxyURL: "http://existing-b:80", Source: "iplocate"},
 		{ProxyURL: "http://existing-c:80", Source: "iplocate"},
 	}}
-	existing := map[string]string{
-		"http://existing-a:80": "http://existing-a:80",
-		"http://existing-b:80": "http://existing-b:80",
-		"http://existing-c:80": "http://existing-c:80",
-		"http://existing-d:80": "http://existing-d:80",
+	existing := map[string]database.FreeProxyInventoryRecord{
+		"http://existing-a:80": {ProxyURL: "http://existing-a:80"},
+		"http://existing-b:80": {ProxyURL: "http://existing-b:80"},
+		"http://existing-c:80": {ProxyURL: "http://existing-c:80"},
+		"http://existing-d:80": {ProxyURL: "http://existing-d:80"},
 	}
 
 	got, newCount := selectFreeProxyImportCandidates(sources, existing, 3)
@@ -177,11 +255,11 @@ func TestSelectFreeProxyImportCandidatesRotatesOversizedPool(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("selected candidate count = %d, want 3", len(got))
 	}
-	if newCount != 1 {
-		t.Fatalf("new candidate count = %d, want 1", newCount)
+	if newCount != 0 {
+		t.Fatalf("new candidate count = %d, want 0", newCount)
 	}
-	if got[0].ProxyURL != "http://new:80" {
-		t.Fatalf("first selected candidate = %q, want new proxy", got[0].ProxyURL)
+	if got[0].ProxyURL != "http://existing-a:80" {
+		t.Fatalf("first selected candidate = %q, want retained untested proxy", got[0].ProxyURL)
 	}
 }
 
@@ -189,8 +267,8 @@ func TestSelectFreeProxyImportCandidatesReusesStoredURLVariant(t *testing.T) {
 	sources := [][]freeProxyImportCandidate{{
 		{ProxyURL: "http://existing:80", Source: "iplocate"},
 	}}
-	existing := map[string]string{
-		"http://existing:80": "http://existing:80/",
+	existing := map[string]database.FreeProxyInventoryRecord{
+		"http://existing:80": {ProxyURL: "http://existing:80/"},
 	}
 
 	got, newCount := selectFreeProxyImportCandidates(sources, existing, 1)
@@ -237,7 +315,9 @@ func TestFreeProxySourcePrefersKnownURLProvider(t *testing.T) {
 	tests := map[string]string{
 		"https://raw.githubusercontent.com/iplocate/free-proxy-list/main/all-proxies.txt": "iplocate",
 		proxyScrapeFallbackURL: "proxyscrape",
-		proxiflyProxyListURL:   "proxifly",
+		proxiflyHTTPListURL:    "proxifly",
+		proxiflyHTTPSListURL:   "proxifly",
+		databayHTTPListURL:     "databay:http",
 		databaySOCKS4ListURL:   "databay:socks4",
 		databaySOCKS5ListURL:   "databay:socks5",
 		monosansProxyListURL:   "monosans",
@@ -252,9 +332,13 @@ func TestFreeProxySourcePrefersKnownURLProvider(t *testing.T) {
 
 func TestDefaultSchemeForImportURL(t *testing.T) {
 	tests := map[string]string{
-		databaySOCKS4ListURL: "socks4",
-		databaySOCKS5ListURL: "socks5",
-		proxiflyProxyListURL: "http",
+		databaySOCKS4ListURL:  "socks4",
+		databaySOCKS5ListURL:  "socks5",
+		databayHTTPListURL:    "http",
+		proxiflyHTTPListURL:   "http",
+		proxiflyHTTPSListURL:  "https",
+		proxiflySOCKS4ListURL: "socks4",
+		proxiflySOCKS5ListURL: "socks5",
 	}
 
 	for importURL, want := range tests {

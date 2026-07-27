@@ -136,6 +136,7 @@ model free_proxies {
   host              String              @db.VarChar(255)
   port              Int
   source            String              @default("manual") @db.VarChar(50)
+  sources           String[]            @default([])
   status            String              @default("active") @db.VarChar(30)
   success_count     Int                 @default(0)
   failure_count     Int                 @default(0)
@@ -144,6 +145,8 @@ model free_proxies {
   last_failure_at   DateTime?           @db.Timestamp(6)
   quarantined_until DateTime?           @db.Timestamp(6)
   last_error        String?             @db.Text
+  last_error_code   String?             @db.VarChar(50)
+  last_seen_at      DateTime?           @db.Timestamp(6)
   created_at        DateTime            @default(now()) @db.Timestamp(6)
   updated_at        DateTime            @updatedAt @db.Timestamp(6)
   health            free_proxy_health[]
@@ -165,6 +168,7 @@ model free_proxy_health {
   latency_ms       Int?
   last_status_code Int?
   last_error       String?      @db.Text
+  last_error_code  String?      @db.VarChar(50)
   last_checked_at  DateTime?    @db.Timestamp(6)
   last_success_at  DateTime?    @db.Timestamp(6)
   last_failure_at  DateTime?    @db.Timestamp(6)

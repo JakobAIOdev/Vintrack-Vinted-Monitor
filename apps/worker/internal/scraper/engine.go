@@ -407,7 +407,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 					}
 				}
 			}
-			if consecutiveErrors >= maxConsecutiveErrors {
+			if shouldAutoStopMonitor(proxySource, consecutiveErrors, maxConsecutiveErrors) {
 				log.Printf("[%d] ❌ auto-stopping: %d consecutive errors", m.ID, consecutiveErrors)
 				e.db.SetMonitorStatus(m.ID, "error")
 				e.db.RecordMonitorEvent(model.MonitorEvent{
@@ -532,6 +532,10 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		})
 		sleepMonitorCycle(ctx, cycleStart, monitorQueryInterval(m, time.Now()))
 	}
+}
+
+func shouldAutoStopMonitor(proxySource string, consecutiveErrors int, maximum int) bool {
+	return proxySource != "free" && maximum > 0 && consecutiveErrors >= maximum
 }
 
 func catalogTimeoutForProxySource(proxySource string) time.Duration {
@@ -671,11 +675,12 @@ func (e *Engine) recordFreeProxyFailure(proxySource string, client *Client, regi
 	if proxySource != "free" || client == nil {
 		return
 	}
-	e.db.RecordFreeProxyFailure(
+	e.db.RecordFreeProxyFailureClass(
 		client.ProxyURL,
 		region,
 		statusCode,
 		message,
+		ClassifyFreeProxyFailure(errors.New(message), statusCode),
 		e.freeProxyFailureThreshold(),
 		e.freeProxyQuarantineMinutes(),
 	)

@@ -7,6 +7,15 @@ import (
 	"vintrack-worker/internal/model"
 )
 
+func TestFreeProxyMonitorNeverAutoStopsForTransientPoolFailures(t *testing.T) {
+	if shouldAutoStopMonitor("free", 10_000, 20) {
+		t.Fatal("free proxy monitor should remain active while the shared pool recovers")
+	}
+	if !shouldAutoStopMonitor("server", 20, 20) {
+		t.Fatal("non-free monitor should retain the configured auto-stop behavior")
+	}
+}
+
 func TestBuildItems_BasicConstruction(t *testing.T) {
 	e := &Engine{}
 	m := model.Monitor{

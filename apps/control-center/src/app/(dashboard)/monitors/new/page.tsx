@@ -261,10 +261,7 @@ export default function NewMonitorPage() {
                 setFreeProxy(freeProxyOption);
                 setSelectedProxyGroup((current) => {
                     if (current) return current;
-                    if (
-                        freeProxyOption.enabled &&
-                        freeProxyOption.regions?.de?.healthy
-                    ) {
+                    if (freeProxyOption.enabled) {
                         return "free";
                     }
                     if (role === "premium" || role === "admin") return "server";
@@ -295,8 +292,10 @@ export default function NewMonitorPage() {
     );
     const selectedRegionFreeProxyCount =
         selectedRegionFreeProxyHealth?.usable ?? 0;
-    const isFreeProxyAvailableForRegion =
-        freeProxy.enabled && Boolean(selectedRegionFreeProxyHealth?.healthy);
+    const isFreeProxyAvailableForRegion = freeProxy.enabled;
+    const isFreeProxyReadyForRegion = Boolean(
+        freeProxy.enabled && selectedRegionFreeProxyHealth?.healthy,
+    );
     const activeFilterCount = [
         selectedAllowedCountries.length > 0,
         selectedCategories.length > 0,
@@ -856,8 +855,10 @@ export default function NewMonitorPage() {
                                                     }{" "}
                                                     usable
                                                     {isFreeProxyAvailableForRegion
-                                                        ? ""
-                                                        : ", degraded"}
+                                                        ? isFreeProxyReadyForRegion
+                                                            ? ""
+                                                            : ", recovering"
+                                                        : ", disabled"}
                                                     )
                                                 </option>
                                             )}
@@ -903,10 +904,9 @@ export default function NewMonitorPage() {
                                             <p className="text-muted-foreground text-[12px]">
                                                 Select your proxy group or the
                                                 admin managed free pool. Free
-                                                pool needs{" "}
-                                                {freeProxy.minActivePerRegion}{" "}
-                                                valid proxies for{" "}
-                                                {selectedRegion}.
+                                                pool monitors wait and resume
+                                                automatically while a region is
+                                                recovering.
                                             </p>
                                         )}
                                         {(userRole === "premium" ||

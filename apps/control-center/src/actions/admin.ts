@@ -144,6 +144,18 @@ type FreeProxyRegionRow = {
     stalled: boolean;
 };
 
+type FreeProxySourceDiagnosticRow = {
+    source: string;
+    protocol: string;
+    proxy_count: bigint;
+    checked_count: bigint;
+    successful_count: bigint;
+    never_checked_count: bigint;
+    active_count: bigint;
+    cooldown_count: bigint;
+    top_error_code: string | null;
+};
+
 type ParsedProxy = {
     proxyUrl: string;
     protocol: string;
@@ -763,17 +775,6 @@ async function upsertFreeProxies(proxies: ParsedProxy[], source: string) {
             offset,
             offset + FREE_PROXY_WRITE_BATCH_SIZE,
         );
-        const values = batch.map(
-            (proxy) => Prisma.sql`(
-                ${proxy.proxyUrl},
-                ${proxy.protocol},
-                ${proxy.host},
-                ${proxy.port},
-                ${source},
-                'pending'
-            )`,
-        );
-
         affectedCount += await db.$executeRaw`
             INSERT INTO free_proxies (
                 proxy_url,
@@ -781,15 +782,36 @@ async function upsertFreeProxies(proxies: ParsedProxy[], source: string) {
                 host,
                 port,
                 source,
+                sources,
+                last_seen_at,
                 status
             )
-            VALUES ${Prisma.join(values)}
+            VALUES ${Prisma.join(
+                batch.map(
+                    (proxy) => Prisma.sql`(
+                        ${proxy.proxyUrl},
+                        ${proxy.protocol},
+                        ${proxy.host},
+                        ${proxy.port},
+                        ${source},
+                        ARRAY[${source}]::TEXT[],
+                        NOW(),
+                        'pending'
+                    )`,
+                ),
+            )}
             ON CONFLICT (proxy_url) DO UPDATE
             SET protocol = EXCLUDED.protocol,
                 host = EXCLUDED.host,
                 port = EXCLUDED.port,
                 source = EXCLUDED.source,
+                sources = ARRAY(
+                    SELECT DISTINCT source_name
+                    FROM unnest(free_proxies.sources || EXCLUDED.sources) AS source_rows(source_name)
+                ),
+                last_seen_at = NOW(),
                 last_error = NULL,
+                last_error_code = NULL,
                 quarantined_until = NULL,
                 updated_at = NOW()
         `;
@@ -929,14 +951,15 @@ export async function updateServerProxies(formData: FormData) {
 export async function getFreeProxyAdminState() {
     await requireAdmin();
 
-    const [settings, counts, regionRows, recent] = await Promise.all([
-        getFreeProxySettings(),
-        db.$queryRaw<FreeProxyStatusCountRow[]>`
+    const [settings, counts, regionRows, sourceRows, recent] =
+        await Promise.all([
+            getFreeProxySettings(),
+            db.$queryRaw<FreeProxyStatusCountRow[]>`
             SELECT status, COUNT(*)::bigint AS proxy_count
             FROM free_proxies
             GROUP BY status
         `,
-        db.$queryRaw<FreeProxyRegionRow[]>`
+            db.$queryRaw<FreeProxyRegionRow[]>`
             SELECT
                 region,
                 COUNT(*) FILTER (
@@ -987,7 +1010,7 @@ export async function getFreeProxyAdminState() {
                     TRUE
                 )
                 AND COUNT(*) FILTER (
-                    WHERE status IN ('pending', 'active', 'cooldown')
+                    WHERE status IN ('pending', 'active', 'cooldown', 'dead')
                       AND (
                         next_check_at IS NULL
                         OR next_check_at <= NOW()
@@ -997,25 +1020,58 @@ export async function getFreeProxyAdminState() {
             GROUP BY region
             ORDER BY region
         `,
-        db.free_proxies.findMany({
-            orderBy: [{ updated_at: "desc" }],
-            take: 20,
-            select: {
-                id: true,
-                proxy_url: true,
-                protocol: true,
-                source: true,
-                status: true,
-                success_count: true,
-                failure_count: true,
-                last_checked_at: true,
-                last_success_at: true,
-                last_failure_at: true,
-                quarantined_until: true,
-                last_error: true,
-            },
-        }),
-    ]);
+            db.$queryRaw<FreeProxySourceDiagnosticRow[]>`
+            SELECT
+                fp.source,
+                fp.protocol,
+                COUNT(DISTINCT fp.id)::bigint AS proxy_count,
+                COUNT(*) FILTER (
+                    WHERE fph.last_checked_at >= NOW() - INTERVAL '24 hours'
+                )::bigint AS checked_count,
+                COUNT(*) FILTER (
+                    WHERE fph.last_checked_at >= NOW() - INTERVAL '24 hours'
+                      AND fph.last_status_code = 200
+                      AND fph.last_error IS NULL
+                )::bigint AS successful_count,
+                COUNT(*) FILTER (
+                    WHERE fph.last_checked_at IS NULL
+                )::bigint AS never_checked_count,
+                COUNT(*) FILTER (
+                    WHERE fph.status = 'active'
+                      AND fph.last_success_at >= NOW() - INTERVAL '20 minutes'
+                )::bigint AS active_count,
+                COUNT(*) FILTER (
+                    WHERE fph.status IN ('cooldown', 'dead')
+                )::bigint AS cooldown_count,
+                mode() WITHIN GROUP (ORDER BY fph.last_error_code)
+                    FILTER (
+                        WHERE fph.last_error_code IS NOT NULL
+                          AND fph.last_checked_at >= NOW() - INTERVAL '24 hours'
+                    ) AS top_error_code
+            FROM free_proxies fp
+            LEFT JOIN free_proxy_health fph ON fph.proxy_id = fp.id
+            GROUP BY fp.source, fp.protocol
+            ORDER BY successful_count DESC, checked_count DESC, fp.source, fp.protocol
+        `,
+            db.free_proxies.findMany({
+                orderBy: [{ updated_at: "desc" }],
+                take: 20,
+                select: {
+                    id: true,
+                    proxy_url: true,
+                    protocol: true,
+                    source: true,
+                    status: true,
+                    success_count: true,
+                    failure_count: true,
+                    last_checked_at: true,
+                    last_success_at: true,
+                    last_failure_at: true,
+                    quarantined_until: true,
+                    last_error: true,
+                },
+            }),
+        ]);
 
     const countsByStatus = Object.fromEntries(
         counts.map((row) => [row.status, Number(row.proxy_count)]),
@@ -1072,6 +1128,25 @@ export async function getFreeProxyAdminState() {
                 healthy:
                     Number(row.active_count) + Number(row.warming_count) >=
                     settings.minActivePerRegion,
+            };
+        }),
+        sourceDiagnostics: sourceRows.map((row) => {
+            const checked = Number(row.checked_count);
+            const successful = Number(row.successful_count);
+            return {
+                source: row.source,
+                protocol: row.protocol,
+                proxyCount: Number(row.proxy_count),
+                checked,
+                successful,
+                successRate:
+                    checked > 0
+                        ? Math.round((successful / checked) * 1000) / 10
+                        : null,
+                neverChecked: Number(row.never_checked_count),
+                active: Number(row.active_count),
+                cooldown: Number(row.cooldown_count),
+                topErrorCode: row.top_error_code,
             };
         }),
         recent,

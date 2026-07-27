@@ -285,8 +285,10 @@ export default function EditMonitorPage() {
     );
     const selectedRegionFreeProxyCount =
         selectedRegionFreeProxyHealth?.usable ?? 0;
-    const isFreeProxyAvailableForRegion =
-        freeProxy.enabled && Boolean(selectedRegionFreeProxyHealth?.healthy);
+    const isFreeProxyAvailableForRegion = freeProxy.enabled;
+    const isFreeProxyReadyForRegion = Boolean(
+        freeProxy.enabled && selectedRegionFreeProxyHealth?.healthy,
+    );
     const activeFilterCount = [
         selectedAllowedCountries.length > 0,
         selectedCategories.length > 0,
@@ -836,8 +838,10 @@ export default function EditMonitorPage() {
                                                     }{" "}
                                                     usable
                                                     {isFreeProxyAvailableForRegion
-                                                        ? ""
-                                                        : ", degraded"}
+                                                        ? isFreeProxyReadyForRegion
+                                                            ? ""
+                                                            : ", recovering"
+                                                        : ", disabled"}
                                                     )
                                                 </option>
                                             )}
