@@ -8,6 +8,27 @@ import { monitorStatusTelegramText, sendTelegramMessage } from "@/lib/telegram";
 import { getTelegramConnection } from "@/lib/telegram-connection";
 import { getMonitorActivationState } from "@/lib/monitor-limits";
 import { getNextDemoMonitorExpiry } from "@/lib/demo-monitor";
+import { normalizeQueryDelayMs } from "@/lib/monitor-delay";
+import { normalizeQuietHours } from "@/lib/monitor-schedule";
+import { logAuditEvent } from "@/lib/audit";
+
+export type BulkMonitorUpdateInput = {
+    monitorIds: number[];
+    queryDelayMs?: string;
+    quietHours?: {
+        enabled: boolean;
+        start: string;
+        end: string;
+        mode: "pause" | "slow";
+        delayMs: string;
+        timezone: string;
+    };
+    discord?: {
+        mode: "enable" | "disable" | "replace";
+        webhookUrl?: string;
+    };
+    telegram?: "enable" | "disable";
+};
 
 async function sendTelegramStatusIfConfigured(
     monitor: { name: string; userId: string; telegram_active: boolean },
@@ -366,5 +387,212 @@ export async function toggleTelegramStatus(
     return {
         success: true,
         message: !currentStatus ? "Telegram activated" : "Telegram deactivated",
+    };
+}
+
+export async function bulkUpdateMonitors(input: BulkMonitorUpdateInput) {
+    const session = await auth();
+    if (!session?.user?.id) throw new Error("Unauthorized");
+    const userId = session.user.id;
+
+    if (!input || !Array.isArray(input.monitorIds)) {
+        throw new Error("Invalid monitor selection");
+    }
+    const monitorIds = Array.from(
+        new Set(
+            input.monitorIds.filter((id) => Number.isInteger(id) && id > 0),
+        ),
+    );
+    if (monitorIds.length === 0) {
+        throw new Error("Select at least one monitor");
+    }
+    if (monitorIds.length > 500) {
+        throw new Error("You can update at most 500 monitors at once");
+    }
+
+    const existingMonitors = await db.monitors.findMany({
+        where: { id: { in: monitorIds }, userId },
+        select: {
+            id: true,
+            query_delay_ms: true,
+            quiet_hours_enabled: true,
+            quiet_hours_mode: true,
+            quiet_hours_delay_ms: true,
+            discord_webhook: true,
+        },
+    });
+    if (existingMonitors.length !== monitorIds.length) {
+        throw new Error("One or more selected monitors were not found");
+    }
+
+    if (
+        input.queryDelayMs !== undefined &&
+        typeof input.queryDelayMs !== "string"
+    ) {
+        throw new Error("Invalid query delay");
+    }
+    const queryDelayMs =
+        input.queryDelayMs === undefined
+            ? null
+            : normalizeQueryDelayMs(input.queryDelayMs);
+
+    if (
+        queryDelayMs !== null &&
+        !input.quietHours &&
+        existingMonitors.some(
+            (monitor) =>
+                monitor.quiet_hours_enabled &&
+                monitor.quiet_hours_mode === "slow" &&
+                monitor.quiet_hours_delay_ms < queryDelayMs,
+        )
+    ) {
+        throw new Error(
+            "The new query delay exceeds the slow quiet-hours delay on some selected monitors. Update quiet hours in the same bulk edit.",
+        );
+    }
+
+    let quietHours: ReturnType<typeof normalizeQuietHours> | null = null;
+    if (input.quietHours) {
+        const quietHoursForm = new FormData();
+        quietHoursForm.set(
+            "quiet_hours_enabled",
+            String(input.quietHours.enabled),
+        );
+        quietHoursForm.set("quiet_hours_start", input.quietHours.start);
+        quietHoursForm.set("quiet_hours_end", input.quietHours.end);
+        quietHoursForm.set("quiet_hours_mode", input.quietHours.mode);
+        quietHoursForm.set("quiet_hours_delay_ms", input.quietHours.delayMs);
+        quietHoursForm.set("quiet_hours_timezone", input.quietHours.timezone);
+
+        const normalDelayForValidation =
+            queryDelayMs ??
+            Math.max(
+                ...existingMonitors.map((monitor) => monitor.query_delay_ms),
+            );
+        quietHours = normalizeQuietHours(
+            quietHoursForm,
+            normalDelayForValidation,
+        );
+    }
+
+    const discordMode = input.discord?.mode;
+    if (
+        discordMode &&
+        !["enable", "disable", "replace"].includes(discordMode)
+    ) {
+        throw new Error("Invalid Discord bulk action");
+    }
+    if (input.telegram && !["enable", "disable"].includes(input.telegram)) {
+        throw new Error("Invalid Telegram bulk action");
+    }
+    const replacementWebhook =
+        discordMode === "replace"
+            ? input.discord?.webhookUrl?.trim() || ""
+            : "";
+    if (
+        discordMode === "replace" &&
+        !isValidDiscordWebhook(replacementWebhook)
+    ) {
+        throw new Error("Enter a valid Discord webhook URL");
+    }
+    if (
+        discordMode === "enable" &&
+        existingMonitors.some((monitor) => !monitor.discord_webhook)
+    ) {
+        throw new Error(
+            "Some selected monitors have no Discord webhook. Choose Replace webhook instead.",
+        );
+    }
+
+    if (input.telegram === "enable") {
+        const connection = await getTelegramConnection(userId);
+        if (!connection) throw new Error("Connect Telegram first");
+    }
+
+    const hasChanges =
+        queryDelayMs !== null ||
+        quietHours !== null ||
+        Boolean(discordMode) ||
+        Boolean(input.telegram);
+    if (!hasChanges) throw new Error("Choose at least one change");
+
+    const updateData = {
+        ...(queryDelayMs !== null ? { query_delay_ms: queryDelayMs } : {}),
+        ...(quietHours
+            ? {
+                  quiet_hours_enabled: quietHours.enabled,
+                  quiet_hours_start_minute: quietHours.startMinute,
+                  quiet_hours_end_minute: quietHours.endMinute,
+                  quiet_hours_mode: quietHours.mode,
+                  quiet_hours_delay_ms: quietHours.delayMs,
+                  quiet_hours_timezone: quietHours.timezone,
+              }
+            : {}),
+        ...(discordMode === "enable" ? { webhook_active: true } : {}),
+        ...(discordMode === "disable" ? { webhook_active: false } : {}),
+        ...(discordMode === "replace"
+            ? {
+                  discord_webhook: replacementWebhook,
+                  webhook_active: true,
+              }
+            : {}),
+        ...(input.telegram
+            ? { telegram_active: input.telegram === "enable" }
+            : {}),
+    };
+
+    const updatedMonitors = await db.$transaction(async (tx) => {
+        const updated = await tx.monitors.updateMany({
+            where: { id: { in: monitorIds }, userId },
+            data: updateData,
+        });
+        if (updated.count !== monitorIds.length) {
+            throw new Error("Not all selected monitors could be updated");
+        }
+
+        return tx.monitors.findMany({
+            where: { id: { in: monitorIds }, userId },
+            select: {
+                id: true,
+                query_delay_ms: true,
+                quiet_hours_enabled: true,
+                quiet_hours_start_minute: true,
+                quiet_hours_end_minute: true,
+                quiet_hours_mode: true,
+                quiet_hours_delay_ms: true,
+                quiet_hours_timezone: true,
+                discord_webhook: true,
+                webhook_active: true,
+                telegram_active: true,
+            },
+        });
+    });
+
+    await logAuditEvent({
+        userId,
+        action: "monitor.bulk_updated",
+        targetType: "monitor",
+        metadata: {
+            monitorIds,
+            count: monitorIds.length,
+            fields: {
+                queryDelay: queryDelayMs !== null,
+                quietHours: quietHours !== null,
+                discord: discordMode ?? null,
+                telegram: input.telegram ?? null,
+            },
+        },
+    });
+
+    revalidatePath("/dashboard");
+    for (const monitorId of monitorIds) {
+        revalidatePath(`/monitors/${monitorId}`);
+        revalidatePath(`/monitors/${monitorId}/edit`);
+    }
+
+    return {
+        success: true,
+        updatedCount: updatedMonitors.length,
+        monitors: updatedMonitors,
     };
 }

@@ -36,6 +36,8 @@ import {
     UserX,
     Rocket,
     Clock3,
+    ListChecks,
+    Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -58,6 +60,8 @@ import {
     updateMonitorWebhook,
     setMonitorWebhookStatus,
     toggleTelegramStatus,
+    bulkUpdateMonitors,
+    type BulkMonitorUpdateInput,
 } from "@/actions/dashboard-actions";
 import { testDiscordWebhook } from "@/actions/monitor";
 import { updateMonitorAlertDedupe } from "@/actions/account";
@@ -67,10 +71,23 @@ import { getSizeLabels } from "@/lib/sizes";
 import {
     getRegionLabel,
     getRegionFlags,
+    getRegionTimezone,
     getStatusLocaleForRegionCodes,
+    REGIONS,
 } from "@/lib/regions";
 import { getStatusLabels } from "@/lib/statuses";
-import { formatQueryDelay } from "@/lib/monitor-delay";
+import {
+    formatQueryDelay,
+    MAX_QUERY_DELAY_MS,
+    MIN_QUERY_DELAY_MS,
+} from "@/lib/monitor-delay";
+import {
+    DEFAULT_QUIET_HOURS_DELAY_MS,
+    DEFAULT_QUIET_HOURS_END_MINUTE,
+    DEFAULT_QUIET_HOURS_START_MINUTE,
+    DEFAULT_QUIET_HOURS_TIMEZONE,
+    minuteOfDayToTime,
+} from "@/lib/monitor-schedule";
 import {
     FirstMonitorQuickStart,
     type QuickStartPool,
@@ -95,6 +112,12 @@ export type Monitor = {
     name: string;
     query: string;
     query_delay_ms: number;
+    quiet_hours_enabled: boolean;
+    quiet_hours_start_minute: number;
+    quiet_hours_end_minute: number;
+    quiet_hours_mode: "pause" | "slow";
+    quiet_hours_delay_ms: number;
+    quiet_hours_timezone: string;
     status: string;
     price_max: number | null;
     catalog_ids: string | null;
@@ -141,6 +164,9 @@ type SellerBan = {
     created_at: string;
 };
 
+type BulkDiscordMode = "unchanged" | "enable" | "disable" | "replace";
+type BulkTelegramMode = "unchanged" | "enable" | "disable";
+
 async function readApiError(res: Response, fallback: string) {
     try {
         const data = await res.json();
@@ -152,7 +178,10 @@ async function readApiError(res: Response, fallback: string) {
 
 function hasProxyWarning(h?: MonitorHealth): boolean {
     if (!h) return false;
-    if (h.proxy_state === "waiting_for_proxy" || h.proxy_state === "unavailable")
+    if (
+        h.proxy_state === "waiting_for_proxy" ||
+        h.proxy_state === "unavailable"
+    )
         return true;
     if (h.consecutive_errors === -1 || h.consecutive_errors >= 3) return true;
     return false;
@@ -247,6 +276,33 @@ export function DashboardClient({
     const [telegramConnectCode, setTelegramConnectCode] =
         useState<TelegramConnectCode | null>(null);
     const [monitors, setMonitors] = useState<Monitor[]>(initialMonitors);
+    const [selectedMonitorIds, setSelectedMonitorIds] = useState<number[]>([]);
+    const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
+    const [isBulkSaving, setIsBulkSaving] = useState(false);
+    const [bulkDiscordMode, setBulkDiscordMode] =
+        useState<BulkDiscordMode>("unchanged");
+    const [bulkWebhookUrl, setBulkWebhookUrl] = useState("");
+    const [bulkTelegramMode, setBulkTelegramMode] =
+        useState<BulkTelegramMode>("unchanged");
+    const [bulkApplyQueryDelay, setBulkApplyQueryDelay] = useState(false);
+    const [bulkQueryDelayMs, setBulkQueryDelayMs] = useState("1500");
+    const [bulkApplyQuietHours, setBulkApplyQuietHours] = useState(false);
+    const [bulkQuietHoursEnabled, setBulkQuietHoursEnabled] = useState(false);
+    const [bulkQuietHoursStart, setBulkQuietHoursStart] = useState(
+        minuteOfDayToTime(DEFAULT_QUIET_HOURS_START_MINUTE),
+    );
+    const [bulkQuietHoursEnd, setBulkQuietHoursEnd] = useState(
+        minuteOfDayToTime(DEFAULT_QUIET_HOURS_END_MINUTE),
+    );
+    const [bulkQuietHoursMode, setBulkQuietHoursMode] = useState<
+        "pause" | "slow"
+    >("pause");
+    const [bulkQuietHoursDelayMs, setBulkQuietHoursDelayMs] = useState(
+        String(DEFAULT_QUIET_HOURS_DELAY_MS),
+    );
+    const [bulkQuietHoursTimezone, setBulkQuietHoursTimezone] = useState(
+        DEFAULT_QUIET_HOURS_TIMEZONE,
+    );
     const [dedupeMonitorAlerts, setDedupeMonitorAlerts] = useState(
         initialDedupeMonitorAlerts,
     );
@@ -471,6 +527,127 @@ export function DashboardClient({
             );
         });
     }, [monitors]);
+
+    const selectedMonitorIdSet = useMemo(
+        () => new Set(selectedMonitorIds),
+        [selectedMonitorIds],
+    );
+    const allMonitorsSelected =
+        monitors.length > 0 && selectedMonitorIds.length === monitors.length;
+    const hasBulkChanges =
+        bulkDiscordMode !== "unchanged" ||
+        bulkTelegramMode !== "unchanged" ||
+        bulkApplyQueryDelay ||
+        bulkApplyQuietHours;
+
+    const toggleMonitorSelection = (monitorId: number) => {
+        setSelectedMonitorIds((current) =>
+            current.includes(monitorId)
+                ? current.filter((id) => id !== monitorId)
+                : [...current, monitorId],
+        );
+    };
+
+    const toggleAllMonitorSelection = () => {
+        setSelectedMonitorIds(
+            allMonitorsSelected ? [] : monitors.map((monitor) => monitor.id),
+        );
+    };
+
+    const openBulkEditDialog = () => {
+        const firstSelected = monitors.find((monitor) =>
+            selectedMonitorIdSet.has(monitor.id),
+        );
+        if (!firstSelected) return;
+
+        setBulkDiscordMode("unchanged");
+        setBulkWebhookUrl(firstSelected.discord_webhook ?? "");
+        setBulkTelegramMode("unchanged");
+        setBulkApplyQueryDelay(false);
+        setBulkQueryDelayMs(String(firstSelected.query_delay_ms));
+        setBulkApplyQuietHours(false);
+        setBulkQuietHoursEnabled(firstSelected.quiet_hours_enabled);
+        setBulkQuietHoursStart(
+            minuteOfDayToTime(firstSelected.quiet_hours_start_minute),
+        );
+        setBulkQuietHoursEnd(
+            minuteOfDayToTime(firstSelected.quiet_hours_end_minute),
+        );
+        setBulkQuietHoursMode(firstSelected.quiet_hours_mode);
+        setBulkQuietHoursDelayMs(String(firstSelected.quiet_hours_delay_ms));
+        setBulkQuietHoursTimezone(firstSelected.quiet_hours_timezone);
+        setIsBulkEditOpen(true);
+        void fetchTelegramConnection();
+    };
+
+    const handleBulkSave = async () => {
+        if (selectedMonitorIds.length === 0 || !hasBulkChanges) return;
+
+        const input: BulkMonitorUpdateInput = {
+            monitorIds: selectedMonitorIds,
+            ...(bulkApplyQueryDelay ? { queryDelayMs: bulkQueryDelayMs } : {}),
+            ...(bulkApplyQuietHours
+                ? {
+                      quietHours: {
+                          enabled: bulkQuietHoursEnabled,
+                          start: bulkQuietHoursStart,
+                          end: bulkQuietHoursEnd,
+                          mode: bulkQuietHoursMode,
+                          delayMs: bulkQuietHoursDelayMs,
+                          timezone: bulkQuietHoursTimezone,
+                      },
+                  }
+                : {}),
+            ...(bulkDiscordMode !== "unchanged"
+                ? {
+                      discord: {
+                          mode: bulkDiscordMode,
+                          ...(bulkDiscordMode === "replace"
+                              ? { webhookUrl: bulkWebhookUrl }
+                              : {}),
+                      },
+                  }
+                : {}),
+            ...(bulkTelegramMode !== "unchanged"
+                ? { telegram: bulkTelegramMode }
+                : {}),
+        };
+
+        setIsBulkSaving(true);
+        try {
+            const result = await bulkUpdateMonitors(input);
+            const updatedById = new Map(
+                result.monitors.map((monitor) => [monitor.id, monitor]),
+            );
+            setMonitors((current) =>
+                current.map((monitor) => {
+                    const updated = updatedById.get(monitor.id);
+                    if (!updated) return monitor;
+                    return {
+                        ...monitor,
+                        ...updated,
+                        quiet_hours_mode:
+                            updated.quiet_hours_mode === "slow"
+                                ? "slow"
+                                : "pause",
+                    };
+                }),
+            );
+            setIsBulkEditOpen(false);
+            setSelectedMonitorIds([]);
+            toast.success(
+                `${result.updatedCount} monitor${result.updatedCount === 1 ? "" : "s"} updated`,
+            );
+        } catch (error) {
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to update monitors",
+            );
+        } finally {
+            setIsBulkSaving(false);
+        }
+    };
 
     const handleStopAll = async () => {
         setMonitors((prev) => prev.map((m) => ({ ...m, status: "paused" })));
@@ -829,16 +1006,74 @@ export function DashboardClient({
                 </div>
             ) : (
                 <div className="space-y-4">
-                    <h2 className="text-base font-semibold">Your monitors</h2>
+                    <div className="border-border/70 bg-card flex flex-col gap-3 rounded-lg border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex items-center gap-3">
+                            <input
+                                type="checkbox"
+                                checked={allMonitorsSelected}
+                                onChange={toggleAllMonitorSelection}
+                                aria-label="Select all monitors"
+                                className="border-input accent-primary size-4 rounded"
+                            />
+                            <div>
+                                <h2 className="text-sm font-semibold">
+                                    Your monitors
+                                </h2>
+                                <p className="text-muted-foreground text-xs">
+                                    {selectedMonitorIds.length > 0
+                                        ? `${selectedMonitorIds.length} selected`
+                                        : `${monitors.length} total`}
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            {selectedMonitorIds.length > 0 && (
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setSelectedMonitorIds([])}
+                                    className="text-muted-foreground h-8 text-xs"
+                                >
+                                    Clear
+                                </Button>
+                            )}
+                            <Button
+                                type="button"
+                                size="sm"
+                                disabled={selectedMonitorIds.length === 0}
+                                onClick={openBulkEditDialog}
+                                className="h-8 gap-1.5 text-xs"
+                            >
+                                <ListChecks className="size-3.5" />
+                                Bulk edit
+                            </Button>
+                        </div>
+                    </div>
                     <div className="grid auto-rows-fr grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
                         {sortedMonitors.map((m) => (
                             <Card
                                 key={m.id}
                                 data-testid="monitor-card"
-                                className="group border-border/70 bg-card hover:border-foreground/20 h-full overflow-hidden rounded-lg py-0 shadow-none transition-colors"
+                                className={`group bg-card hover:border-foreground/20 h-full overflow-hidden rounded-lg py-0 shadow-none transition-colors ${
+                                    selectedMonitorIdSet.has(m.id)
+                                        ? "border-primary/60 ring-primary/10 ring-2"
+                                        : "border-border/70"
+                                }`}
                             >
                                 <CardContent className="flex h-full flex-1 flex-col p-0">
                                     <div className="flex items-start justify-between gap-3 p-5 pb-4">
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedMonitorIdSet.has(
+                                                m.id,
+                                            )}
+                                            onChange={() =>
+                                                toggleMonitorSelection(m.id)
+                                            }
+                                            aria-label={`Select ${m.name}`}
+                                            className="border-input accent-primary mt-1 size-4 shrink-0 rounded"
+                                        />
                                         <div className="min-w-0 flex-1">
                                             <h3
                                                 className="text-foreground truncate text-[15px] font-semibold"
@@ -1148,6 +1383,415 @@ export function DashboardClient({
                     </div>
                 </div>
             )}
+
+            <Dialog
+                open={isBulkEditOpen}
+                onOpenChange={(open) => {
+                    if (!isBulkSaving) setIsBulkEditOpen(open);
+                }}
+            >
+                <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+                    <DialogHeader>
+                        <DialogTitle>
+                            Bulk edit {selectedMonitorIds.length} monitor
+                            {selectedMonitorIds.length === 1 ? "" : "s"}
+                        </DialogTitle>
+                        <DialogDescription>
+                            Only settings explicitly changed below will be
+                            applied. Queries, filters, regions, and proxies stay
+                            untouched.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-4 py-2">
+                        <div className="border-border/80 space-y-4 rounded-lg border p-4">
+                            <div>
+                                <h3 className="text-sm font-semibold">
+                                    Notifications
+                                </h3>
+                                <p className="text-muted-foreground mt-1 text-xs">
+                                    Change either channel independently.
+                                </p>
+                            </div>
+
+                            <div className="grid gap-4 sm:grid-cols-2">
+                                <div className="space-y-2">
+                                    <Label
+                                        htmlFor="bulk-discord-mode"
+                                        className="text-xs"
+                                    >
+                                        Discord
+                                    </Label>
+                                    <select
+                                        id="bulk-discord-mode"
+                                        value={bulkDiscordMode}
+                                        onChange={(event) =>
+                                            setBulkDiscordMode(
+                                                event.target
+                                                    .value as BulkDiscordMode,
+                                            )
+                                        }
+                                        className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+                                    >
+                                        <option value="unchanged">
+                                            Leave unchanged
+                                        </option>
+                                        <option value="enable">
+                                            Enable existing webhooks
+                                        </option>
+                                        <option value="disable">
+                                            Disable notifications
+                                        </option>
+                                        <option value="replace">
+                                            Replace webhook
+                                        </option>
+                                    </select>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <Label
+                                        htmlFor="bulk-telegram-mode"
+                                        className="text-xs"
+                                    >
+                                        Telegram
+                                    </Label>
+                                    <select
+                                        id="bulk-telegram-mode"
+                                        value={bulkTelegramMode}
+                                        onChange={(event) =>
+                                            setBulkTelegramMode(
+                                                event.target
+                                                    .value as BulkTelegramMode,
+                                            )
+                                        }
+                                        className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+                                    >
+                                        <option value="unchanged">
+                                            Leave unchanged
+                                        </option>
+                                        <option value="enable">Enable</option>
+                                        <option value="disable">Disable</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            {bulkDiscordMode === "replace" && (
+                                <div className="space-y-2">
+                                    <Label
+                                        htmlFor="bulk-webhook-url"
+                                        className="text-xs"
+                                    >
+                                        Discord webhook for all selected
+                                        monitors
+                                    </Label>
+                                    <Input
+                                        id="bulk-webhook-url"
+                                        type="url"
+                                        value={bulkWebhookUrl}
+                                        onChange={(event) =>
+                                            setBulkWebhookUrl(
+                                                event.target.value,
+                                            )
+                                        }
+                                        placeholder="https://discord.com/api/webhooks/..."
+                                    />
+                                </div>
+                            )}
+
+                            {bulkTelegramMode === "enable" &&
+                                telegramConnection &&
+                                !telegramConnection.connected && (
+                                    <p className="text-destructive text-xs">
+                                        Connect Telegram in Dashboard settings
+                                        before enabling it.
+                                    </p>
+                                )}
+                        </div>
+
+                        <div className="border-border/80 rounded-lg border p-4">
+                            <div className="flex items-start justify-between gap-4">
+                                <div>
+                                    <Label
+                                        htmlFor="bulk-apply-query-delay"
+                                        className="text-sm font-semibold"
+                                    >
+                                        Query delay
+                                    </Label>
+                                    <p className="text-muted-foreground mt-1 text-xs">
+                                        Apply one polling delay to all selected
+                                        monitors.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="bulk-apply-query-delay"
+                                    checked={bulkApplyQueryDelay}
+                                    onCheckedChange={setBulkApplyQueryDelay}
+                                    aria-label="Apply query delay"
+                                />
+                            </div>
+
+                            {bulkApplyQueryDelay && (
+                                <div className="mt-4 space-y-2">
+                                    <Label
+                                        htmlFor="bulk-query-delay"
+                                        className="text-xs"
+                                    >
+                                        Delay in milliseconds
+                                    </Label>
+                                    <Input
+                                        id="bulk-query-delay"
+                                        type="number"
+                                        min={MIN_QUERY_DELAY_MS}
+                                        max={MAX_QUERY_DELAY_MS}
+                                        step={100}
+                                        value={bulkQueryDelayMs}
+                                        onChange={(event) =>
+                                            setBulkQueryDelayMs(
+                                                event.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="border-border/80 rounded-lg border p-4">
+                            <div className="flex items-start justify-between gap-4">
+                                <div>
+                                    <Label
+                                        htmlFor="bulk-apply-quiet-hours"
+                                        className="text-sm font-semibold"
+                                    >
+                                        Quiet hours
+                                    </Label>
+                                    <p className="text-muted-foreground mt-1 text-xs">
+                                        Apply the complete quiet-hours schedule
+                                        below.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="bulk-apply-quiet-hours"
+                                    checked={bulkApplyQuietHours}
+                                    onCheckedChange={setBulkApplyQuietHours}
+                                    aria-label="Apply quiet hours"
+                                />
+                            </div>
+
+                            {bulkApplyQuietHours && (
+                                <div className="mt-4 space-y-4">
+                                    <div className="bg-muted/30 flex items-center justify-between gap-4 rounded-md p-3">
+                                        <div>
+                                            <Label
+                                                htmlFor="bulk-quiet-enabled"
+                                                className="text-xs font-medium"
+                                            >
+                                                Enable quiet hours
+                                            </Label>
+                                            <p className="text-muted-foreground mt-1 text-xs">
+                                                Turn this off to disable the
+                                                schedule on every selection.
+                                            </p>
+                                        </div>
+                                        <Switch
+                                            id="bulk-quiet-enabled"
+                                            checked={bulkQuietHoursEnabled}
+                                            onCheckedChange={
+                                                setBulkQuietHoursEnabled
+                                            }
+                                        />
+                                    </div>
+
+                                    {bulkQuietHoursEnabled && (
+                                        <>
+                                            <div className="grid gap-4 sm:grid-cols-2">
+                                                <div className="space-y-2">
+                                                    <Label
+                                                        htmlFor="bulk-quiet-start"
+                                                        className="text-xs"
+                                                    >
+                                                        Start
+                                                    </Label>
+                                                    <Input
+                                                        id="bulk-quiet-start"
+                                                        type="time"
+                                                        value={
+                                                            bulkQuietHoursStart
+                                                        }
+                                                        onChange={(event) =>
+                                                            setBulkQuietHoursStart(
+                                                                event.target
+                                                                    .value,
+                                                            )
+                                                        }
+                                                    />
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <Label
+                                                        htmlFor="bulk-quiet-end"
+                                                        className="text-xs"
+                                                    >
+                                                        End
+                                                    </Label>
+                                                    <Input
+                                                        id="bulk-quiet-end"
+                                                        type="time"
+                                                        value={
+                                                            bulkQuietHoursEnd
+                                                        }
+                                                        onChange={(event) =>
+                                                            setBulkQuietHoursEnd(
+                                                                event.target
+                                                                    .value,
+                                                            )
+                                                        }
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <Label
+                                                    htmlFor="bulk-quiet-mode"
+                                                    className="text-xs"
+                                                >
+                                                    During quiet hours
+                                                </Label>
+                                                <select
+                                                    id="bulk-quiet-mode"
+                                                    value={bulkQuietHoursMode}
+                                                    onChange={(event) =>
+                                                        setBulkQuietHoursMode(
+                                                            event.target
+                                                                .value as
+                                                                | "pause"
+                                                                | "slow",
+                                                        )
+                                                    }
+                                                    className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+                                                >
+                                                    <option value="pause">
+                                                        Pause all checks
+                                                    </option>
+                                                    <option value="slow">
+                                                        Use a slower delay
+                                                    </option>
+                                                </select>
+                                            </div>
+
+                                            {bulkQuietHoursMode === "slow" && (
+                                                <div className="space-y-2">
+                                                    <Label
+                                                        htmlFor="bulk-quiet-delay"
+                                                        className="text-xs"
+                                                    >
+                                                        Quiet-hours delay in
+                                                        milliseconds
+                                                    </Label>
+                                                    <Input
+                                                        id="bulk-quiet-delay"
+                                                        type="number"
+                                                        min={MIN_QUERY_DELAY_MS}
+                                                        max={MAX_QUERY_DELAY_MS}
+                                                        step={100}
+                                                        value={
+                                                            bulkQuietHoursDelayMs
+                                                        }
+                                                        onChange={(event) =>
+                                                            setBulkQuietHoursDelayMs(
+                                                                event.target
+                                                                    .value,
+                                                            )
+                                                        }
+                                                    />
+                                                </div>
+                                            )}
+
+                                            <div className="space-y-2">
+                                                <Label
+                                                    htmlFor="bulk-quiet-timezone"
+                                                    className="text-xs"
+                                                >
+                                                    Timezone
+                                                </Label>
+                                                <select
+                                                    id="bulk-quiet-timezone"
+                                                    value={
+                                                        bulkQuietHoursTimezone
+                                                    }
+                                                    onChange={(event) =>
+                                                        setBulkQuietHoursTimezone(
+                                                            event.target.value,
+                                                        )
+                                                    }
+                                                    className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+                                                >
+                                                    {!REGIONS.some(
+                                                        (region) =>
+                                                            getRegionTimezone(
+                                                                region.code,
+                                                            ) ===
+                                                            bulkQuietHoursTimezone,
+                                                    ) && (
+                                                        <option
+                                                            value={
+                                                                bulkQuietHoursTimezone
+                                                            }
+                                                        >
+                                                            {
+                                                                bulkQuietHoursTimezone
+                                                            }
+                                                        </option>
+                                                    )}
+                                                    {REGIONS.map((region) => (
+                                                        <option
+                                                            key={region.code}
+                                                            value={getRegionTimezone(
+                                                                region.code,
+                                                            )}
+                                                        >
+                                                            {region.flag}{" "}
+                                                            {region.label} —{" "}
+                                                            {getRegionTimezone(
+                                                                region.code,
+                                                            )}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    <DialogFooter>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            disabled={isBulkSaving}
+                            onClick={() => setIsBulkEditOpen(false)}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            type="button"
+                            disabled={
+                                isBulkSaving ||
+                                !hasBulkChanges ||
+                                selectedMonitorIds.length === 0
+                            }
+                            onClick={handleBulkSave}
+                            className="gap-1.5"
+                        >
+                            {isBulkSaving && (
+                                <Loader2 className="size-3.5 animate-spin" />
+                            )}
+                            Apply to {selectedMonitorIds.length} monitor
+                            {selectedMonitorIds.length === 1 ? "" : "s"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
                 <DialogContent className="sm:max-w-2xl">
