@@ -381,16 +381,29 @@ model proxy_groups {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  name                  String     @db.VarChar(100)
-  proxies               String     @db.Text
-  bandwidth_rx_bytes    BigInt     @default(0)
-  bandwidth_tx_bytes    BigInt     @default(0)
-  bandwidth_limit_bytes BigInt?
-  bandwidth_reset_at    DateTime?  @db.Timestamp(6)
-  created_at            DateTime?  @default(now()) @db.Timestamp(6)
-  monitors              monitors[]
+  name                     String     @db.VarChar(100)
+  proxies                  String     @db.Text
+  bandwidth_rx_bytes       BigInt     @default(0)
+  bandwidth_tx_bytes       BigInt     @default(0)
+  bandwidth_limit_bytes    BigInt?
+  bandwidth_reset_at       DateTime?  @db.Timestamp(6)
+  proxy_check_status       String     @default("idle") @db.VarChar(20)
+  proxy_check_region       String?    @db.VarChar(10)
+  proxy_check_total        Int        @default(0)
+  proxy_check_checked      Int        @default(0)
+  proxy_check_working      Int        @default(0)
+  proxy_check_slow         Int        @default(0)
+  proxy_check_failed       Int        @default(0)
+  proxy_check_results      Json?
+  proxy_check_error        String?    @db.Text
+  proxy_check_requested_at DateTime?  @db.Timestamp(6)
+  proxy_check_started_at   DateTime?  @db.Timestamp(6)
+  proxy_check_completed_at DateTime?  @db.Timestamp(6)
+  created_at               DateTime?  @default(now()) @db.Timestamp(6)
+  monitors                 monitors[]
 
   @@index([userId])
+  @@index([proxy_check_status, proxy_check_requested_at])
 }
 
 model vinted_sessions {

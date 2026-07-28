@@ -86,6 +86,21 @@ type FreeProxyInventoryRecord struct {
 	LastChecked  *time.Time
 }
 
+type ProxyGroupCheckJob struct {
+	ID      int
+	Proxies string
+	Region  string
+	Total   int
+}
+
+type ProxyGroupCheckResult struct {
+	Index     int     `json:"index"`
+	Label     string  `json:"label"`
+	Status    string  `json:"status"`
+	LatencyMS *int    `json:"latencyMs"`
+	ErrorCode *string `json:"errorCode"`
+}
+
 type PreindexProbe struct {
 	Region      string
 	ItemID      int64
@@ -93,6 +108,145 @@ type PreindexProbe struct {
 	DurationMS  int
 	Outcome     string
 	ProxySource string
+}
+
+func (s *Store) ClaimProxyGroupCheckJobContext(ctx context.Context, maximumSize int) (*ProxyGroupCheckJob, error) {
+	if maximumSize < 1 {
+		maximumSize = 100
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var job ProxyGroupCheckJob
+	err = tx.QueryRowContext(ctx, `
+		WITH candidate AS (
+			SELECT id
+			FROM proxy_groups
+			WHERE proxy_check_status = 'pending'
+			   OR (
+				proxy_check_status = 'running'
+				AND proxy_check_started_at < NOW() - INTERVAL '3 minutes'
+			   )
+			ORDER BY
+				CASE WHEN proxy_check_status = 'pending' THEN 0 ELSE 1 END,
+				proxy_check_requested_at ASC NULLS FIRST
+			LIMIT 1
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE proxy_groups pg
+		SET proxy_check_status = 'running',
+			proxy_check_total = LEAST(pg.proxy_check_total, $1),
+			proxy_check_checked = 0,
+			proxy_check_working = 0,
+			proxy_check_slow = 0,
+			proxy_check_failed = 0,
+			proxy_check_results = NULL,
+			proxy_check_error = NULL,
+			proxy_check_started_at = NOW(),
+			proxy_check_completed_at = NULL
+		FROM candidate
+		WHERE pg.id = candidate.id
+		RETURNING
+			pg.id,
+			pg.proxies,
+			COALESCE(pg.proxy_check_region, 'de'),
+			pg.proxy_check_total`,
+		maximumSize,
+	).Scan(&job.ID, &job.Proxies, &job.Region, &job.Total)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+func (s *Store) UpdateProxyGroupCheckProgressContext(
+	ctx context.Context,
+	id int,
+	total int,
+	checked int,
+	working int,
+	slow int,
+	failed int,
+) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE proxy_groups
+		SET proxy_check_total = $2,
+			proxy_check_checked = $3,
+			proxy_check_working = $4,
+			proxy_check_slow = $5,
+			proxy_check_failed = $6
+		WHERE id = $1
+		  AND proxy_check_status = 'running'`,
+		id,
+		total,
+		checked,
+		working,
+		slow,
+		failed,
+	)
+	return err
+}
+
+func (s *Store) CompleteProxyGroupCheckJobContext(
+	ctx context.Context,
+	id int,
+	total int,
+	working int,
+	slow int,
+	failed int,
+	results []ProxyGroupCheckResult,
+) error {
+	encodedResults, err := json.Marshal(results)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE proxy_groups
+		SET proxy_check_status = 'completed',
+			proxy_check_total = $2,
+			proxy_check_checked = $2,
+			proxy_check_working = $3,
+			proxy_check_slow = $4,
+			proxy_check_failed = $5,
+			proxy_check_results = $6::jsonb,
+			proxy_check_error = NULL,
+			proxy_check_completed_at = NOW()
+		WHERE id = $1
+		  AND proxy_check_status = 'running'`,
+		id,
+		total,
+		working,
+		slow,
+		failed,
+		string(encodedResults),
+	)
+	return err
+}
+
+func (s *Store) FailProxyGroupCheckJobContext(ctx context.Context, id int, message string) error {
+	if len(message) > 1000 {
+		message = message[:1000]
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE proxy_groups
+		SET proxy_check_status = 'failed',
+			proxy_check_error = $2,
+			proxy_check_completed_at = NOW()
+		WHERE id = $1
+		  AND proxy_check_status = 'running'`,
+		id,
+		message,
+	)
+	return err
 }
 
 func NewStore(connStr string, redisCache *cache.RedisCache) (*Store, error) {

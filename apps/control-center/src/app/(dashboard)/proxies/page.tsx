@@ -1,4 +1,5 @@
 import { auth } from "@/auth";
+import type { ProxyCheckResult } from "@/actions/proxy-groups";
 import { db } from "@/lib/db";
 import { getFreeProxyPoolHealth } from "@/lib/free-proxy-health";
 import { REGIONS } from "@/lib/regions";
@@ -52,6 +53,25 @@ export default async function ProxiesPage() {
                 bandwidthLimitBytes:
                     g.bandwidth_limit_bytes?.toString() ?? null,
                 bandwidthResetAt: g.bandwidth_reset_at?.toISOString() ?? null,
+                proxyCheck: {
+                    status: g.proxy_check_status,
+                    region: g.proxy_check_region,
+                    total: g.proxy_check_total,
+                    checked: g.proxy_check_checked,
+                    working: g.proxy_check_working,
+                    slow: g.proxy_check_slow,
+                    failed: g.proxy_check_failed,
+                    results: (Array.isArray(g.proxy_check_results)
+                        ? g.proxy_check_results
+                        : []) as ProxyCheckResult[],
+                    error: g.proxy_check_error,
+                    requestedAt:
+                        g.proxy_check_requested_at?.toISOString() ?? null,
+                    startedAt:
+                        g.proxy_check_started_at?.toISOString() ?? null,
+                    completedAt:
+                        g.proxy_check_completed_at?.toISOString() ?? null,
+                },
                 created_at: g.created_at?.toISOString() ?? "",
             }))}
             userRole={user?.role ?? "free"}

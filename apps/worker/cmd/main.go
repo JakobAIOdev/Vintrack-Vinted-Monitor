@@ -173,10 +173,13 @@ func runProxyMaintainer(ctx context.Context, cancel context.CancelFunc, sigChan 
 		pruneTelemetry()
 		importFreeProxies(ctx, store)
 		checkFreeProxies(ctx, store)
+		processProxyGroupCheckJob(ctx, store)
 	}()
 
 	healthTicker := time.NewTicker(15 * time.Second)
 	defer healthTicker.Stop()
+	proxyGroupCheckTicker := time.NewTicker(2 * time.Second)
+	defer proxyGroupCheckTicker.Stop()
 	importTicker := time.NewTicker(5 * time.Minute)
 	defer importTicker.Stop()
 	cleanupTicker := time.NewTicker(time.Hour)
@@ -190,6 +193,8 @@ func runProxyMaintainer(ctx context.Context, cancel context.CancelFunc, sigChan 
 			return
 		case <-healthTicker.C:
 			go checkFreeProxies(ctx, store)
+		case <-proxyGroupCheckTicker.C:
+			go processProxyGroupCheckJob(ctx, store)
 		case <-importTicker.C:
 			go importFreeProxies(ctx, store)
 		case <-cleanupTicker.C:
