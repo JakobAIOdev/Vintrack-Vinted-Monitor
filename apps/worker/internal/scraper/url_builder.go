@@ -8,6 +8,8 @@ import (
 	"vintrack-worker/internal/model"
 )
 
+const videoGamePlatformCatalogID = "3002"
+
 func BuildVintedURL(m model.Monitor) string {
 	_, query := monitorQueryForCheck(parseMonitorQueries(m.Query), 1)
 	return BuildVintedURLForQuery(m, query)
@@ -64,7 +66,18 @@ func buildVintedURL(m model.Monitor, perPage string, includeQuery bool, page int
 		}
 	}
 
-	if m.CatalogIDs != nil && *m.CatalogIDs != "" {
+	var videoGamePlatformIDs []string
+	if m.VideoGamePlatformIDs != nil {
+		for _, platform := range strings.Split(*m.VideoGamePlatformIDs, ",") {
+			if platform = strings.TrimSpace(platform); platform != "" {
+				videoGamePlatformIDs = append(videoGamePlatformIDs, platform)
+			}
+		}
+	}
+
+	if len(videoGamePlatformIDs) > 0 {
+		params.Add("catalog_ids[]", videoGamePlatformCatalogID)
+	} else if m.CatalogIDs != nil && *m.CatalogIDs != "" {
 		cats := strings.Split(*m.CatalogIDs, ",")
 		for _, c := range cats {
 			c = strings.TrimSpace(c)
@@ -102,6 +115,10 @@ func buildVintedURL(m model.Monitor, perPage string, includeQuery bool, page int
 				params.Add("status_ids[]", s)
 			}
 		}
+	}
+
+	for _, platform := range videoGamePlatformIDs {
+		params.Add("video_game_platform_ids[]", platform)
 	}
 
 	return fmt.Sprintf("%s?%s", baseURL, params.Encode())

@@ -7,6 +7,7 @@ import { Check, Loader2, Search, X } from "lucide-react";
 interface BrandPickerProps {
     selected: string[];
     onChange: (ids: string[]) => void;
+    region: string;
     catalogIds?: string[];
 }
 
@@ -29,6 +30,7 @@ function mergeBrands(...brandGroups: Brand[][]) {
 export function BrandPicker({
     selected,
     onChange,
+    region,
     catalogIds = [],
 }: BrandPickerProps) {
     const [query, setQuery] = useState("");
@@ -82,7 +84,10 @@ export function BrandPicker({
             setLoadingRemote(true);
             setRemoteError(false);
 
-            const params = new URLSearchParams({ query: normalizedQuery });
+            const params = new URLSearchParams({
+                query: normalizedQuery,
+                region,
+            });
             if (catalogIds.length > 0) {
                 params.set("catalog_ids", catalogIds.join(","));
             }
@@ -128,7 +133,7 @@ export function BrandPicker({
             controller.abort();
             window.clearTimeout(timeout);
         };
-    }, [catalogIds, query]);
+    }, [catalogIds, query, region]);
 
     const allBrands = useMemo(
         () => mergeBrands(BRANDS, cachedBrands, remoteBrands),

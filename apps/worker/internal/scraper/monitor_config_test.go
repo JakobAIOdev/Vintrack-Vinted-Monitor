@@ -15,27 +15,29 @@ func TestMonitorConfigFingerprintIncludesRuntimeFilters(t *testing.T) {
 	brandIDs := "30,40"
 	colorIDs := "50,60"
 	statusIDs := "1,4"
+	platformIDs := "1277,1278"
 	allowedCountries := "de,fr"
 	antiKeywords := "fake,replica"
 
 	base := model.Monitor{
-		ID:               7,
-		Query:            "nike",
-		AntiKeywords:     &antiKeywords,
-		QueryDelayMs:     1500,
-		PriceMin:         &min,
-		PriceMax:         &max,
-		SizeID:           &sizeID,
-		CatalogIDs:       &catalogIDs,
-		BrandIDs:         &brandIDs,
-		ColorIDs:         &colorIDs,
-		StatusIDs:        &statusIDs,
-		Region:           "de",
-		AllowedCountries: &allowedCountries,
-		Proxies:          sql.NullString{Valid: true, String: "http://proxy-a:8080"},
-		DiscordWebhook:   sql.NullString{Valid: true, String: "https://discord.test/webhook"},
-		WebhookActive:    true,
-		Status:           "active",
+		ID:                   7,
+		Query:                "nike",
+		AntiKeywords:         &antiKeywords,
+		QueryDelayMs:         1500,
+		PriceMin:             &min,
+		PriceMax:             &max,
+		SizeID:               &sizeID,
+		CatalogIDs:           &catalogIDs,
+		BrandIDs:             &brandIDs,
+		ColorIDs:             &colorIDs,
+		StatusIDs:            &statusIDs,
+		VideoGamePlatformIDs: &platformIDs,
+		Region:               "de",
+		AllowedCountries:     &allowedCountries,
+		Proxies:              sql.NullString{Valid: true, String: "http://proxy-a:8080"},
+		DiscordWebhook:       sql.NullString{Valid: true, String: "https://discord.test/webhook"},
+		WebhookActive:        true,
+		Status:               "active",
 	}
 
 	cases := []struct {
@@ -59,6 +61,7 @@ func TestMonitorConfigFingerprintIncludesRuntimeFilters(t *testing.T) {
 		{name: "brand", mutate: func(m *model.Monitor) { v := "31,41"; m.BrandIDs = &v }},
 		{name: "color", mutate: func(m *model.Monitor) { v := "51,61"; m.ColorIDs = &v }},
 		{name: "status", mutate: func(m *model.Monitor) { v := "2,5"; m.StatusIDs = &v }},
+		{name: "platform", mutate: func(m *model.Monitor) { v := "1280,1281"; m.VideoGamePlatformIDs = &v }},
 		{name: "region", mutate: func(m *model.Monitor) { m.Region = "fr" }},
 		{name: "allowed countries", mutate: func(m *model.Monitor) { v := "it"; m.AllowedCountries = &v }},
 		{name: "proxies", mutate: func(m *model.Monitor) { m.Proxies = sql.NullString{Valid: true, String: "http://proxy-b:8080"} }},
@@ -93,5 +96,20 @@ func TestMonitorConfigFingerprintIgnoresWebhookState(t *testing.T) {
 
 	if got := monitorConfigFingerprint(updated); got != monitorConfigFingerprint(base) {
 		t.Fatalf("fingerprint changed for non-runtime fields: %q vs %q", got, monitorConfigFingerprint(base))
+	}
+}
+
+func TestDiscoveryStructuralKeyIncludesVideoGamePlatforms(t *testing.T) {
+	firstPlatforms := "1277"
+	secondPlatforms := "1278"
+	base := model.Monitor{
+		Region:               "de",
+		VideoGamePlatformIDs: &firstPlatforms,
+	}
+	updated := base
+	updated.VideoGamePlatformIDs = &secondPlatforms
+
+	if discoveryStructuralKey(base) == discoveryStructuralKey(updated) {
+		t.Fatal("discovery key did not change for video game platforms")
 	}
 }

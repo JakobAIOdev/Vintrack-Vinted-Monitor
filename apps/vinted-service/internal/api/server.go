@@ -55,6 +55,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/items/favorites", s.handleFavorites)
 	mux.HandleFunc("GET /api/items/wardrobe", s.handleWardrobe)
 	mux.HandleFunc("GET /api/catalog/brands", s.handleBrandSearch)
+	mux.HandleFunc("GET /api/catalog/platforms", s.handlePlatformSearch)
 
 	mux.HandleFunc("GET /api/messages/inbox", s.handleInbox)
 	mux.HandleFunc("GET /api/notifications", s.handleNotifications)
@@ -1463,6 +1464,54 @@ func (s *Server) handleWardrobe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBrandSearch(w http.ResponseWriter, r *http.Request) {
+	s.handleCatalogFilterSearch(w, r, "brands")
+}
+
+func (s *Server) handlePlatformSearch(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.Header.Get("X-User-ID")) == "" {
+		writeError(w, "unauthorized", 401)
+		return
+	}
+
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	if query == "" {
+		query = strings.TrimSpace(r.URL.Query().Get("q"))
+	}
+	if query == "" {
+		writeError(w, "query is required", 400)
+		return
+	}
+
+	catalogIDs := queryStringList(r.URL.Query(), "catalog_ids", "catalog_ids[]", "catalog[]")
+	if len(catalogIDs) == 0 {
+		catalogIDs = []string{"3002"}
+	}
+
+	region := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("region")))
+	if region == "" {
+		region = "de"
+	}
+	domain, known := vinted.DomainForRegion(region)
+	if !known {
+		writeError(w, "unsupported Vinted region", 400)
+		return
+	}
+
+	client, err := vinted.NewClient(&session.VintedSession{Domain: domain})
+	if err != nil {
+		writeError(w, "failed to create regional Vinted client", 500)
+		return
+	}
+
+	platforms, err := client.SearchPlatforms(catalogIDs, query)
+	if err != nil {
+		writeError(w, "failed to search platforms: "+err.Error(), 502)
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"platforms": platforms})
+}
+
+func (s *Server) handleCatalogFilterSearch(w http.ResponseWriter, r *http.Request, filter string) {
 	sess, client, ok := s.getSessionAndClient(r, w)
 	if !ok {
 		return
@@ -1482,14 +1531,44 @@ func (s *Server) handleBrandSearch(w http.ResponseWriter, r *http.Request) {
 		catalogIDs = vinted.DefaultBrandCatalogIDs()
 	}
 
-	brands, err := client.SearchBrands(catalogIDs, query)
+	region := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("region")))
+	regionalSearch := false
+	if region != "" {
+		domain, known := vinted.DomainForRegion(region)
+		if !known {
+			writeError(w, "unsupported Vinted region", 400)
+			return
+		}
+
+		if domain != client.GetDomain() {
+			regionalSession := *sess
+			regionalSession.Domain = domain
+			regionalSession.RefreshToken = ""
+			regionalSession.CookieHeader = ""
+			regionalSession.CsrfToken = ""
+			regionalSession.AnonID = ""
+			regionalSession.WarmedAt = ""
+
+			regionalClient, err := vinted.NewClient(&regionalSession)
+			if err != nil {
+				writeError(w, "failed to create regional Vinted client", 500)
+				return
+			}
+			client = regionalClient
+			regionalSearch = true
+		}
+	}
+
+	options, err := client.SearchBrands(catalogIDs, query)
 	if err != nil {
-		writeError(w, "failed to search brands: "+err.Error(), 502)
+		writeError(w, "failed to search "+filter+": "+err.Error(), 502)
 		return
 	}
 
-	s.persistIfRefreshed(sess, client)
-	writeJSON(w, 200, map[string]interface{}{"brands": brands})
+	if !regionalSearch {
+		s.persistIfRefreshed(sess, client)
+	}
+	writeJSON(w, 200, map[string]interface{}{filter: options})
 }
 
 func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {

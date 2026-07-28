@@ -74,4 +74,43 @@ test.describe("dashboard overview", () => {
             image_url: "/mock-images/vinted-1.svg",
         });
     });
+
+    test("bulk edits query delay and quiet hours", async ({ page }) => {
+        await page.goto("/dashboard");
+
+        const monitorCard = page
+            .getByTestId("monitor-card")
+            .filter({ hasText: "E2E Mock Feed" })
+            .first();
+        await monitorCard
+            .getByRole("checkbox", { name: "Select E2E Mock Feed" })
+            .check();
+        await page.getByRole("button", { name: "Bulk edit" }).click();
+
+        const dialog = page.getByRole("dialog", {
+            name: "Bulk edit 1 monitor",
+        });
+        await expect(dialog).toBeVisible();
+
+        await dialog.getByLabel("Apply query delay").click();
+        await dialog.getByLabel("Delay in milliseconds").fill("2500");
+
+        await dialog.getByLabel("Apply quiet hours").click();
+        await dialog.getByLabel("Enable quiet hours").click();
+        await dialog.getByLabel("Start").fill("01:00");
+        await dialog.getByLabel("End").fill("05:00");
+
+        await dialog
+            .getByRole("button", { name: "Apply to 1 monitor" })
+            .click();
+        await expect(dialog).toBeHidden();
+        await expect(
+            monitorCard.getByText("2.5s", { exact: true }),
+        ).toBeVisible();
+
+        await monitorCard.getByRole("link", { name: /View monitor/i }).click();
+        await expect(
+            page.getByText("Paused 01:00–05:00", { exact: true }),
+        ).toBeVisible();
+    });
 });

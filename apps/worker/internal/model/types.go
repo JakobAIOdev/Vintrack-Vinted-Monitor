@@ -26,6 +26,7 @@ type Monitor struct {
 	BrandIDs              *string
 	ColorIDs              *string
 	StatusIDs             *string
+	VideoGamePlatformIDs  *string
 	Region                string
 	AllowedCountries      *string
 	Status                string

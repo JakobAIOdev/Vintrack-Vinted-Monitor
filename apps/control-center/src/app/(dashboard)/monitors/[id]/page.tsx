@@ -28,6 +28,7 @@ import {
     getStatusLocaleForRegionCodes,
 } from "@/lib/regions";
 import { getStatusLabels } from "@/lib/statuses";
+import { getVideoGamePlatformLabels } from "@/lib/video-game-platforms";
 import { formatQueryDelay } from "@/lib/monitor-delay";
 import { formatQuietHours } from "@/lib/monitor-schedule";
 import { getMonitorActivationState } from "@/lib/monitor-limits";
@@ -275,6 +276,7 @@ export default async function MonitorPage({
                                 monitor.brand_ids ||
                                 monitor.color_ids ||
                                 monitor.status_ids ||
+                                monitor.video_game_platform_ids ||
                                 monitor.size_id ||
                                 monitor.allowed_countries) && (
                                 <div className="mt-2 flex flex-wrap gap-1">
@@ -330,6 +332,17 @@ export default async function MonitorPage({
                                                 key={`status-${label}`}
                                                 className="inline-flex items-center rounded-md border border-cyan-200 bg-cyan-50 px-1.5 py-0.5 text-[10px] font-medium text-cyan-700 dark:border-cyan-500/20 dark:bg-cyan-500/10 dark:text-cyan-400"
                                                 title={label}
+                                            >
+                                                {label}
+                                            </span>
+                                        ))}
+                                    {monitor.video_game_platform_ids &&
+                                        getVideoGamePlatformLabels(
+                                            monitor.video_game_platform_ids,
+                                        ).map((label) => (
+                                            <span
+                                                key={`platform-${label}`}
+                                                className="inline-flex items-center rounded-md border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 dark:border-indigo-500/20 dark:bg-indigo-500/10 dark:text-indigo-400"
                                             >
                                                 {label}
                                             </span>

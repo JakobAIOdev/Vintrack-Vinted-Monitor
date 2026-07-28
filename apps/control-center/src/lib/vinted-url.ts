@@ -1,5 +1,6 @@
 import { getRegionDomain } from "@/lib/regions";
 import { parseMonitorQueries } from "@/lib/monitor-query";
+import { VIDEO_GAME_PLATFORM_CATALOG_ID } from "@/lib/video-game-platforms";
 
 type BuildVintedMonitorUrlInput = {
     region: string;
@@ -11,6 +12,7 @@ type BuildVintedMonitorUrlInput = {
     brandIds?: string[] | null;
     colorIds?: string[] | null;
     statusIds?: string[] | null;
+    videoGamePlatformIds?: string[] | null;
     perPage?: string | number | null;
 };
 
@@ -39,6 +41,7 @@ export function buildVintedMonitorUrl({
     brandIds,
     colorIds,
     statusIds,
+    videoGamePlatformIds,
     perPage = 20,
 }: BuildVintedMonitorUrlInput) {
     const domain = getRegionDomain(region);
@@ -68,11 +71,20 @@ export function buildVintedMonitorUrl({
         params.set("price_to", normalizedPriceMax);
     }
 
+    const effectiveCatalogIds = videoGamePlatformIds?.length
+        ? [VIDEO_GAME_PLATFORM_CATALOG_ID]
+        : catalogIds;
+
     appendList(params, "size_ids[]", sizeIds);
-    appendList(params, "catalog[]", catalogIds);
+    appendList(params, "catalog[]", effectiveCatalogIds);
     appendList(params, "brand_ids[]", brandIds);
     appendList(params, "color_ids[]", colorIds);
     appendList(params, "status_ids[]", statusIds);
+    appendList(
+        params,
+        "video_game_platform_ids[]",
+        videoGamePlatformIds,
+    );
 
     const queryString = params.toString();
     const basePath = `https://${domain}/catalog`;

@@ -1,6 +1,9 @@
 package api
 
-import "testing"
+import (
+	"net/http/httptest"
+	"testing"
+)
 
 func TestNormalizeVintedDomain(t *testing.T) {
 	tests := []struct {
@@ -19,6 +22,31 @@ func TestNormalizeVintedDomain(t *testing.T) {
 		if got := normalizeVintedDomain(tt.input); got != tt.want {
 			t.Fatalf("normalizeVintedDomain(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestPlatformSearchRequiresVintrackUser(t *testing.T) {
+	server := NewServer(nil, "")
+	request := httptest.NewRequest("GET", "/api/catalog/platforms?query=ps5&catalog_ids=3002&region=de", nil)
+	response := httptest.NewRecorder()
+
+	server.handlePlatformSearch(response, request)
+
+	if response.Code != 401 {
+		t.Fatalf("status = %d, want 401", response.Code)
+	}
+}
+
+func TestPlatformSearchRejectsUnknownRegionBeforeUpstreamRequest(t *testing.T) {
+	server := NewServer(nil, "")
+	request := httptest.NewRequest("GET", "/api/catalog/platforms?query=ps5&catalog_ids=3002&region=unknown", nil)
+	request.Header.Set("X-User-ID", "test-user")
+	response := httptest.NewRecorder()
+
+	server.handlePlatformSearch(response, request)
+
+	if response.Code != 400 {
+		t.Fatalf("status = %d, want 400", response.Code)
 	}
 }
 
