@@ -174,6 +174,10 @@ func (m *Manager) Count() int {
 }
 
 func (m *Manager) Next() string {
+	return m.NextExcluding(nil)
+}
+
+func (m *Manager) NextExcluding(excluded map[string]bool) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -181,7 +185,26 @@ func (m *Manager) Next() string {
 		return ""
 	}
 
-	proxy := m.proxies[m.index]
-	m.index = (m.index + 1) % len(m.proxies)
-	return proxy
+	for range m.proxies {
+		proxy := m.proxies[m.index]
+		m.index = (m.index + 1) % len(m.proxies)
+		if !excluded[proxy] {
+			return proxy
+		}
+	}
+
+	return ""
+}
+
+func (m *Manager) CountAvailable(excluded map[string]bool) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	count := 0
+	for _, candidate := range m.proxies {
+		if !excluded[candidate] {
+			count++
+		}
+	}
+	return count
 }

@@ -73,6 +73,7 @@ import {
     stopUserActiveMonitors,
 } from "@/actions/admin";
 import { getRegionLabel, REGIONS } from "@/lib/regions";
+import { getProxyErrorDetails } from "@/lib/proxy-errors";
 
 type UserMonitor = {
     id: number;
@@ -244,6 +245,25 @@ type FreeProxyState = {
     }[];
     recent: FreeProxyRow[];
 };
+
+function AdminMonitorError({ message }: { message: string }) {
+    const issue = getProxyErrorDetails(null, message);
+    return (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
+            <p className="font-semibold">{issue.title}</p>
+            <p className="mt-0.5">{issue.description}</p>
+            {issue.action ? (
+                <p className="mt-1 font-medium">{issue.action}</p>
+            ) : null}
+            <details className="mt-2 text-[11px]">
+                <summary className="cursor-pointer font-medium">
+                    Technical details
+                </summary>
+                <p className="mt-1 break-words font-mono">{message}</p>
+            </details>
+        </div>
+    );
+}
 
 const ROLES = [
     {
@@ -4711,9 +4731,11 @@ export function AdminClient({
                                     </Badge>
                                 </div>
                                 {selected.metrics.latestError24h ? (
-                                    <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
-                                        {selected.metrics.latestError24h}
-                                    </p>
+                                    <AdminMonitorError
+                                        message={
+                                            selected.metrics.latestError24h
+                                        }
+                                    />
                                 ) : null}
                             </div>
 

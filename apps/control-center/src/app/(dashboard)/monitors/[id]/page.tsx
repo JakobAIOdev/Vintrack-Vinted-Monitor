@@ -37,9 +37,11 @@ import { MonitorItemCount } from "@/components/monitors/monitor-item-count";
 import { MonitorMetricsDialog } from "@/components/monitors/monitor-metrics-dialog";
 import { getBannedSellerIds, visibleSellerWhere } from "@/lib/seller-bans";
 import { DemoMonitorLease } from "@/components/monitors/demo-monitor-lease";
+import { inferProxyErrorCode } from "@/lib/proxy-errors";
 
 type MonitorRunRow = {
     status: string;
+    status_code: number | null;
     duration_ms: number | null;
     item_count: number;
     error_message: string | null;
@@ -94,7 +96,7 @@ export default async function MonitorPage({
         monitor.region,
     );
     const recentRuns = await db.$queryRaw<MonitorRunRow[]>`
-        SELECT status, duration_ms, item_count, error_message, checked_at
+        SELECT status, status_code, duration_ms, item_count, error_message, checked_at
         FROM monitor_runs
         WHERE monitor_id = ${monitor.id}
           AND fetch_source = 'canonical'
@@ -130,8 +132,12 @@ export default async function MonitorPage({
               },
           })
         : 0;
-    const lastError =
-        recentRuns.find((run) => run.error_message)?.error_message ?? null;
+    const lastErrorRun =
+        recentRuns.find((run) => run.error_message) ?? null;
+    const lastError = lastErrorRun?.error_message ?? null;
+    const lastErrorCode = lastError
+        ? inferProxyErrorCode(lastError, lastErrorRun?.status_code)
+        : null;
 
     return (
         <MonitorLiveProvider initialItemCount={visibleItemCount}>
@@ -424,6 +430,7 @@ export default async function MonitorPage({
                                 newItems: savedItemsInWindow,
                                 failedChecks: failedCount,
                                 lastError,
+                                lastErrorCode,
                             }}
                         />
                     </div>

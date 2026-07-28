@@ -11,6 +11,10 @@ export type MonitorHealth = {
     total_errors: number;
     consecutive_errors: number;
     last_error?: string;
+    last_error_code?: string;
+    proxy_state?: string;
+    retry_at?: string;
+    proxy_label?: string;
     updated_at: string;
 };
 
