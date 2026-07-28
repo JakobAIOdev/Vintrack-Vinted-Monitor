@@ -106,6 +106,7 @@ model monitors {
   brand_ids                String?   @db.VarChar(500)
   color_ids                String?   @db.VarChar(500)
   status_ids               String?   @db.VarChar(500)
+  video_game_platform_ids  String?   @db.VarChar(500)
   region                   String    @default("de") @db.VarChar(10)
   allowed_countries        String?   @db.VarChar(500)
   status                   String?   @default("active") @db.VarChar(50)

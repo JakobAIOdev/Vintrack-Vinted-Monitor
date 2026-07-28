@@ -135,6 +135,52 @@ func TestPortal(t *testing.T) {
 	}
 }
 
+func TestNormalizeFilterOptionsPayload(t *testing.T) {
+	payload := filterOptionsPayload{
+		Options: []filterOptionEntry{
+			{ID: float64(10), Title: "PlayStation 5"},
+			{Value: "20", Label: "PlayStation 2"},
+			{ID: float64(10), Name: "Duplicate"},
+			{ID: float64(30)},
+		},
+	}
+
+	options := normalizeFilterOptionsPayload(payload)
+	if len(options) != 2 {
+		t.Fatalf("got %d options, want 2: %#v", len(options), options)
+	}
+	if options[0].ID != "10" || options[0].Label != "PlayStation 5" {
+		t.Errorf("first option = %#v", options[0])
+	}
+	if options[1].ID != "20" || options[1].Label != "PlayStation 2" {
+		t.Errorf("second option = %#v", options[1])
+	}
+}
+
+func TestPlatformOptionMatches(t *testing.T) {
+	tests := []struct {
+		label string
+		query string
+		want  bool
+	}{
+		{label: "PlayStation 2", query: "PS2", want: true},
+		{label: "PlayStation 5 Pro", query: "ps5", want: true},
+		{label: "Nintendo 64", query: "N64", want: true},
+		{label: "Nintendo Entertainment System", query: "NES", want: true},
+		{label: "Nintendo Game Boy Advance", query: "GBA", want: true},
+		{label: "Xbox Series S & X", query: "series", want: true},
+		{label: "Steam Deck", query: "switch", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.label+"/"+tt.query, func(t *testing.T) {
+			if got := platformOptionMatches(tt.label, tt.query); got != tt.want {
+				t.Errorf("platformOptionMatches(%q, %q) = %v, want %v", tt.label, tt.query, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDomainForPortal(t *testing.T) {
 	if got := domainForPortal("ie"); got != "www.vinted.ie" {
 		t.Errorf("domainForPortal(\"ie\") = %q, want %q", got, "www.vinted.ie")

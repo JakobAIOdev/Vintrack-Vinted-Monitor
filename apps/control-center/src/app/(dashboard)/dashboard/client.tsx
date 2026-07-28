@@ -76,6 +76,7 @@ import {
     REGIONS,
 } from "@/lib/regions";
 import { getStatusLabels } from "@/lib/statuses";
+import { getVideoGamePlatformLabels } from "@/lib/video-game-platforms";
 import {
     formatQueryDelay,
     MAX_QUERY_DELAY_MS,
@@ -125,6 +126,7 @@ export type Monitor = {
     brand_ids: string | null;
     color_ids: string | null;
     status_ids: string | null;
+    video_game_platform_ids: string | null;
     size_id: string | null;
     region: string;
     allowed_countries: string | null;
@@ -217,6 +219,11 @@ function getMonitorFilterLabels(monitor: Monitor): string[] {
     }
     if (monitor.color_ids) {
         labels.push(...getColorLabels(monitor.color_ids));
+    }
+    if (monitor.video_game_platform_ids) {
+        labels.push(
+            ...getVideoGamePlatformLabels(monitor.video_game_platform_ids),
+        );
     }
     if (monitor.allowed_countries) {
         labels.push(
@@ -1269,6 +1276,17 @@ export function DashboardClient({
                                                     key={`status-${label}`}
                                                     className="border-border/60 bg-muted/50 text-muted-foreground inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium"
                                                     title={label}
+                                                >
+                                                    {label}
+                                                </span>
+                                            ))}
+                                        {m.video_game_platform_ids &&
+                                            getVideoGamePlatformLabels(
+                                                m.video_game_platform_ids,
+                                            ).map((label) => (
+                                                <span
+                                                    key={`platform-${label}`}
+                                                    className="border-border/60 bg-muted/50 text-muted-foreground inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium"
                                                 >
                                                     {label}
                                                 </span>

@@ -10,7 +10,7 @@ import (
 
 func monitorConfigFingerprint(mon model.Monitor) string {
 	return fmt.Sprintf(
-		"query=%s|anti=%s|queryDelayMs=%d|quiet=%v:%d:%d:%s:%d:%s|priceMin=%s|priceMax=%s|size=%s|catalog=%s|brand=%s|color=%s|status=%s|region=%s|allowed=%s|bannedSellers=%s|proxySource=%s|proxies=%s",
+		"query=%s|anti=%s|queryDelayMs=%d|quiet=%v:%d:%d:%s:%d:%s|priceMin=%s|priceMax=%s|size=%s|catalog=%s|brand=%s|color=%s|status=%s|platform=%s|region=%s|allowed=%s|bannedSellers=%s|proxySource=%s|proxies=%s",
 		mon.Query,
 		nullableString(mon.AntiKeywords),
 		mon.QueryDelayMs,
@@ -27,6 +27,7 @@ func monitorConfigFingerprint(mon model.Monitor) string {
 		nullableString(mon.BrandIDs),
 		nullableString(mon.ColorIDs),
 		nullableString(mon.StatusIDs),
+		nullableString(mon.VideoGamePlatformIDs),
 		mon.Region,
 		nullableString(mon.AllowedCountries),
 		int64ListFingerprint(mon.BannedSellerIDs),

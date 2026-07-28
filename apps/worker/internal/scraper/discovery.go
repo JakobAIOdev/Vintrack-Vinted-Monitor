@@ -70,7 +70,7 @@ func discoveryAllowsProxySource(proxySource string, mode string) bool {
 
 func discoveryStructuralKey(m model.Monitor) string {
 	return fmt.Sprintf(
-		"region=%s|price=%s:%s|size=%s|catalog=%s|brand=%s|color=%s|status=%s|proxy=%s:%s",
+		"region=%s|price=%s:%s|size=%s|catalog=%s|brand=%s|color=%s|status=%s|platform=%s|proxy=%s:%s",
 		m.Region,
 		nullableInt(m.PriceMin),
 		nullableInt(m.PriceMax),
@@ -79,6 +79,7 @@ func discoveryStructuralKey(m model.Monitor) string {
 		nullableString(m.BrandIDs),
 		nullableString(m.ColorIDs),
 		nullableString(m.StatusIDs),
+		nullableString(m.VideoGamePlatformIDs),
 		m.ProxySource,
 		discoveryProxyFingerprint(m),
 	)

@@ -159,6 +159,33 @@ func TestBuildVintedURL_WithStatusIDs(t *testing.T) {
 	}
 }
 
+func TestBuildVintedURL_WithVideoGamePlatformIDs(t *testing.T) {
+	platformIDs := "1277, 1278"
+	conflictingCatalogIDs := "100, 200"
+	m := model.Monitor{
+		Query:                "playstation",
+		Region:               "de",
+		CatalogIDs:           &conflictingCatalogIDs,
+		VideoGamePlatformIDs: &platformIDs,
+	}
+
+	result := BuildVintedURL(m)
+	parsed, _ := url.Parse(result)
+
+	platforms := parsed.Query()["video_game_platform_ids[]"]
+	if len(platforms) != 2 {
+		t.Errorf("Expected 2 video_game_platform_ids, got %d", len(platforms))
+	}
+	catalogs := parsed.Query()["catalog_ids[]"]
+	if len(catalogs) != 1 || catalogs[0] != videoGamePlatformCatalogID {
+		t.Errorf(
+			"catalog_ids = %v, want only platform catalog %s",
+			catalogs,
+			videoGamePlatformCatalogID,
+		)
+	}
+}
+
 func TestBuildVintedURL_NilFilters(t *testing.T) {
 	m := model.Monitor{
 		Query:  "shoes",

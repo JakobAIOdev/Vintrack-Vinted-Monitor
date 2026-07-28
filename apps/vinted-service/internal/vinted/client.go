@@ -526,12 +526,12 @@ type NotificationsResponse struct {
 	Pagination    FavoritesPagination `json:"pagination"`
 }
 
-type BrandOption struct {
+type FilterOption struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
 }
 
-type brandFilterEntry struct {
+type filterOptionEntry struct {
 	ID    interface{} `json:"id"`
 	Value interface{} `json:"value"`
 	Code  interface{} `json:"code"`
@@ -540,10 +540,10 @@ type brandFilterEntry struct {
 	Name  string      `json:"name"`
 }
 
-type brandFilterPayload struct {
-	Options []brandFilterEntry `json:"options"`
-	Filters []brandFilterEntry `json:"filters"`
-	Facets  []brandFilterEntry `json:"facets"`
+type filterOptionsPayload struct {
+	Options []filterOptionEntry `json:"options"`
+	Filters []filterOptionEntry `json:"filters"`
+	Facets  []filterOptionEntry `json:"facets"`
 }
 
 func DefaultBrandCatalogIDs() []string {
@@ -2026,22 +2026,134 @@ func (c *Client) doGetWardrobe(vintedUserID int64, page, perPage int, order stri
 	return &wardrobe, nil
 }
 
-func (c *Client) SearchBrands(catalogIDs []string, query string) ([]BrandOption, error) {
-	brands, err := c.doSearchBrands(catalogIDs, query)
+func (c *Client) SearchBrands(catalogIDs []string, query string) ([]FilterOption, error) {
+	return c.searchFilterOptions(catalogIDs, query, "brand")
+}
+
+func (c *Client) SearchPlatforms(catalogIDs []string, query string) ([]FilterOption, error) {
+	if err := c.WarmUp(); err != nil {
+		log.Printf("[vinted] warmup failed before platform facets request: %v", err)
+	}
+
+	normalizedQuery := strings.TrimSpace(query)
+	if normalizedQuery == "" {
+		return nil, errors.New("query is required")
+	}
+
+	normalizedCatalogIDs := normalizeCatalogIDs(catalogIDs)
+	if len(normalizedCatalogIDs) == 0 {
+		normalizedCatalogIDs = []string{"3002"}
+	}
+
+	params := url.Values{
+		"filter_code":            {"video_game_platform"},
+		"attribute_ids[catalog]": {strings.Join(normalizedCatalogIDs, ",")},
+	}
+	u := fmt.Sprintf(
+		"https://%s/web/gateway/svc-filters/filters/facets?%s",
+		c.session.Domain,
+		params.Encode(),
+	)
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create platform facets request: %w", err)
+	}
+
+	req.Header = c.apiHeaders()
+	req.Header.Set("Platform", "web")
+	req.Header.Set("X-Next-App", "marketplace-web")
+	req.Header.Set(
+		"Referer",
+		fmt.Sprintf(
+			"https://%s/catalog/%s",
+			c.session.Domain,
+			url.PathEscape(normalizedCatalogIDs[0]),
+		),
+	)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("platform facets request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 300))
+	}
+
+	var payload filterOptionsPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("unmarshal platform facets: %w", err)
+	}
+
+	options := normalizeFilterOptionsPayload(payload)
+	matches := make([]FilterOption, 0, len(options))
+	for _, option := range options {
+		if platformOptionMatches(option.Label, normalizedQuery) {
+			matches = append(matches, option)
+		}
+	}
+	return matches, nil
+}
+
+var (
+	nonAlphaNumeric      = regexp.MustCompile(`[^a-z0-9]+`)
+	platformSearchTokens = regexp.MustCompile(`[A-Za-z0-9]+`)
+)
+
+func normalizePlatformSearch(value string) string {
+	return nonAlphaNumeric.ReplaceAllString(strings.ToLower(strings.TrimSpace(value)), "")
+}
+
+func platformOptionMatches(label, query string) bool {
+	normalizedQuery := normalizePlatformSearch(query)
+	if normalizedQuery == "" {
+		return false
+	}
+
+	normalizedLabel := normalizePlatformSearch(label)
+	if strings.Contains(normalizedLabel, normalizedQuery) {
+		return true
+	}
+
+	aliases := []string{
+		strings.ReplaceAll(normalizedLabel, "playstation", "ps"),
+		strings.ReplaceAll(normalizedLabel, "nintendo", "n"),
+	}
+	words := platformSearchTokens.FindAllString(label, -1)
+	if len(words) > 1 {
+		var initials strings.Builder
+		for _, word := range words {
+			initials.WriteByte(strings.ToLower(word)[0])
+		}
+		aliases = append(aliases, initials.String())
+	}
+
+	for _, alias := range aliases {
+		if strings.Contains(alias, normalizedQuery) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Client) searchFilterOptions(catalogIDs []string, query string, filterCode string) ([]FilterOption, error) {
+	options, err := c.doSearchFilterOptions(catalogIDs, query, filterCode)
 	if err != nil && shouldAttemptTokenRefresh(err) && c.session.RefreshToken != "" {
-		log.Printf("[vinted] brand search got %v, attempting token refresh...", err)
+		log.Printf("[vinted] %s filter search got %v, attempting token refresh...", filterCode, err)
 		if refreshErr := c.RefreshAccessToken(); refreshErr != nil {
 			log.Printf("[vinted] token refresh failed: %v", refreshErr)
 			return nil, err
 		}
-		return c.doSearchBrands(catalogIDs, query)
+		return c.doSearchFilterOptions(catalogIDs, query, filterCode)
 	}
-	return brands, err
+	return options, err
 }
 
-func (c *Client) doSearchBrands(catalogIDs []string, query string) ([]BrandOption, error) {
+func (c *Client) doSearchFilterOptions(catalogIDs []string, query string, filterCode string) ([]FilterOption, error) {
 	if err := c.WarmUp(); err != nil {
-		log.Printf("[vinted] warmup failed before brand search: %v", err)
+		log.Printf("[vinted] warmup failed before %s filter search: %v", filterCode, err)
 	}
 
 	normalizedQuery := strings.TrimSpace(query)
@@ -2062,14 +2174,14 @@ func (c *Client) doSearchBrands(catalogIDs []string, query string) ([]BrandOptio
 		"color_ids":          {""},
 		"patterns_ids":       {""},
 		"material_ids":       {""},
-		"filter_search_code": {"brand"},
+		"filter_search_code": {filterCode},
 		"filter_search_text": {normalizedQuery},
 	}
 
 	u := fmt.Sprintf("https://%s/api/v2/catalog/filters/search?%s", c.session.Domain, params.Encode())
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
-		return nil, fmt.Errorf("create brand search request: %w", err)
+		return nil, fmt.Errorf("create %s filter search request: %w", filterCode, err)
 	}
 
 	req.Header = c.apiHeaders()
@@ -2077,23 +2189,23 @@ func (c *Client) doSearchBrands(catalogIDs []string, query string) ([]BrandOptio
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("brand search request failed: %w", err)
+		return nil, fmt.Errorf("%s filter search request failed: %w", filterCode, err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[vinted] GET /api/v2/catalog/filters/search brand query=%q catalogs=%s -> %d (%.300s)", normalizedQuery, strings.Join(normalizedCatalogIDs, ","), resp.StatusCode, string(body))
+	log.Printf("[vinted] GET /api/v2/catalog/filters/search code=%s query=%q catalogs=%s -> %d (%.300s)", filterCode, normalizedQuery, strings.Join(normalizedCatalogIDs, ","), resp.StatusCode, string(body))
 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 300))
 	}
 
-	var payload brandFilterPayload
+	var payload filterOptionsPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, fmt.Errorf("unmarshal brand search: %w", err)
+		return nil, fmt.Errorf("unmarshal %s filter search: %w", filterCode, err)
 	}
 
-	return normalizeBrandFilterPayload(payload), nil
+	return normalizeFilterOptionsPayload(payload), nil
 }
 
 func normalizeCatalogIDs(catalogIDs []string) []string {
@@ -2115,7 +2227,7 @@ func normalizeCatalogIDs(catalogIDs []string) []string {
 	return normalized
 }
 
-func normalizeBrandFilterPayload(payload brandFilterPayload) []BrandOption {
+func normalizeFilterOptionsPayload(payload filterOptionsPayload) []FilterOption {
 	entries := payload.Options
 	if len(entries) == 0 {
 		entries = payload.Filters
@@ -2124,7 +2236,7 @@ func normalizeBrandFilterPayload(payload brandFilterPayload) []BrandOption {
 		entries = payload.Facets
 	}
 
-	brands := make([]BrandOption, 0, len(entries))
+	options := make([]FilterOption, 0, len(entries))
 	seen := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
 		id := optionIDString(firstNonNil(entry.ID, entry.Value, entry.Code))
@@ -2136,9 +2248,9 @@ func normalizeBrandFilterPayload(payload brandFilterPayload) []BrandOption {
 			continue
 		}
 		seen[id] = struct{}{}
-		brands = append(brands, BrandOption{ID: id, Label: label})
+		options = append(options, FilterOption{ID: id, Label: label})
 	}
-	return brands
+	return options
 }
 
 func firstNonNil(values ...interface{}) interface{} {

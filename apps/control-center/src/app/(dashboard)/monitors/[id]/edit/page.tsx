@@ -16,6 +16,7 @@ import { RegionPicker } from "@/components/monitors/region-picker";
 import { CountryFilterPicker } from "@/components/monitors/country-filter-picker";
 import { ColorPicker } from "@/components/monitors/color-picker";
 import { StatusPicker } from "@/components/monitors/status-picker";
+import { PlatformPicker } from "@/components/monitors/platform-picker";
 import { AntiKeywordInput } from "@/components/monitors/anti-keyword-input";
 import {
     FormSection,
@@ -36,6 +37,7 @@ import {
     MAX_MONITOR_QUERY_LENGTH,
     parseMonitorQueries,
 } from "@/lib/monitor-query";
+import { hasVideoGamePlatformCatalog } from "@/lib/video-game-platforms";
 import {
     ArrowLeft,
     Bell,
@@ -86,6 +88,7 @@ type MonitorData = {
     brand_ids: string | null;
     color_ids: string | null;
     status_ids: string | null;
+    video_game_platform_ids: string | null;
     region: string;
     allowed_countries: string | null;
     discord_webhook: string | null;
@@ -111,6 +114,7 @@ export default function EditMonitorPage() {
     const [selectedBrands, setSelectedBrands] = useState<string[]>([]);
     const [selectedColors, setSelectedColors] = useState<string[]>([]);
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+    const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
     const [selectedRegion, setSelectedRegion] = useState<string>("de");
     const [selectedAllowedCountries, setSelectedAllowedCountries] = useState<
         string[]
@@ -179,6 +183,13 @@ export default function EditMonitorPage() {
         }
     };
 
+    const handleCategoryChange = useCallback((ids: string[]) => {
+        setSelectedCategories(ids);
+        if (!hasVideoGamePlatformCatalog(ids)) {
+            setSelectedPlatforms([]);
+        }
+    }, []);
+
     const handleCategorySelectionMetaChange = useCallback(
         ({ selectedLabels }: { selectedLabels: string[] }) => {
             setSelectedCategoryLabels((current) => {
@@ -233,6 +244,13 @@ export default function EditMonitorPage() {
                             ? m.status_ids.split(",").filter(Boolean)
                             : [],
                     );
+                    setSelectedPlatforms(
+                        m.video_game_platform_ids
+                            ? m.video_game_platform_ids
+                                  .split(",")
+                                  .filter(Boolean)
+                            : [],
+                    );
                     setSelectedRegion(m.region || "de");
                     setSelectedAllowedCountries(
                         m.allowed_countries
@@ -267,6 +285,11 @@ export default function EditMonitorPage() {
             .catch(() => setLoading(false));
     }, [monitorId]);
 
+    const hasVideoGamePlatformContext =
+        hasVideoGamePlatformCatalog(selectedCategories);
+    const activeVideoGamePlatformIds = hasVideoGamePlatformContext
+        ? selectedPlatforms
+        : [];
     const previewUrl = buildVintedMonitorUrl({
         region: selectedRegion,
         query,
@@ -277,6 +300,7 @@ export default function EditMonitorPage() {
         brandIds: selectedBrands,
         colorIds: selectedColors,
         statusIds: selectedStatuses,
+        videoGamePlatformIds: activeVideoGamePlatformIds,
     });
     const queryAlternativeCount = parseMonitorQueries(query).length;
     const selectedRegionFreeProxyHealth = getFreeProxyRegionHealth(
@@ -296,6 +320,7 @@ export default function EditMonitorPage() {
         selectedBrands.length > 0,
         selectedColors.length > 0,
         selectedStatuses.length > 0,
+        activeVideoGamePlatformIds.length > 0,
         selectedSizes.length > 0,
     ].filter(Boolean).length;
     const notificationChannelCount =
@@ -550,7 +575,7 @@ export default function EditMonitorPage() {
                                 <CategoryPicker
                                     region={selectedRegion}
                                     selected={selectedCategories}
-                                    onChange={setSelectedCategories}
+                                    onChange={handleCategoryChange}
                                     onSelectionMetaChange={
                                         handleCategorySelectionMetaChange
                                     }
@@ -562,6 +587,8 @@ export default function EditMonitorPage() {
                                 />
                                 <p className="text-muted-foreground text-[12px]">
                                     Limit results to specific Vinted categories.
+                                    Select only Video games & consoles to unlock
+                                    the Platform filter.
                                 </p>
                             </div>
 
@@ -657,6 +684,32 @@ export default function EditMonitorPage() {
                                     Limit results to specific colors.
                                 </p>
                             </div>
+
+                            {hasVideoGamePlatformContext && (
+                                <div className="space-y-2">
+                                    <Label className="text-[13px]">
+                                        Platform Filter{" "}
+                                        <span className="text-muted-foreground font-normal">
+                                            (optional)
+                                        </span>
+                                    </Label>
+                                    <PlatformPicker
+                                        selected={selectedPlatforms}
+                                        onChange={setSelectedPlatforms}
+                                        region={selectedRegion}
+                                        catalogIds={selectedCategories}
+                                    />
+                                    <input
+                                        type="hidden"
+                                        name="video_game_platform_ids"
+                                        value={selectedPlatforms.join(",")}
+                                    />
+                                    <p className="text-muted-foreground text-[12px]">
+                                        Available for Video games & consoles.
+                                        This is separate from Brand.
+                                    </p>
+                                </div>
+                            )}
 
                             <div className="space-y-2">
                                 <Label className="text-[13px]">

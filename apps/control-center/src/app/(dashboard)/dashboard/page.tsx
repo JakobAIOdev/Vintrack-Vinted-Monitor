@@ -63,6 +63,7 @@ export default async function DashboardPage() {
             brand_ids: m.brand_ids ?? null,
             color_ids: m.color_ids ?? null,
             status_ids: m.status_ids ?? null,
+            video_game_platform_ids: m.video_game_platform_ids ?? null,
             size_id: m.size_id ?? null,
             region: m.region ?? "de",
             allowed_countries: m.allowed_countries ?? null,

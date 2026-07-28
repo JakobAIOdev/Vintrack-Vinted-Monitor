@@ -22,6 +22,7 @@ import {
     getMonitorQueryValidationError,
     normalizeMonitorQuery,
 } from "@/lib/monitor-query";
+import { VIDEO_GAME_PLATFORM_CATALOG_ID } from "@/lib/video-game-platforms";
 import {
     getMonitorAntiKeywordsValidationError,
     normalizeMonitorAntiKeywords,
@@ -126,10 +127,16 @@ export async function createMonitor(
         ? Number(formData.get("price_max"))
         : null;
     const sizeId = formData.get("size_id") as string;
-    const catalogIds = (formData.get("catalog_ids") as string) || null;
+    const requestedCatalogIds =
+        (formData.get("catalog_ids") as string) || null;
     const brandIds = (formData.get("brand_ids") as string) || null;
     const colorIds = (formData.get("color_ids") as string) || null;
     const statusIds = (formData.get("status_ids") as string) || null;
+    const videoGamePlatformIds =
+        (formData.get("video_game_platform_ids") as string) || null;
+    const catalogIds = videoGamePlatformIds
+        ? VIDEO_GAME_PLATFORM_CATALOG_ID
+        : requestedCatalogIds;
     const region = (formData.get("region") as string) || "de";
     const allowedCountries =
         (formData.get("allowed_countries") as string) || null;
@@ -193,6 +200,7 @@ export async function createMonitor(
                 brand_ids: brandIds || null,
                 color_ids: colorIds || null,
                 status_ids: statusIds || null,
+                video_game_platform_ids: videoGamePlatformIds || null,
                 region,
                 allowed_countries: allowedCountries || null,
                 discord_webhook: urlToSave,
@@ -557,10 +565,16 @@ export async function updateMonitor(id: number, formData: FormData) {
         ? Number(formData.get("price_max"))
         : null;
     const sizeId = formData.get("size_id") as string;
-    const catalogIds = (formData.get("catalog_ids") as string) || null;
+    const requestedCatalogIds =
+        (formData.get("catalog_ids") as string) || null;
     const brandIds = (formData.get("brand_ids") as string) || null;
     const colorIds = (formData.get("color_ids") as string) || null;
     const statusIds = (formData.get("status_ids") as string) || null;
+    const videoGamePlatformIds =
+        (formData.get("video_game_platform_ids") as string) || null;
+    const catalogIds = videoGamePlatformIds
+        ? VIDEO_GAME_PLATFORM_CATALOG_ID
+        : requestedCatalogIds;
     const region = (formData.get("region") as string) || "de";
     const allowedCountries =
         (formData.get("allowed_countries") as string) || null;
@@ -621,6 +635,7 @@ export async function updateMonitor(id: number, formData: FormData) {
             brand_ids: brandIds || null,
             color_ids: colorIds || null,
             status_ids: statusIds || null,
+            video_game_platform_ids: videoGamePlatformIds || null,
             region,
             allowed_countries: allowedCountries || null,
             discord_webhook: urlToSave,
@@ -667,10 +682,16 @@ export async function updateMonitorAndReturn(
         ? Number(formData.get("price_max"))
         : null;
     const sizeId = formData.get("size_id") as string;
-    const catalogIds = (formData.get("catalog_ids") as string) || null;
+    const requestedCatalogIds =
+        (formData.get("catalog_ids") as string) || null;
     const brandIds = (formData.get("brand_ids") as string) || null;
     const colorIds = (formData.get("color_ids") as string) || null;
     const statusIds = (formData.get("status_ids") as string) || null;
+    const videoGamePlatformIds =
+        (formData.get("video_game_platform_ids") as string) || null;
+    const catalogIds = videoGamePlatformIds
+        ? VIDEO_GAME_PLATFORM_CATALOG_ID
+        : requestedCatalogIds;
     const region = (formData.get("region") as string) || "de";
     const allowedCountries =
         (formData.get("allowed_countries") as string) || null;
@@ -737,6 +758,7 @@ export async function updateMonitorAndReturn(
             brand_ids: brandIds || null,
             color_ids: colorIds || null,
             status_ids: statusIds || null,
+            video_game_platform_ids: videoGamePlatformIds || null,
             region,
             allowed_countries: allowedCountries || null,
             discord_webhook: urlToSave,
