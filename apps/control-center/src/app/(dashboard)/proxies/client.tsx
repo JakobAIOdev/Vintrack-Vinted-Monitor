@@ -3,7 +3,10 @@
 import {
     createProxyGroup,
     deleteProxyGroup,
+    getProxyGroupCheckStatus,
     resetProxyGroupBandwidth,
+    startProxyGroupCheck,
+    type ProxyCheckSnapshot,
     updateProxyGroup,
 } from "@/actions/proxy-groups";
 import { Badge } from "@/components/ui/badge";
@@ -19,23 +22,26 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getRegionLabel } from "@/lib/regions";
+import { getRegionLabel, REGIONS } from "@/lib/regions";
 import {
     Activity,
     ArrowRight,
+    CheckCircle2,
     ChevronDown,
     ChevronUp,
     Globe,
     HardDriveDownload,
     HardDriveUpload,
+    LoaderCircle,
     Plus,
     RotateCcw,
     Server,
     Shield,
     Trash2,
+    XCircle,
 } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 export type ProxyGroup = {
@@ -47,6 +53,7 @@ export type ProxyGroup = {
     bandwidthTxBytes: string;
     bandwidthLimitBytes: string | null;
     bandwidthResetAt: string | null;
+    proxyCheck: ProxyCheckSnapshot;
     created_at: string;
 };
 
@@ -89,6 +96,47 @@ function formatLimitInput(value: string | null) {
     return Number.isInteger(limitGb) ? String(limitGb) : limitGb.toFixed(2);
 }
 
+function emptyProxyCheck(): ProxyCheckSnapshot {
+    return {
+        status: "idle",
+        region: null,
+        total: 0,
+        checked: 0,
+        working: 0,
+        slow: 0,
+        failed: 0,
+        results: [],
+        error: null,
+        requestedAt: null,
+        startedAt: null,
+        completedAt: null,
+    };
+}
+
+function proxyCheckErrorLabel(errorCode: string | null) {
+    switch (errorCode) {
+        case "timeout":
+            return "Timeout";
+        case "connect":
+            return "Connection failed";
+        case "proxy_handshake":
+            return "Proxy authentication/handshake";
+        case "tls":
+            return "TLS failed";
+        case "vinted_401":
+        case "vinted_403":
+            return "Blocked by Vinted";
+        case "vinted_429":
+            return "Rate limited";
+        case "latency":
+            return "Too slow";
+        case "invalid_config":
+            return "Invalid configuration";
+        default:
+            return errorCode ?? "Unknown error";
+    }
+}
+
 export function ProxiesClient({
     initialGroups,
     userRole,
@@ -105,6 +153,16 @@ export function ProxiesClient({
     const [editName, setEditName] = useState("");
     const [editProxies, setEditProxies] = useState("");
     const [editBandwidthLimitGb, setEditBandwidthLimitGb] = useState("");
+    const [startingCheckId, setStartingCheckId] = useState<number | null>(null);
+    const [checkRegions, setCheckRegions] = useState<Record<number, string>>(
+        () =>
+            Object.fromEntries(
+                initialGroups.map((group) => [
+                    group.id,
+                    group.proxyCheck.region ?? "de",
+                ]),
+            ),
+    );
 
     const handleCreate = async (formData: FormData) => {
         try {
@@ -167,6 +225,7 @@ export function ProxiesClient({
                                             ),
                                         ).toString()
                                       : null,
+                              proxyCheck: emptyProxyCheck(),
                           }
                         : g,
                 ),
@@ -198,6 +257,76 @@ export function ProxiesClient({
             toast.error(getErrorMessage(error, "Failed to reset bandwidth"));
         }
     };
+
+    const updateProxyCheck = useCallback(
+        (id: number, proxyCheck: ProxyCheckSnapshot) => {
+            setGroups((current) =>
+                current.map((group) =>
+                    group.id === id ? { ...group, proxyCheck } : group,
+                ),
+            );
+        },
+        [],
+    );
+
+    const handleStartProxyCheck = async (id: number) => {
+        setStartingCheckId(id);
+        try {
+            const snapshot = await startProxyGroupCheck(
+                id,
+                checkRegions[id] ?? "de",
+            );
+            updateProxyCheck(id, snapshot);
+            toast.success("Proxy check queued");
+        } catch (error: unknown) {
+            toast.error(getErrorMessage(error, "Failed to start proxy check"));
+        } finally {
+            setStartingCheckId(null);
+        }
+    };
+
+    const activeCheckIds = groups
+        .filter(
+            (group) =>
+                group.proxyCheck.status === "pending" ||
+                group.proxyCheck.status === "running",
+        )
+        .map((group) => group.id)
+        .join(",");
+
+    useEffect(() => {
+        if (!activeCheckIds) return;
+
+        const ids = activeCheckIds
+            .split(",")
+            .map(Number)
+            .filter(Number.isInteger);
+        let canceled = false;
+        const poll = async () => {
+            const snapshots = await Promise.allSettled(
+                ids.map(async (id) => ({
+                    id,
+                    snapshot: await getProxyGroupCheckStatus(id),
+                })),
+            );
+            if (canceled) return;
+            for (const result of snapshots) {
+                if (result.status === "fulfilled") {
+                    updateProxyCheck(
+                        result.value.id,
+                        result.value.snapshot,
+                    );
+                }
+            }
+        };
+
+        void poll();
+        const interval = window.setInterval(poll, 1_500);
+        return () => {
+            canceled = true;
+            window.clearInterval(interval);
+        };
+    }, [activeCheckIds, updateProxyCheck]);
 
     const getProxyCount = (proxies: string) =>
         proxies.split("\n").filter((l) => l.trim().length > 0).length;
@@ -451,6 +580,20 @@ export function ProxiesClient({
                                       ),
                                   )
                                 : null;
+                        const checkRunning =
+                            group.proxyCheck.status === "pending" ||
+                            group.proxyCheck.status === "running";
+                        const checkProgress =
+                            group.proxyCheck.total > 0
+                                ? Math.min(
+                                      100,
+                                      Math.round(
+                                          (group.proxyCheck.checked /
+                                              group.proxyCheck.total) *
+                                              100,
+                                      ),
+                                  )
+                                : 0;
 
                         return (
                             <Card key={group.id} className="border-input/60">
@@ -553,6 +696,219 @@ export function ProxiesClient({
 
                                     {expandedId === group.id && (
                                         <div className="border-border space-y-3 border-t px-5 py-4">
+                                            <div className="border-border bg-muted/20 space-y-3 rounded-lg border p-3">
+                                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                                    <div>
+                                                        <div className="flex items-center gap-2">
+                                                            <p className="text-sm font-medium">
+                                                                Proxy health
+                                                                check
+                                                            </p>
+                                                            {checkRunning && (
+                                                                <Badge
+                                                                    variant="outline"
+                                                                    className="gap-1"
+                                                                >
+                                                                    <LoaderCircle className="h-3 w-3 animate-spin" />
+                                                                    {group
+                                                                        .proxyCheck
+                                                                        .status ===
+                                                                    "pending"
+                                                                        ? "Queued"
+                                                                        : `${group.proxyCheck.checked}/${group.proxyCheck.total}`}
+                                                                </Badge>
+                                                            )}
+                                                        </div>
+                                                        <p className="text-muted-foreground mt-0.5 text-[11px]">
+                                                            Tests up to 100
+                                                            proxies directly
+                                                            against the selected
+                                                            Vinted region.
+                                                        </p>
+                                                    </div>
+                                                    <div className="flex gap-2">
+                                                        <select
+                                                            value={
+                                                                checkRegions[
+                                                                    group.id
+                                                                ] ??
+                                                                group.proxyCheck
+                                                                    .region ??
+                                                                "de"
+                                                            }
+                                                            onChange={(event) =>
+                                                                setCheckRegions(
+                                                                    (current) => ({
+                                                                        ...current,
+                                                                        [group.id]:
+                                                                            event
+                                                                                .target
+                                                                                .value,
+                                                                    }),
+                                                                )
+                                                            }
+                                                            disabled={
+                                                                checkRunning
+                                                            }
+                                                            className="border-input bg-background h-8 rounded-md border px-2 text-xs"
+                                                        >
+                                                            {REGIONS.map(
+                                                                (region) => (
+                                                                    <option
+                                                                        key={
+                                                                            region.code
+                                                                        }
+                                                                        value={
+                                                                            region.code
+                                                                        }
+                                                                    >
+                                                                        {
+                                                                            region.flag
+                                                                        }{" "}
+                                                                        {
+                                                                            region.label
+                                                                        }
+                                                                    </option>
+                                                                ),
+                                                            )}
+                                                        </select>
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            className="gap-1.5"
+                                                            disabled={
+                                                                checkRunning ||
+                                                                startingCheckId ===
+                                                                    group.id
+                                                            }
+                                                            onClick={() =>
+                                                                handleStartProxyCheck(
+                                                                    group.id,
+                                                                )
+                                                            }
+                                                        >
+                                                            {checkRunning ||
+                                                            startingCheckId ===
+                                                                group.id ? (
+                                                                <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                                                            ) : (
+                                                                <Activity className="h-3.5 w-3.5" />
+                                                            )}
+                                                            {group.proxyCheck
+                                                                .completedAt
+                                                                ? "Check again"
+                                                                : "Check proxies"}
+                                                        </Button>
+                                                    </div>
+                                                </div>
+
+                                                {checkRunning && (
+                                                    <div className="bg-muted h-1.5 overflow-hidden rounded-full">
+                                                        <div
+                                                            className="bg-foreground h-full rounded-full transition-all"
+                                                            style={{
+                                                                width: `${checkProgress}%`,
+                                                            }}
+                                                        />
+                                                    </div>
+                                                )}
+
+                                                {group.proxyCheck.status ===
+                                                    "failed" && (
+                                                    <p className="text-destructive text-xs">
+                                                        {group.proxyCheck
+                                                            .error ??
+                                                            "The proxy check failed. Please try again."}
+                                                    </p>
+                                                )}
+
+                                                {group.proxyCheck.status ===
+                                                    "completed" && (
+                                                    <>
+                                                        <div className="grid grid-cols-3 gap-2">
+                                                            <div className="border-border bg-background rounded-md border p-2.5">
+                                                                <p className="flex items-center gap-1 text-[11px] text-emerald-600">
+                                                                    <CheckCircle2 className="h-3.5 w-3.5" />
+                                                                    Working
+                                                                </p>
+                                                                <p className="mt-1 text-lg font-semibold">
+                                                                    {
+                                                                        group
+                                                                            .proxyCheck
+                                                                            .working
+                                                                    }
+                                                                </p>
+                                                            </div>
+                                                            <div className="border-border bg-background rounded-md border p-2.5">
+                                                                <p className="flex items-center gap-1 text-[11px] text-amber-600">
+                                                                    <Activity className="h-3.5 w-3.5" />
+                                                                    Slow
+                                                                </p>
+                                                                <p className="mt-1 text-lg font-semibold">
+                                                                    {
+                                                                        group
+                                                                            .proxyCheck
+                                                                            .slow
+                                                                    }
+                                                                </p>
+                                                            </div>
+                                                            <div className="border-border bg-background rounded-md border p-2.5">
+                                                                <p className="text-destructive flex items-center gap-1 text-[11px]">
+                                                                    <XCircle className="h-3.5 w-3.5" />
+                                                                    Failed
+                                                                </p>
+                                                                <p className="mt-1 text-lg font-semibold">
+                                                                    {
+                                                                        group
+                                                                            .proxyCheck
+                                                                            .failed
+                                                                    }
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                        <div className="border-border bg-background max-h-52 divide-y overflow-y-auto rounded-md border">
+                                                            {group.proxyCheck.results.map(
+                                                                (result) => (
+                                                                    <div
+                                                                        key={`${result.index}:${result.label}`}
+                                                                        className="flex items-center justify-between gap-3 px-3 py-2 text-[11px]"
+                                                                    >
+                                                                        <span className="min-w-0 truncate font-mono">
+                                                                            {
+                                                                                result.label
+                                                                            }
+                                                                        </span>
+                                                                        <span className="text-muted-foreground flex shrink-0 items-center gap-2">
+                                                                            {result.latencyMs !==
+                                                                                null &&
+                                                                                `${result.latencyMs}ms`}
+                                                                            <Badge
+                                                                                variant="outline"
+                                                                                className={
+                                                                                    result.status ===
+                                                                                    "working"
+                                                                                        ? "border-emerald-500/25 text-emerald-600"
+                                                                                        : result.status ===
+                                                                                            "slow"
+                                                                                          ? "border-amber-500/25 text-amber-600"
+                                                                                          : "border-red-500/25 text-red-600"
+                                                                                }
+                                                                            >
+                                                                                {result.status ===
+                                                                                "working"
+                                                                                    ? "Working"
+                                                                                    : proxyCheckErrorLabel(
+                                                                                          result.errorCode,
+                                                                                      )}
+                                                                            </Badge>
+                                                                        </span>
+                                                                    </div>
+                                                                ),
+                                                            )}
+                                                        </div>
+                                                    </>
+                                                )}
+                                            </div>
                                             <div className="grid gap-3 sm:grid-cols-3">
                                                 <div className="border-border bg-muted/40 rounded-lg border p-3">
                                                     <div className="text-muted-foreground flex items-center gap-2 text-[12px]">

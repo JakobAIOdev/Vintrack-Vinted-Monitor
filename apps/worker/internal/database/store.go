@@ -86,6 +86,21 @@ type FreeProxyInventoryRecord struct {
 	LastChecked  *time.Time
 }
 
+type ProxyGroupCheckJob struct {
+	ID      int
+	Proxies string
+	Region  string
+	Total   int
+}
+
+type ProxyGroupCheckResult struct {
+	Index     int     `json:"index"`
+	Label     string  `json:"label"`
+	Status    string  `json:"status"`
+	LatencyMS *int    `json:"latencyMs"`
+	ErrorCode *string `json:"errorCode"`
+}
+
 type PreindexProbe struct {
 	Region      string
 	ItemID      int64
@@ -93,6 +108,145 @@ type PreindexProbe struct {
 	DurationMS  int
 	Outcome     string
 	ProxySource string
+}
+
+func (s *Store) ClaimProxyGroupCheckJobContext(ctx context.Context, maximumSize int) (*ProxyGroupCheckJob, error) {
+	if maximumSize < 1 {
+		maximumSize = 100
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var job ProxyGroupCheckJob
+	err = tx.QueryRowContext(ctx, `
+		WITH candidate AS (
+			SELECT id
+			FROM proxy_groups
+			WHERE proxy_check_status = 'pending'
+			   OR (
+				proxy_check_status = 'running'
+				AND proxy_check_started_at < NOW() - INTERVAL '3 minutes'
+			   )
+			ORDER BY
+				CASE WHEN proxy_check_status = 'pending' THEN 0 ELSE 1 END,
+				proxy_check_requested_at ASC NULLS FIRST
+			LIMIT 1
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE proxy_groups pg
+		SET proxy_check_status = 'running',
+			proxy_check_total = LEAST(pg.proxy_check_total, $1),
+			proxy_check_checked = 0,
+			proxy_check_working = 0,
+			proxy_check_slow = 0,
+			proxy_check_failed = 0,
+			proxy_check_results = NULL,
+			proxy_check_error = NULL,
+			proxy_check_started_at = NOW(),
+			proxy_check_completed_at = NULL
+		FROM candidate
+		WHERE pg.id = candidate.id
+		RETURNING
+			pg.id,
+			pg.proxies,
+			COALESCE(pg.proxy_check_region, 'de'),
+			pg.proxy_check_total`,
+		maximumSize,
+	).Scan(&job.ID, &job.Proxies, &job.Region, &job.Total)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+func (s *Store) UpdateProxyGroupCheckProgressContext(
+	ctx context.Context,
+	id int,
+	total int,
+	checked int,
+	working int,
+	slow int,
+	failed int,
+) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE proxy_groups
+		SET proxy_check_total = $2,
+			proxy_check_checked = $3,
+			proxy_check_working = $4,
+			proxy_check_slow = $5,
+			proxy_check_failed = $6
+		WHERE id = $1
+		  AND proxy_check_status = 'running'`,
+		id,
+		total,
+		checked,
+		working,
+		slow,
+		failed,
+	)
+	return err
+}
+
+func (s *Store) CompleteProxyGroupCheckJobContext(
+	ctx context.Context,
+	id int,
+	total int,
+	working int,
+	slow int,
+	failed int,
+	results []ProxyGroupCheckResult,
+) error {
+	encodedResults, err := json.Marshal(results)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE proxy_groups
+		SET proxy_check_status = 'completed',
+			proxy_check_total = $2,
+			proxy_check_checked = $2,
+			proxy_check_working = $3,
+			proxy_check_slow = $4,
+			proxy_check_failed = $5,
+			proxy_check_results = $6::jsonb,
+			proxy_check_error = NULL,
+			proxy_check_completed_at = NOW()
+		WHERE id = $1
+		  AND proxy_check_status = 'running'`,
+		id,
+		total,
+		working,
+		slow,
+		failed,
+		string(encodedResults),
+	)
+	return err
+}
+
+func (s *Store) FailProxyGroupCheckJobContext(ctx context.Context, id int, message string) error {
+	if len(message) > 1000 {
+		message = message[:1000]
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE proxy_groups
+		SET proxy_check_status = 'failed',
+			proxy_check_error = $2,
+			proxy_check_completed_at = NOW()
+		WHERE id = $1
+		  AND proxy_check_status = 'running'`,
+		id,
+		message,
+	)
+	return err
 }
 
 func NewStore(connStr string, redisCache *cache.RedisCache) (*Store, error) {
@@ -374,15 +528,31 @@ func (s *Store) GetActiveFreeProxiesContext(ctx context.Context, region string, 
 		JOIN free_proxies fp ON fp.id = fph.proxy_id
 		WHERE fph.region = $1
 		  AND (
-			fph.status = 'active'
-			OR (fph.status = 'pending' AND fph.success_streak > 0)
+			(
+				(
+					fph.status = 'active'
+					OR (fph.status = 'pending' AND fph.success_streak > 0)
+				)
+				AND fph.last_success_at >= NOW() - INTERVAL '20 minutes'
+			)
+			OR (
+				fph.status = 'active'
+				AND fph.failure_streak <= 1
+				AND fph.last_success_at >= NOW() - INTERVAL '60 minutes'
+			)
 		  )
-		  AND fph.last_success_at >= NOW() - INTERVAL '20 minutes'
 		  AND fp.status <> 'disabled'
-		  AND (fp.quarantined_until IS NULL OR fp.quarantined_until <= NOW())
-		  AND (fph.next_check_at IS NULL OR fph.next_check_at <= NOW() + INTERVAL '15 minutes')
+		  AND (
+			fp.success_count > 0
+			OR fp.quarantined_until IS NULL
+			OR fp.quarantined_until <= NOW()
+		  )
 		ORDER BY
-		  CASE WHEN fph.status = 'active' THEN 0 ELSE 1 END,
+		  CASE
+			WHEN fph.last_success_at >= NOW() - INTERVAL '20 minutes' THEN 0
+			ELSE 1
+		  END,
+		  fph.failure_streak ASC,
 		  fph.score DESC,
 		  fph.latency_ms ASC NULLS LAST,
 		  fph.last_success_at DESC NULLS LAST
@@ -757,10 +927,11 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 					CASE
 						WHEN fph.status = 'active' THEN 0
 						WHEN fph.success_count > 0 THEN 1
-						WHEN $3 AND fph.last_checked_at IS NULL THEN 2
-						WHEN fph.status = 'cooldown' THEN 3
-						WHEN fph.status = 'dead' THEN 5
-						ELSE 4
+						WHEN fp.success_count > 0 THEN 2
+						WHEN $3 AND fph.last_checked_at IS NULL THEN 3
+						WHEN fph.status = 'cooldown' THEN 4
+						WHEN fph.status = 'dead' THEN 6
+						ELSE 5
 					END AS priority,
 					ROW_NUMBER() OVER (
 						PARTITION BY fp.source
@@ -768,22 +939,30 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 							CASE
 								WHEN fph.status = 'active' THEN 0
 								WHEN fph.success_count > 0 THEN 1
-								WHEN $3 AND fph.last_checked_at IS NULL THEN 2
-								WHEN fph.status = 'cooldown' THEN 3
-								WHEN fph.status = 'dead' THEN 5
-								ELSE 4
+								WHEN fp.success_count > 0 THEN 2
+								WHEN $3 AND fph.last_checked_at IS NULL THEN 3
+								WHEN fph.status = 'cooldown' THEN 4
+								WHEN fph.status = 'dead' THEN 6
+								ELSE 5
 							END,
+							fp.last_success_at DESC NULLS LAST,
 							fph.last_checked_at ASC NULLS FIRST,
 							fph.score DESC
 					) AS source_rank,
+					fp.last_success_at AS global_last_success_at,
 					fph.last_checked_at,
 					fph.score
 				FROM free_proxy_health fph
 				JOIN free_proxies fp ON fp.id = fph.proxy_id
 				WHERE fph.region = ANY($1)
 				  AND fp.status <> 'disabled'
-				  AND (fp.quarantined_until IS NULL OR fp.quarantined_until <= NOW())
+				  AND (
+					fp.success_count > 0
+					OR fp.quarantined_until IS NULL
+					OR fp.quarantined_until <= NOW()
+				  )
 				  AND fph.status IN ('pending', 'active', 'cooldown', 'dead')
+				  AND ($3 OR fph.status = 'active')
 				  AND (fph.next_check_at IS NULL OR fph.next_check_at <= NOW())
 				  AND ($4 OR fp.protocol = ANY($5))
 			), due AS (
@@ -793,6 +972,7 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 				ORDER BY
 					ranked.priority,
 					ranked.source_rank,
+					ranked.global_last_success_at DESC NULLS LAST,
 					ranked.last_checked_at ASC NULLS FIRST,
 					ranked.score DESC
 				LIMIT $2
@@ -869,15 +1049,18 @@ func freeProxyProtocolQuotas(limit int) (web int, socks5 int, socks4 int) {
 	if limit <= 0 {
 		return 0, 0, 0
 	}
-	web = limit * 60 / 100
-	socks5 = limit * 25 / 100
-	if limit >= 3 {
-		web = max(1, web)
-		socks5 = max(1, socks5)
-		socks4 = max(1, limit-web-socks5)
-	} else {
-		socks4 = limit - web - socks5
+	if limit == 1 {
+		return 1, 0, 0
 	}
+	if limit == 2 {
+		return 1, 1, 0
+	}
+	web = limit * 60 / 100
+	socks5 = limit * 37 / 100
+	socks4 = limit * 3 / 100
+	web = max(1, web)
+	socks5 = max(1, socks5)
+	socks4 = max(1, socks4)
 	for web+socks5+socks4 > limit {
 		if web > socks5 && web > 1 {
 			web--
@@ -918,7 +1101,9 @@ func (s *Store) RecordFreeProxySuccessContext(ctx context.Context, proxyURL stri
 			last_success_at = NOW(),
 			last_error = NULL,
 			last_error_code = NULL,
-			next_check_at = NOW() + INTERVAL '10 minutes',
+			next_check_at = NOW()
+				+ INTERVAL '8 minutes'
+				+ MOD(fp.id::bigint + fph.id, 300) * INTERVAL '1 second',
 			score = LEAST(100, 50 + ((fph.success_streak + 1) * 10) - GREATEST(0, $3 - 1000) / 100),
 			updated_at = NOW()
 		FROM free_proxies fp
@@ -1110,7 +1295,7 @@ func (s *Store) RecordFreeProxyFailureClassContext(
 			last_error = $4,
 			last_error_code = $5,
 			quarantined_until = CASE
-				WHEN $9 THEN GREATEST(
+				WHEN $9 AND fp.success_count = 0 THEN GREATEST(
 					COALESCE(fp.quarantined_until, NOW()),
 					NOW() + INTERVAL '5 minutes'
 				)
@@ -1141,7 +1326,8 @@ func (s *Store) RecordFreeProxyFailureClassContext(
 				updated_at = NOW()
 			FROM free_proxies fp
 			WHERE fp.id = fph.proxy_id
-			  AND fp.proxy_url = $1`, proxyURL)
+			  AND fp.proxy_url = $1
+			  AND fp.success_count = 0`, proxyURL)
 	}
 	return err
 }
@@ -1158,12 +1344,25 @@ func (s *Store) CountActiveFreeProxiesContext(ctx context.Context, region string
 		JOIN free_proxies fp ON fp.id = fph.proxy_id
 		WHERE fph.region = $1
 		  AND (
-			fph.status = 'active'
-			OR (fph.status = 'pending' AND fph.success_streak > 0)
+			(
+				(
+					fph.status = 'active'
+					OR (fph.status = 'pending' AND fph.success_streak > 0)
+				)
+				AND fph.last_success_at >= NOW() - INTERVAL '20 minutes'
+			)
+			OR (
+				fph.status = 'active'
+				AND fph.failure_streak <= 1
+				AND fph.last_success_at >= NOW() - INTERVAL '60 minutes'
+			)
 		  )
-		  AND fph.last_success_at >= NOW() - INTERVAL '20 minutes'
 		  AND fp.status <> 'disabled'
-		  AND (fp.quarantined_until IS NULL OR fp.quarantined_until <= NOW())`, region).Scan(&count)
+		  AND (
+			fp.success_count > 0
+			OR fp.quarantined_until IS NULL
+			OR fp.quarantined_until <= NOW()
+		  )`, region).Scan(&count)
 	return count, err
 }
 

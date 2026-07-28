@@ -11,6 +11,7 @@ import {
     DialogTitle,
     DialogTrigger,
 } from "@/components/ui/dialog";
+import { getProxyErrorDetails } from "@/lib/proxy-errors";
 
 type MonitorMetricsDialogProps = {
     monitorId: number;
@@ -24,6 +25,7 @@ type MonitorMetrics = {
     newItems: number;
     failedChecks: number;
     lastError: string | null;
+    lastErrorCode: string | null;
     earlyAlertRate?: number | null;
     medianEarlyLeadMs?: number | null;
     p95DetectToAlertMs?: number | null;
@@ -36,6 +38,8 @@ type MonitorMetricsResponse = {
     newItemCount: number;
     failedCount: number;
     lastError: string | null;
+    lastErrorCode: string | null;
+    lastStatusCode: number | null;
     earlyAlertRate: number | null;
     medianEarlyLeadMs: number | null;
     p95DetectToAlertMs: number | null;
@@ -69,6 +73,7 @@ export function MonitorMetricsDialog({
                 newItems: data.newItemCount,
                 failedChecks: data.failedCount,
                 lastError: data.lastError,
+                lastErrorCode: data.lastErrorCode,
                 earlyAlertRate: data.earlyAlertRate,
                 medianEarlyLeadMs: data.medianEarlyLeadMs,
                 p95DetectToAlertMs: data.p95DetectToAlertMs,
@@ -92,11 +97,15 @@ export function MonitorMetricsDialog({
         newItems,
         failedChecks,
         lastError,
+        lastErrorCode,
         earlyAlertRate = null,
         medianEarlyLeadMs = null,
         p95DetectToAlertMs = null,
     } = metrics;
     const hasIssues = failedChecks > 0 || Boolean(lastError);
+    const issue = lastError
+        ? getProxyErrorDetails(lastErrorCode, lastError)
+        : null;
 
     return (
         <Dialog open={open} onOpenChange={setOpen}>
@@ -181,13 +190,28 @@ export function MonitorMetricsDialog({
                 {hasIssues && (
                     <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-500/20 dark:bg-amber-500/10">
                         <p className="text-[13px] font-semibold text-amber-900 dark:text-amber-200">
-                            Recent issue
+                            {issue?.title ?? "Recent issue"}
                         </p>
                         <p className="mt-1 text-[12px] text-amber-700 dark:text-amber-300">
                             {failedChecks} failed check
                             {failedChecks === 1 ? "" : "s"} in the latest 100
-                            runs{lastError ? ` · ${lastError}` : ""}.
+                            runs. {issue?.description}
                         </p>
+                        {issue?.action ? (
+                            <p className="mt-1 text-[12px] font-medium text-amber-800 dark:text-amber-200">
+                                {issue.action}
+                            </p>
+                        ) : null}
+                        {lastError ? (
+                            <details className="mt-2 text-[11px] text-amber-800 dark:text-amber-300">
+                                <summary className="cursor-pointer font-medium">
+                                    Technical details
+                                </summary>
+                                <p className="mt-1 break-words font-mono">
+                                    {lastError}
+                                </p>
+                            </details>
+                        ) : null}
                     </div>
                 )}
             </DialogContent>

@@ -15,10 +15,20 @@ func TestPruneUnselectedFreeProxiesSkipsEmptyKeepSet(t *testing.T) {
 }
 
 func TestFreeProxyProtocolQuotas(t *testing.T) {
-	web, socks5, socks4 := freeProxyProtocolQuotas(120)
-	if web != 72 || socks5 != 30 || socks4 != 18 {
+	web, socks5, socks4 := freeProxyProtocolQuotas(1)
+	if web != 1 || socks5 != 0 || socks4 != 0 {
 		t.Fatalf(
-			"freeProxyProtocolQuotas(120) = %d/%d/%d, want 72/30/18",
+			"freeProxyProtocolQuotas(1) = %d/%d/%d, want 1/0/0",
+			web,
+			socks5,
+			socks4,
+		)
+	}
+
+	web, socks5, socks4 = freeProxyProtocolQuotas(120)
+	if web != 73 || socks5 != 44 || socks4 != 3 {
+		t.Fatalf(
+			"freeProxyProtocolQuotas(120) = %d/%d/%d, want 73/44/3",
 			web,
 			socks5,
 			socks4,

@@ -159,8 +159,8 @@ func TestInterleaveFreeProxyImportCandidatesUsesProtocolQuotas(t *testing.T) {
 		}
 	}
 
-	if counts["web"] != 12 || counts["socks5"] != 5 || counts["socks4"] != 3 {
-		t.Fatalf("protocol counts = %#v, want web=12 socks5=5 socks4=3", counts)
+	if counts["web"] != 12 || counts["socks5"] != 7 || counts["socks4"] != 1 {
+		t.Fatalf("protocol counts = %#v, want web=12 socks5=7 socks4=1", counts)
 	}
 }
 

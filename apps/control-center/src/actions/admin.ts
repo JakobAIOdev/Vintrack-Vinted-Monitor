@@ -133,6 +133,7 @@ type FreeProxySettings = {
 type FreeProxyRegionRow = {
     region: string;
     active_count: bigint;
+    reserve_count: bigint;
     warming_count: bigint;
     pending_count: bigint;
     cooldown_count: bigint;
@@ -152,6 +153,7 @@ type FreeProxySourceDiagnosticRow = {
     successful_count: bigint;
     never_checked_count: bigint;
     active_count: bigint;
+    reserve_count: bigint;
     cooldown_count: bigint;
     top_error_code: string | null;
 };
@@ -967,6 +969,12 @@ export async function getFreeProxyAdminState() {
                       AND last_success_at >= NOW() - INTERVAL '20 minutes'
                 )::bigint AS active_count,
                 COUNT(*) FILTER (
+                    WHERE status = 'active'
+                      AND failure_streak <= 1
+                      AND last_success_at >= NOW() - INTERVAL '60 minutes'
+                      AND last_success_at < NOW() - INTERVAL '20 minutes'
+                )::bigint AS reserve_count,
+                COUNT(*) FILTER (
                     WHERE status = 'pending'
                       AND success_streak > 0
                       AND last_success_at >= NOW() - INTERVAL '20 minutes'
@@ -985,7 +993,11 @@ export async function getFreeProxyAdminState() {
                         status = 'active'
                         AND (
                             last_success_at IS NULL
-                            OR last_success_at < NOW() - INTERVAL '20 minutes'
+                            OR last_success_at < NOW() - INTERVAL '60 minutes'
+                            OR (
+                                failure_streak > 1
+                                AND last_success_at < NOW() - INTERVAL '20 minutes'
+                            )
                         )
                       )
                 )::bigint AS cooldown_count,
@@ -1041,6 +1053,12 @@ export async function getFreeProxyAdminState() {
                       AND fph.last_success_at >= NOW() - INTERVAL '20 minutes'
                 )::bigint AS active_count,
                 COUNT(*) FILTER (
+                    WHERE fph.status = 'active'
+                      AND fph.failure_streak <= 1
+                      AND fph.last_success_at >= NOW() - INTERVAL '60 minutes'
+                      AND fph.last_success_at < NOW() - INTERVAL '20 minutes'
+                )::bigint AS reserve_count,
+                COUNT(*) FILTER (
                     WHERE fph.status IN ('cooldown', 'dead')
                 )::bigint AS cooldown_count,
                 mode() WITHIN GROUP (ORDER BY fph.last_error_code)
@@ -1077,7 +1095,8 @@ export async function getFreeProxyAdminState() {
         counts.map((row) => [row.status, Number(row.proxy_count)]),
     );
     const activeHealthCount = regionRows.reduce(
-        (sum, row) => sum + Number(row.active_count),
+        (sum, row) =>
+            sum + Number(row.active_count) + Number(row.reserve_count),
         0,
     );
     const pendingHealthCount = regionRows.reduce(
@@ -1109,6 +1128,7 @@ export async function getFreeProxyAdminState() {
             return {
                 region: row.region,
                 active: Number(row.active_count),
+                reserve: Number(row.reserve_count),
                 warming: Number(row.warming_count),
                 pending: Number(row.pending_count),
                 cooldown: Number(row.cooldown_count),
@@ -1126,7 +1146,9 @@ export async function getFreeProxyAdminState() {
                 lastCheckedAt: row.last_checked_at,
                 stalled: row.stalled,
                 healthy:
-                    Number(row.active_count) + Number(row.warming_count) >=
+                    Number(row.active_count) +
+                        Number(row.reserve_count) +
+                        Number(row.warming_count) >=
                     settings.minActivePerRegion,
             };
         }),
@@ -1145,6 +1167,7 @@ export async function getFreeProxyAdminState() {
                         : null,
                 neverChecked: Number(row.never_checked_count),
                 active: Number(row.active_count),
+                reserve: Number(row.reserve_count),
                 cooldown: Number(row.cooldown_count),
                 topErrorCode: row.top_error_code,
             };

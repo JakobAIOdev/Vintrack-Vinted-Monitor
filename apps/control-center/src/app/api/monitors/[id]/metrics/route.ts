@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
+import { inferProxyErrorCode } from "@/lib/proxy-errors";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,7 @@ type MetricsRow = {
     avg_duration_ms: number | null;
     saved_item_count: bigint;
     last_error: string | null;
+    last_status_code: number | null;
 };
 
 type DetectionMetricsRow = {
@@ -46,7 +48,7 @@ export async function GET(
     const [rows, detectionRows] = await Promise.all([
         db.$queryRaw<MetricsRow[]>`
         WITH recent AS (
-            SELECT status, duration_ms, error_message, checked_at
+            SELECT status, status_code, duration_ms, error_message, checked_at
             FROM monitor_runs
             WHERE monitor_id = ${monitorId}
               AND fetch_source = 'canonical'
@@ -75,7 +77,14 @@ export async function GET(
                 WHERE error_message IS NOT NULL
                 ORDER BY checked_at DESC
                 LIMIT 1
-            ) AS last_error
+            ) AS last_error,
+            (
+                SELECT status_code
+                FROM recent
+                WHERE error_message IS NOT NULL
+                ORDER BY checked_at DESC
+                LIMIT 1
+            ) AS last_status_code
         FROM recent
         `,
         db.$queryRaw<DetectionMetricsRow[]>`
@@ -152,6 +161,10 @@ export async function GET(
                 : Math.round(row.avg_duration_ms),
         newItemCount: Number(row?.saved_item_count ?? 0),
         lastError: row?.last_error ?? null,
+        lastErrorCode: row?.last_error
+            ? inferProxyErrorCode(row.last_error, row.last_status_code)
+            : null,
+        lastStatusCode: row?.last_status_code ?? null,
         earlyAlertRate,
         medianEarlyLeadMs:
             detectionRow?.median_early_lead_ms === null ||

@@ -195,6 +195,8 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			MonitorID:       m.ID,
 			ConsecutiveErrs: -1,
 			LastError:       "no valid proxies available",
+			LastErrorCode:   proxyErrorNoValidProxies,
+			ProxyState:      "unavailable",
 			UpdatedAt:       time.Now().UTC().Format(time.RFC3339),
 		})
 		e.db.RecordMonitorRun(model.MonitorRun{
@@ -270,6 +272,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	initializedQueries := make([]bool, len(monitorQueries))
 	var totalErrors int64
 	localSeen := make(map[int64]time.Time, 128)
+	waitingForProxy := false
 
 	log.Printf("[%d] started | name=%q | queries=%d | delay=%s | hedge=%dms | url=%s", m.ID, m.Name, len(monitorQueries), interval, getEnvInt("CATALOG_HEDGE_DELAY_MS", 250), queryURLs[0])
 	if !m.SuppressStartupNotice && m.WebhookActive && m.DiscordWebhook.Valid && m.DiscordWebhook.String != "" {
@@ -279,16 +282,22 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		go telegram.SendStartup(m.TelegramChatID.String, m.Name)
 	}
 
-	reportHealth := func(lastErr string) {
+	reportHealth := func(lastErr string, lastErrorCode string, proxyState string, retryAt time.Time, proxyLabel string) {
 		h := model.MonitorHealth{
 			MonitorID:       m.ID,
 			TotalChecks:     int64(checks),
 			TotalErrors:     totalErrors,
 			ConsecutiveErrs: consecutiveErrors,
+			LastErrorCode:   lastErrorCode,
+			ProxyState:      proxyState,
+			ProxyLabel:      proxyLabel,
 			UpdatedAt:       time.Now().UTC().Format(time.RFC3339),
 		}
 		if lastErr != "" {
 			h.LastError = lastErr
+		}
+		if !retryAt.IsZero() {
+			h.RetryAt = retryAt.UTC().Format(time.RFC3339)
 		}
 		e.db.UpdateMonitorHealth(h)
 	}
@@ -308,7 +317,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 		if proxySource == "free" && pm.Count() == 0 {
 			log.Printf("[%d] free proxy pool became empty; waiting for recovery", m.ID)
-			reportHealth("free proxy pool is waiting for recovery")
+			reportHealth("free proxy pool is waiting for recovery", proxyErrorPoolWaiting, "waiting_for_proxy", time.Time{}, "")
 			e.db.RecordMonitorEvent(model.MonitorEvent{
 				MonitorID: m.ID,
 				EventType: "free_proxy_pool_degraded",
@@ -324,7 +333,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			log.Printf("[%d] free proxy pool recovered with %d proxies", m.ID, pm.Count())
 		}
 
-		checks++
+		nextCheck := checks + 1
 
 		if e.isProxyGroupBandwidthLimitReached(m) {
 			log.Printf("[%d] proxy group limit reached for %s, pausing monitor", m.ID, proxySource)
@@ -346,7 +355,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			return
 		}
 
-		if checks%20 == 0 {
+		if nextCheck%20 == 0 {
 			if updated, err := e.db.GetMonitorByID(m.ID); err == nil {
 				if updated.Status != "active" {
 					log.Printf("[%d] paused via dashboard", m.ID)
@@ -373,16 +382,42 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			}
 		}
 
-		queryIndex, _ := monitorQueryForCheck(monitorQueries, checks)
+		queryIndex, _ := monitorQueryForCheck(monitorQueries, nextCheck)
 		apiURL := queryURLs[queryIndex]
 		fetchCtx, cancelFetch := context.WithTimeout(ctx, timeoutDuration)
 		result := e.fetchCatalogHedged(fetchCtx, pool, apiURL, domain)
 		cancelFetch()
+		var waitErr *proxyPoolWaitError
+		if errors.As(result.err, &waitErr) {
+			retryAt := waitErr.RetryAt
+			if retryAt.IsZero() || !retryAt.After(time.Now()) {
+				retryAt = time.Now().Add(time.Second)
+			}
+			reportHealth(waitErr.Error(), waitErr.ErrorCode, "waiting_for_proxy", retryAt, waitErr.ProxyLabel)
+			if !waitingForProxy {
+				waitingForProxy = true
+				log.Printf("[%d] all proxies for %s are temporarily unavailable; retrying at %s", m.ID, domain, retryAt.UTC().Format(time.RFC3339))
+				e.db.RecordMonitorEvent(model.MonitorEvent{
+					MonitorID: m.ID,
+					EventType: "proxy_pool_waiting",
+					Severity:  "warning",
+					Message:   fmt.Sprintf("All proxies for %s are temporarily unavailable; retrying at %s", domain, retryAt.UTC().Format(time.RFC3339)),
+				})
+			}
+			if !waitForProxyRetry(ctx, retryAt) {
+				return
+			}
+			continue
+		}
+
+		checks = nextCheck
 		gotSuccess := result.err == nil && result.status == 200
 		e.recordFreeProxyAttempts(proxySource, m.Region, result)
 
 		if !gotSuccess {
 			failureMessage := catalogFailureMessage(result)
+			failureCode := catalogFailureCode(result.status, result.err)
+			proxyLabel := clientProxyLabel(result.client, "")
 			e.db.RecordMonitorRun(model.MonitorRun{
 				MonitorID:    m.ID,
 				Status:       "failed",
@@ -396,7 +431,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			consecutiveErrors++
 			totalErrors++
 			if consecutiveErrors%5 == 0 {
-				reportHealth(failureMessage)
+				reportHealth(failureMessage, failureCode, "degraded", time.Time{}, proxyLabel)
 				log.Printf("[%d] %d consecutive failures (%s), backing off...", m.ID, consecutiveErrors, failureMessage)
 				if consecutiveErrors == 15 || consecutiveErrors == 30 {
 					if m.WebhookActive && m.DiscordWebhook.String != "" {
@@ -436,8 +471,18 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		consecutiveErrors = 0
-		if checks%5 == 0 || checks <= 3 {
-			reportHealth("")
+		recoveredFromProxyWait := waitingForProxy
+		if recoveredFromProxyWait {
+			waitingForProxy = false
+			e.db.RecordMonitorEvent(model.MonitorEvent{
+				MonitorID: m.ID,
+				EventType: "proxy_pool_recovered",
+				Severity:  "info",
+				Message:   fmt.Sprintf("Proxy pool for %s recovered", domain),
+			})
+		}
+		if recoveredFromProxyWait || checks%5 == 0 || checks <= 3 {
+			reportHealth("", "", "", time.Time{}, "")
 		}
 
 		items := result.items
@@ -613,6 +658,21 @@ func sleepMonitorCycle(ctx context.Context, cycleStart time.Time, interval time.
 	select {
 	case <-timer.C:
 	case <-ctx.Done():
+	}
+}
+
+func waitForProxyRetry(ctx context.Context, retryAt time.Time) bool {
+	delay := time.Until(retryAt)
+	if delay <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 

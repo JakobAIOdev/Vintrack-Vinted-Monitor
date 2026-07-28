@@ -47,6 +47,9 @@ func (e *Engine) fetchCatalogHedgedWithDelay(ctx context.Context, pool *ClientPo
 	attempted := make(map[*Client]bool, maxAttempts)
 	primary := pool.AcquireExcluding(attempted)
 	if primary == nil {
+		if waitErr := pool.WaitError(); waitErr != nil {
+			return catalogFetchResult{err: waitErr}
+		}
 		return catalogFetchResult{err: fmt.Errorf("no healthy catalog client available")}
 	}
 

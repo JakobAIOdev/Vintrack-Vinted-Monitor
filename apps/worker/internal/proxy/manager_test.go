@@ -101,6 +101,30 @@ func TestManagerNext_RoundRobin(t *testing.T) {
 	}
 }
 
+func TestManagerNextExcluding(t *testing.T) {
+	m := &Manager{proxies: []string{"a", "b", "c"}}
+	excluded := map[string]bool{"a": true, "c": true}
+
+	if got := m.NextExcluding(excluded); got != "b" {
+		t.Fatalf("NextExcluding() = %q, want b", got)
+	}
+	if got := m.CountAvailable(excluded); got != 1 {
+		t.Fatalf("CountAvailable() = %d, want 1", got)
+	}
+}
+
+func TestManagerNextExcludingAll(t *testing.T) {
+	m := &Manager{proxies: []string{"a", "b"}}
+	excluded := map[string]bool{"a": true, "b": true}
+
+	if got := m.NextExcluding(excluded); got != "" {
+		t.Fatalf("NextExcluding() = %q, want empty", got)
+	}
+	if got := m.CountAvailable(excluded); got != 0 {
+		t.Fatalf("CountAvailable() = %d, want 0", got)
+	}
+}
+
 func TestManagerNext_Empty(t *testing.T) {
 	m := &Manager{}
 	if got := m.Next(); got != "" {

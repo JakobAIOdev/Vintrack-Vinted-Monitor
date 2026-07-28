@@ -3,6 +3,7 @@ package scraper
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -19,6 +20,28 @@ type clientState struct {
 	replacing     bool
 }
 
+type proxyQuarantine struct {
+	until time.Time
+	code  string
+	label string
+}
+
+type proxyPoolWaitError struct {
+	RetryAt    time.Time
+	ErrorCode  string
+	ProxyLabel string
+}
+
+func (e *proxyPoolWaitError) Error() string {
+	if e == nil {
+		return "all configured proxies are temporarily unavailable"
+	}
+	if e.RetryAt.IsZero() {
+		return "all configured proxies are temporarily unavailable"
+	}
+	return fmt.Sprintf("all configured proxies are temporarily unavailable until %s", e.RetryAt.UTC().Format(time.RFC3339))
+}
+
 type ClientPool struct {
 	states          []*clientState
 	index           int
@@ -28,6 +51,9 @@ type ClientPool struct {
 	trafficRecorder func(txBytes int64, rxBytes int64)
 	requestTimeout  time.Duration
 	requireProxy    bool
+	quarantined     map[string]proxyQuarantine
+	reserved        map[string]bool
+	now             func() time.Time
 }
 
 func NewClientPool(pm *proxy.Manager, domain string, size int, trafficRecorder func(txBytes int64, rxBytes int64)) *ClientPool {
@@ -53,6 +79,9 @@ func NewClientPoolWithTimeout(pm *proxy.Manager, domain string, size int, traffi
 		trafficRecorder: trafficRecorder,
 		requestTimeout:  requestTimeout,
 		requireProxy:    proxyCount > 0,
+		quarantined:     make(map[string]proxyQuarantine),
+		reserved:        make(map[string]bool),
+		now:             time.Now,
 	}
 
 	var wg sync.WaitGroup
@@ -103,11 +132,12 @@ func (p *ClientPool) AcquireExcluding(excluded map[*Client]bool) *Client {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	now := time.Now()
+	now := p.currentTime()
+	p.clearExpiredQuarantinesLocked(now)
 	var best *clientState
 	bestScore := float64(0)
 	for _, state := range p.states {
-		if excluded[state.client] || state.cooldownUntil.After(now) || state.replacing {
+		if excluded[state.client] || state.cooldownUntil.After(now) || state.replacing || p.proxyIsQuarantinedLocked(state.client.ProxyURL, now) {
 			continue
 		}
 		latency := state.ewmaLatencyMS
@@ -137,11 +167,12 @@ func (p *ClientPool) AcquireRoundRobin() *Client {
 	if len(p.states) == 0 {
 		return nil
 	}
-	now := time.Now()
+	now := p.currentTime()
+	p.clearExpiredQuarantinesLocked(now)
 	for offset := 0; offset < len(p.states); offset++ {
 		index := (p.index + offset) % len(p.states)
 		state := p.states[index]
-		if state.cooldownUntil.After(now) || state.replacing {
+		if state.cooldownUntil.After(now) || state.replacing || p.proxyIsQuarantinedLocked(state.client.ProxyURL, now) {
 			continue
 		}
 		state.inFlight++
@@ -182,33 +213,30 @@ func (p *ClientPool) Report(client *Client, status int, latency time.Duration, e
 		}
 		state.failures = 0
 		state.cooldownUntil = time.Time{}
+		delete(p.quarantined, client.ProxyURL)
 		p.mu.Unlock()
 		return
 	}
 
 	state.failures++
-	shouldReplace := false
-	cooldown := 2 * time.Second
-	switch status {
-	case 401, 403:
-		cooldown = 30 * time.Second
+	policy := failurePolicy(status, err, state.failures)
+	if policy.resetWarmupSession {
 		client.ResetWarm(p.domain)
-	case 407:
-		cooldown = 5 * time.Minute
-		client.ResetWarm(p.domain)
-	case 429:
-		cooldown = 10 * time.Second
-		client.ResetWarm(p.domain)
-	default:
-		if err != nil {
-			cooldown = 5 * time.Second
-			shouldReplace = state.failures >= 2
-		}
 	}
-	shouldReplace = shouldReplace || shouldReplaceClientForStatus(status)
-	state.cooldownUntil = time.Now().Add(cooldown)
+	now := p.currentTime()
+	state.cooldownUntil = now.Add(policy.cooldown)
+	if policy.quarantine > 0 && client.ProxyURL != "" {
+		until := now.Add(policy.quarantine)
+		p.ensureMapsLocked()
+		p.quarantined[client.ProxyURL] = proxyQuarantine{
+			until: until,
+			code:  policy.code,
+			label: client.ProxyLabel(),
+		}
+		state.cooldownUntil = until
+	}
 	p.mu.Unlock()
-	if shouldReplace {
+	if policy.replaceClient {
 		p.Replace(client)
 	}
 }
@@ -228,9 +256,19 @@ func (p *ClientPool) Replace(bad *Client) {
 	p.mu.Unlock()
 
 	go func(target *clientState) {
-		c, err := newPoolClient(p.pm, p.trafficRecorder, p.requestTimeout, p.requireProxy)
+		proxyURL, err := p.reserveReplacementProxy(target)
+		if err != nil {
+			p.mu.Lock()
+			target.replacing = false
+			p.mu.Unlock()
+			log.Printf("pool: no healthy replacement for %s: %v", p.domain, err)
+			return
+		}
+
+		c, err := NewClientWithTimeout(proxyURL, p.trafficRecorder, p.requestTimeout)
 		p.mu.Lock()
 		defer p.mu.Unlock()
+		delete(p.reserved, proxyURL)
 		if err != nil {
 			target.replacing = false
 			log.Printf("pool: replace failed: %v", err)
@@ -243,6 +281,89 @@ func (p *ClientPool) Replace(bad *Client) {
 		target.cooldownUntil = time.Time{}
 		target.replacing = false
 	}(state)
+}
+
+func (p *ClientPool) reserveReplacementProxy(target *clientState) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.ensureMapsLocked()
+	now := p.currentTime()
+	p.clearExpiredQuarantinesLocked(now)
+	excluded := make(map[string]bool, len(p.quarantined)+len(p.states)+len(p.reserved))
+	for proxyURL := range p.quarantined {
+		excluded[proxyURL] = true
+	}
+	for proxyURL := range p.reserved {
+		excluded[proxyURL] = true
+	}
+	for _, state := range p.states {
+		if state != target && state.client != nil && state.client.ProxyURL != "" {
+			excluded[state.client.ProxyURL] = true
+		}
+	}
+
+	proxyURL := p.pm.NextExcluding(excluded)
+	if proxyURL == "" {
+		return "", errors.New("all configured proxies are active or quarantined")
+	}
+	p.reserved[proxyURL] = true
+	return proxyURL, nil
+}
+
+func (p *ClientPool) WaitError() *proxyPoolWaitError {
+	if p == nil || p.pm == nil {
+		return nil
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.ensureMapsLocked()
+	now := p.currentTime()
+	p.clearExpiredQuarantinesLocked(now)
+	excluded := make(map[string]bool, len(p.quarantined))
+	var earliest proxyQuarantine
+	for proxyURL, quarantine := range p.quarantined {
+		excluded[proxyURL] = true
+		if earliest.until.IsZero() || quarantine.until.Before(earliest.until) {
+			earliest = quarantine
+		}
+	}
+	if len(excluded) == 0 || p.pm.CountAvailable(excluded) > 0 {
+		return nil
+	}
+	return &proxyPoolWaitError{
+		RetryAt: earliest.until, ErrorCode: earliest.code, ProxyLabel: earliest.label,
+	}
+}
+
+func (p *ClientPool) currentTime() time.Time {
+	if p.now != nil {
+		return p.now()
+	}
+	return time.Now()
+}
+
+func (p *ClientPool) ensureMapsLocked() {
+	if p.quarantined == nil {
+		p.quarantined = make(map[string]proxyQuarantine)
+	}
+	if p.reserved == nil {
+		p.reserved = make(map[string]bool)
+	}
+}
+
+func (p *ClientPool) clearExpiredQuarantinesLocked(now time.Time) {
+	for proxyURL, quarantine := range p.quarantined {
+		if !quarantine.until.After(now) {
+			delete(p.quarantined, proxyURL)
+		}
+	}
+}
+
+func (p *ClientPool) proxyIsQuarantinedLocked(proxyURL string, now time.Time) bool {
+	quarantine, ok := p.quarantined[proxyURL]
+	return ok && quarantine.until.After(now)
 }
 
 func (p *ClientPool) findState(client *Client) *clientState {

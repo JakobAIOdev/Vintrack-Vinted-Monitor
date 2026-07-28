@@ -73,6 +73,7 @@ import {
     stopUserActiveMonitors,
 } from "@/actions/admin";
 import { getRegionLabel, REGIONS } from "@/lib/regions";
+import { getProxyErrorDetails } from "@/lib/proxy-errors";
 
 type UserMonitor = {
     id: number;
@@ -220,6 +221,7 @@ type FreeProxyState = {
     regions: {
         region: string;
         active: number;
+        reserve: number;
         warming: number;
         pending: number;
         cooldown: number;
@@ -239,11 +241,31 @@ type FreeProxyState = {
         successRate: number | null;
         neverChecked: number;
         active: number;
+        reserve: number;
         cooldown: number;
         topErrorCode: string | null;
     }[];
     recent: FreeProxyRow[];
 };
+
+function AdminMonitorError({ message }: { message: string }) {
+    const issue = getProxyErrorDetails(null, message);
+    return (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
+            <p className="font-semibold">{issue.title}</p>
+            <p className="mt-0.5">{issue.description}</p>
+            {issue.action ? (
+                <p className="mt-1 font-medium">{issue.action}</p>
+            ) : null}
+            <details className="mt-2 text-[11px]">
+                <summary className="cursor-pointer font-medium">
+                    Technical details
+                </summary>
+                <p className="mt-1 break-words font-mono">{message}</p>
+            </details>
+        </div>
+    );
+}
 
 const ROLES = [
     {
@@ -875,6 +897,7 @@ export function AdminClient({
             : {
                   region: region.code,
                   active: 0,
+                  reserve: 0,
                   warming: 0,
                   pending: 0,
                   cooldown: 0,
@@ -4052,6 +4075,7 @@ export function AdminClient({
                                                           : !region.healthy
                                                             ? "Recovering"
                                                             : region.active +
+                                                                    region.reserve +
                                                                     region.warming <
                                                                 freeProxySettings.targetActivePerRegion
                                                               ? "Building"
@@ -4060,14 +4084,14 @@ export function AdminClient({
                                                 <span className="text-muted-foreground">
                                                     {region.initializing
                                                         ? "Waiting for the worker to assign candidates"
-                                                        : `${region.stalled ? "Maintainer overdue · " : ""}${region.active + region.warming} usable / ${freeProxySettings.targetActivePerRegion} target / ${region.active} active / ${region.warming} warming / ${region.pending} pending / ${region.cooldown} cooldown / ${region.dead} dead`}
+                                                        : `${region.stalled ? "Maintainer overdue · " : ""}${region.active + region.reserve + region.warming} usable / ${freeProxySettings.targetActivePerRegion} target / ${region.active} fresh / ${region.reserve} reserve / ${region.warming} warming / ${region.pending} pending / ${region.cooldown} cooldown / ${region.dead} retry-later`}
                                                 </span>
                                             </div>
                                             <div className="text-muted-foreground">
                                                 {region.successRate === null
                                                     ? "n/a"
                                                     : `${region.successRate}%`}{" "}
-                                                24h ok
+                                                latest ok
                                             </div>
                                             <div className="text-muted-foreground">
                                                 {region.medianLatencyMs === null
@@ -4097,9 +4121,9 @@ export function AdminClient({
                                     Source and protocol yield
                                 </p>
                                 <p className="text-muted-foreground text-xs">
-                                    Last 24 hours. This makes starvation and
-                                    weak feeds visible without exposing proxy
-                                    addresses.
+                                    Latest regional outcome for rows checked in
+                                    the last 24 hours. This is pool state, not a
+                                    request-level success rate.
                                 </p>
                             </div>
                             <div className="divide-border/60 divide-y">
@@ -4127,9 +4151,13 @@ export function AdminClient({
                                                         : `${diagnostic.successRate}%`}
                                                 </span>
                                                 <span>
-                                                    {diagnostic.active} active ·{" "}
+                                                    {diagnostic.active} fresh ·{" "}
+                                                    {diagnostic.reserve} reserve
+                                                    {" · "}
+                                                    {diagnostic.proxyCount}{" "}
+                                                    proxies ·{" "}
                                                     {diagnostic.neverChecked}{" "}
-                                                    new
+                                                    unchecked region rows
                                                 </span>
                                                 <span className="text-muted-foreground">
                                                     {diagnostic.topErrorCode
@@ -4711,9 +4739,11 @@ export function AdminClient({
                                     </Badge>
                                 </div>
                                 {selected.metrics.latestError24h ? (
-                                    <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
-                                        {selected.metrics.latestError24h}
-                                    </p>
+                                    <AdminMonitorError
+                                        message={
+                                            selected.metrics.latestError24h
+                                        }
+                                    />
                                 ) : null}
                             </div>
 

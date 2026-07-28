@@ -86,4 +86,73 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 	if err := store.RecordFreeProxySuccessContext(ctx, proxyURL, region, 250); err != nil {
 		t.Fatalf("record success: %v", err)
 	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO free_proxy_health (proxy_id, region, status, next_check_at, updated_at)
+		SELECT id, 'sqlcheck_other', 'pending', NOW(), NOW()
+		FROM free_proxies
+		WHERE proxy_url = $1
+		ON CONFLICT (proxy_id, region) DO UPDATE
+		SET next_check_at = NOW(), updated_at = NOW()`, proxyURL); err != nil {
+		t.Fatalf("seed other region health row: %v", err)
+	}
+	if err := store.RecordFreeProxyFailureClassContext(
+		ctx,
+		proxyURL,
+		region,
+		0,
+		"read timeout after prior success",
+		"timeout",
+		3,
+		30,
+	); err != nil {
+		t.Fatalf("record proven proxy timeout: %v", err)
+	}
+
+	active, err := store.GetActiveFreeProxiesContext(ctx, region, 10)
+	if err != nil {
+		t.Fatalf("get active proxies after isolated timeout: %v", err)
+	}
+	if len(active) != 1 || active[0] != proxyURL {
+		t.Fatalf("active proxies after isolated timeout = %#v, want proven proxy", active)
+	}
+
+	var quarantinedUntil sql.NullTime
+	if err := db.QueryRowContext(ctx, `
+		SELECT quarantined_until
+		FROM free_proxies
+		WHERE proxy_url = $1`, proxyURL).Scan(&quarantinedUntil); err != nil {
+		t.Fatalf("read proven proxy quarantine: %v", err)
+	}
+	if quarantinedUntil.Valid {
+		t.Fatalf("proven proxy received global quarantine until %v", quarantinedUntil.Time)
+	}
+
+	var otherNextCheck time.Time
+	if err := db.QueryRowContext(ctx, `
+		SELECT fph.next_check_at
+		FROM free_proxy_health fph
+		JOIN free_proxies fp ON fp.id = fph.proxy_id
+		WHERE fp.proxy_url = $1
+		  AND fph.region = 'sqlcheck_other'`, proxyURL).Scan(&otherNextCheck); err != nil {
+		t.Fatalf("read other region next check: %v", err)
+	}
+	if otherNextCheck.After(time.Now().Add(time.Minute)) {
+		t.Fatalf("proven proxy timeout delayed another region until %v", otherNextCheck)
+	}
+
+	maintenanceCandidates, err := store.ClaimFreeProxiesDueForCheck(
+		ctx,
+		[]string{"sqlcheck_other"},
+		3,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("claim maintenance proxies: %v", err)
+	}
+	if len(maintenanceCandidates) != 0 {
+		t.Fatalf(
+			"maintenance candidates = %#v, want no pending discovery candidates",
+			maintenanceCandidates,
+		)
+	}
 }

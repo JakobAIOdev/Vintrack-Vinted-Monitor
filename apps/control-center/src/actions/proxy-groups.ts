@@ -2,10 +2,88 @@
 
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
+import { REGIONS } from "@/lib/regions";
+import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 
 const VALID_SCHEMES = ["http", "https", "socks4", "socks5"];
 const BYTES_PER_GB = 1024 * 1024 * 1024;
+const MAX_PROXY_CHECK_SIZE = 100;
+const PROXY_CHECK_COOLDOWN_MS = 30_000;
+
+export type ProxyCheckResult = {
+    index: number;
+    label: string;
+    status: "working" | "slow" | "failed";
+    latencyMs: number | null;
+    errorCode: string | null;
+};
+
+export type ProxyCheckSnapshot = {
+    status: string;
+    region: string | null;
+    total: number;
+    checked: number;
+    working: number;
+    slow: number;
+    failed: number;
+    results: ProxyCheckResult[];
+    error: string | null;
+    requestedAt: string | null;
+    startedAt: string | null;
+    completedAt: string | null;
+};
+
+type ProxyCheckRecord = {
+    proxy_check_status: string;
+    proxy_check_region: string | null;
+    proxy_check_total: number;
+    proxy_check_checked: number;
+    proxy_check_working: number;
+    proxy_check_slow: number;
+    proxy_check_failed: number;
+    proxy_check_results: unknown;
+    proxy_check_error: string | null;
+    proxy_check_requested_at: Date | null;
+    proxy_check_started_at: Date | null;
+    proxy_check_completed_at: Date | null;
+};
+
+function isProxyCheckResult(value: unknown): value is ProxyCheckResult {
+    if (!value || typeof value !== "object") return false;
+    const result = value as Record<string, unknown>;
+    return (
+        typeof result.index === "number" &&
+        typeof result.label === "string" &&
+        (result.status === "working" ||
+            result.status === "slow" ||
+            result.status === "failed") &&
+        (result.latencyMs === null ||
+            typeof result.latencyMs === "number") &&
+        (result.errorCode === null || typeof result.errorCode === "string")
+    );
+}
+
+function serializeProxyCheck(record: ProxyCheckRecord): ProxyCheckSnapshot {
+    const results = Array.isArray(record.proxy_check_results)
+        ? record.proxy_check_results.filter(isProxyCheckResult)
+        : [];
+
+    return {
+        status: record.proxy_check_status,
+        region: record.proxy_check_region,
+        total: record.proxy_check_total,
+        checked: record.proxy_check_checked,
+        working: record.proxy_check_working,
+        slow: record.proxy_check_slow,
+        failed: record.proxy_check_failed,
+        results,
+        error: record.proxy_check_error,
+        requestedAt: record.proxy_check_requested_at?.toISOString() ?? null,
+        startedAt: record.proxy_check_started_at?.toISOString() ?? null,
+        completedAt: record.proxy_check_completed_at?.toISOString() ?? null,
+    };
+}
 
 function validateProxyLine(line: string): string | null {
     line = line.trim();
@@ -47,8 +125,9 @@ function validateProxies(text: string) {
     const valid: string[] = [];
     const invalid: string[] = [];
     for (const line of lines) {
-        if (validateProxyLine(line)) {
-            valid.push(line.trim());
+        const normalized = validateProxyLine(line);
+        if (normalized) {
+            valid.push(normalized);
         } else {
             invalid.push(line.trim());
         }
@@ -197,6 +276,18 @@ export async function updateProxyGroup(id: number, formData: FormData) {
             name,
             proxies: valid.join("\n"),
             bandwidth_limit_bytes: bandwidthLimitBytes,
+            proxy_check_status: "idle",
+            proxy_check_region: null,
+            proxy_check_total: 0,
+            proxy_check_checked: 0,
+            proxy_check_working: 0,
+            proxy_check_slow: 0,
+            proxy_check_failed: 0,
+            proxy_check_results: Prisma.DbNull,
+            proxy_check_error: null,
+            proxy_check_requested_at: null,
+            proxy_check_started_at: null,
+            proxy_check_completed_at: null,
         },
     });
 
@@ -217,4 +308,96 @@ export async function resetProxyGroupBandwidth(id: number) {
     });
 
     revalidatePath("/proxies");
+}
+
+export async function startProxyGroupCheck(
+    id: number,
+    region: string,
+): Promise<ProxyCheckSnapshot> {
+    const session = await auth();
+    if (!session?.user?.id) throw new Error("Unauthorized");
+    const userId = session.user.id;
+
+    const normalizedRegion = region.trim().toLowerCase();
+    if (!REGIONS.some((candidate) => candidate.code === normalizedRegion)) {
+        throw new Error("Unsupported Vinted region");
+    }
+
+    const snapshot = await db.$transaction(async (tx) => {
+        const group = await tx.proxy_groups.findFirst({
+            where: { id, userId },
+        });
+        if (!group) throw new Error("Proxy group not found");
+
+        if (
+            group.proxy_check_status === "pending" ||
+            group.proxy_check_status === "running"
+        ) {
+            return serializeProxyCheck(group);
+        }
+
+        if (
+            group.proxy_check_requested_at &&
+            Date.now() - group.proxy_check_requested_at.getTime() <
+                PROXY_CHECK_COOLDOWN_MS
+        ) {
+            throw new Error("Please wait 30 seconds before checking again");
+        }
+
+        const otherActiveJob = await tx.proxy_groups.findFirst({
+            where: {
+                userId,
+                id: { not: id },
+                proxy_check_status: { in: ["pending", "running"] },
+            },
+            select: { id: true },
+        });
+        if (otherActiveJob) {
+            throw new Error(
+                "Wait for your current proxy check to finish before starting another",
+            );
+        }
+
+        const total = Math.min(
+            MAX_PROXY_CHECK_SIZE,
+            group.proxies
+                .split("\n")
+                .filter((line) => line.trim().length > 0).length,
+        );
+        const updated = await tx.proxy_groups.update({
+            where: { id },
+            data: {
+                proxy_check_status: "pending",
+                proxy_check_region: normalizedRegion,
+                proxy_check_total: total,
+                proxy_check_checked: 0,
+                proxy_check_working: 0,
+                proxy_check_slow: 0,
+                proxy_check_failed: 0,
+                proxy_check_results: Prisma.DbNull,
+                proxy_check_error: null,
+                proxy_check_requested_at: new Date(),
+                proxy_check_started_at: null,
+                proxy_check_completed_at: null,
+            },
+        });
+        return serializeProxyCheck(updated);
+    });
+
+    revalidatePath("/proxies");
+    return snapshot;
+}
+
+export async function getProxyGroupCheckStatus(
+    id: number,
+): Promise<ProxyCheckSnapshot> {
+    const session = await auth();
+    if (!session?.user?.id) throw new Error("Unauthorized");
+
+    const group = await db.proxy_groups.findFirst({
+        where: { id, userId: session.user.id },
+    });
+    if (!group) throw new Error("Proxy group not found");
+
+    return serializeProxyCheck(group);
 }

@@ -9,6 +9,7 @@ import { useState, type ReactNode } from "react";
 export type FreeProxyRegionHealth = {
     region: string;
     active: number;
+    reserve: number;
     warming: number;
     usable: number;
     pending: number;
@@ -153,7 +154,7 @@ export function RegionPoolStatus({
                         <p className="text-muted-foreground mt-1 text-xs">
                             {freeProxy.enabled
                                 ? isHealthy
-                                    ? `${usable} usable of ${min} target. ${regionHealth?.active ?? 0} active, ${regionHealth?.warming ?? 0} warming.`
+                                    ? `${usable} usable of ${min} target. ${regionHealth?.active ?? 0} fresh, ${regionHealth?.reserve ?? 0} reserve, ${regionHealth?.warming ?? 0} warming.`
                                     : `${usable} usable right now. The pool is rebuilding automatically and monitors stay active.`
                                 : "Free Proxy Pool is currently disabled by admin."}
                         </p>

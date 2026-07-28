@@ -83,6 +83,10 @@ type MonitorHealth = {
     total_errors: number;
     consecutive_errors: number;
     last_error?: string;
+    last_error_code?: string;
+    proxy_state?: string;
+    retry_at?: string;
+    proxy_label?: string;
     updated_at: string;
 };
 
@@ -148,6 +152,8 @@ async function readApiError(res: Response, fallback: string) {
 
 function hasProxyWarning(h?: MonitorHealth): boolean {
     if (!h) return false;
+    if (h.proxy_state === "waiting_for_proxy" || h.proxy_state === "unavailable")
+        return true;
     if (h.consecutive_errors === -1 || h.consecutive_errors >= 3) return true;
     return false;
 }

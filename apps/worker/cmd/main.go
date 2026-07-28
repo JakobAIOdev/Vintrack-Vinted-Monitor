@@ -173,10 +173,13 @@ func runProxyMaintainer(ctx context.Context, cancel context.CancelFunc, sigChan 
 		pruneTelemetry()
 		importFreeProxies(ctx, store)
 		checkFreeProxies(ctx, store)
+		processProxyGroupCheckJob(ctx, store)
 	}()
 
 	healthTicker := time.NewTicker(15 * time.Second)
 	defer healthTicker.Stop()
+	proxyGroupCheckTicker := time.NewTicker(2 * time.Second)
+	defer proxyGroupCheckTicker.Stop()
 	importTicker := time.NewTicker(5 * time.Minute)
 	defer importTicker.Stop()
 	cleanupTicker := time.NewTicker(time.Hour)
@@ -190,6 +193,8 @@ func runProxyMaintainer(ctx context.Context, cancel context.CancelFunc, sigChan 
 			return
 		case <-healthTicker.C:
 			go checkFreeProxies(ctx, store)
+		case <-proxyGroupCheckTicker.C:
+			go processProxyGroupCheckJob(ctx, store)
 		case <-importTicker.C:
 			go importFreeProxies(ctx, store)
 		case <-cleanupTicker.C:
@@ -893,15 +898,18 @@ func freeProxyImportProtocolQuotas(limit int) (web int, socks5 int, socks4 int) 
 	if limit <= 0 {
 		return 0, 0, 0
 	}
-	web = limit * 60 / 100
-	socks5 = limit * 25 / 100
-	if limit >= 3 {
-		web = max(1, web)
-		socks5 = max(1, socks5)
-		socks4 = max(1, limit-web-socks5)
-	} else {
-		socks4 = limit - web - socks5
+	if limit == 1 {
+		return 1, 0, 0
 	}
+	if limit == 2 {
+		return 1, 1, 0
+	}
+	web = limit * 60 / 100
+	socks5 = limit * 37 / 100
+	socks4 = limit * 3 / 100
+	web = max(1, web)
+	socks5 = max(1, socks5)
+	socks4 = max(1, socks4)
 	for web+socks5+socks4 > limit {
 		if web > socks5 && web > 1 {
 			web--

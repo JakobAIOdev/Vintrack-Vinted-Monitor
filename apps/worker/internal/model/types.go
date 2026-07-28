@@ -111,6 +111,10 @@ type MonitorHealth struct {
 	TotalErrors     int64  `json:"total_errors"`
 	ConsecutiveErrs int    `json:"consecutive_errors"`
 	LastError       string `json:"last_error,omitempty"`
+	LastErrorCode   string `json:"last_error_code,omitempty"`
+	ProxyState      string `json:"proxy_state,omitempty"`
+	RetryAt         string `json:"retry_at,omitempty"`
+	ProxyLabel      string `json:"proxy_label,omitempty"`
 	UpdatedAt       string `json:"updated_at"`
 }
 

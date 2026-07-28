@@ -5,25 +5,39 @@
 <h1 align="center">Vintrack</h1>
 
 <p align="center">
-  <strong>Self-hosted Vinted monitoring for focused searches and fast alerts.</strong>
+  <strong>Catch the right Vinted listings before the feed moves on.</strong>
   <br />
-  Go workers, a live Next.js dashboard, health-scored proxy sessions, Discord and Telegram notifications, and optional linked-account actions.
+  A self-hosted monitoring stack with fast Go workers, a live dashboard, regional proxy health,
+  Discord and Telegram alerts, and optional linked-account actions.
 </p>
 
 <p align="center">
-  <a href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/actions/workflows/ci.yml"><img src="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
-  <a href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest"><img src="https://img.shields.io/github/v/release/JakobAIOdev/Vintrack-Vinted-Monitor?display_name=tag" alt="Latest release" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e" alt="MIT license" /></a>
-  <a href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/stargazers"><img src="https://img.shields.io/github/stars/JakobAIOdev/Vintrack-Vinted-Monitor?style=flat" alt="GitHub stars" /></a>
-  <a href="https://discord.gg/WbEpEjaWjP"><img src="https://img.shields.io/badge/Discord-community-5865F2?logo=discord&logoColor=white" alt="Discord community" /></a>
+  <a href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/JakobAIOdev/Vintrack-Vinted-Monitor/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=CI" alt="CI status" /></a>
+  <a href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest"><img src="https://img.shields.io/github/v/release/JakobAIOdev/Vintrack-Vinted-Monitor?display_name=tag&style=for-the-badge&logo=github" alt="Latest release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/JakobAIOdev/Vintrack-Vinted-Monitor?style=for-the-badge&color=22c55e" alt="MIT license" /></a>
+  <a href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/stargazers"><img src="https://img.shields.io/github/stars/JakobAIOdev/Vintrack-Vinted-Monitor?style=for-the-badge&logo=github&color=fbbf24" alt="GitHub stars" /></a>
+  <a href="https://discord.gg/WbEpEjaWjP"><img src="https://img.shields.io/badge/Discord-join%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord community" /></a>
 </p>
 
 <p align="center">
-  <a href="https://vintrack.jakobaio.dev">Live demo</a> ·
-  <a href="docs/getting-started.md">Get started</a> ·
-  <a href="docs/configuration.md">Configuration</a> ·
-  <a href="docs/architecture.md">Architecture</a> ·
-  <a href="CONTRIBUTING.md">Contribute</a>
+  <img src="https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=nextdotjs" alt="Next.js 16" />
+  <img src="https://img.shields.io/badge/React-19-149ECA?style=flat-square&logo=react&logoColor=white" alt="React 19" />
+  <img src="https://img.shields.io/badge/Go-workers-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go workers" />
+  <img src="https://img.shields.io/badge/PostgreSQL-15-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL 15" />
+  <img src="https://img.shields.io/badge/Redis-7-FF4438?style=flat-square&logo=redis&logoColor=white" alt="Redis 7" />
+  <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker Compose" />
+</p>
+
+<p align="center">
+  <a href="https://vintrack.jakobaio.dev"><strong>Live demo</strong></a>
+  ·
+  <a href="#self-host-in-five-minutes"><strong>Self-host</strong></a>
+  ·
+  <a href="docs/getting-started.md"><strong>Documentation</strong></a>
+  ·
+  <a href="https://discord.gg/WbEpEjaWjP"><strong>Community</strong></a>
+  ·
+  <a href="https://github.com/sponsors/JakobAIOdev"><strong>Sponsor</strong></a>
 </p>
 
 <p align="center">
@@ -39,33 +53,60 @@
     <img src="docs/screenshots/product-preview.webp" width="900" alt="Animated Vintrack live feed product preview" />
   </a>
   <br />
-  <sub>Auto-playing product tour · click to open the MP4</sub>
+  <sub>Product tour preview · click to open the MP4</sub>
 </p>
 
-## What is Vintrack?
+## At a glance
+
+- **⚡ Fast monitoring** — run isolated regional catalog sessions with bounded
+  attempts, delayed hedging, and Redis-backed deduplication.
+- **🎯 Precise filters** — target query, price, category, brand, color, size,
+  condition, seller country, and Vinted market.
+- **🔔 Alerts where you are** — send rich matches to the live dashboard,
+  Discord webhooks, or connected Telegram chats.
+- **🌍 Observable proxy pools** — use personal, server-managed, or optional
+  health-scored starter pools with regional readiness.
+- **🛍️ Optional account actions** — link an account you control to like items,
+  send offers, message sellers, and open native checkout.
+- **🏠 Built to self-host** — deploy the complete stack with Docker Compose,
+  Caddy, PostgreSQL, Redis, and forward-only migrations.
 
 Vintrack is an open-source platform for monitoring new Vinted listings. Create
 targeted monitors, process catalog updates through isolated Go workers, and
-deliver matching items to the dashboard, Discord, or Telegram.
+deliver matching items wherever you can act on them fastest.
 
-It is designed for operators who want transparent infrastructure they can run
-themselves:
+> [!IMPORTANT]
+> Vintrack is an independent project. It is not affiliated with, endorsed by,
+> or operated by Vinted. Use it lawfully, respect platform limits, and only
+> connect accounts you are authorized to use.
 
-- **Focused monitoring** — search, price, category, brand, color, size, seller
-  country, and Vinted region filters.
-- **Live results** — Redis-backed deduplication, PostgreSQL persistence, and an
-  SSE live feed.
-- **Flexible notifications** — per-monitor Discord webhooks and Telegram
-  connection flows.
-- **Observable proxy pools** — personal, server-managed, and optional
-  health-checked starter pools with regional status.
-- **Optional account actions** — link an authorized Vinted account to like
-  items, send offers, message sellers, and open browser-assisted checkout.
-- **Browser session sync** — Chrome and Firefox builds keep an explicitly linked
-  account session current without copying a full browser cookie jar.
+## Start here
 
-Vintrack is an independent project and is not affiliated with, endorsed by, or
-operated by Vinted.
+| I want to… | Go here |
+| --- | --- |
+| See Vintrack without installing anything | [Try the live demo](#try-the-live-demo) |
+| Run my own instance | [Self-host in five minutes](#self-host-in-five-minutes) |
+| Understand the moving parts | [Architecture](#architecture) |
+| Configure auth, proxies, alerts, and tuning | [Configuration guide](docs/configuration.md) |
+| Develop or contribute | [Development guide](docs/development.md) · [Contributing](CONTRIBUTING.md) |
+| Fix a broken deployment | [Troubleshooting guide](docs/troubleshooting.md) |
+
+<details>
+<summary><strong>Full README contents</strong></summary>
+
+- [Try the live demo](#try-the-live-demo)
+- [Self-host in five minutes](#self-host-in-five-minutes)
+- [Feature overview](#feature-overview)
+- [Product tour](#product-tour)
+- [Architecture](#architecture)
+- [Technology](#technology)
+- [Repository layout](#repository-layout)
+- [Documentation](#documentation)
+- [Responsible use](#responsible-use)
+- [Contributing and support](#contributing-and-support)
+- [License](#license)
+
+</details>
 
 ## Try the live demo
 

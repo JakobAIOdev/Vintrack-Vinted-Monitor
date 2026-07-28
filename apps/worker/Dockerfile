@@ -10,7 +10,7 @@ RUN go mod download
 COPY . .
 
 # Build
-RUN CGO_ENABLED=0 GOOS=linux go build -o worker ./cmd/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o worker ./cmd
 
 # Runtime Image
 FROM alpine:latest
