@@ -141,6 +141,8 @@ func (c *Client) portal() string {
 		return "uk"
 	case strings.Contains(c.session.Domain, "vinted.ie"):
 		return "ie"
+	case strings.Contains(c.session.Domain, "vinted.cz"):
+		return "cz"
 	case strings.Contains(c.session.Domain, "vinted.com"):
 		return "com"
 	default:
@@ -172,6 +174,8 @@ func (c *Client) locale() string {
 		return "en-GB"
 	case strings.Contains(c.session.Domain, "vinted.ie"):
 		return "en-IE"
+	case strings.Contains(c.session.Domain, "vinted.cz"):
+		return "cs-CZ"
 	case strings.Contains(c.session.Domain, "vinted.com"):
 		return "en-US"
 	default:
@@ -544,6 +548,35 @@ type brandFilterPayload struct {
 
 func DefaultBrandCatalogIDs() []string {
 	return []string{"1904", "5", "2993", "1193", "1918", "2994", "2309", "4824", "4332"}
+}
+
+var brandSearchDomains = map[string]string{
+	"de": "www.vinted.de",
+	"fr": "www.vinted.fr",
+	"it": "www.vinted.it",
+	"es": "www.vinted.es",
+	"nl": "www.vinted.nl",
+	"pl": "www.vinted.pl",
+	"pt": "www.vinted.pt",
+	"be": "www.vinted.be",
+	"at": "www.vinted.at",
+	"lu": "www.vinted.lu",
+	"uk": "www.vinted.co.uk",
+	"ie": "www.vinted.ie",
+	"cz": "www.vinted.cz",
+	"sk": "www.vinted.sk",
+	"lt": "www.vinted.lt",
+	"se": "www.vinted.se",
+	"dk": "www.vinted.dk",
+	"ro": "www.vinted.ro",
+	"hu": "www.vinted.hu",
+	"hr": "www.vinted.hr",
+	"fi": "www.vinted.fi",
+}
+
+func DomainForRegion(region string) (string, bool) {
+	domain, ok := brandSearchDomains[strings.ToLower(strings.TrimSpace(region))]
+	return domain, ok
 }
 
 type userWrapper struct {

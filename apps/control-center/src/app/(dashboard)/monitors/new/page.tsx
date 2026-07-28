@@ -645,6 +645,7 @@ export default function NewMonitorPage() {
                                 <BrandPicker
                                     selected={selectedBrands}
                                     onChange={setSelectedBrands}
+                                    region={selectedRegion}
                                     catalogIds={selectedCategories}
                                 />
                                 <input

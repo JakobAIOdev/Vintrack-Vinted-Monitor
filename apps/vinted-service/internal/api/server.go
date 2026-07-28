@@ -1482,13 +1482,43 @@ func (s *Server) handleBrandSearch(w http.ResponseWriter, r *http.Request) {
 		catalogIDs = vinted.DefaultBrandCatalogIDs()
 	}
 
+	region := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("region")))
+	regionalSearch := false
+	if region != "" {
+		domain, known := vinted.DomainForRegion(region)
+		if !known {
+			writeError(w, "unsupported Vinted region", 400)
+			return
+		}
+
+		if domain != client.GetDomain() {
+			regionalSession := *sess
+			regionalSession.Domain = domain
+			regionalSession.RefreshToken = ""
+			regionalSession.CookieHeader = ""
+			regionalSession.CsrfToken = ""
+			regionalSession.AnonID = ""
+			regionalSession.WarmedAt = ""
+
+			regionalClient, err := vinted.NewClient(&regionalSession)
+			if err != nil {
+				writeError(w, "failed to create regional Vinted client", 500)
+				return
+			}
+			client = regionalClient
+			regionalSearch = true
+		}
+	}
+
 	brands, err := client.SearchBrands(catalogIDs, query)
 	if err != nil {
 		writeError(w, "failed to search brands: "+err.Error(), 502)
 		return
 	}
 
-	s.persistIfRefreshed(sess, client)
+	if !regionalSearch {
+		s.persistIfRefreshed(sess, client)
+	}
 	writeJSON(w, 200, map[string]interface{}{"brands": brands})
 }
 

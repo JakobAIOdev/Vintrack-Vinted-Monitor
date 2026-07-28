@@ -98,6 +98,7 @@ func TestLocale(t *testing.T) {
 		{"www.vinted.pl", "pl-PL"},
 		{"www.vinted.co.uk", "en-GB"},
 		{"www.vinted.ie", "en-IE"},
+		{"www.vinted.cz", "cs-CZ"},
 		{"www.vinted.com", "en-US"},
 		{"www.vinted.xyz", "de-DE"}, // fallback
 	}
@@ -121,6 +122,7 @@ func TestPortal(t *testing.T) {
 		{"www.vinted.de", "de"},
 		{"www.vinted.co.uk", "uk"},
 		{"www.vinted.ie", "ie"},
+		{"www.vinted.cz", "cz"},
 	}
 
 	for _, tt := range tests {
@@ -136,6 +138,15 @@ func TestPortal(t *testing.T) {
 func TestDomainForPortal(t *testing.T) {
 	if got := domainForPortal("ie"); got != "www.vinted.ie" {
 		t.Errorf("domainForPortal(\"ie\") = %q, want %q", got, "www.vinted.ie")
+	}
+}
+
+func TestDomainForRegion(t *testing.T) {
+	if got, ok := DomainForRegion(" CZ "); !ok || got != "www.vinted.cz" {
+		t.Errorf("DomainForRegion(\" CZ \") = %q, %v; want %q, true", got, ok, "www.vinted.cz")
+	}
+	if got, ok := DomainForRegion("unknown"); ok || got != "" {
+		t.Errorf("DomainForRegion(\"unknown\") = %q, %v; want empty, false", got, ok)
 	}
 }
 
