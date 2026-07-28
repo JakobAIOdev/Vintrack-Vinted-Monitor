@@ -51,6 +51,15 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed health row: %v", err)
 	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO free_proxy_health (proxy_id, region, status, next_check_at, updated_at)
+		SELECT id, 'sqlother', 'pending', NOW(), NOW()
+		FROM free_proxies
+		WHERE proxy_url = $1
+		ON CONFLICT (proxy_id, region) DO UPDATE
+		SET status = 'pending', next_check_at = NOW(), updated_at = NOW()`, proxyURL); err != nil {
+		t.Fatalf("seed other health row: %v", err)
+	}
 
 	candidates, err := store.ClaimFreeProxiesDueForCheck(ctx, []string{region}, 3, true)
 	if err != nil {
@@ -58,6 +67,21 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 	}
 	if len(candidates) != 1 || candidates[0].Protocol != "http" {
 		t.Fatalf("claimed candidates = %#v, want one HTTP proxy", candidates)
+	}
+	duplicateCandidates, err := store.ClaimFreeProxiesDueForCheck(
+		ctx,
+		[]string{"sqlother"},
+		3,
+		true,
+	)
+	if err != nil {
+		t.Fatalf("claim same proxy in another region: %v", err)
+	}
+	if len(duplicateCandidates) != 0 {
+		t.Fatalf(
+			"cross-region duplicate candidates = %#v, want active global lease",
+			duplicateCandidates,
+		)
 	}
 	if err := store.RecordFreeProxyFailureClassContext(
 		ctx,
@@ -88,7 +112,7 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO free_proxy_health (proxy_id, region, status, next_check_at, updated_at)
-		SELECT id, 'sqlcheck_other', 'pending', NOW(), NOW()
+		SELECT id, 'sqlother', 'pending', NOW(), NOW()
 		FROM free_proxies
 		WHERE proxy_url = $1
 		ON CONFLICT (proxy_id, region) DO UPDATE
@@ -133,7 +157,7 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 		FROM free_proxy_health fph
 		JOIN free_proxies fp ON fp.id = fph.proxy_id
 		WHERE fp.proxy_url = $1
-		  AND fph.region = 'sqlcheck_other'`, proxyURL).Scan(&otherNextCheck); err != nil {
+		  AND fph.region = 'sqlother'`, proxyURL).Scan(&otherNextCheck); err != nil {
 		t.Fatalf("read other region next check: %v", err)
 	}
 	if otherNextCheck.After(time.Now().Add(time.Minute)) {
@@ -142,7 +166,7 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 
 	maintenanceCandidates, err := store.ClaimFreeProxiesDueForCheck(
 		ctx,
-		[]string{"sqlcheck_other"},
+		[]string{"sqlother"},
 		3,
 		false,
 	)

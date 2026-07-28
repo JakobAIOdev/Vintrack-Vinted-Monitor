@@ -130,28 +130,30 @@ model monitors {
 }
 
 model free_proxies {
-  id                Int                 @id @default(autoincrement())
-  proxy_url         String              @unique @db.VarChar(500)
-  protocol          String              @db.VarChar(20)
-  host              String              @db.VarChar(255)
-  port              Int
-  source            String              @default("manual") @db.VarChar(50)
-  sources           String[]            @default([])
-  status            String              @default("active") @db.VarChar(30)
-  success_count     Int                 @default(0)
-  failure_count     Int                 @default(0)
-  last_checked_at   DateTime?           @db.Timestamp(6)
-  last_success_at   DateTime?           @db.Timestamp(6)
-  last_failure_at   DateTime?           @db.Timestamp(6)
-  quarantined_until DateTime?           @db.Timestamp(6)
-  last_error        String?             @db.Text
-  last_error_code   String?             @db.VarChar(50)
-  last_seen_at      DateTime?           @db.Timestamp(6)
-  created_at        DateTime            @default(now()) @db.Timestamp(6)
-  updated_at        DateTime            @updatedAt @db.Timestamp(6)
-  health            free_proxy_health[]
+  id                  Int                 @id @default(autoincrement())
+  proxy_url           String              @unique @db.VarChar(500)
+  protocol            String              @db.VarChar(20)
+  host                String              @db.VarChar(255)
+  port                Int
+  source              String              @default("manual") @db.VarChar(50)
+  sources             String[]            @default([])
+  status              String              @default("active") @db.VarChar(30)
+  success_count       Int                 @default(0)
+  failure_count       Int                 @default(0)
+  last_checked_at     DateTime?           @db.Timestamp(6)
+  last_success_at     DateTime?           @db.Timestamp(6)
+  last_failure_at     DateTime?           @db.Timestamp(6)
+  quarantined_until   DateTime?           @db.Timestamp(6)
+  check_claimed_until DateTime?           @db.Timestamp(6)
+  last_error          String?             @db.Text
+  last_error_code     String?             @db.VarChar(50)
+  last_seen_at        DateTime?           @db.Timestamp(6)
+  created_at          DateTime            @default(now()) @db.Timestamp(6)
+  updated_at          DateTime            @updatedAt @db.Timestamp(6)
+  health              free_proxy_health[]
 
   @@index([status, quarantined_until])
+  @@index([check_claimed_until])
   @@index([source])
 }
 
