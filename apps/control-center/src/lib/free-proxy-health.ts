@@ -5,6 +5,7 @@ const DEFAULT_STARTER_REGIONS = "de,fr,it,es,nl,be,at";
 export type FreeProxyRegionHealth = {
     region: string;
     active: number;
+    reserve: number;
     warming: number;
     usable: number;
     pending: number;
@@ -30,6 +31,7 @@ export type FreeProxyPoolHealth = {
 type FreeProxyHealthRow = {
     region: string;
     active_count: bigint;
+    reserve_count: bigint;
     warming_count: bigint;
     pending_count: bigint;
     cooldown_count: bigint;
@@ -57,6 +59,7 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                 de: {
                     region: "de",
                     active: 1,
+                    reserve: 0,
                     warming: 0,
                     usable: 1,
                     pending: 0,
@@ -96,6 +99,12 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                       AND last_success_at >= NOW() - INTERVAL '20 minutes'
                 )::bigint AS active_count,
                 COUNT(*) FILTER (
+                    WHERE status = 'active'
+                      AND failure_streak <= 1
+                      AND last_success_at >= NOW() - INTERVAL '60 minutes'
+                      AND last_success_at < NOW() - INTERVAL '20 minutes'
+                )::bigint AS reserve_count,
+                COUNT(*) FILTER (
                     WHERE status = 'pending'
                       AND success_streak > 0
                       AND last_success_at >= NOW() - INTERVAL '20 minutes'
@@ -114,7 +123,11 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                         status = 'active'
                         AND (
                             last_success_at IS NULL
-                            OR last_success_at < NOW() - INTERVAL '20 minutes'
+                            OR last_success_at < NOW() - INTERVAL '60 minutes'
+                            OR (
+                                failure_streak > 1
+                                AND last_success_at < NOW() - INTERVAL '20 minutes'
+                            )
                         )
                       )
                 )::bigint AS cooldown_count,
@@ -160,6 +173,7 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                 const emptyHealth: FreeProxyRegionHealth = {
                     region,
                     active: 0,
+                    reserve: 0,
                     warming: 0,
                     usable: 0,
                     pending: 0,
@@ -177,13 +191,15 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
             }
 
             const active = Number(row.active_count);
+            const reserve = Number(row.reserve_count);
             const warming = Number(row.warming_count);
-            const usable = active + warming;
+            const usable = active + reserve + warming;
             const recentSuccessCount = Number(row.recent_success_count);
             const recentCheckCount = Number(row.recent_check_count);
             const health: FreeProxyRegionHealth = {
                 region: row.region,
                 active,
+                reserve,
                 warming,
                 usable,
                 pending: Number(row.pending_count),

@@ -221,6 +221,7 @@ type FreeProxyState = {
     regions: {
         region: string;
         active: number;
+        reserve: number;
         warming: number;
         pending: number;
         cooldown: number;
@@ -240,6 +241,7 @@ type FreeProxyState = {
         successRate: number | null;
         neverChecked: number;
         active: number;
+        reserve: number;
         cooldown: number;
         topErrorCode: string | null;
     }[];
@@ -895,6 +897,7 @@ export function AdminClient({
             : {
                   region: region.code,
                   active: 0,
+                  reserve: 0,
                   warming: 0,
                   pending: 0,
                   cooldown: 0,
@@ -4072,6 +4075,7 @@ export function AdminClient({
                                                           : !region.healthy
                                                             ? "Recovering"
                                                             : region.active +
+                                                                    region.reserve +
                                                                     region.warming <
                                                                 freeProxySettings.targetActivePerRegion
                                                               ? "Building"
@@ -4080,14 +4084,14 @@ export function AdminClient({
                                                 <span className="text-muted-foreground">
                                                     {region.initializing
                                                         ? "Waiting for the worker to assign candidates"
-                                                        : `${region.stalled ? "Maintainer overdue · " : ""}${region.active + region.warming} usable / ${freeProxySettings.targetActivePerRegion} target / ${region.active} active / ${region.warming} warming / ${region.pending} pending / ${region.cooldown} cooldown / ${region.dead} dead`}
+                                                        : `${region.stalled ? "Maintainer overdue · " : ""}${region.active + region.reserve + region.warming} usable / ${freeProxySettings.targetActivePerRegion} target / ${region.active} fresh / ${region.reserve} reserve / ${region.warming} warming / ${region.pending} pending / ${region.cooldown} cooldown / ${region.dead} retry-later`}
                                                 </span>
                                             </div>
                                             <div className="text-muted-foreground">
                                                 {region.successRate === null
                                                     ? "n/a"
                                                     : `${region.successRate}%`}{" "}
-                                                24h ok
+                                                latest ok
                                             </div>
                                             <div className="text-muted-foreground">
                                                 {region.medianLatencyMs === null
@@ -4117,9 +4121,9 @@ export function AdminClient({
                                     Source and protocol yield
                                 </p>
                                 <p className="text-muted-foreground text-xs">
-                                    Last 24 hours. This makes starvation and
-                                    weak feeds visible without exposing proxy
-                                    addresses.
+                                    Latest regional outcome for rows checked in
+                                    the last 24 hours. This is pool state, not a
+                                    request-level success rate.
                                 </p>
                             </div>
                             <div className="divide-border/60 divide-y">
@@ -4147,9 +4151,13 @@ export function AdminClient({
                                                         : `${diagnostic.successRate}%`}
                                                 </span>
                                                 <span>
-                                                    {diagnostic.active} active ·{" "}
+                                                    {diagnostic.active} fresh ·{" "}
+                                                    {diagnostic.reserve} reserve
+                                                    {" · "}
+                                                    {diagnostic.proxyCount}{" "}
+                                                    proxies ·{" "}
                                                     {diagnostic.neverChecked}{" "}
-                                                    new
+                                                    unchecked region rows
                                                 </span>
                                                 <span className="text-muted-foreground">
                                                     {diagnostic.topErrorCode
