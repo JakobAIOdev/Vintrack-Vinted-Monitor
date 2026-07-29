@@ -17,7 +17,16 @@ type FreeProxyValidationResult struct {
 	CatalogLatencyMs int
 	StatusCode       int
 	ErrorCode        string
+	Stage            FreeProxyValidationStage
 }
+
+type FreeProxyValidationStage string
+
+const (
+	FreeProxyValidationStageClientInit FreeProxyValidationStage = "client_init"
+	FreeProxyValidationStageWarmup     FreeProxyValidationStage = "warmup"
+	FreeProxyValidationStageCatalog    FreeProxyValidationStage = "catalog"
+)
 
 func ValidateFreeProxy(ctx context.Context, proxyURL string, region string, maxLatencyMs int) (FreeProxyValidationResult, error) {
 	if maxLatencyMs <= 0 {
@@ -26,7 +35,10 @@ func ValidateFreeProxy(ctx context.Context, proxyURL string, region string, maxL
 	requestTimeout := freeProxyRequestTimeout(ctx, maxLatencyMs)
 	client, err := NewClientWithTimeout(proxyURL, nil, requestTimeout)
 	if err != nil {
-		return FreeProxyValidationResult{ErrorCode: "invalid_config"}, err
+		return FreeProxyValidationResult{
+			ErrorCode: "invalid_config",
+			Stage:     FreeProxyValidationStageClientInit,
+		}, err
 	}
 
 	domain := model.RegionDomain(region)
@@ -39,6 +51,7 @@ func ValidateFreeProxy(ctx context.Context, proxyURL string, region string, maxL
 			WarmupLatencyMs: warmupLatencyMs,
 			StatusCode:      statusCode,
 			ErrorCode:       ClassifyFreeProxyFailure(err, statusCode),
+			Stage:           FreeProxyValidationStageWarmup,
 		}, err
 	}
 	warmupLatencyMs := int(time.Since(warmupStartedAt).Milliseconds())
@@ -53,6 +66,7 @@ func ValidateFreeProxy(ctx context.Context, proxyURL string, region string, maxL
 		WarmupLatencyMs:  warmupLatencyMs,
 		CatalogLatencyMs: catalogLatencyMs,
 		StatusCode:       status,
+		Stage:            FreeProxyValidationStageCatalog,
 	}
 	if err != nil {
 		result.ErrorCode = ClassifyFreeProxyFailure(err, status)

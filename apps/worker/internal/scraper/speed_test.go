@@ -290,11 +290,12 @@ func TestWaitForProxyManagerStopsWithContext(t *testing.T) {
 
 func TestDetectedItemAlertPlanWaitsForDiscordEnrichment(t *testing.T) {
 	monitor := model.Monitor{
-		WebhookActive:  true,
-		DiscordWebhook: sql.NullString{String: "https://discord.test/webhook", Valid: true},
+		WebhookActive:        true,
+		DiscordWebhook:       sql.NullString{String: "https://discord.test/webhook", Valid: true},
+		NotificationsEnabled: true,
 	}
 
-	publishNow, alertAfterEnrich := detectedItemAlertPlan(monitor, false)
+	publishNow, alertAfterEnrich := detectedItemAlertPlan(monitor, false, true)
 	if !publishNow {
 		t.Fatal("dashboard publish should stay on the immediate path")
 	}
@@ -306,12 +307,17 @@ func TestDetectedItemAlertPlanWaitsForDiscordEnrichment(t *testing.T) {
 func TestDetectedItemAlertPlanPreservesStrictRegionFilter(t *testing.T) {
 	allowedCountries := "de"
 	monitor := model.Monitor{
-		AllowedCountries: &allowedCountries,
-		WebhookActive:    true,
-		DiscordWebhook:   sql.NullString{String: "https://discord.test/webhook", Valid: true},
+		AllowedCountries:     &allowedCountries,
+		WebhookActive:        true,
+		DiscordWebhook:       sql.NullString{String: "https://discord.test/webhook", Valid: true},
+		NotificationsEnabled: true,
 	}
 
-	publishNow, alertAfterEnrich := detectedItemAlertPlan(monitor, hasCountryFilter(monitor.AllowedCountries))
+	publishNow, alertAfterEnrich := detectedItemAlertPlan(
+		monitor,
+		hasCountryFilter(monitor.AllowedCountries),
+		true,
+	)
 	if publishNow {
 		t.Fatal("strict region filter published before seller enrichment")
 	}
@@ -327,12 +333,36 @@ func TestDetectedItemAlertPlanPreservesStrictRegionFilter(t *testing.T) {
 }
 
 func TestDetectedItemAlertPlanSkipsDeferredWorkWithoutExternalAlerts(t *testing.T) {
-	publishNow, alertAfterEnrich := detectedItemAlertPlan(model.Monitor{}, false)
+	publishNow, alertAfterEnrich := detectedItemAlertPlan(
+		model.Monitor{},
+		false,
+		true,
+	)
 	if !publishNow {
 		t.Fatal("dashboard publish should be immediate")
 	}
 	if alertAfterEnrich {
 		t.Fatal("item without external alerts scheduled a deferred alert")
+	}
+}
+
+func TestDetectedItemAlertPlanSkipsExternalEnrichmentWhenMuted(t *testing.T) {
+	monitor := model.Monitor{
+		WebhookActive:  true,
+		DiscordWebhook: sql.NullString{String: "https://discord.test/webhook", Valid: true},
+	}
+
+	publishNow, alertAfterEnrich := detectedItemAlertPlan(monitor, false, false)
+	if !publishNow {
+		t.Fatal("muted monitor should still publish to the dashboard")
+	}
+	if alertAfterEnrich {
+		t.Fatal("muted monitor scheduled an external alert")
+	}
+
+	hasDiscord, hasTelegram := effectiveExternalAlerts(monitor, false)
+	if hasDiscord || hasTelegram {
+		t.Fatal("muted monitor retained an effective external channel")
 	}
 }
 

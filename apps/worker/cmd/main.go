@@ -26,9 +26,11 @@ import (
 )
 
 var (
-	freeProxyCheckRunning   atomic.Bool
-	freeProxyImportRunning  atomic.Bool
-	telemetryCleanupRunning atomic.Bool
+	freeProxyCheckRunning        atomic.Bool
+	freeProxyImportRunning       atomic.Bool
+	freeProxyEgressLimited       atomic.Bool
+	freeProxyEgressRecoveryWaves atomic.Int32
+	telemetryCleanupRunning      atomic.Bool
 )
 
 const (
@@ -48,6 +50,8 @@ const (
 	freeProxyImportTimeout     = 2 * time.Minute
 	freeProxySourceTimeout     = 15 * time.Second
 	freeProxyWriteTimeout      = 5 * time.Second
+	freeProxyDegradationKey    = "free_proxy_degradation_reason"
+	freeProxyEgressLimitedCode = "host_egress_limited"
 )
 
 type freeProxyImportCandidate struct {
@@ -321,7 +325,6 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 		log.Printf("free proxy health row sync failed: %v", err)
 		return
 	}
-	regionBatches := make([][]database.FreeProxyCandidate, 0, len(regions))
 	perRegionBatch, err := settingIntContext(cycleCtx, store, "FREE_PROXY_HEALTH_BATCH_PER_REGION", 40)
 	if err != nil {
 		log.Printf("free proxy health batch setting load failed: %v", err)
@@ -373,88 +376,280 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 		concurrency = 1
 	}
 
+	remainingByRegion := make(map[string]int, len(regions))
+	bootstrapByRegion := make(map[string]bool, len(regions))
 	for _, region := range regions {
-		batchSize := perRegionBatch
-		bootstrap := false
 		activeCount, err := store.CountActiveFreeProxiesContext(cycleCtx, region)
 		if err != nil {
 			log.Printf("free proxy active count failed for %s: %v", region, err)
-		} else if activeCount < targetActive {
-			batchSize = bootstrapBatch
-			bootstrap = true
-		}
-		regionProxies, err := store.ClaimFreeProxiesDueForCheck(cycleCtx, []string{region}, batchSize, bootstrap)
-		if err != nil {
-			log.Printf("free proxy health load failed for %s: %v", region, err)
 			continue
 		}
-		regionBatches = append(regionBatches, regionProxies)
+		if activeCount < targetActive {
+			remainingByRegion[region] = bootstrapBatch
+			bootstrapByRegion[region] = true
+		} else {
+			remainingByRegion[region] = perRegionBatch
+		}
 	}
-	proxies := interleaveFreeProxyCandidates(regionBatches)
-	if len(proxies) == 0 {
-		return
+
+	if value, ok, settingErr := store.GetSettingValueContext(
+		cycleCtx,
+		freeProxyDegradationKey,
+	); settingErr == nil && ok && value == freeProxyEgressLimitedCode {
+		freeProxyEgressLimited.Store(true)
+	}
+
+	totalBudget := 0
+	for _, remaining := range remainingByRegion {
+		totalBudget += remaining
 	}
 	protocolCounts := make(map[string]int)
 	sourceCounts := make(map[string]int)
-	for _, candidate := range proxies {
-		protocolCounts[candidate.Protocol]++
-		sourceCounts[candidate.Source]++
-	}
 	log.Printf(
-		"free proxy check started: %d candidates across %d regions (concurrency %d, timeout %s, protocols %v, sources %v)",
-		len(proxies),
-		len(regionBatches),
+		"free proxy check started: cycle budget %d across %d regions (wave size %d, timeout %s)",
+		totalBudget,
+		len(regions),
 		concurrency,
 		validationTimeout,
+	)
+	total := freeProxyWaveStats{}
+	errorCounts := make(map[string]int)
+	stageCounts := make(map[string]int)
+	startedAt := time.Now()
+	regionCursor := 0
+	waves := 0
+
+	for cycleCtx.Err() == nil {
+		recoveryRegions := make([]string, 0, len(regions))
+		maintenanceRegions := make([]string, 0, len(regions))
+		for offset := 0; offset < len(regions); offset++ {
+			region := regions[(regionCursor+offset)%len(regions)]
+			if remainingByRegion[region] <= 0 {
+				continue
+			}
+
+			if bootstrapByRegion[region] {
+				activeCount, countErr := store.CountActiveFreeProxiesContext(cycleCtx, region)
+				if countErr != nil {
+					log.Printf("free proxy active count failed for %s: %v", region, countErr)
+					remainingByRegion[region] = 0
+					continue
+				}
+				if activeCount >= targetActive {
+					remainingByRegion[region] = 0
+					continue
+				}
+				recoveryRegions = append(recoveryRegions, region)
+			} else {
+				maintenanceRegions = append(maintenanceRegions, region)
+			}
+		}
+		regionCursor = (regionCursor + 1) % max(1, len(regions))
+		if len(recoveryRegions)+len(maintenanceRegions) == 0 {
+			break
+		}
+
+		recoverySlots, maintenanceSlots := freeProxyWaveGroupSlots(
+			concurrency,
+			len(recoveryRegions),
+			len(maintenanceRegions),
+		)
+		regionBatches := make([][]database.FreeProxyCandidate, 0, 2)
+		claimGroup := func(groupRegions []string, limit int, bootstrap bool) {
+			if len(groupRegions) == 0 || limit <= 0 {
+				return
+			}
+			groupBudget := 0
+			for _, region := range groupRegions {
+				groupBudget += remainingByRegion[region]
+			}
+			limit = min(limit, groupBudget)
+			candidates, claimErr := store.ClaimFreeProxiesDueForCheck(
+				cycleCtx,
+				groupRegions,
+				limit,
+				bootstrap,
+			)
+			if claimErr != nil {
+				log.Printf("free proxy health load failed for %v: %v", groupRegions, claimErr)
+				for _, region := range groupRegions {
+					remainingByRegion[region] = 0
+				}
+				return
+			}
+			if len(candidates) == 0 {
+				for _, region := range groupRegions {
+					remainingByRegion[region] = 0
+				}
+				return
+			}
+			for _, candidate := range candidates {
+				remainingByRegion[candidate.Region] = max(
+					0,
+					remainingByRegion[candidate.Region]-1,
+				)
+			}
+			regionBatches = append(regionBatches, candidates)
+		}
+		claimGroup(recoveryRegions, recoverySlots, true)
+		claimGroup(maintenanceRegions, maintenanceSlots, false)
+
+		candidates := interleaveFreeProxyCandidates(regionBatches)
+		if len(candidates) == 0 {
+			break
+		}
+		for _, candidate := range candidates {
+			protocolCounts[candidate.Protocol]++
+			sourceCounts[candidate.Source]++
+		}
+
+		wave := validateFreeProxyWave(
+			cycleCtx,
+			store,
+			candidates,
+			validationTimeout,
+			maxLatencyMs,
+			threshold,
+			quarantineMinutes,
+		)
+		waves++
+		total.add(wave)
+		mergeStringCounts(errorCounts, wave.ErrorCounts)
+		mergeStringCounts(stageCounts, wave.StageCounts)
+		updateFreeProxyEgressState(cycleCtx, store, wave)
+		if wave.Canceled > 0 && cycleCtx.Err() != nil {
+			break
+		}
+	}
+
+	log.Printf(
+		"free proxy check completed: %d waves, %d checked, %d passed, %d failed, %d canceled, %d persistence failures in %s (errors %v, stages %v, protocols %v, sources %v)",
+		waves,
+		total.Checked,
+		total.Passed,
+		total.Failed,
+		total.Canceled,
+		total.PersistenceFailed,
+		time.Since(startedAt).Round(time.Second),
+		errorCounts,
+		stageCounts,
 		protocolCounts,
 		sourceCounts,
 	)
-	sem := make(chan struct{}, concurrency)
+}
+
+func freeProxyWaveGroupSlots(
+	maximumSlots int,
+	recoveryRegionCount int,
+	maintenanceRegionCount int,
+) (recoverySlots int, maintenanceSlots int) {
+	if maximumSlots <= 0 {
+		return 0, 0
+	}
+	if recoveryRegionCount <= 0 {
+		return 0, maximumSlots
+	}
+	if maintenanceRegionCount <= 0 {
+		return maximumSlots, 0
+	}
+	totalRegions := recoveryRegionCount + maintenanceRegionCount
+	recoverySlots = max(1, maximumSlots*recoveryRegionCount/totalRegions)
+	maintenanceSlots = maximumSlots - recoverySlots
+	if maintenanceSlots == 0 {
+		maintenanceSlots = 1
+		recoverySlots--
+	}
+	return recoverySlots, maintenanceSlots
+}
+
+type freeProxyWaveStats struct {
+	Checked                 int
+	Passed                  int
+	Failed                  int
+	Canceled                int
+	PersistenceFailed       int
+	WarmupTransportFailures int
+	ErrorCounts             map[string]int
+	StageCounts             map[string]int
+}
+
+func (stats *freeProxyWaveStats) add(other freeProxyWaveStats) {
+	stats.Checked += other.Checked
+	stats.Passed += other.Passed
+	stats.Failed += other.Failed
+	stats.Canceled += other.Canceled
+	stats.PersistenceFailed += other.PersistenceFailed
+	stats.WarmupTransportFailures += other.WarmupTransportFailures
+}
+
+func validateFreeProxyWave(
+	ctx context.Context,
+	store *database.Store,
+	candidates []database.FreeProxyCandidate,
+	validationTimeout time.Duration,
+	maxLatencyMs int,
+	failureThreshold int,
+	quarantineMinutes int,
+) freeProxyWaveStats {
 	var wg sync.WaitGroup
 	var passed atomic.Int64
 	var failed atomic.Int64
 	var canceled atomic.Int64
 	var persistenceFailed atomic.Int64
-	var launched atomic.Int64
+	var warmupTransportFailures atomic.Int64
 	errorCounts := make(map[string]int)
-	var errorCountsMu sync.Mutex
-	startedAt := time.Now()
-launchCandidates:
-	for _, candidate := range proxies {
+	stageCounts := make(map[string]int)
+	var countsMu sync.Mutex
+
+	for _, candidate := range candidates {
 		candidate := candidate
-		select {
-		case sem <- struct{}{}:
-		case <-cycleCtx.Done():
-			break launchCandidates
+		if ctx.Err() != nil {
+			canceled.Add(1)
+			continue
 		}
 		wg.Add(1)
-		launched.Add(1)
 		go func() {
 			defer wg.Done()
-			defer func() { <-sem }()
-			validationCtx, cancelValidation := context.WithTimeout(cycleCtx, validationTimeout)
-			result, err := scraper.ValidateFreeProxy(validationCtx, candidate.ProxyURL, candidate.Region, maxLatencyMs)
+			validationCtx, cancelValidation := context.WithTimeout(ctx, validationTimeout)
+			result, err := scraper.ValidateFreeProxy(
+				validationCtx,
+				candidate.ProxyURL,
+				candidate.Region,
+				maxLatencyMs,
+			)
 			cancelValidation()
-			if cycleCtx.Err() != nil {
+			if ctx.Err() != nil {
 				canceled.Add(1)
 				return
 			}
 
-			writeCtx, cancelWrite := context.WithTimeout(cycleCtx, freeProxyWriteTimeout)
+			stage := string(result.Stage)
+			if stage == "" {
+				stage = "unknown"
+			}
+			countsMu.Lock()
+			stageCounts[stage]++
+			countsMu.Unlock()
+
+			writeCtx, cancelWrite := context.WithTimeout(ctx, freeProxyWriteTimeout)
 			defer cancelWrite()
 			if err != nil {
 				failed.Add(1)
-				errorCountsMu.Lock()
+				if isWarmupTransportFailure(result.ErrorCode, result.Stage) {
+					warmupTransportFailures.Add(1)
+				}
+				countsMu.Lock()
 				errorCounts[result.ErrorCode]++
-				errorCountsMu.Unlock()
-				if writeErr := store.RecordFreeProxyFailureClassContext(
+				countsMu.Unlock()
+				if writeErr := store.RecordFreeProxyFailureStageContext(
 					writeCtx,
 					candidate.ProxyURL,
 					candidate.Region,
 					result.StatusCode,
 					err.Error(),
 					result.ErrorCode,
-					threshold,
+					string(result.Stage),
+					failureThreshold,
 					quarantineMinutes,
 				); writeErr != nil {
 					persistenceFailed.Add(1)
@@ -472,30 +667,92 @@ launchCandidates:
 			}
 		}()
 	}
-	if !waitForFreeProxyBatch(cycleCtx, &wg) {
-		log.Printf(
-			"free proxy check timed out after %s: %d/%d launched, %d passed, %d failed, %d canceled, %d persistence failures",
-			time.Since(startedAt).Round(time.Second),
-			launched.Load(),
-			len(proxies),
-			passed.Load(),
-			failed.Load(),
-			canceled.Load(),
-			persistenceFailed.Load(),
-		)
+	if !waitForFreeProxyBatch(ctx, &wg) {
+		wg.Wait()
+	}
+
+	return freeProxyWaveStats{
+		Checked:                 int(passed.Load() + failed.Load()),
+		Passed:                  int(passed.Load()),
+		Failed:                  int(failed.Load()),
+		Canceled:                int(canceled.Load()),
+		PersistenceFailed:       int(persistenceFailed.Load()),
+		WarmupTransportFailures: int(warmupTransportFailures.Load()),
+		ErrorCounts:             errorCounts,
+		StageCounts:             stageCounts,
+	}
+}
+
+func isWarmupTransportFailure(
+	errorCode string,
+	stage scraper.FreeProxyValidationStage,
+) bool {
+	if stage != scraper.FreeProxyValidationStageWarmup {
+		return false
+	}
+	switch errorCode {
+	case "connect", "timeout", "tls", "proxy_handshake", "transport":
+		return true
+	default:
+		return false
+	}
+}
+
+func mergeStringCounts(target map[string]int, source map[string]int) {
+	for key, count := range source {
+		target[key] += count
+	}
+}
+
+func updateFreeProxyEgressState(
+	ctx context.Context,
+	store *database.Store,
+	wave freeProxyWaveStats,
+) {
+	limited, err := store.FreeProxyEgressLimitedContext(ctx)
+	if err != nil {
+		log.Printf("free proxy egress health evaluation failed: %v", err)
+		return
+	}
+	if limited {
+		alreadyLimited := freeProxyEgressLimited.Swap(true)
+		freeProxyEgressRecoveryWaves.Store(0)
+		if !alreadyLimited {
+			if err := store.SetSettingValueContext(
+				ctx,
+				freeProxyDegradationKey,
+				freeProxyEgressLimitedCode,
+			); err != nil {
+				log.Printf("free proxy degradation state update failed: %v", err)
+			}
+		}
+		return
+	}
+	if !freeProxyEgressLimited.Load() || wave.Checked == 0 {
 		return
 	}
 
-	log.Printf(
-		"free proxy check completed: %d checked, %d passed, %d failed, %d canceled, %d persistence failures in %s (errors %v)",
-		passed.Load()+failed.Load(),
-		passed.Load(),
-		failed.Load(),
-		canceled.Load(),
-		persistenceFailed.Load(),
-		time.Since(startedAt).Round(time.Second),
-		errorCounts,
-	)
+	if !freeProxyWaveShowsEgressRecovery(wave) {
+		freeProxyEgressRecoveryWaves.Store(0)
+		return
+	}
+	if freeProxyEgressRecoveryWaves.Add(1) < 3 {
+		return
+	}
+	if err := store.SetSettingValueContext(ctx, freeProxyDegradationKey, ""); err != nil {
+		log.Printf("free proxy degradation state clear failed: %v", err)
+		return
+	}
+	freeProxyEgressLimited.Store(false)
+	freeProxyEgressRecoveryWaves.Store(0)
+}
+
+func freeProxyWaveShowsEgressRecovery(wave freeProxyWaveStats) bool {
+	if wave.Checked <= 0 {
+		return false
+	}
+	return wave.Passed*100 > wave.Checked*2 ||
+		wave.WarmupTransportFailures*100 < wave.Checked*60
 }
 
 func waitForFreeProxyBatch(ctx context.Context, wg *sync.WaitGroup) bool {

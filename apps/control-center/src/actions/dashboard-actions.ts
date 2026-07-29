@@ -28,13 +28,19 @@ export type BulkMonitorUpdateInput = {
         webhookUrl?: string;
     };
     telegram?: "enable" | "disable";
+    notifications?: "enable" | "disable";
 };
 
 async function sendTelegramStatusIfConfigured(
-    monitor: { name: string; userId: string; telegram_active: boolean },
+    monitor: {
+        name: string;
+        userId: string;
+        telegram_active: boolean;
+        notifications_enabled: boolean;
+    },
     status: "started" | "paused",
 ) {
-    if (!monitor.telegram_active) return;
+    if (!monitor.notifications_enabled || !monitor.telegram_active) return;
 
     const connection = await getTelegramConnection(monitor.userId);
     if (!connection) return;
@@ -62,7 +68,11 @@ export async function stopAllMonitors() {
 
     Promise.all(
         monitorsToStop.map(async (monitor) => {
-            if (monitor.discord_webhook && monitor.webhook_active) {
+            if (
+                monitor.notifications_enabled &&
+                monitor.discord_webhook &&
+                monitor.webhook_active
+            ) {
                 try {
                     const payload = {
                         username: "Vintrack Monitor",
@@ -188,7 +198,11 @@ export async function startAllMonitors() {
 
     Promise.all(
         monitorsToStart.map(async (monitor) => {
-            if (monitor.discord_webhook && monitor.webhook_active) {
+            if (
+                monitor.notifications_enabled &&
+                monitor.discord_webhook &&
+                monitor.webhook_active
+            ) {
                 try {
                     const payload = {
                         username: "Vintrack Monitor",
@@ -274,7 +288,11 @@ export async function toggleMonitor(id: number, currentStatus: string) {
         },
     });
 
-    if (monitor.discord_webhook && monitor.webhook_active) {
+    if (
+        monitor.notifications_enabled &&
+        monitor.discord_webhook &&
+        monitor.webhook_active
+    ) {
         try {
             const isStarting = newStatus === "active";
             const payload = {
@@ -363,6 +381,43 @@ export async function setMonitorWebhookStatus(
     return {
         success: true,
         message: enabled ? "Webhook activated" : "Webhook deactivated",
+    };
+}
+
+export async function setMonitorNotificationsEnabled(
+    monitorId: number,
+    enabled: boolean,
+) {
+    const session = await auth();
+    if (!session?.user?.id) throw new Error("Unauthorized");
+    if (!Number.isInteger(monitorId) || monitorId <= 0) {
+        throw new Error("Invalid monitor");
+    }
+    if (typeof enabled !== "boolean") {
+        throw new Error("Invalid notification status");
+    }
+
+    const monitor = await db.monitors.update({
+        where: { id: monitorId, userId: session.user.id },
+        data: { notifications_enabled: enabled },
+        select: { id: true, notifications_enabled: true },
+    });
+
+    await logAuditEvent({
+        userId: session.user.id,
+        action: "monitor.notifications_toggled",
+        targetType: "monitor",
+        targetId: String(monitor.id),
+        metadata: { enabled: monitor.notifications_enabled },
+    });
+
+    revalidatePath("/dashboard");
+    revalidatePath(`/monitors/${monitor.id}`);
+    revalidatePath(`/monitors/${monitor.id}/edit`);
+
+    return {
+        success: true,
+        notificationsEnabled: monitor.notifications_enabled,
     };
 }
 
@@ -485,6 +540,12 @@ export async function bulkUpdateMonitors(input: BulkMonitorUpdateInput) {
     if (input.telegram && !["enable", "disable"].includes(input.telegram)) {
         throw new Error("Invalid Telegram bulk action");
     }
+    if (
+        input.notifications &&
+        !["enable", "disable"].includes(input.notifications)
+    ) {
+        throw new Error("Invalid notifications bulk action");
+    }
     const replacementWebhook =
         discordMode === "replace"
             ? input.discord?.webhookUrl?.trim() || ""
@@ -513,7 +574,8 @@ export async function bulkUpdateMonitors(input: BulkMonitorUpdateInput) {
         queryDelayMs !== null ||
         quietHours !== null ||
         Boolean(discordMode) ||
-        Boolean(input.telegram);
+        Boolean(input.telegram) ||
+        Boolean(input.notifications);
     if (!hasChanges) throw new Error("Choose at least one change");
 
     const updateData = {
@@ -538,6 +600,9 @@ export async function bulkUpdateMonitors(input: BulkMonitorUpdateInput) {
             : {}),
         ...(input.telegram
             ? { telegram_active: input.telegram === "enable" }
+            : {}),
+        ...(input.notifications
+            ? { notifications_enabled: input.notifications === "enable" }
             : {}),
     };
 
@@ -564,6 +629,7 @@ export async function bulkUpdateMonitors(input: BulkMonitorUpdateInput) {
                 discord_webhook: true,
                 webhook_active: true,
                 telegram_active: true,
+                notifications_enabled: true,
             },
         });
     });
@@ -580,6 +646,7 @@ export async function bulkUpdateMonitors(input: BulkMonitorUpdateInput) {
                 quietHours: quietHours !== null,
                 discord: discordMode ?? null,
                 telegram: input.telegram ?? null,
+                notifications: input.notifications ?? null,
             },
         },
     });

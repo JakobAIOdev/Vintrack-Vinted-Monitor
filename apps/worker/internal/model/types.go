@@ -34,6 +34,7 @@ type Monitor struct {
 	WebhookActive         bool
 	TelegramChatID        sql.NullString
 	TelegramActive        bool
+	NotificationsEnabled  bool
 	DedupeMonitorAlerts   bool
 	BannedSellerIDs       []int64
 	ProxyGroupID          *int

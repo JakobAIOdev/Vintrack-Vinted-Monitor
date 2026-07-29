@@ -116,6 +116,7 @@ model monitors {
   discord_webhook          String?
   webhook_active           Boolean   @default(true)
   telegram_active          Boolean   @default(false)
+  notifications_enabled    Boolean   @default(true)
 
   proxy_group_id  Int?
   proxy_source    String                     @default("server") @db.VarChar(20)
@@ -148,6 +149,7 @@ model free_proxies {
   check_claimed_until DateTime?           @db.Timestamp(6)
   last_error          String?             @db.Text
   last_error_code     String?             @db.VarChar(50)
+  last_error_stage    String?             @db.VarChar(20)
   last_seen_at        DateTime?           @db.Timestamp(6)
   created_at          DateTime            @default(now()) @db.Timestamp(6)
   updated_at          DateTime            @updatedAt @db.Timestamp(6)
@@ -172,6 +174,7 @@ model free_proxy_health {
   last_status_code Int?
   last_error       String?      @db.Text
   last_error_code  String?      @db.VarChar(50)
+  last_error_stage String?      @db.VarChar(20)
   last_checked_at  DateTime?    @db.Timestamp(6)
   last_success_at  DateTime?    @db.Timestamp(6)
   last_failure_at  DateTime?    @db.Timestamp(6)
@@ -182,6 +185,7 @@ model free_proxy_health {
 
   @@unique([proxy_id, region])
   @@index([region, status, next_check_at])
+  @@index([region, last_error_stage], map: "free_proxy_health_region_error_stage_idx")
   @@index([status, score])
 }
 

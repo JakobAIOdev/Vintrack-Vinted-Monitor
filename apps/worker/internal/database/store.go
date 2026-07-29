@@ -487,6 +487,40 @@ func (s *Store) GetSettingValueContext(ctx context.Context, key string) (string,
 	return value, true, nil
 }
 
+func (s *Store) SetSettingValueContext(ctx context.Context, key string, value string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO app_settings (key, value, updated_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (key) DO UPDATE
+		SET value = EXCLUDED.value,
+			updated_at = NOW()`, key, value)
+	return err
+}
+
+func (s *Store) FreeProxyEgressLimitedContext(ctx context.Context) (bool, error) {
+	var limited bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*) >= 100
+			AND COUNT(*) FILTER (
+				WHERE last_status_code = 200
+				  AND last_error IS NULL
+			) * 100 <= COUNT(*)
+			AND COUNT(*) FILTER (
+				WHERE last_error_stage = 'warmup'
+				  AND last_error_code IN (
+					'connect',
+					'timeout',
+					'tls',
+					'proxy_handshake',
+					'transport'
+				  )
+			) * 100 >= COUNT(*) * 80
+		FROM free_proxy_health
+		WHERE last_checked_at >= NOW() - INTERVAL '15 minutes'`).Scan(&limited)
+	return limited, err
+}
+
 func (s *Store) GetActiveFreeProxyRegions() ([]string, error) {
 	return s.GetActiveFreeProxyRegionsContext(context.Background())
 }
@@ -915,13 +949,28 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 	}
 	defer tx.Rollback()
 
-	claim := func(protocols []string, claimLimit int) ([]FreeProxyCandidate, error) {
+	claim := func(explore bool, claimLimit int) ([]FreeProxyCandidate, error) {
 		if claimLimit <= 0 {
 			return nil, nil
 		}
-		filterAllProtocols := len(protocols) == 0
 		rows, queryErr := tx.QueryContext(ctx, `
-			WITH ranked AS (
+			WITH group_stats AS (
+				SELECT
+					fph.region,
+					fp.source,
+					fp.protocol,
+					COUNT(*) FILTER (
+						WHERE fph.last_checked_at >= NOW() - INTERVAL '6 hours'
+					)::double precision AS checked_count,
+					COUNT(*) FILTER (
+						WHERE fph.last_checked_at >= NOW() - INTERVAL '6 hours'
+						  AND fph.last_status_code = 200
+						  AND fph.last_error IS NULL
+					)::double precision AS successful_count
+				FROM free_proxies fp
+				JOIN free_proxy_health fph ON fph.proxy_id = fp.id
+				GROUP BY fph.region, fp.source, fp.protocol
+			), ranked AS (
 				SELECT
 					fph.id,
 					fph.proxy_id,
@@ -965,18 +1014,61 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 							fph.last_checked_at ASC NULLS FIRST,
 							fph.score DESC
 					) AS proxy_rank,
+					ROW_NUMBER() OVER (
+						PARTITION BY fp.source, fp.protocol
+						ORDER BY
+							CASE
+								WHEN fph.status = 'active' THEN 0
+								WHEN fph.success_count > 0 THEN 1
+								WHEN fp.success_count > 0 THEN 2
+								WHEN $3 AND fph.last_checked_at IS NULL THEN 3
+								WHEN fph.status = 'cooldown' THEN 4
+								WHEN fph.status = 'dead' THEN 6
+								ELSE 5
+							END,
+							fph.last_checked_at ASC NULLS FIRST,
+							fph.score DESC
+					) AS group_rank,
+					ROW_NUMBER() OVER (
+						PARTITION BY fph.region
+						ORDER BY
+							CASE
+								WHEN fph.status = 'active' THEN 0
+								WHEN fph.success_count > 0 THEN 1
+								WHEN fp.success_count > 0 THEN 2
+								WHEN $3 AND fph.last_checked_at IS NULL THEN 3
+								WHEN fph.status = 'cooldown' THEN 4
+								WHEN fph.status = 'dead' THEN 6
+								ELSE 5
+							END,
+							CASE WHEN NOT $4 THEN
+								(
+									COALESCE(group_stats.successful_count, 0) + 1.0
+								) / (
+									COALESCE(group_stats.checked_count, 0) + 20.0
+								)
+							END DESC NULLS LAST,
+							fp.last_success_at DESC NULLS LAST,
+							fph.last_checked_at ASC NULLS FIRST,
+							fph.score DESC
+					) AS region_rank,
+					(
+						COALESCE(group_stats.successful_count, 0) + 1.0
+					) / (
+						COALESCE(group_stats.checked_count, 0) + 20.0
+					) AS yield_score,
 					fp.last_success_at AS global_last_success_at,
 					fph.last_checked_at,
 					fph.score
 				FROM free_proxy_health fph
 				JOIN free_proxies fp ON fp.id = fph.proxy_id
+				LEFT JOIN group_stats
+				  ON group_stats.region = fph.region
+				 AND group_stats.source = fp.source
+				 AND group_stats.protocol = fp.protocol
 				WHERE fph.region = ANY($1)
 				  AND fp.status <> 'disabled'
-				  AND (
-					fp.success_count > 0
-					OR fp.quarantined_until IS NULL
-					OR fp.quarantined_until <= NOW()
-				  )
+				  AND (fp.quarantined_until IS NULL OR fp.quarantined_until <= NOW())
 				  AND (
 					fp.check_claimed_until IS NULL
 					OR fp.check_claimed_until <= NOW()
@@ -984,15 +1076,18 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 				  AND fph.status IN ('pending', 'active', 'cooldown', 'dead')
 				  AND ($3 OR fph.status = 'active')
 				  AND (fph.next_check_at IS NULL OR fph.next_check_at <= NOW())
-				  AND ($4 OR fp.protocol = ANY($5))
 			), due AS (
 				SELECT fph.id, fp.id AS proxy_id
 				FROM ranked
 				JOIN free_proxy_health fph ON fph.id = ranked.id
 				JOIN free_proxies fp ON fp.id = ranked.proxy_id
 				WHERE ranked.proxy_rank = 1
+				  AND ranked.region_rank <= $5
 				ORDER BY
 					ranked.priority,
+					ranked.region_rank,
+					CASE WHEN $4 THEN ranked.group_rank END,
+					CASE WHEN NOT $4 THEN ranked.yield_score END DESC NULLS LAST,
 					ranked.source_rank,
 					ranked.global_last_success_at DESC NULLS LAST,
 					ranked.last_checked_at ASC NULLS FIRST,
@@ -1025,8 +1120,8 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 			pq.Array(regions),
 			claimLimit,
 			bootstrap,
-			filterAllProtocols,
-			pq.Array(protocols),
+			explore,
+			max(1, (claimLimit+len(regions)-1)/len(regions)),
 		)
 		if queryErr != nil {
 			return nil, queryErr
@@ -1049,24 +1144,15 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 		return candidates, rows.Err()
 	}
 
-	webQuota, socks5Quota, socks4Quota := freeProxyProtocolQuotas(limit)
 	proxies := make([]FreeProxyCandidate, 0, limit)
-	for _, group := range []struct {
-		protocols []string
-		limit     int
-	}{
-		{protocols: []string{"http", "https"}, limit: webQuota},
-		{protocols: []string{"socks5"}, limit: socks5Quota},
-		{protocols: []string{"socks4"}, limit: socks4Quota},
-	} {
-		claimed, claimErr := claim(group.protocols, group.limit)
-		if claimErr != nil {
-			return nil, claimErr
-		}
-		proxies = append(proxies, claimed...)
+	explorationLimit := freeProxyExplorationQuota(limit)
+	exploration, err := claim(true, explorationLimit)
+	if err != nil {
+		return nil, err
 	}
+	proxies = append(proxies, exploration...)
 	if remaining := limit - len(proxies); remaining > 0 {
-		claimed, claimErr := claim(nil, remaining)
+		claimed, claimErr := claim(false, remaining)
 		if claimErr != nil {
 			return nil, claimErr
 		}
@@ -1079,35 +1165,15 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 	return proxies, nil
 }
 
-func freeProxyProtocolQuotas(limit int) (web int, socks5 int, socks4 int) {
-	if limit <= 0 {
-		return 0, 0, 0
+func freeProxyExplorationQuota(limit int) int {
+	if limit <= 1 {
+		return 0
 	}
-	if limit == 1 {
-		return 1, 0, 0
+	quota := max(1, limit*20/100)
+	if quota >= limit {
+		return limit - 1
 	}
-	if limit == 2 {
-		return 1, 1, 0
-	}
-	web = limit * 60 / 100
-	socks5 = limit * 37 / 100
-	socks4 = limit * 3 / 100
-	web = max(1, web)
-	socks5 = max(1, socks5)
-	socks4 = max(1, socks4)
-	for web+socks5+socks4 > limit {
-		if web > socks5 && web > 1 {
-			web--
-		} else if socks5 > 1 {
-			socks5--
-		} else {
-			socks4--
-		}
-	}
-	if remaining := limit - web - socks5 - socks4; remaining > 0 {
-		web += remaining
-	}
-	return web, socks5, socks4
+	return quota
 }
 
 func (s *Store) RecordFreeProxySuccess(proxyURL string, region string, latencyMs int) {
@@ -1135,6 +1201,7 @@ func (s *Store) RecordFreeProxySuccessContext(ctx context.Context, proxyURL stri
 			last_success_at = NOW(),
 			last_error = NULL,
 			last_error_code = NULL,
+			last_error_stage = NULL,
 			next_check_at = NOW()
 				+ INTERVAL '8 minutes'
 				+ MOD(fp.id::bigint + fph.id, 300) * INTERVAL '1 second',
@@ -1154,6 +1221,7 @@ func (s *Store) RecordFreeProxySuccessContext(ctx context.Context, proxyURL stri
 			last_success_at = NOW(),
 			last_error = NULL,
 			last_error_code = NULL,
+			last_error_stage = NULL,
 			quarantined_until = NULL,
 			check_claimed_until = NULL,
 			updated_at = NOW()
@@ -1236,6 +1304,30 @@ func (s *Store) RecordFreeProxyFailureClassContext(
 	failureThreshold int,
 	quarantineMinutes int,
 ) error {
+	return s.RecordFreeProxyFailureStageContext(
+		ctx,
+		proxyURL,
+		region,
+		statusCode,
+		message,
+		errorCode,
+		"",
+		failureThreshold,
+		quarantineMinutes,
+	)
+}
+
+func (s *Store) RecordFreeProxyFailureStageContext(
+	ctx context.Context,
+	proxyURL string,
+	region string,
+	statusCode int,
+	message string,
+	errorCode string,
+	errorStage string,
+	failureThreshold int,
+	quarantineMinutes int,
+) error {
 	if proxyURL == "" {
 		return nil
 	}
@@ -1254,6 +1346,9 @@ func (s *Store) RecordFreeProxyFailureClassContext(
 	if errorCode == "" {
 		errorCode = "unknown"
 	}
+	if len(errorStage) > 20 {
+		errorStage = errorStage[:20]
+	}
 
 	if errorCode == "upstream_5xx" || errorCode == "decode" || errorCode == "schema" || errorCode == "canceled" {
 		_, err := s.db.ExecContext(ctx, `
@@ -1263,6 +1358,7 @@ func (s *Store) RecordFreeProxyFailureClassContext(
 				last_checked_at = NOW(),
 				last_error = $4,
 				last_error_code = $5,
+				last_error_stage = NULLIF($6, ''),
 				next_check_at = NOW() + INTERVAL '5 minutes',
 				updated_at = NOW()
 			FROM free_proxies fp
@@ -1272,7 +1368,11 @@ func (s *Store) RecordFreeProxyFailureClassContext(
 			RETURNING fph.proxy_id
 			)
 			UPDATE free_proxies fp
-			SET check_claimed_until = NULL,
+			SET last_checked_at = NOW(),
+				last_error = $4,
+				last_error_code = $5,
+				last_error_stage = NULLIF($6, ''),
+				check_claimed_until = NULL,
 				updated_at = NOW()
 			WHERE fp.id IN (SELECT proxy_id FROM updated_health)`,
 			proxyURL,
@@ -1280,6 +1380,7 @@ func (s *Store) RecordFreeProxyFailureClassContext(
 			statusCode,
 			message,
 			errorCode,
+			errorStage,
 		)
 		return err
 	}
@@ -1292,6 +1393,7 @@ func (s *Store) RecordFreeProxyFailureClassContext(
 		errorCode == "tls" ||
 		errorCode == "proxy_handshake" ||
 		errorCode == "transport"
+	globalTransportFailure := errorStage == "warmup" && hardTransportFailure
 
 	_, err := s.db.ExecContext(ctx, `
 		WITH updated_health AS (
@@ -1304,6 +1406,7 @@ func (s *Store) RecordFreeProxyFailureClassContext(
 			last_failure_at = NOW(),
 			last_error = $4,
 			last_error_code = $5,
+			last_error_stage = NULLIF($10, ''),
 			status = CASE
 				WHEN $7 THEN 'cooldown'
 				WHEN fph.status = 'active' AND fph.failure_streak + 1 < $6 THEN 'active'
@@ -1331,16 +1434,25 @@ func (s *Store) RecordFreeProxyFailureClassContext(
 		RETURNING fph.proxy_id
 		)
 		UPDATE free_proxies fp
-		SET failure_count = failure_count + 1,
+		SET failure_count = CASE
+				WHEN $9 THEN failure_count + 1
+				ELSE failure_count
+			END,
 			last_checked_at = NOW(),
 			last_failure_at = NOW(),
 			last_error = $4,
 			last_error_code = $5,
+			last_error_stage = NULLIF($10, ''),
 			check_claimed_until = NULL,
 			quarantined_until = CASE
-				WHEN $9 AND fp.success_count = 0 THEN GREATEST(
+				WHEN $9 THEN GREATEST(
 					COALESCE(fp.quarantined_until, NOW()),
-					NOW() + INTERVAL '5 minutes'
+					NOW() + CASE
+						WHEN fp.failure_count + 1 = 1 THEN INTERVAL '5 minutes'
+						WHEN fp.failure_count + 1 = 2 THEN INTERVAL '30 minutes'
+						WHEN fp.failure_count + 1 = 3 THEN INTERVAL '2 hours'
+						ELSE INTERVAL '6 hours'
+					END
 				)
 				ELSE fp.quarantined_until
 			END,
@@ -1354,23 +1466,24 @@ func (s *Store) RecordFreeProxyFailureClassContext(
 		failureThreshold,
 		regionalAccessFailure,
 		quarantineMinutes,
-		hardTransportFailure,
+		globalTransportFailure,
+		errorStage,
 	)
 	if err != nil {
 		return err
 	}
-	if hardTransportFailure {
+	if globalTransportFailure {
 		_, err = s.db.ExecContext(ctx, `
 			UPDATE free_proxy_health fph
 			SET next_check_at = GREATEST(
 					COALESCE(fph.next_check_at, NOW()),
-					NOW() + INTERVAL '5 minutes'
+					fp.quarantined_until
 				),
 				updated_at = NOW()
 			FROM free_proxies fp
 			WHERE fp.id = fph.proxy_id
 			  AND fp.proxy_url = $1
-			  AND fp.success_count = 0`, proxyURL)
+			  AND fp.quarantined_until IS NOT NULL`, proxyURL)
 	}
 	return err
 }
@@ -1549,7 +1662,7 @@ func nilIfEmpty(v string) interface{} {
 
 func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {
 	rows, err := s.db.Query(`
-		SELECT m.id, m."userId", m.name, m.query, m.anti_keywords, m.query_delay_ms, m.quiet_hours_enabled, m.quiet_hours_start_minute, m.quiet_hours_end_minute, m.quiet_hours_mode, m.quiet_hours_delay_ms, m.quiet_hours_timezone, m.price_min, m.price_max, m.size_id, m.catalog_ids, m.brand_ids, m.color_ids, m.status_ids, m.video_game_platform_ids, m.region, m.allowed_countries, m.status, m.discord_webhook, m.webhook_active, tc.chat_id, m.telegram_active, u.dedupe_monitor_alerts, m.proxy_group_id, COALESCE(NULLIF(m.proxy_source, ''), CASE WHEN m.proxy_group_id IS NULL THEN 'server' ELSE 'group' END), pg.name, pg.bandwidth_limit_bytes, COALESCE(pg.bandwidth_rx_bytes, 0), COALESCE(pg.bandwidth_tx_bytes, 0), pg.bandwidth_reset_at, pg.proxies
+		SELECT m.id, m."userId", m.name, m.query, m.anti_keywords, m.query_delay_ms, m.quiet_hours_enabled, m.quiet_hours_start_minute, m.quiet_hours_end_minute, m.quiet_hours_mode, m.quiet_hours_delay_ms, m.quiet_hours_timezone, m.price_min, m.price_max, m.size_id, m.catalog_ids, m.brand_ids, m.color_ids, m.status_ids, m.video_game_platform_ids, m.region, m.allowed_countries, m.status, m.discord_webhook, m.webhook_active, tc.chat_id, m.telegram_active, m.notifications_enabled, u.dedupe_monitor_alerts, m.proxy_group_id, COALESCE(NULLIF(m.proxy_source, ''), CASE WHEN m.proxy_group_id IS NULL THEN 'server' ELSE 'group' END), pg.name, pg.bandwidth_limit_bytes, COALESCE(pg.bandwidth_rx_bytes, 0), COALESCE(pg.bandwidth_tx_bytes, 0), pg.bandwidth_reset_at, pg.proxies
 		FROM monitors m
 		JOIN "User" u ON u.id = m."userId"
 		LEFT JOIN proxy_groups pg ON m.proxy_group_id = pg.id
@@ -1563,7 +1676,7 @@ func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {
 	var monitors []model.Monitor
 	for rows.Next() {
 		var m model.Monitor
-		if err := rows.Scan(&m.ID, &m.UserID, &m.Name, &m.Query, &m.AntiKeywords, &m.QueryDelayMs, &m.QuietHoursEnabled, &m.QuietHoursStartMinute, &m.QuietHoursEndMinute, &m.QuietHoursMode, &m.QuietHoursDelayMs, &m.QuietHoursTimezone, &m.PriceMin, &m.PriceMax, &m.SizeID, &m.CatalogIDs, &m.BrandIDs, &m.ColorIDs, &m.StatusIDs, &m.VideoGamePlatformIDs, &m.Region, &m.AllowedCountries, &m.Status, &m.DiscordWebhook, &m.WebhookActive, &m.TelegramChatID, &m.TelegramActive, &m.DedupeMonitorAlerts, &m.ProxyGroupID, &m.ProxySource, &m.ProxyGroupName, &m.ProxyGroupLimitBytes, &m.ProxyGroupRxBytes, &m.ProxyGroupTxBytes, &m.ProxyGroupResetAt, &m.Proxies); err != nil {
+		if err := rows.Scan(&m.ID, &m.UserID, &m.Name, &m.Query, &m.AntiKeywords, &m.QueryDelayMs, &m.QuietHoursEnabled, &m.QuietHoursStartMinute, &m.QuietHoursEndMinute, &m.QuietHoursMode, &m.QuietHoursDelayMs, &m.QuietHoursTimezone, &m.PriceMin, &m.PriceMax, &m.SizeID, &m.CatalogIDs, &m.BrandIDs, &m.ColorIDs, &m.StatusIDs, &m.VideoGamePlatformIDs, &m.Region, &m.AllowedCountries, &m.Status, &m.DiscordWebhook, &m.WebhookActive, &m.TelegramChatID, &m.TelegramActive, &m.NotificationsEnabled, &m.DedupeMonitorAlerts, &m.ProxyGroupID, &m.ProxySource, &m.ProxyGroupName, &m.ProxyGroupLimitBytes, &m.ProxyGroupRxBytes, &m.ProxyGroupTxBytes, &m.ProxyGroupResetAt, &m.Proxies); err != nil {
 			return nil, err
 		}
 		s.SyncProxyGroupBandwidthState(m)
@@ -1578,13 +1691,13 @@ func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {
 func (s *Store) GetMonitorByID(id int) (model.Monitor, error) {
 	var m model.Monitor
 	err := s.db.QueryRow(`
-		SELECT m.id, m."userId", m.name, m.query, m.anti_keywords, m.query_delay_ms, m.quiet_hours_enabled, m.quiet_hours_start_minute, m.quiet_hours_end_minute, m.quiet_hours_mode, m.quiet_hours_delay_ms, m.quiet_hours_timezone, m.price_min, m.price_max, m.size_id, m.catalog_ids, m.brand_ids, m.color_ids, m.status_ids, m.video_game_platform_ids, m.region, m.allowed_countries, m.status, m.discord_webhook, m.webhook_active, tc.chat_id, m.telegram_active, u.dedupe_monitor_alerts, m.proxy_group_id, COALESCE(NULLIF(m.proxy_source, ''), CASE WHEN m.proxy_group_id IS NULL THEN 'server' ELSE 'group' END), pg.name, pg.bandwidth_limit_bytes, COALESCE(pg.bandwidth_rx_bytes, 0), COALESCE(pg.bandwidth_tx_bytes, 0), pg.bandwidth_reset_at, pg.proxies
+		SELECT m.id, m."userId", m.name, m.query, m.anti_keywords, m.query_delay_ms, m.quiet_hours_enabled, m.quiet_hours_start_minute, m.quiet_hours_end_minute, m.quiet_hours_mode, m.quiet_hours_delay_ms, m.quiet_hours_timezone, m.price_min, m.price_max, m.size_id, m.catalog_ids, m.brand_ids, m.color_ids, m.status_ids, m.video_game_platform_ids, m.region, m.allowed_countries, m.status, m.discord_webhook, m.webhook_active, tc.chat_id, m.telegram_active, m.notifications_enabled, u.dedupe_monitor_alerts, m.proxy_group_id, COALESCE(NULLIF(m.proxy_source, ''), CASE WHEN m.proxy_group_id IS NULL THEN 'server' ELSE 'group' END), pg.name, pg.bandwidth_limit_bytes, COALESCE(pg.bandwidth_rx_bytes, 0), COALESCE(pg.bandwidth_tx_bytes, 0), pg.bandwidth_reset_at, pg.proxies
 		FROM monitors m
 		JOIN "User" u ON u.id = m."userId"
 		LEFT JOIN proxy_groups pg ON m.proxy_group_id = pg.id
 		LEFT JOIN telegram_connections tc ON tc."userId" = m."userId"
 		WHERE m.id = $1`, id,
-	).Scan(&m.ID, &m.UserID, &m.Name, &m.Query, &m.AntiKeywords, &m.QueryDelayMs, &m.QuietHoursEnabled, &m.QuietHoursStartMinute, &m.QuietHoursEndMinute, &m.QuietHoursMode, &m.QuietHoursDelayMs, &m.QuietHoursTimezone, &m.PriceMin, &m.PriceMax, &m.SizeID, &m.CatalogIDs, &m.BrandIDs, &m.ColorIDs, &m.StatusIDs, &m.VideoGamePlatformIDs, &m.Region, &m.AllowedCountries, &m.Status, &m.DiscordWebhook, &m.WebhookActive, &m.TelegramChatID, &m.TelegramActive, &m.DedupeMonitorAlerts, &m.ProxyGroupID, &m.ProxySource, &m.ProxyGroupName, &m.ProxyGroupLimitBytes, &m.ProxyGroupRxBytes, &m.ProxyGroupTxBytes, &m.ProxyGroupResetAt, &m.Proxies)
+	).Scan(&m.ID, &m.UserID, &m.Name, &m.Query, &m.AntiKeywords, &m.QueryDelayMs, &m.QuietHoursEnabled, &m.QuietHoursStartMinute, &m.QuietHoursEndMinute, &m.QuietHoursMode, &m.QuietHoursDelayMs, &m.QuietHoursTimezone, &m.PriceMin, &m.PriceMax, &m.SizeID, &m.CatalogIDs, &m.BrandIDs, &m.ColorIDs, &m.StatusIDs, &m.VideoGamePlatformIDs, &m.Region, &m.AllowedCountries, &m.Status, &m.DiscordWebhook, &m.WebhookActive, &m.TelegramChatID, &m.TelegramActive, &m.NotificationsEnabled, &m.DedupeMonitorAlerts, &m.ProxyGroupID, &m.ProxySource, &m.ProxyGroupName, &m.ProxyGroupLimitBytes, &m.ProxyGroupRxBytes, &m.ProxyGroupTxBytes, &m.ProxyGroupResetAt, &m.Proxies)
 	if err != nil {
 		return model.Monitor{}, err
 	}

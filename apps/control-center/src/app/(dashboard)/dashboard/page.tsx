@@ -70,6 +70,7 @@ export default async function DashboardPage() {
             discord_webhook: m.discord_webhook ?? null,
             webhook_active: m.webhook_active ?? true,
             telegram_active: m.telegram_active ?? false,
+            notifications_enabled: m.notifications_enabled ?? true,
             proxy_source: m.proxy_source ?? "server",
             proxy_group_name: m.proxy_group?.name ?? null,
             demo_expires_at: m.demo_expires_at?.toISOString() ?? null,

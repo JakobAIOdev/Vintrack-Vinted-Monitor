@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
@@ -119,6 +119,33 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 		SET next_check_at = NOW(), updated_at = NOW()`, proxyURL); err != nil {
 		t.Fatalf("seed other region health row: %v", err)
 	}
+	fanoutCandidates, err := store.ClaimFreeProxiesDueForCheck(
+		ctx,
+		[]string{"sqlother"},
+		3,
+		true,
+	)
+	if err != nil {
+		t.Fatalf("claim globally successful proxy for another region: %v", err)
+	}
+	if len(fanoutCandidates) != 1 || fanoutCandidates[0].ProxyURL != proxyURL {
+		t.Fatalf(
+			"fanout candidates = %#v, want globally successful proxy",
+			fanoutCandidates,
+		)
+	}
+	if err := store.RecordFreeProxySuccessContext(ctx, proxyURL, "sqlother", 275); err != nil {
+		t.Fatalf("record fanout success: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE free_proxy_health fph
+		SET next_check_at = NOW()
+		FROM free_proxies fp
+		WHERE fp.id = fph.proxy_id
+		  AND fp.proxy_url = $1
+		  AND fph.region = 'sqlother'`, proxyURL); err != nil {
+		t.Fatalf("make fanout region immediately due: %v", err)
+	}
 	if err := store.RecordFreeProxyFailureClassContext(
 		ctx,
 		proxyURL,
@@ -192,10 +219,246 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim maintenance proxies: %v", err)
 	}
-	if len(maintenanceCandidates) != 0 {
+	if len(maintenanceCandidates) != 1 ||
+		maintenanceCandidates[0].ProxyURL != proxyURL {
 		t.Fatalf(
-			"maintenance candidates = %#v, want no pending discovery candidates",
+			"maintenance candidates = %#v, want the active fanout proxy",
 			maintenanceCandidates,
+		)
+	}
+
+	if err := store.RecordFreeProxySuccessContext(ctx, proxyURL, region, 225); err != nil {
+		t.Fatalf("reset proxy with success: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE free_proxy_health fph
+		SET next_check_at = NOW()
+		FROM free_proxies fp
+		WHERE fp.id = fph.proxy_id
+		  AND fp.proxy_url = $1
+		  AND fph.region = 'sqlother'`, proxyURL); err != nil {
+		t.Fatalf("make other region due: %v", err)
+	}
+	if err := store.RecordFreeProxyFailureStageContext(
+		ctx,
+		proxyURL,
+		region,
+		0,
+		"warmup timed out",
+		"timeout",
+		"warmup",
+		3,
+		30,
+	); err != nil {
+		t.Fatalf("record staged warmup failure: %v", err)
+	}
+
+	var stagedQuarantine time.Time
+	var storedStage sql.NullString
+	if err := db.QueryRowContext(ctx, `
+		SELECT quarantined_until, last_error_stage
+		FROM free_proxies
+		WHERE proxy_url = $1`, proxyURL).Scan(&stagedQuarantine, &storedStage); err != nil {
+		t.Fatalf("read staged global failure: %v", err)
+	}
+	if stagedQuarantine.Before(time.Now().Add(4 * time.Minute)) {
+		t.Fatalf("warmup failure quarantine = %v, want at least about 5 minutes", stagedQuarantine)
+	}
+	if !storedStage.Valid || storedStage.String != "warmup" {
+		t.Fatalf("global error stage = %#v, want warmup", storedStage)
+	}
+
+	if err := db.QueryRowContext(ctx, `
+		SELECT fph.next_check_at
+		FROM free_proxy_health fph
+		JOIN free_proxies fp ON fp.id = fph.proxy_id
+		WHERE fp.proxy_url = $1
+		  AND fph.region = 'sqlother'`, proxyURL).Scan(&otherNextCheck); err != nil {
+		t.Fatalf("read globally delayed region: %v", err)
+	}
+	if otherNextCheck.Before(stagedQuarantine.Add(-time.Second)) {
+		t.Fatalf(
+			"other region next check = %v, want global quarantine %v",
+			otherNextCheck,
+			stagedQuarantine,
+		)
+	}
+}
+
+func TestFreeProxyClaimUsesRegionalSourceProtocolYield(t *testing.T) {
+	databaseURL := os.Getenv("FREE_PROXY_STORE_INTEGRATION_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("FREE_PROXY_STORE_INTEGRATION_DATABASE_URL is not set")
+	}
+
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatalf("open postgres: %v", err)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	store := &Store{db: db}
+	const (
+		region     = "sqlyield"
+		highSource = "sql-yield-high"
+		lowSource  = "sql-yield-low"
+		highURL    = "http://vintrack-free-proxy-yield-high.invalid:1"
+		lowURL     = "http://vintrack-free-proxy-yield-low.invalid:1"
+	)
+	defer db.ExecContext(
+		context.Background(),
+		`DELETE FROM free_proxies WHERE source = ANY($1)`,
+		pq.Array([]string{highSource, lowSource}),
+	)
+
+	for _, record := range []FreeProxyRecord{
+		{
+			ProxyURL: highURL,
+			Protocol: "http",
+			Host:     "vintrack-free-proxy-yield-high.invalid",
+			Port:     1,
+			Source:   highSource,
+			Sources:  []string{highSource},
+		},
+		{
+			ProxyURL: lowURL,
+			Protocol: "http",
+			Host:     "vintrack-free-proxy-yield-low.invalid",
+			Port:     1,
+			Source:   lowSource,
+			Sources:  []string{lowSource},
+		},
+	} {
+		if _, err := store.UpsertFreeProxiesContext(
+			ctx,
+			[]FreeProxyRecord{record},
+		); err != nil {
+			t.Fatalf("upsert candidate %s: %v", record.ProxyURL, err)
+		}
+	}
+
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO free_proxy_health (
+			proxy_id,
+			region,
+			status,
+			next_check_at,
+			updated_at
+		)
+		SELECT id, $2, 'pending', NOW(), NOW()
+		FROM free_proxies
+		WHERE proxy_url = ANY($1)
+		ON CONFLICT (proxy_id, region) DO UPDATE
+		SET status = 'pending',
+			success_count = 0,
+			last_checked_at = NULL,
+			last_success_at = NULL,
+			last_error = NULL,
+			last_status_code = NULL,
+			next_check_at = NOW(),
+			updated_at = NOW()`,
+		pq.Array([]string{highURL, lowURL}),
+		region,
+	); err != nil {
+		t.Fatalf("seed yield candidates: %v", err)
+	}
+
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO free_proxies (
+			proxy_url,
+			protocol,
+			host,
+			port,
+			source,
+			status,
+			last_seen_at,
+			updated_at
+		)
+		SELECT
+			'http://vintrack-free-proxy-yield-history-' || source_name || '-' || n || '.invalid:1',
+			'http',
+			'vintrack-free-proxy-yield-history-' || source_name || '-' || n || '.invalid',
+			1,
+			source_name,
+			'disabled',
+			NOW(),
+			NOW()
+		FROM unnest(ARRAY[$1::text, $2::text]) AS source_name
+		CROSS JOIN generate_series(1, 20) AS n
+		ON CONFLICT (proxy_url) DO UPDATE
+		SET source = EXCLUDED.source,
+			status = 'disabled',
+			updated_at = NOW()`,
+		highSource,
+		lowSource,
+	); err != nil {
+		t.Fatalf("seed yield history proxies: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO free_proxy_health (
+			proxy_id,
+			region,
+			status,
+			last_status_code,
+			last_error,
+			last_checked_at,
+			last_success_at,
+			next_check_at,
+			updated_at
+		)
+		SELECT
+			fp.id,
+			$3,
+			'cooldown',
+			CASE WHEN fp.source = $1 AND numbered.n <= 10 THEN 200 ELSE 0 END,
+			CASE WHEN fp.source = $1 AND numbered.n <= 10 THEN NULL ELSE 'timeout' END,
+			NOW() - INTERVAL '5 minutes',
+			CASE
+				WHEN fp.source = $1 AND numbered.n <= 10
+				THEN NOW() - INTERVAL '5 minutes'
+				ELSE NULL
+			END,
+			NOW() + INTERVAL '1 hour',
+			NOW()
+		FROM free_proxies fp
+		CROSS JOIN LATERAL (
+			SELECT (
+				regexp_match(fp.proxy_url, '-([0-9]+)\.invalid')
+			)[1]::int AS n
+		) AS numbered
+		WHERE fp.source = ANY(ARRAY[$1::text, $2::text])
+		  AND fp.status = 'disabled'
+		ON CONFLICT (proxy_id, region) DO UPDATE
+		SET status = EXCLUDED.status,
+			last_status_code = EXCLUDED.last_status_code,
+			last_error = EXCLUDED.last_error,
+			last_checked_at = EXCLUDED.last_checked_at,
+			last_success_at = EXCLUDED.last_success_at,
+			next_check_at = EXCLUDED.next_check_at,
+			updated_at = NOW()`,
+		highSource,
+		lowSource,
+		region,
+	); err != nil {
+		t.Fatalf("seed regional yield history: %v", err)
+	}
+
+	candidates, err := store.ClaimFreeProxiesDueForCheck(
+		ctx,
+		[]string{region},
+		1,
+		true,
+	)
+	if err != nil {
+		t.Fatalf("claim regional-yield candidate: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].ProxyURL != highURL {
+		t.Fatalf(
+			"regional-yield candidates = %#v, want %s",
+			candidates,
+			highURL,
 		)
 	}
 }

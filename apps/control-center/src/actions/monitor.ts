@@ -29,10 +29,15 @@ import {
 } from "@/lib/monitor-anti-keywords";
 
 async function sendTelegramStatusIfConfigured(
-    monitor: { name: string; userId: string; telegram_active: boolean },
+    monitor: {
+        name: string;
+        userId: string;
+        telegram_active: boolean;
+        notifications_enabled: boolean;
+    },
     status: "created" | "started" | "paused",
 ) {
-    if (!monitor.telegram_active) return;
+    if (!monitor.notifications_enabled || !monitor.telegram_active) return;
 
     const connection = await getTelegramConnection(monitor.userId);
     if (!connection) return;
@@ -238,6 +243,7 @@ export async function createMonitor(
 
     if (
         initialStatus === "active" &&
+        monitor.notifications_enabled &&
         monitor.discord_webhook &&
         monitor.webhook_active
     ) {
@@ -811,7 +817,11 @@ export async function toggleMonitorStatus(id: number, currentStatus: string) {
         },
     });
 
-    if (monitor.discord_webhook && monitor.webhook_active) {
+    if (
+        monitor.notifications_enabled &&
+        monitor.discord_webhook &&
+        monitor.webhook_active
+    ) {
         try {
             const isStarting = newStatus === "active";
             const payload = {

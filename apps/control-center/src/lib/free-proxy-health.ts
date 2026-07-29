@@ -18,6 +18,7 @@ export type FreeProxyRegionHealth = {
     state: "ready" | "building" | "recovering" | "disabled";
     neverChecked: number;
     topErrorCode: string | null;
+    topErrorStage: string | null;
 };
 
 export type FreeProxyPoolHealth = {
@@ -26,6 +27,7 @@ export type FreeProxyPoolHealth = {
     minActivePerRegion: number;
     regions: Record<string, FreeProxyRegionHealth>;
     activeCount: number;
+    degradationReason: "host_egress_limited" | null;
 };
 
 type FreeProxyHealthRow = {
@@ -42,6 +44,7 @@ type FreeProxyHealthRow = {
     last_checked_at: Date | null;
     never_checked_count: bigint;
     top_error_code: string | null;
+    top_error_stage: string | null;
 };
 
 export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
@@ -55,6 +58,7 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
             state: "ready",
             minActivePerRegion: 1,
             activeCount: 1,
+            degradationReason: null,
             regions: {
                 de: {
                     region: "de",
@@ -72,12 +76,19 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                     state: "ready",
                     neverChecked: 0,
                     topErrorCode: null,
+                    topErrorStage: null,
                 },
             },
         };
     }
 
-    const [setting, minActiveSetting, starterRegionsSetting, rows] =
+    const [
+        setting,
+        minActiveSetting,
+        starterRegionsSetting,
+        degradationSetting,
+        rows,
+    ] =
         await Promise.all([
             db.app_settings.findUnique({
                 where: { key: "free_proxy_enabled" },
@@ -89,6 +100,10 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
             }),
             db.app_settings.findUnique({
                 where: { key: "free_proxy_starter_regions" },
+                select: { value: true },
+            }),
+            db.app_settings.findUnique({
+                where: { key: "free_proxy_degradation_reason" },
                 select: { value: true },
             }),
             db.$queryRaw<FreeProxyHealthRow[]>`
@@ -152,7 +167,15 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                     WHERE last_checked_at IS NULL
                 )::bigint AS never_checked_count,
                 mode() WITHIN GROUP (ORDER BY last_error_code)
-                    FILTER (WHERE last_error_code IS NOT NULL) AS top_error_code
+                    FILTER (
+                        WHERE last_error_code IS NOT NULL
+                          AND last_checked_at >= NOW() - INTERVAL '24 hours'
+                    ) AS top_error_code,
+                mode() WITHIN GROUP (ORDER BY last_error_stage)
+                    FILTER (
+                        WHERE last_error_stage IS NOT NULL
+                          AND last_checked_at >= NOW() - INTERVAL '24 hours'
+                    ) AS top_error_stage
             FROM free_proxy_health
             GROUP BY region
         `,
@@ -186,6 +209,7 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                     state: setting?.value === "true" ? "building" : "disabled",
                     neverChecked: 0,
                     topErrorCode: null,
+                    topErrorStage: null,
                 };
                 return [region, emptyHealth];
             }
@@ -227,6 +251,7 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                             : "recovering",
                 neverChecked: Number(row.never_checked_count),
                 topErrorCode: row.top_error_code,
+                topErrorStage: row.top_error_stage,
             };
             return [region, health];
         }),
@@ -248,5 +273,9 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
         minActivePerRegion,
         regions,
         activeCount: regions.de?.usable ?? 0,
+        degradationReason:
+            enabled && degradationSetting?.value === "host_egress_limited"
+                ? "host_egress_limited"
+                : null,
     };
 }

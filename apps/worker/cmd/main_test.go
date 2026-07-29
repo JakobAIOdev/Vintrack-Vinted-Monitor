@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"vintrack-worker/internal/database"
+	"vintrack-worker/internal/scraper"
 )
 
 func TestFreeProxyValidationTimeout(t *testing.T) {
@@ -84,6 +85,107 @@ func TestInterleaveFreeProxyCandidates(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("interleaveFreeProxyCandidates() = %#v, want %#v", got, want)
+	}
+}
+
+func TestFreeProxyWaveGroupSlotsStayBoundedAndFair(t *testing.T) {
+	tests := []struct {
+		name               string
+		maximumSlots       int
+		recoveryRegions    int
+		maintenanceRegions int
+		wantRecovery       int
+		wantMaintenance    int
+	}{
+		{name: "all recovery", maximumSlots: 24, recoveryRegions: 12, wantRecovery: 24},
+		{name: "all maintenance", maximumSlots: 24, maintenanceRegions: 12, wantMaintenance: 24},
+		{name: "proportional split", maximumSlots: 24, recoveryRegions: 9, maintenanceRegions: 3, wantRecovery: 18, wantMaintenance: 6},
+		{name: "maintenance retains a slot", maximumSlots: 2, recoveryRegions: 11, maintenanceRegions: 1, wantRecovery: 1, wantMaintenance: 1},
+		{name: "empty wave", maximumSlots: 0, recoveryRegions: 2, maintenanceRegions: 2},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gotRecovery, gotMaintenance := freeProxyWaveGroupSlots(
+				test.maximumSlots,
+				test.recoveryRegions,
+				test.maintenanceRegions,
+			)
+			if gotRecovery != test.wantRecovery ||
+				gotMaintenance != test.wantMaintenance {
+				t.Fatalf(
+					"freeProxyWaveGroupSlots() = %d/%d, want %d/%d",
+					gotRecovery,
+					gotMaintenance,
+					test.wantRecovery,
+					test.wantMaintenance,
+				)
+			}
+			if gotRecovery+gotMaintenance > test.maximumSlots {
+				t.Fatalf(
+					"allocated %d slots above maximum %d",
+					gotRecovery+gotMaintenance,
+					test.maximumSlots,
+				)
+			}
+		})
+	}
+}
+
+func TestWarmupTransportFailureClassification(t *testing.T) {
+	if !isWarmupTransportFailure("timeout", scraper.FreeProxyValidationStageWarmup) {
+		t.Fatal("warmup timeout should be a global transport failure")
+	}
+	if isWarmupTransportFailure("timeout", scraper.FreeProxyValidationStageCatalog) {
+		t.Fatal("catalog timeout should remain region-local")
+	}
+	if isWarmupTransportFailure("vinted_403", scraper.FreeProxyValidationStageWarmup) {
+		t.Fatal("warmup HTTP denial should remain region-local")
+	}
+}
+
+func TestFreeProxyWaveEgressRecoveryThresholds(t *testing.T) {
+	tests := []struct {
+		name string
+		wave freeProxyWaveStats
+		want bool
+	}{
+		{
+			name: "more than two percent succeeds",
+			wave: freeProxyWaveStats{
+				Checked:                 100,
+				Passed:                  3,
+				WarmupTransportFailures: 97,
+			},
+			want: true,
+		},
+		{
+			name: "warmup failures below sixty percent",
+			wave: freeProxyWaveStats{
+				Checked:                 100,
+				Passed:                  1,
+				WarmupTransportFailures: 59,
+			},
+			want: true,
+		},
+		{
+			name: "boundary remains degraded",
+			wave: freeProxyWaveStats{
+				Checked:                 100,
+				Passed:                  2,
+				WarmupTransportFailures: 60,
+			},
+			want: false,
+		},
+		{name: "empty wave", wave: freeProxyWaveStats{}, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := freeProxyWaveShowsEgressRecovery(test.wave); got != test.want {
+				t.Fatalf("freeProxyWaveShowsEgressRecovery() = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 

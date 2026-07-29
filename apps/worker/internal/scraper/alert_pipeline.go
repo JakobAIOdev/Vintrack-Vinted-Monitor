@@ -122,7 +122,11 @@ func (e *Engine) deliverAlert(job alertJob) {
 	default:
 	}
 
-	configuredDiscord, configuredTelegram := configuredExternalAlerts(job.monitor)
+	notificationsEnabled := e.monitorNotificationsEnabled(job.monitor)
+	configuredDiscord, configuredTelegram := effectiveExternalAlerts(
+		job.monitor,
+		notificationsEnabled,
+	)
 	hasDiscord := job.deliverExternal && configuredDiscord
 	hasTelegram := job.deliverExternal && configuredTelegram
 
@@ -131,7 +135,7 @@ func (e *Engine) deliverAlert(job alertJob) {
 		// wait for seller enrichment without delaying the live feed.
 		if err := e.db.PublishItem(job.item); err != nil {
 			log.Printf("[%d] publish error: %v", job.monitor.ID, err)
-		} else if !configuredDiscord && !configuredTelegram {
+		} else if !hasDiscord && !hasTelegram {
 			e.db.RecordDetectionAlertSent(job.monitor.ID, job.item.ID, time.Now())
 		}
 	}
@@ -289,10 +293,25 @@ func configuredExternalAlerts(monitor model.Monitor) (bool, bool) {
 	return hasDiscord, hasTelegram
 }
 
-func detectedItemAlertPlan(monitor model.Monitor, strictCountryGate bool) (bool, bool) {
+func effectiveExternalAlerts(
+	monitor model.Monitor,
+	notificationsEnabled bool,
+) (bool, bool) {
+	if !notificationsEnabled {
+		return false, false
+	}
+	return configuredExternalAlerts(monitor)
+}
+
+func detectedItemAlertPlan(
+	monitor model.Monitor,
+	strictCountryGate bool,
+	notificationsEnabled bool,
+) (bool, bool) {
 	hasDiscord, hasTelegram := configuredExternalAlerts(monitor)
 	publishNow := !strictCountryGate
-	alertAfterEnrich := strictCountryGate || hasDiscord || hasTelegram
+	alertAfterEnrich :=
+		strictCountryGate || (notificationsEnabled && (hasDiscord || hasTelegram))
 	return publishNow, alertAfterEnrich
 }
 
