@@ -471,6 +471,9 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 				bootstrap,
 			)
 			if claimErr != nil {
+				if cycleCtx.Err() != nil {
+					return
+				}
 				log.Printf("free proxy health load failed for %v: %v", groupRegions, claimErr)
 				for _, region := range groupRegions {
 					remainingByRegion[region] = 0
@@ -709,6 +712,9 @@ func updateFreeProxyEgressState(
 	store *database.Store,
 	wave freeProxyWaveStats,
 ) {
+	if ctx.Err() != nil {
+		return
+	}
 	limited, err := store.FreeProxyEgressLimitedContext(ctx)
 	if err != nil {
 		log.Printf("free proxy egress health evaluation failed: %v", err)

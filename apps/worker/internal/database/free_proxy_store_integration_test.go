@@ -462,3 +462,138 @@ func TestFreeProxyClaimUsesRegionalSourceProtocolYield(t *testing.T) {
 		)
 	}
 }
+
+func TestFreeProxyClaimFillsMultiRegionWaveAfterProxyDeduplication(t *testing.T) {
+	databaseURL := os.Getenv("FREE_PROXY_STORE_INTEGRATION_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("FREE_PROXY_STORE_INTEGRATION_DATABASE_URL is not set")
+	}
+
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatalf("open postgres: %v", err)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	store := &Store{db: db}
+	const source = "sql-wave-fill"
+	regions := []string{"sqlwa", "sqlwb", "sqlwc"}
+	defer db.ExecContext(
+		context.Background(),
+		`DELETE FROM free_proxies WHERE source = $1`,
+		source,
+	)
+
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO free_proxies (
+			proxy_url,
+			protocol,
+			host,
+			port,
+			source,
+			status,
+			last_seen_at,
+			updated_at
+		)
+		SELECT
+			'http://vintrack-free-proxy-wave-' || n || '.invalid:1',
+			'http',
+			'vintrack-free-proxy-wave-' || n || '.invalid',
+			1,
+			$1,
+			'active',
+			NOW(),
+			NOW()
+		FROM generate_series(1, 24) AS n
+		ON CONFLICT (proxy_url) DO UPDATE
+		SET source = EXCLUDED.source,
+			status = 'active',
+			quarantined_until = NULL,
+			check_claimed_until = NULL,
+			updated_at = NOW()`,
+		source,
+	); err != nil {
+		t.Fatalf("seed multi-region wave proxies: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO free_proxy_health (
+			proxy_id,
+			region,
+			status,
+			success_streak,
+			success_count,
+			failure_streak,
+			last_checked_at,
+			last_success_at,
+			last_error,
+			last_error_code,
+			last_error_stage,
+			next_check_at,
+			updated_at
+		)
+		SELECT
+			fp.id,
+			region,
+			'pending',
+			0,
+			0,
+			0,
+			NULL,
+			NULL,
+			NULL,
+			NULL,
+			NULL,
+			NOW(),
+			NOW()
+		FROM free_proxies fp
+		CROSS JOIN unnest($2::text[]) AS region
+		WHERE fp.source = $1
+		ON CONFLICT (proxy_id, region) DO UPDATE
+		SET status = 'pending',
+			success_streak = 0,
+			success_count = 0,
+			failure_streak = 0,
+			last_checked_at = NULL,
+			last_success_at = NULL,
+			last_error = NULL,
+			last_error_code = NULL,
+			last_error_stage = NULL,
+			next_check_at = NOW(),
+			updated_at = NOW()`,
+		source,
+		pq.Array(regions),
+	); err != nil {
+		t.Fatalf("seed multi-region health rows: %v", err)
+	}
+
+	candidates, err := store.ClaimFreeProxiesDueForCheck(
+		ctx,
+		regions,
+		12,
+		true,
+	)
+	if err != nil {
+		t.Fatalf("claim multi-region wave: %v", err)
+	}
+	if len(candidates) != 12 {
+		t.Fatalf(
+			"multi-region wave size = %d, want 12: %#v",
+			len(candidates),
+			candidates,
+		)
+	}
+	claimedRegions := make(map[string]int)
+	for _, candidate := range candidates {
+		claimedRegions[candidate.Region]++
+	}
+	for _, region := range regions {
+		if claimedRegions[region] == 0 {
+			t.Fatalf(
+				"multi-region wave distribution = %#v, want every region represented",
+				claimedRegions,
+			)
+		}
+	}
+}
