@@ -1662,7 +1662,7 @@ func nilIfEmpty(v string) interface{} {
 
 func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {
 	rows, err := s.db.Query(`
-		SELECT m.id, m."userId", m.name, m.query, m.anti_keywords, m.query_delay_ms, m.quiet_hours_enabled, m.quiet_hours_start_minute, m.quiet_hours_end_minute, m.quiet_hours_mode, m.quiet_hours_delay_ms, m.quiet_hours_timezone, m.price_min, m.price_max, m.size_id, m.catalog_ids, m.brand_ids, m.color_ids, m.status_ids, m.video_game_platform_ids, m.region, m.allowed_countries, m.status, m.discord_webhook, m.webhook_active, tc.chat_id, m.telegram_active, u.dedupe_monitor_alerts, m.proxy_group_id, COALESCE(NULLIF(m.proxy_source, ''), CASE WHEN m.proxy_group_id IS NULL THEN 'server' ELSE 'group' END), pg.name, pg.bandwidth_limit_bytes, COALESCE(pg.bandwidth_rx_bytes, 0), COALESCE(pg.bandwidth_tx_bytes, 0), pg.bandwidth_reset_at, pg.proxies
+		SELECT m.id, m."userId", m.name, m.query, m.anti_keywords, m.query_delay_ms, m.quiet_hours_enabled, m.quiet_hours_start_minute, m.quiet_hours_end_minute, m.quiet_hours_mode, m.quiet_hours_delay_ms, m.quiet_hours_timezone, m.price_min, m.price_max, m.size_id, m.catalog_ids, m.brand_ids, m.color_ids, m.status_ids, m.video_game_platform_ids, m.region, m.allowed_countries, m.status, m.discord_webhook, m.webhook_active, tc.chat_id, m.telegram_active, m.notifications_enabled, u.dedupe_monitor_alerts, m.proxy_group_id, COALESCE(NULLIF(m.proxy_source, ''), CASE WHEN m.proxy_group_id IS NULL THEN 'server' ELSE 'group' END), pg.name, pg.bandwidth_limit_bytes, COALESCE(pg.bandwidth_rx_bytes, 0), COALESCE(pg.bandwidth_tx_bytes, 0), pg.bandwidth_reset_at, pg.proxies
 		FROM monitors m
 		JOIN "User" u ON u.id = m."userId"
 		LEFT JOIN proxy_groups pg ON m.proxy_group_id = pg.id
@@ -1676,7 +1676,7 @@ func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {
 	var monitors []model.Monitor
 	for rows.Next() {
 		var m model.Monitor
-		if err := rows.Scan(&m.ID, &m.UserID, &m.Name, &m.Query, &m.AntiKeywords, &m.QueryDelayMs, &m.QuietHoursEnabled, &m.QuietHoursStartMinute, &m.QuietHoursEndMinute, &m.QuietHoursMode, &m.QuietHoursDelayMs, &m.QuietHoursTimezone, &m.PriceMin, &m.PriceMax, &m.SizeID, &m.CatalogIDs, &m.BrandIDs, &m.ColorIDs, &m.StatusIDs, &m.VideoGamePlatformIDs, &m.Region, &m.AllowedCountries, &m.Status, &m.DiscordWebhook, &m.WebhookActive, &m.TelegramChatID, &m.TelegramActive, &m.DedupeMonitorAlerts, &m.ProxyGroupID, &m.ProxySource, &m.ProxyGroupName, &m.ProxyGroupLimitBytes, &m.ProxyGroupRxBytes, &m.ProxyGroupTxBytes, &m.ProxyGroupResetAt, &m.Proxies); err != nil {
+		if err := rows.Scan(&m.ID, &m.UserID, &m.Name, &m.Query, &m.AntiKeywords, &m.QueryDelayMs, &m.QuietHoursEnabled, &m.QuietHoursStartMinute, &m.QuietHoursEndMinute, &m.QuietHoursMode, &m.QuietHoursDelayMs, &m.QuietHoursTimezone, &m.PriceMin, &m.PriceMax, &m.SizeID, &m.CatalogIDs, &m.BrandIDs, &m.ColorIDs, &m.StatusIDs, &m.VideoGamePlatformIDs, &m.Region, &m.AllowedCountries, &m.Status, &m.DiscordWebhook, &m.WebhookActive, &m.TelegramChatID, &m.TelegramActive, &m.NotificationsEnabled, &m.DedupeMonitorAlerts, &m.ProxyGroupID, &m.ProxySource, &m.ProxyGroupName, &m.ProxyGroupLimitBytes, &m.ProxyGroupRxBytes, &m.ProxyGroupTxBytes, &m.ProxyGroupResetAt, &m.Proxies); err != nil {
 			return nil, err
 		}
 		s.SyncProxyGroupBandwidthState(m)
@@ -1691,13 +1691,13 @@ func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {
 func (s *Store) GetMonitorByID(id int) (model.Monitor, error) {
 	var m model.Monitor
 	err := s.db.QueryRow(`
-		SELECT m.id, m."userId", m.name, m.query, m.anti_keywords, m.query_delay_ms, m.quiet_hours_enabled, m.quiet_hours_start_minute, m.quiet_hours_end_minute, m.quiet_hours_mode, m.quiet_hours_delay_ms, m.quiet_hours_timezone, m.price_min, m.price_max, m.size_id, m.catalog_ids, m.brand_ids, m.color_ids, m.status_ids, m.video_game_platform_ids, m.region, m.allowed_countries, m.status, m.discord_webhook, m.webhook_active, tc.chat_id, m.telegram_active, u.dedupe_monitor_alerts, m.proxy_group_id, COALESCE(NULLIF(m.proxy_source, ''), CASE WHEN m.proxy_group_id IS NULL THEN 'server' ELSE 'group' END), pg.name, pg.bandwidth_limit_bytes, COALESCE(pg.bandwidth_rx_bytes, 0), COALESCE(pg.bandwidth_tx_bytes, 0), pg.bandwidth_reset_at, pg.proxies
+		SELECT m.id, m."userId", m.name, m.query, m.anti_keywords, m.query_delay_ms, m.quiet_hours_enabled, m.quiet_hours_start_minute, m.quiet_hours_end_minute, m.quiet_hours_mode, m.quiet_hours_delay_ms, m.quiet_hours_timezone, m.price_min, m.price_max, m.size_id, m.catalog_ids, m.brand_ids, m.color_ids, m.status_ids, m.video_game_platform_ids, m.region, m.allowed_countries, m.status, m.discord_webhook, m.webhook_active, tc.chat_id, m.telegram_active, m.notifications_enabled, u.dedupe_monitor_alerts, m.proxy_group_id, COALESCE(NULLIF(m.proxy_source, ''), CASE WHEN m.proxy_group_id IS NULL THEN 'server' ELSE 'group' END), pg.name, pg.bandwidth_limit_bytes, COALESCE(pg.bandwidth_rx_bytes, 0), COALESCE(pg.bandwidth_tx_bytes, 0), pg.bandwidth_reset_at, pg.proxies
 		FROM monitors m
 		JOIN "User" u ON u.id = m."userId"
 		LEFT JOIN proxy_groups pg ON m.proxy_group_id = pg.id
 		LEFT JOIN telegram_connections tc ON tc."userId" = m."userId"
 		WHERE m.id = $1`, id,
-	).Scan(&m.ID, &m.UserID, &m.Name, &m.Query, &m.AntiKeywords, &m.QueryDelayMs, &m.QuietHoursEnabled, &m.QuietHoursStartMinute, &m.QuietHoursEndMinute, &m.QuietHoursMode, &m.QuietHoursDelayMs, &m.QuietHoursTimezone, &m.PriceMin, &m.PriceMax, &m.SizeID, &m.CatalogIDs, &m.BrandIDs, &m.ColorIDs, &m.StatusIDs, &m.VideoGamePlatformIDs, &m.Region, &m.AllowedCountries, &m.Status, &m.DiscordWebhook, &m.WebhookActive, &m.TelegramChatID, &m.TelegramActive, &m.DedupeMonitorAlerts, &m.ProxyGroupID, &m.ProxySource, &m.ProxyGroupName, &m.ProxyGroupLimitBytes, &m.ProxyGroupRxBytes, &m.ProxyGroupTxBytes, &m.ProxyGroupResetAt, &m.Proxies)
+	).Scan(&m.ID, &m.UserID, &m.Name, &m.Query, &m.AntiKeywords, &m.QueryDelayMs, &m.QuietHoursEnabled, &m.QuietHoursStartMinute, &m.QuietHoursEndMinute, &m.QuietHoursMode, &m.QuietHoursDelayMs, &m.QuietHoursTimezone, &m.PriceMin, &m.PriceMax, &m.SizeID, &m.CatalogIDs, &m.BrandIDs, &m.ColorIDs, &m.StatusIDs, &m.VideoGamePlatformIDs, &m.Region, &m.AllowedCountries, &m.Status, &m.DiscordWebhook, &m.WebhookActive, &m.TelegramChatID, &m.TelegramActive, &m.NotificationsEnabled, &m.DedupeMonitorAlerts, &m.ProxyGroupID, &m.ProxySource, &m.ProxyGroupName, &m.ProxyGroupLimitBytes, &m.ProxyGroupRxBytes, &m.ProxyGroupTxBytes, &m.ProxyGroupResetAt, &m.Proxies)
 	if err != nil {
 		return model.Monitor{}, err
 	}

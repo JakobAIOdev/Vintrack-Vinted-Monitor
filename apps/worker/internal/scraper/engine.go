@@ -32,25 +32,27 @@ const (
 )
 
 type Engine struct {
-	db             *database.Store
-	serverProxy    *proxy.Manager
-	freeProxy      *proxy.RegionPools
-	fetcher        CatalogFetcher
-	enrichSeller   bool
-	poolSize       int
-	freePoolSize   int
-	pools          map[string]*ClientPool
-	poolsMu        sync.RWMutex
-	enrichers      map[string]*SellerEnricher
-	enrichersMu    sync.RWMutex
-	discoveryMode  string
-	jobsCtx        context.Context
-	jobsCancel     context.CancelFunc
-	alertJobs      chan alertJob
-	discordJobs    chan alertJob
-	telegramJobs   chan alertJob
-	enrichmentJobs chan enrichmentJob
-	jobsWG         sync.WaitGroup
+	db                     *database.Store
+	serverProxy            *proxy.Manager
+	freeProxy              *proxy.RegionPools
+	fetcher                CatalogFetcher
+	enrichSeller           bool
+	poolSize               int
+	freePoolSize           int
+	pools                  map[string]*ClientPool
+	poolsMu                sync.RWMutex
+	enrichers              map[string]*SellerEnricher
+	enrichersMu            sync.RWMutex
+	notificationPolicies   map[int]bool
+	notificationPoliciesMu sync.RWMutex
+	discoveryMode          string
+	jobsCtx                context.Context
+	jobsCancel             context.CancelFunc
+	alertJobs              chan alertJob
+	discordJobs            chan alertJob
+	telegramJobs           chan alertJob
+	enrichmentJobs         chan enrichmentJob
+	jobsWG                 sync.WaitGroup
 }
 
 func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools) *Engine {
@@ -68,25 +70,47 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 	jobsCtx, jobsCancel := context.WithCancel(context.Background())
 	log.Printf("Catalog fetch mode: %s, seller enrichment (region/rating): %v, client pool size: %d, free proxy pool size: %d, TLS profile: %s, discovery: %s", fetcher.Name(), enrich, poolSize, freePoolSize, configuredClientFingerprint().name, discoveryMode)
 	engine := &Engine{
-		db:             db,
-		serverProxy:    pm,
-		freeProxy:      freePM,
-		fetcher:        fetcher,
-		enrichSeller:   enrich,
-		poolSize:       poolSize,
-		freePoolSize:   freePoolSize,
-		pools:          make(map[string]*ClientPool),
-		enrichers:      make(map[string]*SellerEnricher),
-		discoveryMode:  discoveryMode,
-		jobsCtx:        jobsCtx,
-		jobsCancel:     jobsCancel,
-		alertJobs:      make(chan alertJob, 4096),
-		discordJobs:    make(chan alertJob, 4096),
-		telegramJobs:   make(chan alertJob, 4096),
-		enrichmentJobs: make(chan enrichmentJob, 4096),
+		db:                   db,
+		serverProxy:          pm,
+		freeProxy:            freePM,
+		fetcher:              fetcher,
+		enrichSeller:         enrich,
+		poolSize:             poolSize,
+		freePoolSize:         freePoolSize,
+		pools:                make(map[string]*ClientPool),
+		enrichers:            make(map[string]*SellerEnricher),
+		notificationPolicies: make(map[int]bool),
+		discoveryMode:        discoveryMode,
+		jobsCtx:              jobsCtx,
+		jobsCancel:           jobsCancel,
+		alertJobs:            make(chan alertJob, 4096),
+		discordJobs:          make(chan alertJob, 4096),
+		telegramJobs:         make(chan alertJob, 4096),
+		enrichmentJobs:       make(chan enrichmentJob, 4096),
 	}
 	engine.startPipelines()
 	return engine
+}
+
+func (e *Engine) SyncNotificationPolicies(monitors []model.Monitor) {
+	policies := make(map[int]bool, len(monitors))
+	for _, monitor := range monitors {
+		policies[monitor.ID] = monitor.NotificationsEnabled
+	}
+
+	e.notificationPoliciesMu.Lock()
+	e.notificationPolicies = policies
+	e.notificationPoliciesMu.Unlock()
+}
+
+func (e *Engine) monitorNotificationsEnabled(monitor model.Monitor) bool {
+	e.notificationPoliciesMu.RLock()
+	enabled, ok := e.notificationPolicies[monitor.ID]
+	e.notificationPoliciesMu.RUnlock()
+	if ok {
+		return enabled
+	}
+	return monitor.NotificationsEnabled
 }
 
 func (e *Engine) ServerProxyVersion() uint64 {
@@ -316,10 +340,11 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	waitingForProxy := false
 
 	log.Printf("[%d] started | name=%q | queries=%d | delay=%s | hedge=%dms | url=%s", m.ID, m.Name, len(monitorQueries), interval, getEnvInt("CATALOG_HEDGE_DELAY_MS", 250), queryURLs[0])
-	if !m.SuppressStartupNotice && m.WebhookActive && m.DiscordWebhook.Valid && m.DiscordWebhook.String != "" {
+	notificationsEnabled := e.monitorNotificationsEnabled(m)
+	if notificationsEnabled && !m.SuppressStartupNotice && m.WebhookActive && m.DiscordWebhook.Valid && m.DiscordWebhook.String != "" {
 		go discord.SendStartupWebhook(m.DiscordWebhook.String, m.Name)
 	}
-	if !m.SuppressStartupNotice && m.TelegramActive && m.TelegramChatID.Valid && m.TelegramChatID.String != "" {
+	if notificationsEnabled && !m.SuppressStartupNotice && m.TelegramActive && m.TelegramChatID.Valid && m.TelegramChatID.String != "" {
 		go telegram.SendStartup(m.TelegramChatID.String, m.Name)
 	}
 
@@ -413,6 +438,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 				m.WebhookActive = updated.WebhookActive
 				m.TelegramChatID = updated.TelegramChatID
 				m.TelegramActive = updated.TelegramActive
+				m.NotificationsEnabled = updated.NotificationsEnabled
 				m.DedupeMonitorAlerts = updated.DedupeMonitorAlerts
 				m.AllowedCountries = updated.AllowedCountries
 				m.Status = updated.Status
@@ -689,7 +715,11 @@ func (e *Engine) handleDetectedItem(ctx context.Context, monitor model.Monitor, 
 	item := e.buildItems(monitor, []model.VintedItem{vintedItem})[0]
 	log.Printf("[%d] NEW via %s: %s (%s) [%s]", monitor.ID, source, item.Title, item.Price, item.Size)
 	strictCountryGate := hasCountryFilter(monitor.AllowedCountries)
-	publishNow, alertAfterEnrich := detectedItemAlertPlan(monitor, strictCountryGate)
+	publishNow, alertAfterEnrich := detectedItemAlertPlan(
+		monitor,
+		strictCountryGate,
+		e.monitorNotificationsEnabled(monitor),
+	)
 	e.enqueueItem(enrichmentJob{
 		ctx: ctx, item: item, vintedItem: vintedItem, monitor: monitor, proxySource: proxySource,
 		enricher: enricher, publishUpdate: !strictCountryGate,

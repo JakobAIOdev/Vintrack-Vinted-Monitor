@@ -116,6 +116,7 @@ model monitors {
   discord_webhook          String?
   webhook_active           Boolean   @default(true)
   telegram_active          Boolean   @default(false)
+  notifications_enabled    Boolean   @default(true)
 
   proxy_group_id  Int?
   proxy_source    String                     @default("server") @db.VarChar(20)

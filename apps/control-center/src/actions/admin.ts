@@ -1911,6 +1911,7 @@ export async function stopUserActiveMonitors(userId: string) {
             discord_webhook: true,
             webhook_active: true,
             telegram_active: true,
+            notifications_enabled: true,
         },
     });
 
@@ -1925,14 +1926,18 @@ export async function stopUserActiveMonitors(userId: string) {
 
     Promise.all(
         monitorsToStop.map(async (monitor) => {
-            if (monitor.discord_webhook && monitor.webhook_active) {
+            if (
+                monitor.notifications_enabled &&
+                monitor.discord_webhook &&
+                monitor.webhook_active
+            ) {
                 await sendPausedWebhook(
                     monitor.name,
                     monitor.id,
                     monitor.discord_webhook,
                 );
             }
-            if (monitor.telegram_active) {
+            if (monitor.notifications_enabled && monitor.telegram_active) {
                 await sendPausedTelegram(
                     monitor.name,
                     monitor.id,
@@ -1966,6 +1971,7 @@ export async function stopSingleUserMonitor(userId: string, monitorId: number) {
             discord_webhook: true,
             webhook_active: true,
             telegram_active: true,
+            notifications_enabled: true,
         },
     });
 
@@ -1978,14 +1984,18 @@ export async function stopSingleUserMonitor(userId: string, monitorId: number) {
         data: { status: "paused" },
     });
 
-    if (monitor.discord_webhook && monitor.webhook_active) {
+    if (
+        monitor.notifications_enabled &&
+        monitor.discord_webhook &&
+        monitor.webhook_active
+    ) {
         sendPausedWebhook(
             monitor.name,
             monitor.id,
             monitor.discord_webhook,
         ).catch(console.error);
     }
-    if (monitor.telegram_active) {
+    if (monitor.notifications_enabled && monitor.telegram_active) {
         sendPausedTelegram(monitor.name, monitor.id, monitor.userId).catch(
             console.error,
         );

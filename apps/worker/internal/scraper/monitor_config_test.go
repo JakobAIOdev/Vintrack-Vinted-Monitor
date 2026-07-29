@@ -92,10 +92,33 @@ func TestMonitorConfigFingerprintIgnoresWebhookState(t *testing.T) {
 	updated.WebhookActive = true
 	updated.TelegramChatID = sql.NullString{Valid: true, String: "-1001234567890"}
 	updated.TelegramActive = true
+	updated.NotificationsEnabled = !base.NotificationsEnabled
 	updated.Status = "paused"
 
 	if got := monitorConfigFingerprint(updated); got != monitorConfigFingerprint(base) {
 		t.Fatalf("fingerprint changed for non-runtime fields: %q vs %q", got, monitorConfigFingerprint(base))
+	}
+}
+
+func TestNotificationPolicyRefreshDoesNotChangeMonitorFingerprint(t *testing.T) {
+	engine := &Engine{notificationPolicies: make(map[int]bool)}
+	monitor := model.Monitor{
+		ID:                   42,
+		Query:                "nike",
+		Region:               "de",
+		NotificationsEnabled: true,
+	}
+	originalFingerprint := monitorConfigFingerprint(monitor)
+
+	muted := monitor
+	muted.NotificationsEnabled = false
+	engine.SyncNotificationPolicies([]model.Monitor{muted})
+
+	if engine.monitorNotificationsEnabled(monitor) {
+		t.Fatal("notification policy refresh did not mute the monitor")
+	}
+	if monitorConfigFingerprint(muted) != originalFingerprint {
+		t.Fatal("notification policy refresh should not restart the monitor")
 	}
 }
 

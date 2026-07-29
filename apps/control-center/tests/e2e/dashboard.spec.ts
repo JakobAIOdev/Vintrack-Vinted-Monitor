@@ -31,6 +31,12 @@ test.describe("dashboard overview", () => {
         await expect(monitorCard.getByText("Server Proxies")).toBeVisible();
         await expect(monitorCard.getByText(/items found/i)).toBeVisible();
         await expect(
+            monitorCard.getByText("Alerts on", { exact: true }),
+        ).toBeVisible();
+        await expect(
+            monitorCard.getByText("Discord", { exact: true }),
+        ).toBeVisible();
+        await expect(
             monitorCard.getByRole("link", { name: /View/i }),
         ).toHaveAttribute("href", "/monitors/990001");
     });
@@ -85,7 +91,7 @@ test.describe("dashboard overview", () => {
         await monitorCard
             .getByRole("checkbox", { name: "Select E2E Mock Feed" })
             .check();
-        await page.getByRole("button", { name: "Bulk edit" }).click();
+        await page.getByRole("button", { name: "Edit selected" }).click();
 
         const dialog = page.getByRole("dialog", {
             name: "Bulk edit 1 monitor",
@@ -111,6 +117,93 @@ test.describe("dashboard overview", () => {
         await monitorCard.getByRole("link", { name: /View monitor/i }).click();
         await expect(
             page.getByText("Paused 01:00–05:00", { exact: true }),
+        ).toBeVisible();
+    });
+
+    test("mutes alerts directly and preserves channels through bulk edit", async ({
+        page,
+    }, testInfo) => {
+        test.skip(
+            testInfo.project.name !== "chromium",
+            "Notification mutation is covered once against the shared E2E database.",
+        );
+        await page.goto("/dashboard");
+
+        const monitorCard = page
+            .getByTestId("monitor-card")
+            .filter({ hasText: "E2E Mock Feed" })
+            .first();
+        const notificationSwitch = monitorCard.getByRole("switch", {
+            name: "Notifications for E2E Mock Feed",
+        });
+
+        await expect(notificationSwitch).toBeChecked();
+        await notificationSwitch.click();
+        await expect(
+            monitorCard.getByText("Alerts muted", { exact: true }),
+        ).toBeVisible();
+        await expect(
+            monitorCard.getByText("Discord", { exact: true }),
+        ).toBeVisible();
+
+        await page.reload();
+        await expect(
+            monitorCard.getByText("Alerts muted", { exact: true }),
+        ).toBeVisible();
+
+        await monitorCard
+            .getByRole("checkbox", { name: "Select E2E Mock Feed" })
+            .check();
+        await page.getByRole("button", { name: "Edit selected" }).click();
+
+        const bulkDialog = page.getByRole("dialog", {
+            name: "Bulk edit 1 monitor",
+        });
+        await bulkDialog.getByLabel("Alert status").selectOption("enable");
+        await bulkDialog
+            .getByRole("button", { name: "Apply to 1 monitor" })
+            .click();
+
+        await expect(
+            monitorCard.getByText("Alerts on", { exact: true }),
+        ).toBeVisible();
+        await expect(
+            monitorCard.getByText("Discord", { exact: true }),
+        ).toBeVisible();
+
+        await monitorCard
+            .getByRole("button", {
+                name: "Configure notifications for E2E Mock Feed",
+            })
+            .click();
+        const notificationsDialog = page.getByRole("dialog", {
+            name: "Notifications",
+        });
+        await notificationsDialog
+            .getByRole("switch", { name: "Enable Discord" })
+            .click();
+        await notificationsDialog
+            .getByRole("button", { name: "Close", exact: true })
+            .last()
+            .click();
+
+        await expect(
+            monitorCard.getByText("Set up alerts", { exact: true }),
+        ).toBeVisible();
+
+        await monitorCard
+            .getByRole("checkbox", { name: "Select E2E Mock Feed" })
+            .check();
+        await page.getByRole("button", { name: "Edit selected" }).click();
+        const restoreDialog = page.getByRole("dialog", {
+            name: "Bulk edit 1 monitor",
+        });
+        await restoreDialog.getByLabel("Discord").selectOption("enable");
+        await restoreDialog
+            .getByRole("button", { name: "Apply to 1 monitor" })
+            .click();
+        await expect(
+            monitorCard.getByText("Alerts on", { exact: true }),
         ).toBeVisible();
     });
 });

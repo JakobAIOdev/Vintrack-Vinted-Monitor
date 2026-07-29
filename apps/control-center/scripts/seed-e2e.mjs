@@ -93,8 +93,11 @@ async function main() {
             region: "de",
             status: "active",
             demo_expires_at: null,
-            webhook_active: false,
+            discord_webhook:
+                "https://discord.com/api/webhooks/12345678901234567/e2e_test_token",
+            webhook_active: true,
             telegram_active: false,
+            notifications_enabled: true,
         },
         update: {
             userId,
@@ -109,9 +112,11 @@ async function main() {
             quiet_hours_timezone: "Europe/Berlin",
             status: "active",
             demo_expires_at: null,
-            discord_webhook: null,
-            webhook_active: false,
+            discord_webhook:
+                "https://discord.com/api/webhooks/12345678901234567/e2e_test_token",
+            webhook_active: true,
             telegram_active: false,
+            notifications_enabled: true,
         },
     });
 

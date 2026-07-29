@@ -53,12 +53,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
     startAllMonitors,
     stopAllMonitors,
     toggleMonitor,
     updateMonitorWebhook,
     setMonitorWebhookStatus,
+    setMonitorNotificationsEnabled,
     toggleTelegramStatus,
     bulkUpdateMonitors,
     type BulkMonitorUpdateInput,
@@ -133,6 +135,7 @@ export type Monitor = {
     discord_webhook: string | null;
     webhook_active: boolean;
     telegram_active: boolean;
+    notifications_enabled: boolean;
     proxy_source: string;
     proxy_group_name: string | null;
     demo_expires_at: string | null;
@@ -168,6 +171,22 @@ type SellerBan = {
 
 type BulkDiscordMode = "unchanged" | "enable" | "disable" | "replace";
 type BulkTelegramMode = "unchanged" | "enable" | "disable";
+type BulkNotificationsMode = "unchanged" | "enable" | "disable";
+
+function getMonitorNotificationChannels(monitor: Monitor): string {
+    const channels: string[] = [];
+    if (monitor.discord_webhook && monitor.webhook_active) {
+        channels.push("Discord");
+    }
+    if (monitor.telegram_active) {
+        channels.push("Telegram");
+    }
+    return channels.join(" + ");
+}
+
+function hasActiveNotificationChannel(monitor: Monitor): boolean {
+    return getMonitorNotificationChannels(monitor).length > 0;
+}
 
 async function readApiError(res: Response, fallback: string) {
     try {
@@ -291,6 +310,11 @@ export function DashboardClient({
     const [bulkWebhookUrl, setBulkWebhookUrl] = useState("");
     const [bulkTelegramMode, setBulkTelegramMode] =
         useState<BulkTelegramMode>("unchanged");
+    const [bulkNotificationsMode, setBulkNotificationsMode] =
+        useState<BulkNotificationsMode>("unchanged");
+    const [notificationToggleIds, setNotificationToggleIds] = useState<
+        Set<number>
+    >(new Set());
     const [bulkApplyQueryDelay, setBulkApplyQueryDelay] = useState(false);
     const [bulkQueryDelayMs, setBulkQueryDelayMs] = useState("1500");
     const [bulkApplyQuietHours, setBulkApplyQuietHours] = useState(false);
@@ -542,6 +566,7 @@ export function DashboardClient({
     const allMonitorsSelected =
         monitors.length > 0 && selectedMonitorIds.length === monitors.length;
     const hasBulkChanges =
+        bulkNotificationsMode !== "unchanged" ||
         bulkDiscordMode !== "unchanged" ||
         bulkTelegramMode !== "unchanged" ||
         bulkApplyQueryDelay ||
@@ -570,6 +595,7 @@ export function DashboardClient({
         setBulkDiscordMode("unchanged");
         setBulkWebhookUrl(firstSelected.discord_webhook ?? "");
         setBulkTelegramMode("unchanged");
+        setBulkNotificationsMode("unchanged");
         setBulkApplyQueryDelay(false);
         setBulkQueryDelayMs(String(firstSelected.query_delay_ms));
         setBulkApplyQuietHours(false);
@@ -617,6 +643,9 @@ export function DashboardClient({
                 : {}),
             ...(bulkTelegramMode !== "unchanged"
                 ? { telegram: bulkTelegramMode }
+                : {}),
+            ...(bulkNotificationsMode !== "unchanged"
+                ? { notifications: bulkNotificationsMode }
                 : {}),
         };
 
@@ -780,6 +809,58 @@ export function DashboardClient({
         }
     };
 
+    const handleNotificationsToggle = async (
+        monitor: Monitor,
+        checked: boolean,
+    ) => {
+        if (notificationToggleIds.has(monitor.id)) return;
+
+        const previousStatus = monitor.notifications_enabled;
+        const updateStatus = (enabled: boolean) => {
+            setMonitors((current) =>
+                current.map((entry) =>
+                    entry.id === monitor.id
+                        ? { ...entry, notifications_enabled: enabled }
+                        : entry,
+                ),
+            );
+            setSelectedMonitor((current) =>
+                current?.id === monitor.id
+                    ? { ...current, notifications_enabled: enabled }
+                    : current,
+            );
+        };
+
+        setNotificationToggleIds((current) => {
+            const next = new Set(current);
+            next.add(monitor.id);
+            return next;
+        });
+        updateStatus(checked);
+
+        try {
+            const result = await setMonitorNotificationsEnabled(
+                monitor.id,
+                checked,
+            );
+            updateStatus(result.notificationsEnabled);
+            toast.success(checked ? "Alerts enabled" : "Alerts muted");
+        } catch (error) {
+            updateStatus(previousStatus);
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to update alerts",
+            );
+        } finally {
+            setNotificationToggleIds((current) => {
+                const next = new Set(current);
+                next.delete(monitor.id);
+                return next;
+            });
+        }
+    };
+
     const handleSaveWebhook = async () => {
         if (!selectedMonitor) return;
         const webhookActive = Boolean(webhookInput.trim() && isWebhookActive);
@@ -795,6 +876,15 @@ export function DashboardClient({
                       }
                     : m,
             ),
+        );
+        setSelectedMonitor((monitor) =>
+            monitor
+                ? {
+                      ...monitor,
+                      discord_webhook: webhookInput.trim() || null,
+                      webhook_active: webhookActive,
+                  }
+                : monitor,
         );
         toast.promise(
             updateMonitorWebhook(
@@ -816,6 +906,7 @@ export function DashboardClient({
                                 : monitor,
                         ),
                     );
+                    setSelectedMonitor(previousMonitor);
                     return error instanceof Error
                         ? error.message
                         : "Failed to save Discord webhook";
@@ -1013,22 +1104,28 @@ export function DashboardClient({
                 </div>
             ) : (
                 <div className="space-y-4">
-                    <div className="border-border/70 bg-card flex flex-col gap-3 rounded-lg border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div
+                        className={`flex flex-col gap-3 rounded-lg border px-4 py-3 transition-colors sm:flex-row sm:items-center sm:justify-between ${
+                            selectedMonitorIds.length > 0
+                                ? "border-primary/30 bg-primary/[0.035]"
+                                : "border-border/70 bg-card"
+                        }`}
+                    >
                         <div className="flex items-center gap-3">
-                            <input
-                                type="checkbox"
+                            <Checkbox
                                 checked={allMonitorsSelected}
-                                onChange={toggleAllMonitorSelection}
+                                onCheckedChange={toggleAllMonitorSelection}
                                 aria-label="Select all monitors"
-                                className="border-input accent-primary size-4 rounded"
                             />
                             <div>
                                 <h2 className="text-sm font-semibold">
-                                    Your monitors
+                                    {selectedMonitorIds.length > 0
+                                        ? `${selectedMonitorIds.length} selected`
+                                        : "Your monitors"}
                                 </h2>
                                 <p className="text-muted-foreground text-xs">
                                     {selectedMonitorIds.length > 0
-                                        ? `${selectedMonitorIds.length} selected`
+                                        ? "Choose the settings to update together"
                                         : `${monitors.length} total`}
                                 </p>
                             </div>
@@ -1048,12 +1145,19 @@ export function DashboardClient({
                             <Button
                                 type="button"
                                 size="sm"
+                                variant={
+                                    selectedMonitorIds.length > 0
+                                        ? "default"
+                                        : "outline"
+                                }
                                 disabled={selectedMonitorIds.length === 0}
                                 onClick={openBulkEditDialog}
                                 className="h-8 gap-1.5 text-xs"
                             >
                                 <ListChecks className="size-3.5" />
-                                Bulk edit
+                                {selectedMonitorIds.length > 0
+                                    ? "Edit selected"
+                                    : "Bulk edit"}
                             </Button>
                         </div>
                     </div>
@@ -1062,24 +1166,23 @@ export function DashboardClient({
                             <Card
                                 key={m.id}
                                 data-testid="monitor-card"
-                                className={`group bg-card hover:border-foreground/20 h-full overflow-hidden rounded-lg py-0 shadow-none transition-colors ${
+                                className={`group hover:border-foreground/20 h-full overflow-hidden rounded-lg py-0 shadow-none transition-colors ${
                                     selectedMonitorIdSet.has(m.id)
-                                        ? "border-primary/60 ring-primary/10 ring-2"
-                                        : "border-border/70"
+                                        ? "border-primary/45 bg-primary/[0.025] ring-primary/10 ring-2"
+                                        : "border-border/70 bg-card"
                                 }`}
                             >
                                 <CardContent className="flex h-full flex-1 flex-col p-0">
-                                    <div className="flex items-start justify-between gap-3 p-5 pb-4">
-                                        <input
-                                            type="checkbox"
+                                    <div className="flex items-start justify-between gap-3 p-4 pb-3">
+                                        <Checkbox
                                             checked={selectedMonitorIdSet.has(
                                                 m.id,
                                             )}
-                                            onChange={() =>
+                                            onCheckedChange={() =>
                                                 toggleMonitorSelection(m.id)
                                             }
                                             aria-label={`Select ${m.name}`}
-                                            className="border-input accent-primary mt-1 size-4 shrink-0 rounded"
+                                            className="mt-0.5"
                                         />
                                         <div className="min-w-0 flex-1">
                                             <h3
@@ -1140,7 +1243,7 @@ export function DashboardClient({
                                                     )}
                                             </div>
                                         </div>
-                                        <div className="flex shrink-0 items-center gap-0.5">
+                                        <div className="flex shrink-0 items-center">
                                             <Link
                                                 href={`/monitors/${m.id}/edit?from=dashboard`}
                                                 className="text-muted-foreground hover:bg-accent hover:text-accent-foreground flex size-8 items-center justify-center rounded-md transition-colors"
@@ -1149,29 +1252,10 @@ export function DashboardClient({
                                             >
                                                 <Pencil className="h-3.5 w-3.5" />
                                             </Link>
-                                            <button
-                                                type="button"
-                                                onClick={() =>
-                                                    openWebhookDialog(m)
-                                                }
-                                                className="text-muted-foreground hover:bg-accent hover:text-accent-foreground flex size-8 items-center justify-center rounded-md transition-colors"
-                                                title="Configure notifications"
-                                                aria-label="Configure notifications"
-                                            >
-                                                <Webhook
-                                                    className={`h-3.5 w-3.5 ${
-                                                        (m.discord_webhook &&
-                                                            m.webhook_active) ||
-                                                        m.telegram_active
-                                                            ? "text-indigo-600 dark:text-indigo-400"
-                                                            : ""
-                                                    }`}
-                                                />
-                                            </button>
                                         </div>
                                     </div>
 
-                                    <div className="px-5 pb-4">
+                                    <div className="px-4 pb-3">
                                         <div className="flex min-w-0 items-center gap-2">
                                             <Search className="text-muted-foreground size-3.5 shrink-0" />
                                             <p
@@ -1183,7 +1267,7 @@ export function DashboardClient({
                                         </div>
                                     </div>
 
-                                    <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-2 px-5 pb-4 text-xs">
+                                    <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-2 px-4 pb-3 text-xs">
                                         <span
                                             className="inline-flex min-w-0 items-center gap-1.5"
                                             title={getRegionLabel(m.region)}
@@ -1204,7 +1288,7 @@ export function DashboardClient({
                                         </span>
                                     </div>
 
-                                    <div className="flex px-5 pb-5 [&>span]:hidden">
+                                    <div className="flex px-4 pb-4 [&>span]:hidden">
                                         <div className="text-muted-foreground flex min-w-0 items-center gap-2 text-xs">
                                             <SlidersHorizontal className="text-muted-foreground size-3.5" />
                                             <span className="shrink-0">
@@ -1306,7 +1390,7 @@ export function DashboardClient({
 
                                     <div className="flex-1" />
 
-                                    <div className="border-border/60 text-muted-foreground flex flex-wrap items-center gap-x-5 gap-y-2 border-t px-5 py-4">
+                                    <div className="border-border/60 text-muted-foreground flex flex-wrap items-center gap-x-5 gap-y-2 border-t px-4 py-3">
                                         <div className="min-w-0">
                                             <p className="hidden">Results</p>
                                             <p className="flex items-center gap-1.5 text-xs">
@@ -1338,23 +1422,89 @@ export function DashboardClient({
                                                 </span>
                                             </p>
                                         </div>
-                                        <div className="min-w-0">
-                                            <p className="hidden">Alerts</p>
-                                            <p className="flex min-w-0 items-center gap-1.5 text-xs">
-                                                <Bell className="text-muted-foreground size-3.5 shrink-0" />
-                                                <span className="truncate">
-                                                    {m.discord_webhook &&
-                                                    m.webhook_active &&
-                                                    m.telegram_active
-                                                        ? "Discord + Telegram"
-                                                        : m.discord_webhook &&
-                                                            m.webhook_active
-                                                          ? "Discord"
-                                                          : m.telegram_active
-                                                            ? "Telegram"
-                                                            : "Off"}
-                                                </span>
-                                            </p>
+                                    </div>
+
+                                    <div className="border-border/60 flex items-center justify-between gap-3 border-t px-4 py-3">
+                                        <div className="flex min-w-0 items-center gap-2.5">
+                                            <div
+                                                className={`flex size-8 shrink-0 items-center justify-center rounded-md ${
+                                                    hasActiveNotificationChannel(
+                                                        m,
+                                                    ) && m.notifications_enabled
+                                                        ? "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400"
+                                                        : "bg-muted text-muted-foreground"
+                                                }`}
+                                            >
+                                                <Bell className="size-3.5" />
+                                            </div>
+                                            <div className="min-w-0">
+                                                {hasActiveNotificationChannel(
+                                                    m,
+                                                ) ? (
+                                                    <>
+                                                        <p className="text-foreground text-xs font-medium">
+                                                            {m.notifications_enabled
+                                                                ? "Alerts on"
+                                                                : "Alerts muted"}
+                                                        </p>
+                                                        <p className="text-muted-foreground truncate text-[11px]">
+                                                            {getMonitorNotificationChannels(
+                                                                m,
+                                                            )}
+                                                        </p>
+                                                    </>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            openWebhookDialog(m)
+                                                        }
+                                                        className="text-left"
+                                                    >
+                                                        <span className="text-foreground block text-xs font-medium">
+                                                            Set up alerts
+                                                        </span>
+                                                        <span className="text-muted-foreground block text-[11px]">
+                                                            Discord or Telegram
+                                                        </span>
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="flex shrink-0 items-center gap-1.5">
+                                            {hasActiveNotificationChannel(
+                                                m,
+                                            ) && (
+                                                <Switch
+                                                    size="sm"
+                                                    checked={
+                                                        m.notifications_enabled
+                                                    }
+                                                    disabled={notificationToggleIds.has(
+                                                        m.id,
+                                                    )}
+                                                    onCheckedChange={(
+                                                        checked,
+                                                    ) =>
+                                                        void handleNotificationsToggle(
+                                                            m,
+                                                            checked,
+                                                        )
+                                                    }
+                                                    aria-label={`Notifications for ${m.name}`}
+                                                />
+                                            )}
+                                            <button
+                                                type="button"
+                                                onClick={() =>
+                                                    openWebhookDialog(m)
+                                                }
+                                                className="text-muted-foreground hover:bg-accent hover:text-accent-foreground flex size-8 items-center justify-center rounded-md transition-colors"
+                                                title="Configure notifications"
+                                                aria-label={`Configure notifications for ${m.name}`}
+                                            >
+                                                <Webhook className="size-3.5" />
+                                            </button>
                                         </div>
                                     </div>
 
@@ -1428,7 +1578,52 @@ export function DashboardClient({
                                     Notifications
                                 </h3>
                                 <p className="text-muted-foreground mt-1 text-xs">
-                                    Change either channel independently.
+                                    Control the master alert state without
+                                    changing delivery channels.
+                                </p>
+                            </div>
+
+                            <div className="bg-muted/30 grid gap-2 rounded-md p-3 sm:grid-cols-[1fr_220px] sm:items-center">
+                                <div>
+                                    <Label
+                                        htmlFor="bulk-notifications-mode"
+                                        className="text-sm font-medium"
+                                    >
+                                        Alert status
+                                    </Label>
+                                    <p className="text-muted-foreground mt-1 text-xs">
+                                        Muting preserves every monitor&apos;s
+                                        Discord and Telegram choices.
+                                    </p>
+                                </div>
+                                <select
+                                    id="bulk-notifications-mode"
+                                    value={bulkNotificationsMode}
+                                    onChange={(event) =>
+                                        setBulkNotificationsMode(
+                                            event.target
+                                                .value as BulkNotificationsMode,
+                                        )
+                                    }
+                                    className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+                                >
+                                    <option value="unchanged">
+                                        Leave unchanged
+                                    </option>
+                                    <option value="enable">
+                                        Unmute alerts
+                                    </option>
+                                    <option value="disable">Mute alerts</option>
+                                </select>
+                            </div>
+
+                            <div className="border-border/70 border-t pt-4">
+                                <p className="text-xs font-medium">
+                                    Delivery channels
+                                </p>
+                                <p className="text-muted-foreground mt-1 text-xs">
+                                    Optional channel changes are applied
+                                    independently of the master status.
                                 </p>
                             </div>
 
@@ -1458,7 +1653,7 @@ export function DashboardClient({
                                             Enable existing webhooks
                                         </option>
                                         <option value="disable">
-                                            Disable notifications
+                                            Disable Discord
                                         </option>
                                         <option value="replace">
                                             Replace webhook
@@ -1987,6 +2182,64 @@ export function DashboardClient({
                     </DialogHeader>
 
                     <div className="grid gap-5 py-4">
+                        {selectedMonitor && (
+                            <div
+                                className={`flex items-center justify-between gap-4 rounded-lg border p-3 ${
+                                    selectedMonitor.notifications_enabled
+                                        ? "border-indigo-500/20 bg-indigo-500/[0.06]"
+                                        : "border-amber-500/25 bg-amber-500/[0.06]"
+                                }`}
+                            >
+                                <div className="flex min-w-0 items-start gap-2.5">
+                                    <Bell
+                                        className={`mt-0.5 size-4 shrink-0 ${
+                                            selectedMonitor.notifications_enabled
+                                                ? "text-indigo-600 dark:text-indigo-400"
+                                                : "text-amber-600 dark:text-amber-400"
+                                        }`}
+                                    />
+                                    <div>
+                                        <Label
+                                            htmlFor="notifications-enabled"
+                                            className="cursor-pointer text-sm font-medium"
+                                        >
+                                            Master alerts
+                                        </Label>
+                                        <p className="text-muted-foreground mt-0.5 text-[12px]">
+                                            {!hasActiveNotificationChannel(
+                                                selectedMonitor,
+                                            )
+                                                ? "Enable a delivery channel below to use alerts."
+                                                : selectedMonitor.notifications_enabled
+                                                  ? "External alerts are allowed for the active channels below."
+                                                  : "All external alerts are muted. Your channel settings are preserved."}
+                                        </p>
+                                    </div>
+                                </div>
+                                <Switch
+                                    id="notifications-enabled"
+                                    checked={
+                                        selectedMonitor.notifications_enabled
+                                    }
+                                    disabled={
+                                        notificationToggleIds.has(
+                                            selectedMonitor.id,
+                                        ) ||
+                                        !hasActiveNotificationChannel(
+                                            selectedMonitor,
+                                        )
+                                    }
+                                    onCheckedChange={(checked) =>
+                                        void handleNotificationsToggle(
+                                            selectedMonitor,
+                                            checked,
+                                        )
+                                    }
+                                    aria-label={`Notifications for ${selectedMonitor.name}`}
+                                />
+                            </div>
+                        )}
+
                         <div className="grid gap-2">
                             <Label htmlFor="webhook">Discord Webhook URL</Label>
                             <div className="flex gap-2">
@@ -2019,11 +2272,11 @@ export function DashboardClient({
                                         htmlFor="active-mode"
                                         className="cursor-pointer text-sm font-medium"
                                     >
-                                        Enable Notifications
+                                        Enable Discord
                                     </Label>
                                     <span className="text-muted-foreground text-[12px]">
-                                        Pause notifications without deleting the
-                                        URL.
+                                        Keep this webhook configured while
+                                        controlling the Discord channel.
                                     </span>
                                 </div>
                                 <Switch
@@ -2157,6 +2410,14 @@ export function DashboardClient({
                                     checked={isTelegramActive}
                                     onCheckedChange={async (checked) => {
                                         setIsTelegramActive(checked);
+                                        setSelectedMonitor((monitor) =>
+                                            monitor
+                                                ? {
+                                                      ...monitor,
+                                                      telegram_active: checked,
+                                                  }
+                                                : monitor,
+                                        );
                                         setMonitors((prev) =>
                                             prev.map((m) =>
                                                 selectedMonitor &&
@@ -2194,7 +2455,7 @@ export function DashboardClient({
                             variant="outline"
                             onClick={() => setIsWebhookOpen(false)}
                         >
-                            Cancel
+                            Close
                         </Button>
                         <Button onClick={handleSaveWebhook}>Save</Button>
                     </DialogFooter>

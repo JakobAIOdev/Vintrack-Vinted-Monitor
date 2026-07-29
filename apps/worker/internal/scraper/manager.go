@@ -46,6 +46,7 @@ func (m *Manager) Sync(ctx context.Context) {
 		log.Printf("Error fetching monitors: %v", err)
 		return
 	}
+	m.engine.SyncNotificationPolicies(monitors)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
