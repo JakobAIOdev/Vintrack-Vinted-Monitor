@@ -187,9 +187,11 @@ Important safe starting points:
 | --- | ---: | --- |
 | `VINTED_FETCH_MODE` | `live` | Use `mock` only for development |
 | `CLIENT_POOL_SIZE` | `5` | Dedicated catalog client pool |
+| `FREE_PROXY_CLIENT_POOL_SIZE` | `50` | Regional free-proxy sessions shared by monitors |
 | `TLS_PROFILE` | `chrome_146` | TLS client profile |
 | `CATALOG_TIMEOUT_MS` | `2000` | Canonical catalog request timeout |
 | `CATALOG_HEDGE_DELAY_MS` | `250` | Delay before a secondary attempt |
+| `FREE_PROXY_CATALOG_HEDGE_DELAY_MS` | `900` | Less aggressive hedge delay for public proxies |
 | `CATALOG_MAX_ATTEMPTS` | `5` | Bounded request attempts |
 | `DISCOVERY_MODE` | `off` | Optional hybrid discovery behavior |
 | `DISCOVERY_ALLOW_FREE_ACTIVE` | `false` | Explicit opt-in for free-pool active alerts |

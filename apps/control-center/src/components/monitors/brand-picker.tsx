@@ -1,7 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo } from "react";
-import { BRANDS, type Brand } from "@/lib/brands";
+import {
+    BRANDS,
+    compareBrandsForSearch,
+    matchesBrandSearch,
+    type Brand,
+} from "@/lib/brands";
 import { Check, Loader2, Search, X } from "lucide-react";
 
 interface BrandPickerProps {
@@ -142,9 +147,11 @@ export function BrandPicker({
 
     const filtered = useMemo(() => {
         if (!query.trim()) return allBrands.slice(0, 50);
-        const q = query.toLowerCase();
         return allBrands
-            .filter((b) => b.label.toLowerCase().includes(q))
+            .filter((brand) => matchesBrandSearch(brand, query))
+            .sort((first, second) =>
+                compareBrandsForSearch(first, second, query),
+            )
             .slice(0, 50);
     }, [allBrands, query]);
 

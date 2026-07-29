@@ -108,6 +108,39 @@ func TestFetchCatalogHedgedRotatesPastBlockedClients(t *testing.T) {
 	}
 }
 
+func TestFetchCatalogHedgedWaitsForFreeProxyCapacity(t *testing.T) {
+	client := &Client{ProxyURL: "only"}
+	pool := &ClientPool{states: []*clientState{{client: client}}}
+	pool.SetMaxInFlightPerClient(1)
+	if got := pool.Acquire(nil); got != client {
+		t.Fatalf("setup Acquire() = %v, want client", got)
+	}
+
+	engine := &Engine{fetcher: timedCatalogFetcher{
+		delays: map[string]time.Duration{"only": time.Millisecond},
+	}}
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		pool.Report(client, 200, time.Millisecond, nil)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := engine.fetchCatalogHedgedWithDelay(
+		ctx,
+		pool,
+		"https://example.test",
+		"example.test",
+		time.Hour,
+	)
+	if result.err != nil || result.status != 200 {
+		t.Fatalf("fetch after capacity wait = status %d, error %v", result.status, result.err)
+	}
+	if result.client != client {
+		t.Fatalf("fetch client = %v, want released client", result.client)
+	}
+}
+
 func TestClientPoolPrefersHealthyIdleClient(t *testing.T) {
 	slow := &Client{ProxyURL: "slow"}
 	fast := &Client{ProxyURL: "fast"}
@@ -136,6 +169,40 @@ func TestCatalogTimeoutForFreeProxyMatchesValidationBudget(t *testing.T) {
 	}
 	if got := catalogTimeoutForProxySource("server"); got != 2*time.Second {
 		t.Fatalf("server catalog timeout = %s, want 2s", got)
+	}
+}
+
+func TestConfiguredFreeProxyClientPoolSize(t *testing.T) {
+	t.Setenv("FREE_PROXY_CLIENT_POOL_SIZE", "")
+	if got := configuredFreeProxyClientPoolSize(); got != defaultFreeProxyClientPoolSize {
+		t.Fatalf("default free pool size = %d, want %d", got, defaultFreeProxyClientPoolSize)
+	}
+
+	t.Setenv("FREE_PROXY_CLIENT_POOL_SIZE", "75")
+	if got := configuredFreeProxyClientPoolSize(); got != 75 {
+		t.Fatalf("configured free pool size = %d, want 75", got)
+	}
+
+	t.Setenv("FREE_PROXY_CLIENT_POOL_SIZE", "500")
+	if got := configuredFreeProxyClientPoolSize(); got != maximumFreeProxyClientPoolSize {
+		t.Fatalf("capped free pool size = %d, want %d", got, maximumFreeProxyClientPoolSize)
+	}
+}
+
+func TestCatalogHedgeDelayForFreeProxyAvoidsAutomaticDoubleLoad(t *testing.T) {
+	t.Setenv("CATALOG_HEDGE_DELAY_MS", "250")
+	t.Setenv("FREE_PROXY_CATALOG_HEDGE_DELAY_MS", "")
+
+	if got := catalogHedgeDelayForProxySource("server"); got != 250*time.Millisecond {
+		t.Fatalf("server hedge delay = %s, want 250ms", got)
+	}
+	if got := catalogHedgeDelayForProxySource("free"); got != 900*time.Millisecond {
+		t.Fatalf("free hedge delay = %s, want 900ms", got)
+	}
+
+	t.Setenv("FREE_PROXY_CATALOG_HEDGE_DELAY_MS", "1200")
+	if got := catalogHedgeDelayForProxySource("free"); got != 1200*time.Millisecond {
+		t.Fatalf("configured free hedge delay = %s, want 1.2s", got)
 	}
 }
 

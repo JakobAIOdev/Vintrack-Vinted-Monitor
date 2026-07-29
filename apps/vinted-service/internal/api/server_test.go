@@ -50,6 +50,39 @@ func TestPlatformSearchRejectsUnknownRegionBeforeUpstreamRequest(t *testing.T) {
 	}
 }
 
+func TestBrandSearchRequiresVintrackUser(t *testing.T) {
+	server := NewServer(nil, "")
+	request := httptest.NewRequest(
+		"GET",
+		"/api/catalog/brands?query=christian+dior&region=de",
+		nil,
+	)
+	response := httptest.NewRecorder()
+
+	server.handleBrandSearch(response, request)
+
+	if response.Code != 401 {
+		t.Fatalf("status = %d, want 401", response.Code)
+	}
+}
+
+func TestBrandSearchRejectsUnknownRegionBeforeUpstreamRequest(t *testing.T) {
+	server := NewServer(nil, "")
+	request := httptest.NewRequest(
+		"GET",
+		"/api/catalog/brands?query=celine&region=unknown",
+		nil,
+	)
+	request.Header.Set("X-User-ID", "test-user")
+	response := httptest.NewRecorder()
+
+	server.handleBrandSearch(response, request)
+
+	if response.Code != 400 {
+		t.Fatalf("status = %d, want 400", response.Code)
+	}
+}
+
 func TestNormalizeBrowserSessionInput_FromCookieHeader(t *testing.T) {
 	accessToken, refreshToken, cookieHeader, userAgent, err := normalizeBrowserSessionInput(
 		"",

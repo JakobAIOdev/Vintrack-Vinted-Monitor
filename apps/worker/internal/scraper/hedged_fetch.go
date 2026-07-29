@@ -45,12 +45,9 @@ func (e *Engine) fetchCatalogHedgedWithDelay(ctx context.Context, pool *ClientPo
 	}
 
 	attempted := make(map[*Client]bool, maxAttempts)
-	primary := pool.AcquireExcluding(attempted)
-	if primary == nil {
-		if waitErr := pool.WaitError(); waitErr != nil {
-			return catalogFetchResult{err: waitErr}
-		}
-		return catalogFetchResult{err: fmt.Errorf("no healthy catalog client available")}
+	primary, acquireErr := acquireCatalogPrimary(ctx, pool, attempted)
+	if acquireErr != nil {
+		return catalogFetchResult{err: acquireErr}
 	}
 
 	requestCtx, cancel := context.WithCancel(ctx)
@@ -122,4 +119,26 @@ func (e *Engine) fetchCatalogHedgedWithDelay(ctx context.Context, pool *ClientPo
 
 	last.attempts = attempts
 	return last
+}
+
+func acquireCatalogPrimary(ctx context.Context, pool *ClientPool, excluded map[*Client]bool) (*Client, error) {
+	if pool == nil || pool.Size() == 0 {
+		return nil, fmt.Errorf("no healthy catalog client available")
+	}
+
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if client := pool.AcquireExcluding(excluded); client != nil {
+			return client, nil
+		}
+		if waitErr := pool.WaitError(); waitErr != nil {
+			return nil, waitErr
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }

@@ -1,6 +1,8 @@
 package vinted
 
 import (
+	"encoding/json"
+	"net/url"
 	"testing"
 	"time"
 
@@ -154,6 +156,71 @@ func TestNormalizeFilterOptionsPayload(t *testing.T) {
 	}
 	if options[1].ID != "20" || options[1].Label != "PlayStation 2" {
 		t.Errorf("second option = %#v", options[1])
+	}
+}
+
+func TestNormalizeFilterOptionsPayload_GatewayBrandSearch(t *testing.T) {
+	var payload filterOptionsPayload
+	err := json.Unmarshal([]byte(`{
+		"options": [
+			{"id": "671", "title": "Dior", "type": "default"},
+			{"id": "15430438", "title": "Christian Dior", "type": "default"}
+		],
+		"selected_filters": {"code": "brand", "ids": []}
+	}`), &payload)
+	if err != nil {
+		t.Fatalf("unmarshal gateway fixture: %v", err)
+	}
+
+	options := normalizeFilterOptionsPayload(payload)
+	if len(options) != 2 {
+		t.Fatalf("got %d options, want 2: %#v", len(options), options)
+	}
+	if options[1].ID != "15430438" || options[1].Label != "Christian Dior" {
+		t.Errorf("Christian Dior option = %#v", options[1])
+	}
+}
+
+func TestBuildGatewayFilterSearchURL(t *testing.T) {
+	rawURL := buildGatewayFilterSearchURL(
+		"www.vinted.de",
+		[]string{"1904", "5"},
+		"Christian Dior",
+		"brand",
+	)
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse gateway filter URL: %v", err)
+	}
+
+	if parsed.Host != "www.vinted.de" {
+		t.Errorf("host = %q, want www.vinted.de", parsed.Host)
+	}
+	if parsed.Path != "/web/gateway/svc-filters/filters/search" {
+		t.Errorf("path = %q", parsed.Path)
+	}
+	if got := parsed.Query().Get("filter_search_code"); got != "brand" {
+		t.Errorf("filter_search_code = %q, want brand", got)
+	}
+	if got := parsed.Query().Get("filter_search_text"); got != "Christian Dior" {
+		t.Errorf("filter_search_text = %q, want Christian Dior", got)
+	}
+	if got := parsed.Query().Get("attribute_ids[catalog]"); got != "1904,5" {
+		t.Errorf("attribute_ids[catalog] = %q, want 1904,5", got)
+	}
+
+	unscopedURL := buildGatewayFilterSearchURL(
+		"www.vinted.de",
+		nil,
+		"Celine",
+		"brand",
+	)
+	unscoped, err := url.Parse(unscopedURL)
+	if err != nil {
+		t.Fatalf("parse unscoped gateway filter URL: %v", err)
+	}
+	if unscoped.Query().Has("attribute_ids[catalog]") {
+		t.Error("unscoped search unexpectedly contains a catalog attribute")
 	}
 }
 

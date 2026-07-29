@@ -139,6 +139,25 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 	if len(active) != 1 || active[0] != proxyURL {
 		t.Fatalf("active proxies after isolated timeout = %#v, want proven proxy", active)
 	}
+	if err := store.RecordFreeProxyFailureClassContext(
+		ctx,
+		proxyURL,
+		region,
+		0,
+		"second read timeout after prior success",
+		"timeout",
+		3,
+		30,
+	); err != nil {
+		t.Fatalf("record second proven proxy timeout: %v", err)
+	}
+	active, err = store.GetActiveFreeProxiesContext(ctx, region, 10)
+	if err != nil {
+		t.Fatalf("get reserve proxies after second timeout: %v", err)
+	}
+	if len(active) != 1 || active[0] != proxyURL {
+		t.Fatalf("reserve proxies after second timeout = %#v, want proven proxy", active)
+	}
 
 	var quarantinedUntil sql.NullTime
 	if err := db.QueryRowContext(ctx, `

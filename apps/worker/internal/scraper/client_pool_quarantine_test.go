@@ -124,6 +124,51 @@ func TestClientPoolReplacesBlockedProxyWithUnusedHealthyProxy(t *testing.T) {
 	t.Fatal("blocked proxy was not replaced")
 }
 
+func TestClientPoolExpandsAfterProxyManagerRecovery(t *testing.T) {
+	manager := proxy.FromString("http://1.2.3.4:8080")
+	pool := NewClientPool(manager, "www.vinted.de", 50, nil)
+	if got := pool.Size(); got != 1 {
+		t.Fatalf("initial pool size = %d, want 1", got)
+	}
+
+	manager.ReplaceFromString(
+		"http://1.2.3.4:8080\nhttp://5.6.7.8:8080\nhttp://9.10.11.12:8080",
+	)
+	pool.EnsureSize(50)
+
+	if got := pool.Size(); got != 3 {
+		t.Fatalf("expanded pool size = %d, want 3", got)
+	}
+	seen := make(map[string]bool)
+	pool.mu.Lock()
+	for _, state := range pool.states {
+		if seen[state.client.ProxyURL] {
+			pool.mu.Unlock()
+			t.Fatalf("expanded pool contains duplicate proxy %q", state.client.ProxyURL)
+		}
+		seen[state.client.ProxyURL] = true
+	}
+	pool.mu.Unlock()
+}
+
+func TestClientPoolCapsConcurrentRequestsPerProxy(t *testing.T) {
+	client := &Client{ProxyURL: "http://1.2.3.4:8080"}
+	pool := &ClientPool{states: []*clientState{{client: client}}}
+	pool.SetMaxInFlightPerClient(1)
+
+	if got := pool.Acquire(nil); got != client {
+		t.Fatalf("first Acquire() = %v, want client", got)
+	}
+	if got := pool.Acquire(nil); got != nil {
+		t.Fatalf("second Acquire() = %v, want load shedding", got)
+	}
+
+	pool.Report(client, 200, 50*time.Millisecond, nil)
+	if got := pool.Acquire(nil); got != client {
+		t.Fatalf("Acquire() after Report() = %v, want client", got)
+	}
+}
+
 func TestWaitForProxyRetryHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
