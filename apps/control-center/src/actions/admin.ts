@@ -143,6 +143,7 @@ type FreeProxyRegionRow = {
     median_latency_ms: number | null;
     last_checked_at: Date | null;
     stalled: boolean;
+    top_error_stage: string | null;
 };
 
 type FreeProxySourceDiagnosticRow = {
@@ -156,6 +157,7 @@ type FreeProxySourceDiagnosticRow = {
     reserve_count: bigint;
     cooldown_count: bigint;
     top_error_code: string | null;
+    top_error_stage: string | null;
 };
 
 type ParsedProxy = {
@@ -953,7 +955,14 @@ export async function updateServerProxies(formData: FormData) {
 export async function getFreeProxyAdminState() {
     await requireAdmin();
 
-    const [settings, counts, regionRows, sourceRows, recent] =
+    const [
+        settings,
+        counts,
+        regionRows,
+        sourceRows,
+        recent,
+        degradationSetting,
+    ] =
         await Promise.all([
             getFreeProxySettings(),
             db.$queryRaw<FreeProxyStatusCountRow[]>`
@@ -1028,6 +1037,12 @@ export async function getFreeProxyAdminState() {
                         OR next_check_at <= NOW()
                       )
                 ) > 0 AS stalled
+                ,
+                mode() WITHIN GROUP (ORDER BY last_error_stage)
+                    FILTER (
+                        WHERE last_error_stage IS NOT NULL
+                          AND last_checked_at >= NOW() - INTERVAL '24 hours'
+                    ) AS top_error_stage
             FROM free_proxy_health
             GROUP BY region
             ORDER BY region
@@ -1065,7 +1080,12 @@ export async function getFreeProxyAdminState() {
                     FILTER (
                         WHERE fph.last_error_code IS NOT NULL
                           AND fph.last_checked_at >= NOW() - INTERVAL '24 hours'
-                    ) AS top_error_code
+                    ) AS top_error_code,
+                mode() WITHIN GROUP (ORDER BY fph.last_error_stage)
+                    FILTER (
+                        WHERE fph.last_error_stage IS NOT NULL
+                          AND fph.last_checked_at >= NOW() - INTERVAL '24 hours'
+                    ) AS top_error_stage
             FROM free_proxies fp
             LEFT JOIN free_proxy_health fph ON fph.proxy_id = fp.id
             GROUP BY fp.source, fp.protocol
@@ -1089,6 +1109,10 @@ export async function getFreeProxyAdminState() {
                     last_error: true,
                 },
             }),
+            db.app_settings.findUnique({
+                where: { key: "free_proxy_degradation_reason" },
+                select: { value: true },
+            }),
         ]);
 
     const countsByStatus = Object.fromEntries(
@@ -1110,6 +1134,10 @@ export async function getFreeProxyAdminState() {
 
     return {
         settings,
+        degradationReason:
+            degradationSetting?.value === "host_egress_limited"
+                ? ("host_egress_limited" as const)
+                : null,
         counts: {
             active: activeHealthCount,
             pending: pendingHealthCount || (countsByStatus.pending ?? 0),
@@ -1145,6 +1173,7 @@ export async function getFreeProxyAdminState() {
                         : Math.round(row.median_latency_ms),
                 lastCheckedAt: row.last_checked_at,
                 stalled: row.stalled,
+                topErrorStage: row.top_error_stage,
                 healthy:
                     Number(row.active_count) +
                         Number(row.reserve_count) +
@@ -1170,6 +1199,7 @@ export async function getFreeProxyAdminState() {
                 reserve: Number(row.reserve_count),
                 cooldown: Number(row.cooldown_count),
                 topErrorCode: row.top_error_code,
+                topErrorStage: row.top_error_stage,
             };
         }),
         recent,

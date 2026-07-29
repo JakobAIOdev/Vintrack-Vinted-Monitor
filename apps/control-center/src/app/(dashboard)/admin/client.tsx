@@ -198,6 +198,7 @@ type FreeProxyRow = {
 };
 
 type FreeProxyState = {
+    degradationReason: "host_egress_limited" | null;
     settings: {
         enabled: boolean;
         autoImportEnabled: boolean;
@@ -231,6 +232,7 @@ type FreeProxyState = {
         lastCheckedAt: Date | null;
         stalled: boolean;
         healthy: boolean;
+        topErrorStage: string | null;
     }[];
     sourceDiagnostics: {
         source: string;
@@ -244,6 +246,7 @@ type FreeProxyState = {
         reserve: number;
         cooldown: number;
         topErrorCode: string | null;
+        topErrorStage: string | null;
     }[];
     recent: FreeProxyRow[];
 };
@@ -907,6 +910,7 @@ export function AdminClient({
                   lastCheckedAt: null,
                   stalled: false,
                   healthy: false,
+                  topErrorStage: null,
                   initializing: true,
               };
     });
@@ -4036,6 +4040,28 @@ export function AdminClient({
                             </div>
                         </div>
 
+                        {freeProxySettings.enabled &&
+                        freeProxyState.degradationReason ===
+                        "host_egress_limited" ? (
+                            <div className="mt-5 flex gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                                <div>
+                                    <p className="text-sm font-semibold">
+                                        Host egress limited
+                                    </p>
+                                    <p className="mt-0.5 text-xs">
+                                        Most checks fail during the initial
+                                        proxy warmup from this server. The
+                                        maintainer is backing off globally and
+                                        prioritizing routes that work here. If
+                                        this persists, use a different
+                                        maintainer egress or controlled proxy
+                                        capacity.
+                                    </p>
+                                </div>
+                            </div>
+                        ) : null}
+
                         <div className="mt-5 rounded-lg border">
                             <div className="border-border/60 flex items-center justify-between border-b px-4 py-3">
                                 <div>
@@ -4072,6 +4098,10 @@ export function AdminClient({
                                                         ? "Waiting"
                                                         : region.stalled
                                                           ? "Stalled"
+                                                          : freeProxySettings.enabled &&
+                                                              freeProxyState.degradationReason ===
+                                                              "host_egress_limited"
+                                                            ? "Egress limited"
                                                           : !region.healthy
                                                             ? "Recovering"
                                                             : region.active +
@@ -4092,6 +4122,12 @@ export function AdminClient({
                                                     ? "n/a"
                                                     : `${region.successRate}%`}{" "}
                                                 latest ok
+                                                {region.topErrorStage ? (
+                                                    <span className="block text-[11px]">
+                                                        Top stage:{" "}
+                                                        {region.topErrorStage}
+                                                    </span>
+                                                ) : null}
                                             </div>
                                             <div className="text-muted-foreground">
                                                 {region.medianLatencyMs === null
@@ -4161,7 +4197,7 @@ export function AdminClient({
                                                 </span>
                                                 <span className="text-muted-foreground">
                                                     {diagnostic.topErrorCode
-                                                        ? `Top error: ${diagnostic.topErrorCode}`
+                                                        ? `Top error: ${diagnostic.topErrorCode}${diagnostic.topErrorStage ? ` during ${diagnostic.topErrorStage}` : ""}`
                                                         : "No recent error class"}
                                                 </span>
                                             </div>

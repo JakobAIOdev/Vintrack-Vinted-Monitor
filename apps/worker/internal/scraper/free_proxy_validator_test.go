@@ -34,7 +34,7 @@ func TestValidateFreeProxyHonorsContextDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 	startedAt := time.Now()
-	_, err = ValidateFreeProxy(ctx, "http://"+listener.Addr().String(), "de", 2500)
+	result, err := ValidateFreeProxy(ctx, "http://"+listener.Addr().String(), "de", 2500)
 	elapsed := time.Since(startedAt)
 
 	if err == nil {
@@ -42,6 +42,9 @@ func TestValidateFreeProxyHonorsContextDeadline(t *testing.T) {
 	}
 	if elapsed > time.Second {
 		t.Fatalf("validation returned after %s, expected context cancellation within 1s", elapsed)
+	}
+	if result.Stage != FreeProxyValidationStageWarmup {
+		t.Fatalf("validation stage = %q, want warmup", result.Stage)
 	}
 }
 
@@ -75,7 +78,7 @@ func TestValidateFreeProxyHonorsContextDeadlineForSOCKS5(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 	startedAt := time.Now()
-	_, err = ValidateFreeProxy(ctx, "socks5://"+listener.Addr().String(), "de", 2500)
+	result, err := ValidateFreeProxy(ctx, "socks5://"+listener.Addr().String(), "de", 2500)
 	elapsed := time.Since(startedAt)
 
 	if err == nil {
@@ -88,6 +91,9 @@ func TestValidateFreeProxyHonorsContextDeadlineForSOCKS5(t *testing.T) {
 	}
 	if elapsed > time.Second {
 		t.Fatalf("SOCKS5 validation returned after %s, expected context cancellation within 1s", elapsed)
+	}
+	if result.Stage != FreeProxyValidationStageWarmup {
+		t.Fatalf("SOCKS5 validation stage = %q, want warmup", result.Stage)
 	}
 }
 
@@ -130,6 +136,9 @@ func TestValidateFreeProxyHonorsContextDeadlineForSOCKS4(t *testing.T) {
 	if result.ErrorCode != "timeout" {
 		t.Fatalf("error code = %q, want timeout", result.ErrorCode)
 	}
+	if result.Stage != FreeProxyValidationStageWarmup {
+		t.Fatalf("SOCKS4 validation stage = %q, want warmup", result.Stage)
+	}
 	select {
 	case <-accepted:
 	case <-time.After(250 * time.Millisecond):
@@ -137,6 +146,24 @@ func TestValidateFreeProxyHonorsContextDeadlineForSOCKS4(t *testing.T) {
 	}
 	if elapsed > time.Second {
 		t.Fatalf("SOCKS4 validation returned after %s, expected context cancellation within 1s", elapsed)
+	}
+}
+
+func TestValidateFreeProxyReportsClientInitStage(t *testing.T) {
+	result, err := ValidateFreeProxy(
+		context.Background(),
+		"://invalid-proxy-url",
+		"de",
+		2500,
+	)
+	if err == nil {
+		t.Fatal("expected invalid proxy URL to fail")
+	}
+	if result.Stage != FreeProxyValidationStageClientInit {
+		t.Fatalf("validation stage = %q, want client_init", result.Stage)
+	}
+	if result.ErrorCode != "invalid_config" {
+		t.Fatalf("error code = %q, want invalid_config", result.ErrorCode)
 	}
 }
 
