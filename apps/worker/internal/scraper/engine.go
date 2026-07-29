@@ -21,10 +21,14 @@ import (
 )
 
 const (
-	maxAPIResponseBytes = 2 * 1024 * 1024 // 2 MB
-	defaultQueryDelayMS = 1500
-	minQueryDelayMS     = 500
-	maxQueryDelayMS     = 3600000
+	maxAPIResponseBytes             = 2 * 1024 * 1024 // 2 MB
+	defaultQueryDelayMS             = 1500
+	minQueryDelayMS                 = 500
+	maxQueryDelayMS                 = 3600000
+	defaultFreeProxyClientPoolSize  = 50
+	maximumFreeProxyClientPoolSize  = 100
+	freeProxyMaxInFlightPerClient   = 2
+	defaultFreeProxyHedgeDelayMilli = 900
 )
 
 type Engine struct {
@@ -34,6 +38,7 @@ type Engine struct {
 	fetcher        CatalogFetcher
 	enrichSeller   bool
 	poolSize       int
+	freePoolSize   int
 	pools          map[string]*ClientPool
 	poolsMu        sync.RWMutex
 	enrichers      map[string]*SellerEnricher
@@ -55,12 +60,13 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 		enrich = false
 	}
 	poolSize := getEnvInt("CLIENT_POOL_SIZE", 5)
+	freePoolSize := configuredFreeProxyClientPoolSize()
 	discoveryMode := resolveDiscoveryMode(os.Getenv("DISCOVERY_MODE"))
 	if !fetcher.RequiresNetwork() {
 		discoveryMode = "off"
 	}
 	jobsCtx, jobsCancel := context.WithCancel(context.Background())
-	log.Printf("Catalog fetch mode: %s, seller enrichment (region/rating): %v, client pool size: %d, TLS profile: %s, discovery: %s", fetcher.Name(), enrich, poolSize, configuredClientFingerprint().name, discoveryMode)
+	log.Printf("Catalog fetch mode: %s, seller enrichment (region/rating): %v, client pool size: %d, free proxy pool size: %d, TLS profile: %s, discovery: %s", fetcher.Name(), enrich, poolSize, freePoolSize, configuredClientFingerprint().name, discoveryMode)
 	engine := &Engine{
 		db:             db,
 		serverProxy:    pm,
@@ -68,6 +74,7 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 		fetcher:        fetcher,
 		enrichSeller:   enrich,
 		poolSize:       poolSize,
+		freePoolSize:   freePoolSize,
 		pools:          make(map[string]*ClientPool),
 		enrichers:      make(map[string]*SellerEnricher),
 		discoveryMode:  discoveryMode,
@@ -119,7 +126,11 @@ func (e *Engine) GetOrCreateEnricher(pm *proxy.Manager, domain string, proxyKey 
 }
 
 func (e *Engine) GetOrCreatePool(pm *proxy.Manager, domain string, proxyKey string, trafficRecorder func(txBytes int64, rxBytes int64), proxyLabel string) *ClientPool {
-	return e.GetOrCreatePoolSized(pm, domain, proxyKey, trafficRecorder, proxyLabel, e.poolSize)
+	poolSize := e.poolSize
+	if proxyLabel == "free" {
+		poolSize = e.freePoolSize
+	}
+	return e.GetOrCreatePoolSized(pm, domain, proxyKey, trafficRecorder, proxyLabel, poolSize)
 }
 
 func (e *Engine) GetOrCreatePoolSized(pm *proxy.Manager, domain string, proxyKey string, trafficRecorder func(txBytes int64, rxBytes int64), proxyLabel string, poolSize int) *ClientPool {
@@ -130,6 +141,7 @@ func (e *Engine) GetOrCreatePoolSized(pm *proxy.Manager, domain string, proxyKey
 	e.poolsMu.RUnlock()
 
 	if ok {
+		pool.EnsureSize(poolSize)
 		return pool
 	}
 
@@ -138,13 +150,42 @@ func (e *Engine) GetOrCreatePoolSized(pm *proxy.Manager, domain string, proxyKey
 
 	// Double check
 	if pool, ok = e.pools[key]; ok {
+		pool.EnsureSize(poolSize)
 		return pool
 	}
 
 	log.Printf("Creating new client pool for %s (source: %s)", domain, proxyLabel)
 	pool = NewClientPool(pm, domain, poolSize, trafficRecorder)
+	if strings.HasPrefix(proxyLabel, "free") {
+		pool.SetMaxInFlightPerClient(freeProxyMaxInFlightPerClient)
+	}
 	e.pools[key] = pool
 	return pool
+}
+
+func configuredFreeProxyClientPoolSize() int {
+	size := getEnvInt("FREE_PROXY_CLIENT_POOL_SIZE", defaultFreeProxyClientPoolSize)
+	if size < 1 {
+		return defaultFreeProxyClientPoolSize
+	}
+	if size > maximumFreeProxyClientPoolSize {
+		return maximumFreeProxyClientPoolSize
+	}
+	return size
+}
+
+func catalogHedgeDelayForProxySource(proxySource string) time.Duration {
+	key := "CATALOG_HEDGE_DELAY_MS"
+	fallback := getEnvInt(key, 250)
+	if proxySource == "free" {
+		key = "FREE_PROXY_CATALOG_HEDGE_DELAY_MS"
+		fallback = defaultFreeProxyHedgeDelayMilli
+	}
+	delay := getEnvInt(key, fallback)
+	if delay < 0 {
+		delay = 0
+	}
+	return time.Duration(delay) * time.Millisecond
 }
 
 func (e *Engine) getProxyManager(m model.Monitor) *proxy.Manager {
@@ -384,8 +425,17 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 		queryIndex, _ := monitorQueryForCheck(monitorQueries, nextCheck)
 		apiURL := queryURLs[queryIndex]
+		if proxySource == "free" {
+			pool.EnsureSize(e.freePoolSize)
+		}
 		fetchCtx, cancelFetch := context.WithTimeout(ctx, timeoutDuration)
-		result := e.fetchCatalogHedged(fetchCtx, pool, apiURL, domain)
+		result := e.fetchCatalogHedgedWithDelay(
+			fetchCtx,
+			pool,
+			apiURL,
+			domain,
+			catalogHedgeDelayForProxySource(proxySource),
+		)
 		cancelFetch()
 		var waitErr *proxyPoolWaitError
 		if errors.As(result.err, &waitErr) {

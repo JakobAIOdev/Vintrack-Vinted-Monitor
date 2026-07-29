@@ -537,8 +537,8 @@ func (s *Store) GetActiveFreeProxiesContext(ctx context.Context, region string, 
 			)
 			OR (
 				fph.status = 'active'
-				AND fph.failure_streak <= 1
-				AND fph.last_success_at >= NOW() - INTERVAL '60 minutes'
+				AND fph.failure_streak <= 2
+				AND fph.last_success_at >= NOW() - INTERVAL '90 minutes'
 			)
 		  )
 		  AND fp.status <> 'disabled'
@@ -1396,8 +1396,8 @@ func (s *Store) CountActiveFreeProxiesContext(ctx context.Context, region string
 			)
 			OR (
 				fph.status = 'active'
-				AND fph.failure_streak <= 1
-				AND fph.last_success_at >= NOW() - INTERVAL '60 minutes'
+				AND fph.failure_streak <= 2
+				AND fph.last_success_at >= NOW() - INTERVAL '90 minutes'
 			)
 		  )
 		  AND fp.status <> 'disabled'

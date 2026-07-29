@@ -970,8 +970,8 @@ export async function getFreeProxyAdminState() {
                 )::bigint AS active_count,
                 COUNT(*) FILTER (
                     WHERE status = 'active'
-                      AND failure_streak <= 1
-                      AND last_success_at >= NOW() - INTERVAL '60 minutes'
+                      AND failure_streak <= 2
+                      AND last_success_at >= NOW() - INTERVAL '90 minutes'
                       AND last_success_at < NOW() - INTERVAL '20 minutes'
                 )::bigint AS reserve_count,
                 COUNT(*) FILTER (
@@ -993,9 +993,9 @@ export async function getFreeProxyAdminState() {
                         status = 'active'
                         AND (
                             last_success_at IS NULL
-                            OR last_success_at < NOW() - INTERVAL '60 minutes'
+                            OR last_success_at < NOW() - INTERVAL '90 minutes'
                             OR (
-                                failure_streak > 1
+                                failure_streak > 2
                                 AND last_success_at < NOW() - INTERVAL '20 minutes'
                             )
                         )
@@ -1054,8 +1054,8 @@ export async function getFreeProxyAdminState() {
                 )::bigint AS active_count,
                 COUNT(*) FILTER (
                     WHERE fph.status = 'active'
-                      AND fph.failure_streak <= 1
-                      AND fph.last_success_at >= NOW() - INTERVAL '60 minutes'
+                      AND fph.failure_streak <= 2
+                      AND fph.last_success_at >= NOW() - INTERVAL '90 minutes'
                       AND fph.last_success_at < NOW() - INTERVAL '20 minutes'
                 )::bigint AS reserve_count,
                 COUNT(*) FILTER (

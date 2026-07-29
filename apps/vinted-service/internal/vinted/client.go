@@ -24,6 +24,7 @@ import (
 const defaultUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
 const defaultSecChUA = `"Google Chrome";v="146", "Chromium";v="146", "Not_A Brand";v="99"`
 const warmupReuseWindow = 10 * time.Minute
+const maxFilterSearchResponseBytes = 512 * 1024
 
 type Client struct {
 	httpClient tls_client.HttpClient
@@ -544,10 +545,6 @@ type filterOptionsPayload struct {
 	Options []filterOptionEntry `json:"options"`
 	Filters []filterOptionEntry `json:"filters"`
 	Facets  []filterOptionEntry `json:"facets"`
-}
-
-func DefaultBrandCatalogIDs() []string {
-	return []string{"1904", "5", "2993", "1193", "1918", "2994", "2309", "4824", "4332"}
 }
 
 var brandSearchDomains = map[string]string{
@@ -2027,7 +2024,30 @@ func (c *Client) doGetWardrobe(vintedUserID int64, page, perPage int, order stri
 }
 
 func (c *Client) SearchBrands(catalogIDs []string, query string) ([]FilterOption, error) {
-	return c.searchFilterOptions(catalogIDs, query, "brand")
+	normalizedCatalogIDs := normalizeCatalogIDs(catalogIDs)
+	options, err := c.searchGatewayFilterOptions(
+		normalizedCatalogIDs,
+		query,
+		"brand",
+	)
+	if len(normalizedCatalogIDs) == 0 || (err == nil && len(options) > 0) {
+		return options, err
+	}
+
+	// A selected catalog can hide otherwise valid brands. Retry globally so
+	// the picker remains useful for cross-category and newly added brands.
+	fallbackOptions, fallbackErr := c.searchGatewayFilterOptions(
+		nil,
+		query,
+		"brand",
+	)
+	if fallbackErr == nil {
+		return fallbackOptions, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, fallbackErr
 }
 
 func (c *Client) SearchPlatforms(catalogIDs []string, query string) ([]FilterOption, error) {
@@ -2138,22 +2158,9 @@ func platformOptionMatches(label, query string) bool {
 	return false
 }
 
-func (c *Client) searchFilterOptions(catalogIDs []string, query string, filterCode string) ([]FilterOption, error) {
-	options, err := c.doSearchFilterOptions(catalogIDs, query, filterCode)
-	if err != nil && shouldAttemptTokenRefresh(err) && c.session.RefreshToken != "" {
-		log.Printf("[vinted] %s filter search got %v, attempting token refresh...", filterCode, err)
-		if refreshErr := c.RefreshAccessToken(); refreshErr != nil {
-			log.Printf("[vinted] token refresh failed: %v", refreshErr)
-			return nil, err
-		}
-		return c.doSearchFilterOptions(catalogIDs, query, filterCode)
-	}
-	return options, err
-}
-
-func (c *Client) doSearchFilterOptions(catalogIDs []string, query string, filterCode string) ([]FilterOption, error) {
+func (c *Client) searchGatewayFilterOptions(catalogIDs []string, query string, filterCode string) ([]FilterOption, error) {
 	if err := c.WarmUp(); err != nil {
-		log.Printf("[vinted] warmup failed before %s filter search: %v", filterCode, err)
+		log.Printf("[vinted] warmup failed before %s gateway search: %v", filterCode, err)
 	}
 
 	normalizedQuery := strings.TrimSpace(query)
@@ -2162,39 +2169,36 @@ func (c *Client) doSearchFilterOptions(catalogIDs []string, query string, filter
 	}
 
 	normalizedCatalogIDs := normalizeCatalogIDs(catalogIDs)
-	if len(normalizedCatalogIDs) == 0 {
-		normalizedCatalogIDs = DefaultBrandCatalogIDs()
-	}
-
-	params := url.Values{
-		"catalog_ids":        {strings.Join(normalizedCatalogIDs, ",")},
-		"size_ids":           {""},
-		"brand_ids":          {""},
-		"status_ids":         {""},
-		"color_ids":          {""},
-		"patterns_ids":       {""},
-		"material_ids":       {""},
-		"filter_search_code": {filterCode},
-		"filter_search_text": {normalizedQuery},
-	}
-
-	u := fmt.Sprintf("https://%s/api/v2/catalog/filters/search?%s", c.session.Domain, params.Encode())
+	u := buildGatewayFilterSearchURL(
+		c.session.Domain,
+		normalizedCatalogIDs,
+		normalizedQuery,
+		filterCode,
+	)
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
-		return nil, fmt.Errorf("create %s filter search request: %w", filterCode, err)
+		return nil, fmt.Errorf("create %s gateway search request: %w", filterCode, err)
 	}
 
 	req.Header = c.apiHeaders()
+	req.Header.Set("Platform", "web")
+	req.Header.Set("X-Next-App", "marketplace-web")
 	req.Header.Set("Referer", fmt.Sprintf("https://%s/catalog?search_text=%s", c.session.Domain, url.QueryEscape(normalizedQuery)))
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s filter search request failed: %w", filterCode, err)
+		return nil, fmt.Errorf("%s gateway search request failed: %w", filterCode, err)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[vinted] GET /api/v2/catalog/filters/search code=%s query=%q catalogs=%s -> %d (%.300s)", filterCode, normalizedQuery, strings.Join(normalizedCatalogIDs, ","), resp.StatusCode, string(body))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFilterSearchResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s gateway search response: %w", filterCode, err)
+	}
+	if len(body) > maxFilterSearchResponseBytes {
+		return nil, fmt.Errorf("%s gateway search response exceeds %d bytes", filterCode, maxFilterSearchResponseBytes)
+	}
+	log.Printf("[vinted] GET /web/gateway/svc-filters/filters/search code=%s query=%q catalogs=%s -> %d", filterCode, normalizedQuery, strings.Join(normalizedCatalogIDs, ","), resp.StatusCode)
 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 300))
@@ -2202,10 +2206,30 @@ func (c *Client) doSearchFilterOptions(catalogIDs []string, query string, filter
 
 	var payload filterOptionsPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, fmt.Errorf("unmarshal %s filter search: %w", filterCode, err)
+		return nil, fmt.Errorf("unmarshal %s gateway search: %w", filterCode, err)
 	}
 
 	return normalizeFilterOptionsPayload(payload), nil
+}
+
+func buildGatewayFilterSearchURL(
+	domain string,
+	catalogIDs []string,
+	query string,
+	filterCode string,
+) string {
+	params := url.Values{
+		"filter_search_code": {filterCode},
+		"filter_search_text": {query},
+	}
+	if len(catalogIDs) > 0 {
+		params.Set("attribute_ids[catalog]", strings.Join(catalogIDs, ","))
+	}
+	return fmt.Sprintf(
+		"https://%s/web/gateway/svc-filters/filters/search?%s",
+		domain,
+		params.Encode(),
+	)
 }
 
 func normalizeCatalogIDs(catalogIDs []string) []string {

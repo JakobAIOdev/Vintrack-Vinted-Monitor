@@ -29,8 +29,10 @@ Shadow discovery also runs on a healthy shared free-proxy pool so its timing can
 | ---------------------------------- | -----------: | ------------------------------------------------------------------------------------------------------------------ |
 | `TLS_PROFILE`                      | `chrome_146` | TLS and browser-header profile (`chrome_131`, `chrome_133`, `chrome_144`, or `chrome_146`).                        |
 | `CLIENT_POOL_SIZE`                 |          `5` | Warm proxy sessions retained per domain and proxy source.                                                          |
+| `FREE_PROXY_CLIENT_POOL_SIZE`      |         `50` | Warm sessions used to spread shared monitor traffic across each regional free pool.                                |
 | `CATALOG_TIMEOUT_MS`               |       `2000` | Deadline for a catalog cycle.                                                                                      |
 | `CATALOG_HEDGE_DELAY_MS`           |        `250` | Starts a second request on another healthy proxy if the first request has not completed.                           |
+| `FREE_PROXY_CATALOG_HEDGE_DELAY_MS` |       `900` | Delays speculative free-proxy traffic so a normal public-proxy response does not automatically double the load.   |
 | `DISCOVERY_MODE`                   |        `off` | `off`, `shadow`, or `active`.                                                                                      |
 | `DISCOVERY_ALLOW_FREE_ACTIVE`      |      `false` | Explicitly allows active discovery alerts on the shared free-proxy pool. Shadow measurement does not require this. |
 | `DISCOVERY_INTERVAL_MS`            |        `500` | Minimum discovery cycle interval; the worker adds 0–100 ms jitter.                                                 |
@@ -45,7 +47,7 @@ Shadow discovery also runs on a healthy shared free-proxy pool so its timing can
 | `DISCORD_ALERT_WORKERS`            |          `8` | Dedicated Discord workers that cannot block dashboard/SSE or Telegram.                                             |
 | `TELEGRAM_ALERT_WORKERS`           |         `16` | Dedicated Telegram workers that cannot block dashboard/SSE or Discord.                                             |
 | `ENRICHMENT_WORKERS`               |          `8` | Concurrent persistence and seller-enrichment workers.                                                              |
-| `FREE_PROXY_HEALTH_CONCURRENCY`    |         `48` | Maximum parallel free-proxy validations in the isolated proxy-maintainer process.                                  |
+| `FREE_PROXY_HEALTH_CONCURRENCY`    |         `24` | Maximum parallel free-proxy validations in the isolated proxy-maintainer process.                                  |
 | `FREE_PROXY_HEALTH_BATCH_PER_REGION` |       `40` | Per-region validation batch once the target reserve is available.                                                  |
 | `FREE_PROXY_BOOTSTRAP_BATCH_PER_REGION` |   `120` | Per-region validation batch while the pool is below its target reserve.                                            |
 | `MONITOR_RUN_RETENTION_HOURS`      |         `24` | Retention for raw per-check monitor telemetry; hourly aggregates remain available separately.                      |

@@ -364,7 +364,7 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 		return
 	}
 	validationTimeout := freeProxyValidationTimeout(maxLatencyMs)
-	concurrency, err := settingIntContext(cycleCtx, store, "FREE_PROXY_HEALTH_CONCURRENCY", 48)
+	concurrency, err := settingIntContext(cycleCtx, store, "FREE_PROXY_HEALTH_CONCURRENCY", 24)
 	if err != nil {
 		log.Printf("free proxy health concurrency setting load failed: %v", err)
 		return

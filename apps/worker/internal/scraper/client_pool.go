@@ -53,6 +53,8 @@ type ClientPool struct {
 	requireProxy    bool
 	quarantined     map[string]proxyQuarantine
 	reserved        map[string]bool
+	resizing        bool
+	maxInFlight     int
 	now             func() time.Time
 }
 
@@ -137,7 +139,11 @@ func (p *ClientPool) AcquireExcluding(excluded map[*Client]bool) *Client {
 	var best *clientState
 	bestScore := float64(0)
 	for _, state := range p.states {
-		if excluded[state.client] || state.cooldownUntil.After(now) || state.replacing || p.proxyIsQuarantinedLocked(state.client.ProxyURL, now) {
+		if excluded[state.client] ||
+			state.cooldownUntil.After(now) ||
+			state.replacing ||
+			(p.maxInFlight > 0 && state.inFlight >= p.maxInFlight) ||
+			p.proxyIsQuarantinedLocked(state.client.ProxyURL, now) {
 			continue
 		}
 		latency := state.ewmaLatencyMS
@@ -172,7 +178,10 @@ func (p *ClientPool) AcquireRoundRobin() *Client {
 	for offset := 0; offset < len(p.states); offset++ {
 		index := (p.index + offset) % len(p.states)
 		state := p.states[index]
-		if state.cooldownUntil.After(now) || state.replacing || p.proxyIsQuarantinedLocked(state.client.ProxyURL, now) {
+		if state.cooldownUntil.After(now) ||
+			state.replacing ||
+			(p.maxInFlight > 0 && state.inFlight >= p.maxInFlight) ||
+			p.proxyIsQuarantinedLocked(state.client.ProxyURL, now) {
 			continue
 		}
 		state.inFlight++
@@ -342,6 +351,83 @@ func (p *ClientPool) currentTime() time.Time {
 		return p.now()
 	}
 	return time.Now()
+}
+
+// SetMaxInFlightPerClient bounds concurrent work sent through one exit IP.
+// A zero value keeps the historical unlimited behavior for private pools.
+func (p *ClientPool) SetMaxInFlightPerClient(limit int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.maxInFlight = max(0, limit)
+}
+
+// EnsureSize expands a live pool when its proxy manager gains healthy entries.
+// This is especially important while a free pool recovers from zero: monitors
+// may start with one proxy and must not remain pinned to that one proxy forever.
+func (p *ClientPool) EnsureSize(size int) {
+	if p == nil || p.pm == nil || size <= 0 {
+		return
+	}
+	if proxyCount := p.pm.Count(); size > proxyCount {
+		size = proxyCount
+	}
+	if size <= 0 {
+		return
+	}
+
+	p.mu.Lock()
+	if p.resizing || len(p.states) >= size {
+		p.mu.Unlock()
+		return
+	}
+	p.resizing = true
+	p.mu.Unlock()
+
+	defer func() {
+		p.mu.Lock()
+		p.resizing = false
+		p.mu.Unlock()
+	}()
+
+	failed := make(map[string]bool)
+	for {
+		p.mu.Lock()
+		if len(p.states) >= size {
+			p.mu.Unlock()
+			return
+		}
+		p.ensureMapsLocked()
+		excluded := make(map[string]bool, len(p.states)+len(p.reserved)+len(failed))
+		for _, state := range p.states {
+			if state.client != nil && state.client.ProxyURL != "" {
+				excluded[state.client.ProxyURL] = true
+			}
+		}
+		for proxyURL := range p.reserved {
+			excluded[proxyURL] = true
+		}
+		for proxyURL := range failed {
+			excluded[proxyURL] = true
+		}
+		proxyURL := p.pm.NextExcluding(excluded)
+		if proxyURL == "" {
+			p.mu.Unlock()
+			return
+		}
+		p.reserved[proxyURL] = true
+		p.mu.Unlock()
+
+		client, err := NewClientWithTimeout(proxyURL, p.trafficRecorder, p.requestTimeout)
+
+		p.mu.Lock()
+		delete(p.reserved, proxyURL)
+		if err == nil {
+			p.states = append(p.states, &clientState{client: client})
+		} else {
+			failed[proxyURL] = true
+		}
+		p.mu.Unlock()
+	}
 }
 
 func (p *ClientPool) ensureMapsLocked() {
