@@ -959,21 +959,23 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 					fph.region,
 					fp.source,
 					fp.protocol,
+					COUNT(*)::double precision AS checked_count,
 					COUNT(*) FILTER (
-						WHERE fph.last_checked_at >= NOW() - INTERVAL '6 hours'
-					)::double precision AS checked_count,
-					COUNT(*) FILTER (
-						WHERE fph.last_checked_at >= NOW() - INTERVAL '6 hours'
-						  AND fph.last_status_code = 200
+						WHERE fph.last_status_code = 200
 						  AND fph.last_error IS NULL
 					)::double precision AS successful_count
 				FROM free_proxies fp
 				JOIN free_proxy_health fph ON fph.proxy_id = fp.id
+				WHERE fph.region = ANY($1)
+				  AND fph.last_checked_at >= NOW() - INTERVAL '6 hours'
 				GROUP BY fph.region, fp.source, fp.protocol
-			), ranked AS (
+			), proxy_ranked AS (
 				SELECT
 					fph.id,
 					fph.proxy_id,
+					fph.region,
+					fp.source,
+					fp.protocol,
 					CASE
 						WHEN fph.status = 'active' THEN 0
 						WHEN fph.success_count > 0 THEN 1
@@ -983,22 +985,6 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 						WHEN fph.status = 'dead' THEN 6
 						ELSE 5
 					END AS priority,
-					ROW_NUMBER() OVER (
-						PARTITION BY fp.source
-						ORDER BY
-							CASE
-								WHEN fph.status = 'active' THEN 0
-								WHEN fph.success_count > 0 THEN 1
-								WHEN fp.success_count > 0 THEN 2
-								WHEN $3 AND fph.last_checked_at IS NULL THEN 3
-								WHEN fph.status = 'cooldown' THEN 4
-								WHEN fph.status = 'dead' THEN 6
-								ELSE 5
-							END,
-							fp.last_success_at DESC NULLS LAST,
-							fph.last_checked_at ASC NULLS FIRST,
-							fph.score DESC
-					) AS source_rank,
 					ROW_NUMBER() OVER (
 						PARTITION BY fp.id
 						ORDER BY
@@ -1012,46 +998,9 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 								ELSE 5
 							END,
 							fph.last_checked_at ASC NULLS FIRST,
-							fph.score DESC
+							fph.score DESC,
+							MD5(fp.proxy_url || ':' || fph.region)
 					) AS proxy_rank,
-					ROW_NUMBER() OVER (
-						PARTITION BY fp.source, fp.protocol
-						ORDER BY
-							CASE
-								WHEN fph.status = 'active' THEN 0
-								WHEN fph.success_count > 0 THEN 1
-								WHEN fp.success_count > 0 THEN 2
-								WHEN $3 AND fph.last_checked_at IS NULL THEN 3
-								WHEN fph.status = 'cooldown' THEN 4
-								WHEN fph.status = 'dead' THEN 6
-								ELSE 5
-							END,
-							fph.last_checked_at ASC NULLS FIRST,
-							fph.score DESC
-					) AS group_rank,
-					ROW_NUMBER() OVER (
-						PARTITION BY fph.region
-						ORDER BY
-							CASE
-								WHEN fph.status = 'active' THEN 0
-								WHEN fph.success_count > 0 THEN 1
-								WHEN fp.success_count > 0 THEN 2
-								WHEN $3 AND fph.last_checked_at IS NULL THEN 3
-								WHEN fph.status = 'cooldown' THEN 4
-								WHEN fph.status = 'dead' THEN 6
-								ELSE 5
-							END,
-							CASE WHEN NOT $4 THEN
-								(
-									COALESCE(group_stats.successful_count, 0) + 1.0
-								) / (
-									COALESCE(group_stats.checked_count, 0) + 20.0
-								)
-							END DESC NULLS LAST,
-							fp.last_success_at DESC NULLS LAST,
-							fph.last_checked_at ASC NULLS FIRST,
-							fph.score DESC
-					) AS region_rank,
 					(
 						COALESCE(group_stats.successful_count, 0) + 1.0
 					) / (
@@ -1076,13 +1025,40 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 				  AND fph.status IN ('pending', 'active', 'cooldown', 'dead')
 				  AND ($3 OR fph.status = 'active')
 				  AND (fph.next_check_at IS NULL OR fph.next_check_at <= NOW())
+			), ranked AS (
+				SELECT
+					proxy_ranked.*,
+					ROW_NUMBER() OVER (
+						PARTITION BY source
+						ORDER BY
+							priority,
+							global_last_success_at DESC NULLS LAST,
+							last_checked_at ASC NULLS FIRST,
+							score DESC
+					) AS source_rank,
+					ROW_NUMBER() OVER (
+						PARTITION BY source, protocol
+						ORDER BY
+							priority,
+							last_checked_at ASC NULLS FIRST,
+							score DESC
+					) AS group_rank,
+					ROW_NUMBER() OVER (
+						PARTITION BY region
+						ORDER BY
+							priority,
+							CASE WHEN NOT $4 THEN yield_score END DESC NULLS LAST,
+							global_last_success_at DESC NULLS LAST,
+							last_checked_at ASC NULLS FIRST,
+							score DESC
+					) AS region_rank
+				FROM proxy_ranked
+				WHERE proxy_rank = 1
 			), due AS (
 				SELECT fph.id, fp.id AS proxy_id
 				FROM ranked
 				JOIN free_proxy_health fph ON fph.id = ranked.id
 				JOIN free_proxies fp ON fp.id = ranked.proxy_id
-				WHERE ranked.proxy_rank = 1
-				  AND ranked.region_rank <= $5
 				ORDER BY
 					ranked.priority,
 					ranked.region_rank,
@@ -1121,7 +1097,6 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 			claimLimit,
 			bootstrap,
 			explore,
-			max(1, (claimLimit+len(regions)-1)/len(regions)),
 		)
 		if queryErr != nil {
 			return nil, queryErr
