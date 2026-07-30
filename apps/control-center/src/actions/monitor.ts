@@ -120,6 +120,7 @@ export async function createMonitor(
 
     const name = formData.get("name") as string;
     const normalizedQuery = normalizeMonitorQuery(formData.get("query"));
+    const titleOnly = formData.get("title_only") === "true";
     const antiKeywords = normalizeMonitorAntiKeywords(
         formData.get("anti_keywords"),
     );
@@ -190,6 +191,7 @@ export async function createMonitor(
                 userId,
                 name: normalizedName,
                 query: normalizedQuery,
+                title_only: titleOnly,
                 anti_keywords: antiKeywords,
                 query_delay_ms: queryDelayMs,
                 quiet_hours_enabled: quietHours.enabled,
@@ -559,6 +561,7 @@ export async function updateMonitor(id: number, formData: FormData) {
 
     const name = formData.get("name") as string;
     const normalizedQuery = normalizeMonitorQuery(formData.get("query"));
+    const titleOnly = formData.get("title_only") === "true";
     const antiKeywords = normalizeMonitorAntiKeywords(
         formData.get("anti_keywords"),
     );
@@ -626,6 +629,7 @@ export async function updateMonitor(id: number, formData: FormData) {
         data: {
             name: normalizedName,
             query: normalizedQuery,
+            title_only: titleOnly,
             anti_keywords: antiKeywords,
             query_delay_ms: queryDelayMs,
             quiet_hours_enabled: quietHours.enabled,
@@ -676,6 +680,7 @@ export async function updateMonitorAndReturn(
 
     const name = formData.get("name") as string;
     const normalizedQuery = normalizeMonitorQuery(formData.get("query"));
+    const titleOnly = formData.get("title_only") === "true";
     const antiKeywords = normalizeMonitorAntiKeywords(
         formData.get("anti_keywords"),
     );
@@ -749,6 +754,7 @@ export async function updateMonitorAndReturn(
         data: {
             name: normalizedName,
             query: normalizedQuery,
+            title_only: titleOnly,
             anti_keywords: antiKeywords,
             query_delay_ms: queryDelayMs,
             quiet_hours_enabled: quietHours.enabled,

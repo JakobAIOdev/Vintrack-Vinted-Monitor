@@ -279,7 +279,11 @@ func discoveryFailureBackoff(proxySource string, consecutiveFailures int) time.D
 }
 
 func matchesDiscovery(item model.VintedItem, monitor model.Monitor) bool {
-	haystack := strings.ToLower(item.Title + "\n" + item.BrandTitle)
+	haystack := item.Title
+	if !monitor.TitleOnly {
+		haystack += "\n" + item.BrandTitle
+	}
+	haystack = strings.ToLower(haystack)
 	if !matchesMonitorQuery(haystack, monitor.Query) {
 		return false
 	}

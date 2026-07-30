@@ -461,6 +461,14 @@ func TestMatchesDiscoveryAppliesLocalTextFilters(t *testing.T) {
 	if matchesDiscovery(model.VintedItem{Title: "Air Force 1", BrandTitle: "Nike", User: model.VintedUser{ID: 1}}, monitor) {
 		t.Fatal("item missing a query term was accepted")
 	}
+
+	monitor.TitleOnly = true
+	if matchesDiscovery(model.VintedItem{Title: "Air Max 90", BrandTitle: "Nike", User: model.VintedUser{ID: 1}}, monitor) {
+		t.Fatal("title-only monitor accepted a query term found only in the brand")
+	}
+	if !matchesDiscovery(model.VintedItem{Title: "Nike Air Max 90", User: model.VintedUser{ID: 1}}, monitor) {
+		t.Fatal("title-only monitor rejected matching title")
+	}
 }
 
 func TestMatchesDiscoveryAcceptsAnyCommaSeparatedQuery(t *testing.T) {

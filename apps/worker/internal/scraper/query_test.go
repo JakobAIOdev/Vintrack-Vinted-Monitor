@@ -3,6 +3,8 @@ package scraper
 import (
 	"reflect"
 	"testing"
+
+	"vintrack-worker/internal/model"
 )
 
 func TestParseMonitorQueriesNormalizesAndDeduplicates(t *testing.T) {
@@ -42,5 +44,36 @@ func TestMatchesMonitorQueryUsesORBetweenAlternatives(t *testing.T) {
 				t.Fatalf("matchesMonitorQuery() = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestFilterTitleOnlyItems(t *testing.T) {
+	items := []model.VintedItem{
+		{ID: 1, Title: "Nike Air Max 90"},
+		{ID: 2, Title: "Vintage trainers", Description: "Nike Air Max 90"},
+		{ID: 3, Title: "Adidas Samba OG"},
+	}
+
+	filtered, blocked := filterTitleOnlyItems(items, "nike air, adidas samba", true)
+
+	if blocked != 1 {
+		t.Fatalf("blocked = %d, want 1", blocked)
+	}
+	if len(filtered) != 2 || filtered[0].ID != 1 || filtered[1].ID != 3 {
+		t.Fatalf("filtered items = %#v, want IDs [1 3]", filtered)
+	}
+}
+
+func TestFilterTitleOnlyItemsDisabledReturnsOriginal(t *testing.T) {
+	items := []model.VintedItem{{
+		ID:          1,
+		Title:       "Vintage trainers",
+		Description: "Nike Air Max",
+	}}
+
+	filtered, blocked := filterTitleOnlyItems(items, "nike", false)
+
+	if blocked != 0 || len(filtered) != 1 {
+		t.Fatalf("blocked = %d, filtered = %d, want 0 and 1", blocked, len(filtered))
 	}
 }

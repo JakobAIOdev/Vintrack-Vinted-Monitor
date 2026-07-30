@@ -1,0 +1,2 @@
+ALTER TABLE "monitors"
+ADD COLUMN "title_only" BOOLEAN NOT NULL DEFAULT false;

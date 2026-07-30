@@ -45,6 +45,7 @@ func TestMonitorConfigFingerprintIncludesRuntimeFilters(t *testing.T) {
 		mutate func(*model.Monitor)
 	}{
 		{name: "query", mutate: func(m *model.Monitor) { m.Query = "adidas" }},
+		{name: "title only", mutate: func(m *model.Monitor) { m.TitleOnly = true }},
 		{name: "anti keywords", mutate: func(m *model.Monitor) { v := "damaged"; m.AntiKeywords = &v }},
 		{name: "query delay", mutate: func(m *model.Monitor) { m.QueryDelayMs = 2000 }},
 		{name: "quiet hours", mutate: func(m *model.Monitor) {
