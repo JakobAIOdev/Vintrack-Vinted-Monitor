@@ -88,6 +88,24 @@ func failurePolicy(status int, err error, failures int) proxyFailurePolicy {
 	return proxyFailurePolicy{code: proxyErrorHTTP, cooldown: 2 * time.Second}
 }
 
+func failurePolicyWithQuarantineThreshold(status int, err error, failures int, threshold int) proxyFailurePolicy {
+	policy := failurePolicy(status, err, failures)
+	if threshold <= 1 || failures >= threshold || policy.quarantine == 0 {
+		return policy
+	}
+
+	// Authentication failures cannot recover without different credentials.
+	// Other volatile public-proxy failures get a short retry window before the
+	// usual quarantine and replacement policy applies.
+	if policy.code == proxyErrorAuthenticationFailed {
+		return policy
+	}
+	policy.cooldown = 5 * time.Second
+	policy.quarantine = 0
+	policy.replaceClient = false
+	return policy
+}
+
 func catalogFailureCode(status int, err error) string {
 	return failurePolicy(status, err, 1).code
 }

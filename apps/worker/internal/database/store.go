@@ -566,11 +566,22 @@ func (s *Store) GetActiveFreeProxiesContext(ctx context.Context, region string, 
 				(
 					fph.status = 'active'
 					OR (fph.status = 'pending' AND fph.success_streak > 0)
+					OR (
+						fph.status = 'cooldown'
+						AND fph.success_count > 0
+						AND fph.failure_streak <= 2
+					)
 				)
 				AND fph.last_success_at >= NOW() - INTERVAL '20 minutes'
 			)
 			OR (
-				fph.status = 'active'
+				(
+					fph.status = 'active'
+					OR (
+						fph.status = 'cooldown'
+						AND fph.success_count > 0
+					)
+				)
 				AND fph.failure_streak <= 2
 				AND fph.last_success_at >= NOW() - INTERVAL '90 minutes'
 			)
@@ -1383,16 +1394,16 @@ func (s *Store) RecordFreeProxyFailureStageContext(
 			last_error_code = $5,
 			last_error_stage = NULLIF($10, ''),
 			status = CASE
-				WHEN $7 THEN 'cooldown'
 				WHEN fph.status = 'active' AND fph.failure_streak + 1 < $6 THEN 'active'
+				WHEN $7 THEN 'cooldown'
 				WHEN fph.failure_streak + 1 >= $6 THEN 'dead'
 				WHEN fph.status = 'active' THEN 'cooldown'
 				ELSE 'cooldown'
 			END,
 			next_check_at = CASE
-				WHEN $7 THEN NOW() + ($8::text || ' minutes')::interval
 				WHEN fph.failure_streak + 1 = 1 THEN NOW() + INTERVAL '5 minutes'
 				WHEN fph.failure_streak + 1 = 2 THEN NOW() + INTERVAL '30 minutes'
+				WHEN $7 THEN NOW() + ($8::text || ' minutes')::interval
 				WHEN fph.failure_streak + 1 = 3 THEN NOW() + INTERVAL '2 hours'
 				ELSE NOW() + INTERVAL '6 hours'
 			END,
@@ -1479,11 +1490,22 @@ func (s *Store) CountActiveFreeProxiesContext(ctx context.Context, region string
 				(
 					fph.status = 'active'
 					OR (fph.status = 'pending' AND fph.success_streak > 0)
+					OR (
+						fph.status = 'cooldown'
+						AND fph.success_count > 0
+						AND fph.failure_streak <= 2
+					)
 				)
 				AND fph.last_success_at >= NOW() - INTERVAL '20 minutes'
 			)
 			OR (
-				fph.status = 'active'
+				(
+					fph.status = 'active'
+					OR (
+						fph.status = 'cooldown'
+						AND fph.success_count > 0
+					)
+				)
 				AND fph.failure_streak <= 2
 				AND fph.last_success_at >= NOW() - INTERVAL '90 minutes'
 			)

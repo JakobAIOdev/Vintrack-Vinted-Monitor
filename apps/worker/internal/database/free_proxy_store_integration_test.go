@@ -230,6 +230,97 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 	if err := store.RecordFreeProxySuccessContext(ctx, proxyURL, region, 225); err != nil {
 		t.Fatalf("reset proxy with success: %v", err)
 	}
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err := store.RecordFreeProxyFailureStageContext(
+			ctx,
+			proxyURL,
+			region,
+			403,
+			"regional warmup forbidden",
+			"vinted_403",
+			"warmup",
+			3,
+			30,
+		); err != nil {
+			t.Fatalf("record regional access failure %d: %v", attempt, err)
+		}
+
+		var regionalStatus string
+		var regionalFailureStreak int
+		if err := db.QueryRowContext(ctx, `
+			SELECT fph.status, fph.failure_streak
+			FROM free_proxy_health fph
+			JOIN free_proxies fp ON fp.id = fph.proxy_id
+			WHERE fp.proxy_url = $1
+			  AND fph.region = $2`,
+			proxyURL,
+			region,
+		).Scan(&regionalStatus, &regionalFailureStreak); err != nil {
+			t.Fatalf("read regional failure %d state: %v", attempt, err)
+		}
+		wantStatus := "active"
+		if attempt == 3 {
+			wantStatus = "cooldown"
+		}
+		if regionalStatus != wantStatus || regionalFailureStreak != attempt {
+			t.Fatalf(
+				"regional failure %d state = %s/%d, want %s/%d",
+				attempt,
+				regionalStatus,
+				regionalFailureStreak,
+				wantStatus,
+				attempt,
+			)
+		}
+
+		active, err = store.GetActiveFreeProxiesContext(ctx, region, 10)
+		if err != nil {
+			t.Fatalf("get proxies after regional failure %d: %v", attempt, err)
+		}
+		wantActive := 1
+		if attempt == 3 {
+			wantActive = 0
+		}
+		if len(active) != wantActive {
+			t.Fatalf(
+				"active proxies after regional failure %d = %#v, want %d",
+				attempt,
+				active,
+				wantActive,
+			)
+		}
+	}
+	if err := store.RecordFreeProxySuccessContext(ctx, proxyURL, region, 225); err != nil {
+		t.Fatalf("reset proxy after regional hysteresis: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE free_proxy_health fph
+		SET status = 'cooldown',
+			failure_streak = 1,
+			next_check_at = NOW() + INTERVAL '5 minutes',
+			updated_at = NOW()
+		FROM free_proxies fp
+		WHERE fp.id = fph.proxy_id
+		  AND fp.proxy_url = $1
+		  AND fph.region = $2`,
+		proxyURL,
+		region,
+	); err != nil {
+		t.Fatalf("seed legacy cooldown reserve: %v", err)
+	}
+	active, err = store.GetActiveFreeProxiesContext(ctx, region, 10)
+	if err != nil {
+		t.Fatalf("get legacy cooldown reserve: %v", err)
+	}
+	if len(active) != 1 || active[0] != proxyURL {
+		t.Fatalf(
+			"legacy cooldown reserve = %#v, want proven proxy",
+			active,
+		)
+	}
+	if err := store.RecordFreeProxySuccessContext(ctx, proxyURL, region, 225); err != nil {
+		t.Fatalf("reset legacy cooldown reserve: %v", err)
+	}
 	if _, err := db.ExecContext(ctx, `
 		UPDATE free_proxy_health fph
 		SET next_check_at = NOW()

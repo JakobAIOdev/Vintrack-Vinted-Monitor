@@ -55,6 +55,7 @@ type ClientPool struct {
 	reserved        map[string]bool
 	resizing        bool
 	maxInFlight     int
+	quarantineAfter int
 	now             func() time.Time
 }
 
@@ -229,6 +230,14 @@ func (p *ClientPool) Report(client *Client, status int, latency time.Duration, e
 
 	state.failures++
 	policy := failurePolicy(status, err, state.failures)
+	if p.quarantineAfter > 1 {
+		policy = failurePolicyWithQuarantineThreshold(
+			status,
+			err,
+			state.failures,
+			p.quarantineAfter,
+		)
+	}
 	if policy.resetWarmupSession {
 		client.ResetWarm(p.domain)
 	}
@@ -359,6 +368,15 @@ func (p *ClientPool) SetMaxInFlightPerClient(limit int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.maxInFlight = max(0, limit)
+}
+
+// SetQuarantineFailureThreshold keeps volatile free proxies available through
+// isolated access or transport failures. A success still resets the streak,
+// while repeated failures eventually apply the normal long quarantine.
+func (p *ClientPool) SetQuarantineFailureThreshold(threshold int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.quarantineAfter = max(1, threshold)
 }
 
 // EnsureSize expands a live pool when its proxy manager gains healthy entries.
