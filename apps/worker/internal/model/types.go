@@ -11,6 +11,7 @@ type Monitor struct {
 	UserID                string
 	Name                  string
 	Query                 string
+	TitleOnly             bool
 	AntiKeywords          *string
 	QueryDelayMs          int
 	QuietHoursEnabled     bool

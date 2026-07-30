@@ -562,7 +562,10 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			reportHealth("", "", "", time.Time{}, "")
 		}
 
-		items := result.items
+		items, titleBlockedCount := filterTitleOnlyItems(result.items, m.Query, m.TitleOnly)
+		if titleBlockedCount > 0 && (checks <= 3 || checks%100 == 0) {
+			log.Printf("[%d] skipped %d items because their titles did not match the query", m.ID, titleBlockedCount)
+		}
 		if len(items) == 0 {
 			if !initializedQueries[queryIndex] {
 				initializedQueries[queryIndex] = true

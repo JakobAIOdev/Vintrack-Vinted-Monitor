@@ -93,6 +93,7 @@ export default function NewMonitorPage() {
         string[]
     >([]);
     const [query, setQuery] = useState("");
+    const [titleOnly, setTitleOnly] = useState(false);
     const [priceMin, setPriceMin] = useState("");
     const [priceMax, setPriceMax] = useState("");
     const [proxyGroups, setProxyGroups] = useState<ProxyGroupOption[]>([]);
@@ -114,6 +115,7 @@ export default function NewMonitorPage() {
         setSelectedPreset(preset.key);
         setName(preset.name);
         setQuery(preset.query);
+        setTitleOnly(false);
         setAntiKeywordResetKey((current) => current + 1);
         setSelectedBrands([...preset.brandIds]);
         setSelectedCategories([...preset.catalogIds]);
@@ -131,6 +133,7 @@ export default function NewMonitorPage() {
         setSelectedPreset(null);
         setName("");
         setQuery("");
+        setTitleOnly(false);
         setSelectedBrands([]);
         setSelectedCategories([]);
         setSelectedCategoryLabels([]);
@@ -469,6 +472,33 @@ export default function NewMonitorPage() {
                                         : ""}
                                     .
                                 </p>
+                            </div>
+
+                            <div className="space-y-2">
+                                <input
+                                    type="hidden"
+                                    name="title_only"
+                                    value={titleOnly ? "true" : "false"}
+                                />
+                                <div className="border-border/80 bg-muted/30 flex items-center justify-between gap-4 rounded-lg border p-3">
+                                    <div className="space-y-0.5">
+                                        <Label
+                                            htmlFor="title-only-switch"
+                                            className="text-[13px]"
+                                        >
+                                            Match title only
+                                        </Label>
+                                        <p className="text-muted-foreground text-[12px]">
+                                            Skip items whose search terms only
+                                            appear in the description.
+                                        </p>
+                                    </div>
+                                    <Switch
+                                        id="title-only-switch"
+                                        checked={titleOnly}
+                                        onCheckedChange={setTitleOnly}
+                                    />
+                                </div>
                             </div>
 
                             <div className="space-y-2">

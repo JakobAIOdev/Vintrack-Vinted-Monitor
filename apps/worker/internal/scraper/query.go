@@ -1,6 +1,10 @@
 package scraper
 
-import "strings"
+import (
+	"strings"
+
+	"vintrack-worker/internal/model"
+)
 
 func parseMonitorQueries(raw string) []string {
 	parts := strings.FieldsFunc(raw, func(r rune) bool {
@@ -51,4 +55,21 @@ func matchesMonitorQuery(haystack string, rawQuery string) bool {
 		}
 	}
 	return false
+}
+
+func filterTitleOnlyItems(items []model.VintedItem, rawQuery string, titleOnly bool) ([]model.VintedItem, int) {
+	if !titleOnly || len(items) == 0 {
+		return items, 0
+	}
+
+	filtered := make([]model.VintedItem, 0, len(items))
+	blocked := 0
+	for _, item := range items {
+		if !matchesMonitorQuery(item.Title, rawQuery) {
+			blocked++
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered, blocked
 }
