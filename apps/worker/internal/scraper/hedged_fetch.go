@@ -76,6 +76,14 @@ func (e *Engine) fetchCatalogHedgedWithDelay(ctx context.Context, pool *ClientPo
 	timer := time.NewTimer(hedgeDelay)
 	defer timer.Stop()
 	hedgeTimer := timer.C
+	rearmHedge := func() {
+		if launched >= maxAttempts {
+			hedgeTimer = nil
+			return
+		}
+		timer.Reset(hedgeDelay)
+		hedgeTimer = timer.C
+	}
 
 	launchNext := func() bool {
 		if launched >= maxAttempts {
@@ -104,10 +112,14 @@ func (e *Engine) fetchCatalogHedgedWithDelay(ctx context.Context, pool *ClientPo
 				result.attempts = attempts
 				return result
 			}
-			launchNext()
+			if launchNext() && hedgeTimer == nil {
+				rearmHedge()
+			}
 		case <-hedgeTimer:
 			hedgeTimer = nil
-			launchNext()
+			if launchNext() {
+				rearmHedge()
+			}
 		case <-ctx.Done():
 			if last.err == nil {
 				last.err = ctx.Err()

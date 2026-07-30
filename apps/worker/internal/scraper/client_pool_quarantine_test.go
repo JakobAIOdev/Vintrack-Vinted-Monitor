@@ -41,6 +41,86 @@ func TestFailurePolicyQuarantineDurations(t *testing.T) {
 	}
 }
 
+func TestFreeProxyFailurePolicyRequiresThreeConsecutiveFailures(t *testing.T) {
+	for failures := 1; failures <= 2; failures++ {
+		policy := failurePolicyWithQuarantineThreshold(
+			403,
+			errors.New("blocked"),
+			failures,
+			3,
+		)
+		if policy.quarantine != 0 {
+			t.Fatalf(
+				"failure %d quarantine = %s, want none",
+				failures,
+				policy.quarantine,
+			)
+		}
+		if policy.cooldown != 5*time.Second {
+			t.Fatalf(
+				"failure %d cooldown = %s, want 5s",
+				failures,
+				policy.cooldown,
+			)
+		}
+		if policy.replaceClient {
+			t.Fatalf("failure %d unexpectedly replaces client", failures)
+		}
+	}
+
+	policy := failurePolicyWithQuarantineThreshold(
+		403,
+		errors.New("blocked"),
+		3,
+		3,
+	)
+	if policy.quarantine != vintedAccessDeniedQuarantine {
+		t.Fatalf(
+			"third failure quarantine = %s, want %s",
+			policy.quarantine,
+			vintedAccessDeniedQuarantine,
+		)
+	}
+	if !policy.replaceClient {
+		t.Fatal("third failure does not replace client")
+	}
+}
+
+func TestFreeProxyPoolQuarantinesOnlyAfterThirdConsecutiveFailure(t *testing.T) {
+	now := time.Date(2026, time.July, 30, 8, 0, 0, 0, time.UTC)
+	manager := proxy.FromString("http://1.2.3.4:8080")
+	client := &Client{ProxyURL: "http://1.2.3.4:8080", warmed: make(map[string]bool)}
+	pool := &ClientPool{
+		states:          []*clientState{{client: client}},
+		pm:              manager,
+		domain:          "www.vinted.de",
+		requireProxy:    true,
+		quarantined:     make(map[string]proxyQuarantine),
+		reserved:        make(map[string]bool),
+		quarantineAfter: 3,
+		now:             func() time.Time { return now },
+	}
+
+	for failure := 1; failure <= 2; failure++ {
+		pool.Report(client, 403, 50*time.Millisecond, errors.New("blocked"))
+		if waitErr := pool.WaitError(); waitErr != nil {
+			t.Fatalf("failure %d WaitError() = %v, want nil", failure, waitErr)
+		}
+		now = now.Add(5*time.Second + time.Millisecond)
+		if got := pool.Acquire(nil); got != client {
+			t.Fatalf("failure %d Acquire() = %v, want original client", failure, got)
+		}
+	}
+
+	pool.Report(client, 403, 50*time.Millisecond, errors.New("blocked"))
+	if waitErr := pool.WaitError(); waitErr == nil {
+		t.Fatal("third failure WaitError() = nil, want quarantined pool")
+	}
+	if got := pool.Acquire(nil); got != nil {
+		t.Fatalf("third failure Acquire() = %v, want nil", got)
+	}
+}
+
 func TestClientPoolWaitsWhenEveryProxyIsQuarantined(t *testing.T) {
 	now := time.Date(2026, time.July, 28, 8, 0, 0, 0, time.UTC)
 	manager := proxy.FromString("http://1.2.3.4:8080")

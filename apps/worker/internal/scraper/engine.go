@@ -182,6 +182,7 @@ func (e *Engine) GetOrCreatePoolSized(pm *proxy.Manager, domain string, proxyKey
 	pool = NewClientPool(pm, domain, poolSize, trafficRecorder)
 	if strings.HasPrefix(proxyLabel, "free") {
 		pool.SetMaxInFlightPerClient(freeProxyMaxInFlightPerClient)
+		pool.SetQuarantineFailureThreshold(3)
 	}
 	e.pools[key] = pool
 	return pool

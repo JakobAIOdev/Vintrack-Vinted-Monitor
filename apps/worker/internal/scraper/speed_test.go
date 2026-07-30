@@ -108,6 +108,56 @@ func TestFetchCatalogHedgedRotatesPastBlockedClients(t *testing.T) {
 	}
 }
 
+func TestFetchCatalogHedgedLaunchesRecurringHedgesBeforeSlowTimeout(t *testing.T) {
+	t.Setenv("CATALOG_MAX_ATTEMPTS", "5")
+	slowOne := &Client{ProxyURL: "slow-one"}
+	slowTwo := &Client{ProxyURL: "slow-two"}
+	slowThree := &Client{ProxyURL: "slow-three"}
+	slowFour := &Client{ProxyURL: "slow-four"}
+	healthy := &Client{ProxyURL: "healthy"}
+	pool := &ClientPool{states: []*clientState{
+		{client: slowOne, ewmaLatencyMS: 10},
+		{client: slowTwo, ewmaLatencyMS: 20},
+		{client: slowThree, ewmaLatencyMS: 30},
+		{client: slowFour, ewmaLatencyMS: 40},
+		{client: healthy, ewmaLatencyMS: 50},
+	}}
+	engine := &Engine{fetcher: timedCatalogFetcher{delays: map[string]time.Duration{
+		"slow-one":   250 * time.Millisecond,
+		"slow-two":   250 * time.Millisecond,
+		"slow-three": 250 * time.Millisecond,
+		"slow-four":  250 * time.Millisecond,
+		"healthy":    5 * time.Millisecond,
+	}}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	result := engine.fetchCatalogHedgedWithDelay(
+		ctx,
+		pool,
+		"https://example.test",
+		"example.test",
+		20*time.Millisecond,
+	)
+
+	if result.err != nil || result.status != 200 {
+		t.Fatalf(
+			"recurring hedged fetch = status %d, error %v",
+			result.status,
+			result.err,
+		)
+	}
+	if result.client != healthy {
+		t.Fatalf("recurring hedge winner = %v, want healthy", result.client)
+	}
+	if len(result.attempts) != 1 {
+		t.Fatalf(
+			"completed recurring hedge attempts = %d, want only healthy completion",
+			len(result.attempts),
+		)
+	}
+}
+
 func TestFetchCatalogHedgedWaitsForFreeProxyCapacity(t *testing.T) {
 	client := &Client{ProxyURL: "only"}
 	pool := &ClientPool{states: []*clientState{{client: client}}}

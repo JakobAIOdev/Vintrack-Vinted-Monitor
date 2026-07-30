@@ -110,11 +110,24 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
             SELECT
                 region,
                 COUNT(*) FILTER (
-                    WHERE status = 'active'
+                    WHERE (
+                        status = 'active'
+                        OR (
+                            status = 'cooldown'
+                            AND success_count > 0
+                            AND failure_streak <= 2
+                        )
+                      )
                       AND last_success_at >= NOW() - INTERVAL '20 minutes'
                 )::bigint AS active_count,
                 COUNT(*) FILTER (
-                    WHERE status = 'active'
+                    WHERE (
+                        status = 'active'
+                        OR (
+                            status = 'cooldown'
+                            AND success_count > 0
+                        )
+                      )
                       AND failure_streak <= 2
                       AND last_success_at >= NOW() - INTERVAL '90 minutes'
                       AND last_success_at < NOW() - INTERVAL '20 minutes'
@@ -133,7 +146,15 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                       )
                 )::bigint AS pending_count,
                 COUNT(*) FILTER (
-                    WHERE status = 'cooldown'
+                    WHERE (
+                        status = 'cooldown'
+                        AND (
+                            success_count = 0
+                            OR failure_streak > 2
+                            OR last_success_at IS NULL
+                            OR last_success_at < NOW() - INTERVAL '90 minutes'
+                        )
+                      )
                        OR (
                         status = 'active'
                         AND (

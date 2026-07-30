@@ -974,11 +974,24 @@ export async function getFreeProxyAdminState() {
             SELECT
                 region,
                 COUNT(*) FILTER (
-                    WHERE status = 'active'
+                    WHERE (
+                        status = 'active'
+                        OR (
+                            status = 'cooldown'
+                            AND success_count > 0
+                            AND failure_streak <= 2
+                        )
+                      )
                       AND last_success_at >= NOW() - INTERVAL '20 minutes'
                 )::bigint AS active_count,
                 COUNT(*) FILTER (
-                    WHERE status = 'active'
+                    WHERE (
+                        status = 'active'
+                        OR (
+                            status = 'cooldown'
+                            AND success_count > 0
+                        )
+                      )
                       AND failure_streak <= 2
                       AND last_success_at >= NOW() - INTERVAL '90 minutes'
                       AND last_success_at < NOW() - INTERVAL '20 minutes'
@@ -997,7 +1010,15 @@ export async function getFreeProxyAdminState() {
                       )
                 )::bigint AS pending_count,
                 COUNT(*) FILTER (
-                    WHERE status = 'cooldown'
+                    WHERE (
+                        status = 'cooldown'
+                        AND (
+                            success_count = 0
+                            OR failure_streak > 2
+                            OR last_success_at IS NULL
+                            OR last_success_at < NOW() - INTERVAL '90 minutes'
+                        )
+                      )
                        OR (
                         status = 'active'
                         AND (
@@ -1064,17 +1085,39 @@ export async function getFreeProxyAdminState() {
                     WHERE fph.last_checked_at IS NULL
                 )::bigint AS never_checked_count,
                 COUNT(*) FILTER (
-                    WHERE fph.status = 'active'
+                    WHERE (
+                        fph.status = 'active'
+                        OR (
+                            fph.status = 'cooldown'
+                            AND fph.success_count > 0
+                            AND fph.failure_streak <= 2
+                        )
+                      )
                       AND fph.last_success_at >= NOW() - INTERVAL '20 minutes'
                 )::bigint AS active_count,
                 COUNT(*) FILTER (
-                    WHERE fph.status = 'active'
+                    WHERE (
+                        fph.status = 'active'
+                        OR (
+                            fph.status = 'cooldown'
+                            AND fph.success_count > 0
+                        )
+                      )
                       AND fph.failure_streak <= 2
                       AND fph.last_success_at >= NOW() - INTERVAL '90 minutes'
                       AND fph.last_success_at < NOW() - INTERVAL '20 minutes'
                 )::bigint AS reserve_count,
                 COUNT(*) FILTER (
-                    WHERE fph.status IN ('cooldown', 'dead')
+                    WHERE fph.status = 'dead'
+                       OR (
+                            fph.status = 'cooldown'
+                            AND (
+                                fph.success_count = 0
+                                OR fph.failure_streak > 2
+                                OR fph.last_success_at IS NULL
+                                OR fph.last_success_at < NOW() - INTERVAL '90 minutes'
+                            )
+                       )
                 )::bigint AS cooldown_count,
                 mode() WITHIN GROUP (ORDER BY fph.last_error_code)
                     FILTER (
