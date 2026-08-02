@@ -548,6 +548,30 @@ func (s *Store) GetActiveFreeProxyRegionsContext(ctx context.Context) ([]string,
 	return regions, rows.Err()
 }
 
+func (s *Store) GetFreeProxyRegionDemandContext(ctx context.Context) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT region, COUNT(*)
+		FROM monitors
+		WHERE status = 'active'
+		  AND proxy_source = 'free'
+		GROUP BY region`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	demand := make(map[string]int)
+	for rows.Next() {
+		var region string
+		var count int
+		if err := rows.Scan(&region, &count); err != nil {
+			return nil, err
+		}
+		demand[region] = count
+	}
+	return demand, rows.Err()
+}
+
 func (s *Store) GetActiveFreeProxies(region string, limit int) ([]string, error) {
 	return s.GetActiveFreeProxiesContext(context.Background(), region, limit)
 }
@@ -859,7 +883,7 @@ func (s *Store) PruneUnselectedFreeProxiesContext(ctx context.Context, keepProxy
 		  AND NOT (fp.proxy_url = ANY($1))
 		  AND fp.success_count = 0
 		  AND fp.last_checked_at IS NOT NULL
-		  AND fp.last_seen_at < NOW() - INTERVAL '6 hours'
+		  AND fp.last_seen_at < NOW() - INTERVAL '24 hours'
 		  AND NOT EXISTS (
 			SELECT 1
 			FROM free_proxy_health fph
@@ -877,12 +901,22 @@ func (s *Store) EnsureFreeProxyHealthRows(regions []string, limit int) error {
 }
 
 func (s *Store) EnsureFreeProxyHealthRowsContext(ctx context.Context, regions []string, limit int) error {
+	limits := make(map[string]int, len(regions))
+	for _, region := range regions {
+		limits[region] = limit
+	}
+	return s.EnsureFreeProxyHealthRowsWithLimitsContext(ctx, limits)
+}
+
+func (s *Store) EnsureFreeProxyHealthRowsWithLimitsContext(ctx context.Context, limits map[string]int) error {
+	regions := make([]string, 0, len(limits))
+	for region := range limits {
+		regions = append(regions, region)
+	}
+	sort.Strings(regions)
 	if len(regions) == 0 {
 		_, err := s.db.ExecContext(ctx, `DELETE FROM free_proxy_health`)
 		return err
-	}
-	if limit <= 0 {
-		limit = 1000
 	}
 	if _, err := s.db.ExecContext(ctx, `
 		DELETE FROM free_proxy_health
@@ -890,6 +924,10 @@ func (s *Store) EnsureFreeProxyHealthRowsContext(ctx context.Context, regions []
 		return err
 	}
 	for _, region := range regions {
+		limit := limits[region]
+		if limit <= 0 {
+			limit = 1000
+		}
 		if _, err := s.db.ExecContext(ctx, `
 			WITH desired AS (
 				SELECT fp.id
@@ -900,12 +938,22 @@ func (s *Store) EnsureFreeProxyHealthRowsContext(ctx context.Context, regions []
 				WHERE fp.status <> 'disabled'
 				ORDER BY
 				  CASE
+					WHEN current_health.candidate_window_token =
+					  FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint THEN 0
+					ELSE 1
+				  END,
+				  CASE
 					WHEN current_health.status = 'active' THEN 0
 					WHEN current_health.success_count > 0 THEN 1
 					WHEN current_health.id IS NULL OR current_health.last_checked_at IS NULL THEN 2
 					WHEN current_health.status = 'pending' THEN 3
 					WHEN current_health.status = 'cooldown' THEN 4
 					ELSE 5
+				  END,
+				  CASE
+					WHEN current_health.next_check_at IS NULL
+					  OR current_health.next_check_at <= NOW() THEN 0
+					ELSE 1
 				  END,
 				  CASE WHEN fp.source = 'iplocate:' || $1 THEN 0 ELSE 1 END,
 				  CASE fp.protocol
@@ -917,26 +965,57 @@ func (s *Store) EnsureFreeProxyHealthRowsContext(ctx context.Context, regions []
 				  END,
 				  fp.last_success_at DESC NULLS LAST,
 				  fp.failure_count ASC,
+				  MD5(
+					fp.proxy_url || ':' ||
+					FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::text
+				  ),
 				  fp.updated_at DESC
-				LIMIT $2
-			), removed AS (
-				DELETE FROM free_proxy_health fph
-				WHERE fph.region = $1
-				  AND NOT EXISTS (
-					SELECT 1 FROM desired WHERE desired.id = fph.proxy_id
-				  )
-				RETURNING fph.id
+				LIMIT $2::bigint
 			)
-			INSERT INTO free_proxy_health (proxy_id, region, status, next_check_at, updated_at)
-			SELECT desired.id, $1, 'pending', NOW(), NOW()
+			INSERT INTO free_proxy_health (
+				proxy_id, region, status, next_check_at,
+				candidate_window_token, updated_at
+			)
+			SELECT
+				desired.id,
+				$1,
+				'pending',
+				NOW(),
+				FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint,
+				NOW()
 			FROM desired
-			WHERE NOT EXISTS (
-				SELECT 1
-				FROM free_proxy_health current_health
-				WHERE current_health.proxy_id = desired.id
-				  AND current_health.region = $1
+			ON CONFLICT (proxy_id, region) DO UPDATE
+			SET candidate_window_token = EXCLUDED.candidate_window_token
+			WHERE free_proxy_health.candidate_window_token IS DISTINCT FROM
+				EXCLUDED.candidate_window_token`, region, limit); err != nil {
+			return err
+		}
+		if _, err := s.db.ExecContext(ctx, `
+			WITH excess AS (
+				SELECT fph.id
+				FROM free_proxy_health fph
+				JOIN free_proxies fp ON fp.id = fph.proxy_id
+				WHERE fph.region = $1
+				  AND fph.candidate_window_token =
+					FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint
+				ORDER BY
+				  CASE
+					WHEN fph.status = 'active' THEN 0
+					WHEN fph.success_count > 0 THEN 1
+					WHEN fph.last_checked_at IS NULL THEN 2
+					WHEN fph.status = 'pending' THEN 3
+					WHEN fph.status = 'cooldown' THEN 4
+					ELSE 5
+				  END,
+				  fph.last_success_at DESC NULLS LAST,
+				  fph.last_checked_at ASC NULLS FIRST,
+				  fp.id
+				OFFSET $2::bigint
 			)
-			ON CONFLICT (proxy_id, region) DO NOTHING`, region, limit); err != nil {
+			UPDATE free_proxy_health fph
+			SET candidate_window_token = NULL
+			FROM excess
+			WHERE fph.id = excess.id`, region, limit); err != nil {
 			return err
 		}
 	}
@@ -960,15 +1039,16 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 	}
 	defer tx.Rollback()
 
-	claim := func(explore bool, claimLimit int) ([]FreeProxyCandidate, error) {
+	claim := func(lane string, claimLimit int) ([]FreeProxyCandidate, error) {
 		if claimLimit <= 0 {
 			return nil, nil
 		}
+		explore := lane == "explore"
 		rows, queryErr := tx.QueryContext(ctx, `
 			WITH group_stats AS (
 				SELECT
 					fph.region,
-					fp.source,
+					listed_source.source_name AS source,
 					fp.protocol,
 					COUNT(*)::double precision AS checked_count,
 					COUNT(*) FILTER (
@@ -977,9 +1057,15 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 					)::double precision AS successful_count
 				FROM free_proxies fp
 				JOIN free_proxy_health fph ON fph.proxy_id = fp.id
+				CROSS JOIN LATERAL unnest(
+					CASE
+						WHEN cardinality(fp.sources) > 0 THEN fp.sources
+						ELSE ARRAY[fp.source]::text[]
+					END
+				) AS listed_source(source_name)
 				WHERE fph.region = ANY($1)
 				  AND fph.last_checked_at >= NOW() - INTERVAL '6 hours'
-				GROUP BY fph.region, fp.source, fp.protocol
+				GROUP BY fph.region, listed_source.source_name, fp.protocol
 			), proxy_ranked AS (
 				SELECT
 					fph.id,
@@ -1012,20 +1098,28 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 							fph.score DESC,
 							MD5(fp.proxy_url || ':' || fph.region)
 					) AS proxy_rank,
-					(
-						COALESCE(group_stats.successful_count, 0) + 1.0
-					) / (
-						COALESCE(group_stats.checked_count, 0) + 20.0
-					) AS yield_score,
+					COALESCE(source_stats.yield_score, 1.0 / 20.0) AS yield_score,
 					fp.last_success_at AS global_last_success_at,
 					fph.last_checked_at,
 					fph.score
 				FROM free_proxy_health fph
 				JOIN free_proxies fp ON fp.id = fph.proxy_id
-				LEFT JOIN group_stats
-				  ON group_stats.region = fph.region
-				 AND group_stats.source = fp.source
-				 AND group_stats.protocol = fp.protocol
+				LEFT JOIN LATERAL (
+					SELECT MAX(
+						(group_stats.successful_count + 1.0) /
+						(group_stats.checked_count + 20.0)
+					) AS yield_score
+					FROM unnest(
+						CASE
+							WHEN cardinality(fp.sources) > 0 THEN fp.sources
+							ELSE ARRAY[fp.source]::text[]
+						END
+					) AS candidate_source(source_name)
+					JOIN group_stats
+					  ON group_stats.region = fph.region
+					 AND group_stats.source = candidate_source.source_name
+					 AND group_stats.protocol = fp.protocol
+				) source_stats ON TRUE
 				WHERE fph.region = ANY($1)
 				  AND fp.status <> 'disabled'
 				  AND (fp.quarantined_until IS NULL OR fp.quarantined_until <= NOW())
@@ -1034,8 +1128,15 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 					OR fp.check_claimed_until <= NOW()
 				  )
 				  AND fph.status IN ('pending', 'active', 'cooldown', 'dead')
-				  AND ($3 OR fph.status = 'active')
+				  AND fph.candidate_window_token =
+					FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint
 				  AND (fph.next_check_at IS NULL OR fph.next_check_at <= NOW())
+				  AND CASE $5
+					WHEN 'explore' THEN fph.last_checked_at IS NULL
+					WHEN 'fanout' THEN fph.success_count = 0 AND fp.success_count > 0
+					WHEN 'keepalive' THEN fph.success_count > 0
+					ELSE TRUE
+				  END
 			), ranked AS (
 				SELECT
 					proxy_ranked.*,
@@ -1108,6 +1209,7 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 			claimLimit,
 			bootstrap,
 			explore,
+			lane,
 		)
 		if queryErr != nil {
 			return nil, queryErr
@@ -1131,14 +1233,15 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 	}
 
 	proxies := make([]FreeProxyCandidate, 0, limit)
-	explorationLimit := freeProxyExplorationQuota(limit)
-	exploration, err := claim(true, explorationLimit)
-	if err != nil {
-		return nil, err
+	for _, lane := range freeProxyLaneQuotas(limit, bootstrap) {
+		claimed, claimErr := claim(lane.name, lane.limit)
+		if claimErr != nil {
+			return nil, claimErr
+		}
+		proxies = append(proxies, claimed...)
 	}
-	proxies = append(proxies, exploration...)
 	if remaining := limit - len(proxies); remaining > 0 {
-		claimed, claimErr := claim(false, remaining)
+		claimed, claimErr := claim("any", remaining)
 		if claimErr != nil {
 			return nil, claimErr
 		}
@@ -1151,15 +1254,37 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 	return proxies, nil
 }
 
-func freeProxyExplorationQuota(limit int) int {
-	if limit <= 1 {
-		return 0
+type freeProxyLaneQuota struct {
+	name  string
+	limit int
+}
+
+func freeProxyLaneQuotas(limit int, bootstrap bool) []freeProxyLaneQuota {
+	if limit <= 0 {
+		return nil
 	}
-	quota := max(1, limit*20/100)
-	if quota >= limit {
-		return limit - 1
+	if !bootstrap {
+		explore := max(1, limit*20/100)
+		if explore >= limit {
+			explore = 0
+		}
+		return []freeProxyLaneQuota{
+			{name: "keepalive", limit: limit - explore},
+			{name: "explore", limit: explore},
+		}
 	}
-	return quota
+
+	explore := max(1, limit*60/100)
+	fanout := max(1, limit*25/100)
+	if explore+fanout > limit {
+		fanout = max(0, limit-explore)
+	}
+	keepalive := max(0, limit-explore-fanout)
+	return []freeProxyLaneQuota{
+		{name: "explore", limit: explore},
+		{name: "fanout", limit: fanout},
+		{name: "keepalive", limit: keepalive},
+	}
 }
 
 func (s *Store) RecordFreeProxySuccess(proxyURL string, region string, latencyMs int) {
@@ -1379,7 +1504,7 @@ func (s *Store) RecordFreeProxyFailureStageContext(
 		errorCode == "tls" ||
 		errorCode == "proxy_handshake" ||
 		errorCode == "transport"
-	globalTransportFailure := errorStage == "warmup" && hardTransportFailure
+	globalTransportFailure := hardTransportFailure
 
 	_, err := s.db.ExecContext(ctx, `
 		WITH updated_health AS (
@@ -1401,6 +1526,8 @@ func (s *Store) RecordFreeProxyFailureStageContext(
 				ELSE 'cooldown'
 			END,
 			next_check_at = CASE
+				WHEN fph.success_count = 0 AND fp.success_count = 0
+					THEN NOW() + INTERVAL '6 hours'
 				WHEN fph.failure_streak + 1 = 1 THEN NOW() + INTERVAL '5 minutes'
 				WHEN fph.failure_streak + 1 = 2 THEN NOW() + INTERVAL '30 minutes'
 				WHEN $7 THEN NOW() + ($8::text || ' minutes')::interval
@@ -1431,7 +1558,9 @@ func (s *Store) RecordFreeProxyFailureStageContext(
 			last_error_stage = NULLIF($10, ''),
 			check_claimed_until = NULL,
 			quarantined_until = CASE
-				WHEN $9 THEN GREATEST(
+				WHEN $9 AND fp.success_count > 0 AND fp.failure_count + 1 >= 3
+					THEN NOW() + INTERVAL '15 minutes'
+				WHEN $9 AND fp.success_count = 0 THEN GREATEST(
 					COALESCE(fp.quarantined_until, NOW()),
 					NOW() + CASE
 						WHEN fp.failure_count + 1 = 1 THEN INTERVAL '5 minutes'
@@ -1517,6 +1646,48 @@ func (s *Store) CountActiveFreeProxiesContext(ctx context.Context, region string
 			OR fp.quarantined_until <= NOW()
 		  )`, region).Scan(&count)
 	return count, err
+}
+
+func (s *Store) SyncFreeProxyRegionMilestoneContext(ctx context.Context, region string, readyCount int) error {
+	region = strings.ToLower(strings.TrimSpace(region))
+	if region == "" {
+		return nil
+	}
+	state := "recovering"
+	eventType := "free_proxy_recovery_started"
+	severity := "warning"
+	switch {
+	case readyCount <= 0:
+		state = "outage"
+		eventType = "free_proxy_pool_outage"
+		severity = "error"
+	case readyCount >= 50:
+		state = "ready_50"
+		eventType = "free_proxy_pool_reached_50"
+		severity = "info"
+	case readyCount >= 10:
+		state = "ready_10"
+		eventType = "free_proxy_pool_reached_10"
+		severity = "info"
+	}
+
+	metadata := fmt.Sprintf(`{"region":%q,"ready":%d,"state":%q}`, region, readyCount, state)
+	_, err := s.db.ExecContext(ctx, `
+		WITH changed AS (
+			INSERT INTO app_settings (key, value, updated_at)
+			VALUES ('free_proxy_region_state:' || $1, $2, NOW())
+			ON CONFLICT (key) DO UPDATE
+			SET value = EXCLUDED.value,
+				updated_at = NOW()
+			WHERE app_settings.value <> EXCLUDED.value
+			RETURNING key
+		)
+		INSERT INTO audit_events (
+			action, target_type, target_id, status, metadata, created_at
+		)
+		SELECT $3, 'free_proxy_pool', $1, $4, $5::jsonb, NOW()
+		FROM changed`, region, state, eventType, severity, metadata)
+	return err
 }
 
 func (s *Store) SaveItem(item model.Item) error {

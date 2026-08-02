@@ -165,7 +165,11 @@ func (e *Engine) GetOrCreatePoolSized(pm *proxy.Manager, domain string, proxyKey
 	e.poolsMu.RUnlock()
 
 	if ok {
-		pool.EnsureSize(poolSize)
+		if strings.HasPrefix(proxyLabel, "free") {
+			pool.Reconcile(poolSize)
+		} else {
+			pool.EnsureSize(poolSize)
+		}
 		return pool
 	}
 
@@ -174,7 +178,11 @@ func (e *Engine) GetOrCreatePoolSized(pm *proxy.Manager, domain string, proxyKey
 
 	// Double check
 	if pool, ok = e.pools[key]; ok {
-		pool.EnsureSize(poolSize)
+		if strings.HasPrefix(proxyLabel, "free") {
+			pool.Reconcile(poolSize)
+		} else {
+			pool.EnsureSize(poolSize)
+		}
 		return pool
 	}
 
@@ -185,6 +193,14 @@ func (e *Engine) GetOrCreatePoolSized(pm *proxy.Manager, domain string, proxyKey
 		pool.SetQuarantineFailureThreshold(3)
 	}
 	e.pools[key] = pool
+	return pool
+}
+
+func (e *Engine) existingPool(domain string, proxyKey string) *ClientPool {
+	key := fmt.Sprintf("%s:%s", domain, proxyKey)
+	e.poolsMu.RLock()
+	pool := e.pools[key]
+	e.poolsMu.RUnlock()
 	return pool
 }
 
@@ -240,7 +256,7 @@ func (e *Engine) proxyContext(m model.Monitor) (*proxy.Manager, string, string, 
 		}
 	} else if m.ProxySource == "free" {
 		proxySource = "free"
-		proxyKey = fmt.Sprintf("free:%s:%d", m.Region, e.FreeProxyRegionVersion(m.Region))
+		proxyKey = fmt.Sprintf("free:%s", m.Region)
 	}
 
 	return pm, proxySource, proxyKey, trafficRecorder
@@ -254,8 +270,12 @@ func shortProxyHash(raw string) string {
 func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	pm, proxySource, proxyKey, trafficRecorder := e.proxyContext(m)
 	domain := model.RegionDomain(m.Region)
+	var pool *ClientPool
+	if proxySource == "free" {
+		pool = e.existingPool(domain, proxyKey)
+	}
 
-	if e.fetcher.RequiresNetwork() && pm.Count() == 0 {
+	if e.fetcher.RequiresNetwork() && pm.Count() == 0 && (pool == nil || pool.Size() == 0) {
 		log.Printf("[%d] ❌ ERROR: no valid proxies available (source: %s)", m.ID, proxySource)
 		e.db.UpdateMonitorHealth(model.MonitorHealth{
 			MonitorID:       m.ID,
@@ -288,7 +308,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			if !waitForProxyManager(ctx, pm, 15*time.Second) {
 				return
 			}
-			proxyKey = fmt.Sprintf("free:%s:%d", m.Region, e.FreeProxyRegionVersion(m.Region))
+			proxyKey = fmt.Sprintf("free:%s", m.Region)
 			log.Printf("[%d] free proxy pool recovered with %d proxies", m.ID, pm.Count())
 		} else {
 			if m.WebhookActive && m.DiscordWebhook.String != "" {
@@ -301,10 +321,13 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 	}
 
-	var pool *ClientPool
 	if e.fetcher.RequiresNetwork() {
 		log.Printf("[%d] proxy source: %s (%d proxies)", m.ID, proxySource, pm.Count())
-		pool = e.GetOrCreatePool(pm, domain, proxyKey, trafficRecorder, proxySource)
+		if pool == nil {
+			pool = e.GetOrCreatePool(pm, domain, proxyKey, trafficRecorder, proxySource)
+		} else if pm.Count() > 0 {
+			pool.Reconcile(e.freePoolSize)
+		}
 		log.Printf("[%d] using client pool: %d clients", m.ID, pool.Size())
 	} else {
 		proxySource = "mock"
@@ -339,6 +362,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	var totalErrors int64
 	localSeen := make(map[int64]time.Time, 128)
 	waitingForProxy := false
+	managerDegraded := false
 
 	log.Printf("[%d] started | name=%q | queries=%d | delay=%s | hedge=%dms | url=%s", m.ID, m.Name, len(monitorQueries), interval, getEnvInt("CATALOG_HEDGE_DELAY_MS", 250), queryURLs[0])
 	notificationsEnabled := e.monitorNotificationsEnabled(m)
@@ -383,21 +407,37 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		default:
 		}
 		if proxySource == "free" && pm.Count() == 0 {
-			log.Printf("[%d] free proxy pool became empty; waiting for recovery", m.ID)
-			reportHealth("free proxy pool is waiting for recovery", proxyErrorPoolWaiting, "waiting_for_proxy", time.Time{}, "")
+			if pool != nil && pool.Size() > 0 {
+				if !managerDegraded {
+					managerDegraded = true
+					log.Printf("[%d] free proxy manager became empty; continuing with %d validated clients", m.ID, pool.Size())
+					reportHealth("free proxy manager is rebuilding; using validated reserve clients", proxyErrorPoolWaiting, "degraded", time.Time{}, "")
+					e.db.RecordMonitorEvent(model.MonitorEvent{
+						MonitorID: m.ID,
+						EventType: "free_proxy_recovery_started",
+						Severity:  "warning",
+						Message:   fmt.Sprintf("Free proxy pool for region %s is rebuilding; validated reserve clients remain active", m.Region),
+					})
+				}
+			} else {
+				log.Printf("[%d] free proxy pool became empty; waiting for recovery", m.ID)
+				reportHealth("free proxy pool is waiting for recovery", proxyErrorPoolWaiting, "waiting_for_proxy", time.Time{}, "")
+				if !waitForProxyManager(ctx, pm, 15*time.Second) {
+					return
+				}
+				pool = e.GetOrCreatePool(pm, domain, proxyKey, trafficRecorder, proxySource)
+				consecutiveErrors = 0
+				log.Printf("[%d] free proxy pool recovered with %d proxies", m.ID, pm.Count())
+			}
+		} else if proxySource == "free" && managerDegraded {
+			managerDegraded = false
+			pool.Reconcile(e.freePoolSize)
 			e.db.RecordMonitorEvent(model.MonitorEvent{
 				MonitorID: m.ID,
-				EventType: "free_proxy_pool_degraded",
-				Severity:  "warning",
-				Message:   fmt.Sprintf("Free proxy pool for region %s became empty; monitor is waiting for recovery", m.Region),
+				EventType: "free_proxy_pool_recovered",
+				Severity:  "info",
+				Message:   fmt.Sprintf("Free proxy pool for region %s received validated capacity", m.Region),
 			})
-			if !waitForProxyManager(ctx, pm, 15*time.Second) {
-				return
-			}
-			proxyKey = fmt.Sprintf("free:%s:%d", m.Region, e.FreeProxyRegionVersion(m.Region))
-			pool = e.GetOrCreatePool(pm, domain, proxyKey, trafficRecorder, proxySource)
-			consecutiveErrors = 0
-			log.Printf("[%d] free proxy pool recovered with %d proxies", m.ID, pm.Count())
 		}
 
 		nextCheck := checks + 1
@@ -453,7 +493,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		queryIndex, _ := monitorQueryForCheck(monitorQueries, nextCheck)
 		apiURL := queryURLs[queryIndex]
 		if proxySource == "free" {
-			pool.EnsureSize(e.freePoolSize)
+			pool.Reconcile(e.freePoolSize)
 		}
 		fetchCtx, cancelFetch := context.WithTimeout(ctx, timeoutDuration)
 		result := e.fetchCatalogHedgedWithDelay(

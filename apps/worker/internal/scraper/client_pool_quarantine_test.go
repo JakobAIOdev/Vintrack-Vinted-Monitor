@@ -249,6 +249,38 @@ func TestClientPoolCapsConcurrentRequestsPerProxy(t *testing.T) {
 	}
 }
 
+func TestFreeClientPoolRetainsValidatedClientsForEmptyManagerSnapshot(t *testing.T) {
+	manager := proxy.FromString("http://1.2.3.4:8080")
+	pool := NewClientPool(manager, "www.vinted.de", 1, nil)
+	if pool.Size() != 1 {
+		t.Fatalf("initial pool size = %d, want 1", pool.Size())
+	}
+	manager.ReplaceFromString("")
+	pool.Reconcile(1)
+	if pool.Size() != 1 {
+		t.Fatalf("pool size after empty snapshot = %d, want retained client", pool.Size())
+	}
+}
+
+func TestFreeClientPoolReconcilesRemovedProxy(t *testing.T) {
+	manager := proxy.FromString("http://1.2.3.4:8080")
+	pool := NewClientPool(manager, "www.vinted.de", 1, nil)
+	manager.ReplaceFromString("http://5.6.7.8:8080")
+	pool.Reconcile(1)
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		pool.mu.Lock()
+		proxyURL := pool.states[0].client.ProxyURL
+		pool.mu.Unlock()
+		if proxyURL == "http://5.6.7.8:8080" {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("pool did not replace the removed proxy")
+}
+
 func TestWaitForProxyRetryHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

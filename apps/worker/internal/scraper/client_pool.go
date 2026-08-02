@@ -448,6 +448,41 @@ func (p *ClientPool) EnsureSize(size int) {
 	}
 }
 
+// Reconcile grows the pool and gradually replaces clients that are no longer
+// present in the manager snapshot. An empty manager is treated as a temporary
+// control-plane outage: existing region-validated clients are retained and
+// their request outcomes continue to drive local quarantine decisions.
+func (p *ClientPool) Reconcile(size int) {
+	if p == nil || p.pm == nil {
+		return
+	}
+	allowedProxies := p.pm.Snapshot()
+	if len(allowedProxies) == 0 {
+		return
+	}
+	p.EnsureSize(size)
+
+	allowed := make(map[string]bool, len(allowedProxies))
+	for _, proxyURL := range allowedProxies {
+		allowed[proxyURL] = true
+	}
+	p.mu.Lock()
+	stale := make([]*Client, 0)
+	for _, state := range p.states {
+		if state.client == nil || state.replacing || state.inFlight > 0 {
+			continue
+		}
+		if !allowed[state.client.ProxyURL] {
+			stale = append(stale, state.client)
+		}
+	}
+	p.mu.Unlock()
+
+	for _, client := range stale {
+		p.Replace(client)
+	}
+}
+
 func (p *ClientPool) ensureMapsLocked() {
 	if p.quarantined == nil {
 		p.quarantined = make(map[string]proxyQuarantine)

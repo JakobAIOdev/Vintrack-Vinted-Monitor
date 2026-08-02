@@ -211,6 +211,13 @@ type FreeProxyState = {
         targetActivePerRegion: number;
         maxLatencyMs: number;
         starterRegions: string;
+        inventoryLimit: number;
+        activeCandidateLimit: number;
+        idleCandidateLimit: number;
+        readyTarget: number;
+        reserveTarget: number;
+        idleTarget: number;
+        emergencyRecoveryEnabled: boolean;
     };
     counts: {
         active: number;
@@ -233,8 +240,15 @@ type FreeProxyState = {
         stalled: boolean;
         healthy: boolean;
         topErrorStage: string | null;
+        candidateWindow: number;
+        checkedLastHour: number;
+        promotedLastHour: number;
+        minutesSinceLastSuccess: number | null;
+        activeMonitorCount: number;
+        recoveryMode: boolean;
     }[];
     sourceDiagnostics: {
+        region: string;
         source: string;
         protocol: string;
         proxyCount: number;
@@ -911,9 +925,19 @@ export function AdminClient({
                   stalled: false,
                   healthy: false,
                   topErrorStage: null,
+                  candidateWindow: 0,
+                  checkedLastHour: 0,
+                  promotedLastHour: 0,
+                  minutesSinceLastSuccess: null,
+                  activeMonitorCount: 0,
+                  recoveryMode: false,
                   initializing: true,
               };
     });
+    const freeProxyTargetForRegion = (activeMonitorCount: number) =>
+        activeMonitorCount > 0
+            ? freeProxySettings.readyTarget + freeProxySettings.reserveTarget
+            : freeProxySettings.idleTarget;
 
     const toggleStarterRegion = (regionCode: string) => {
         setFreeProxySettings((current) => {
@@ -1657,6 +1681,22 @@ export function AdminClient({
         );
         formData.set("maxLatencyMs", String(freeProxySettings.maxLatencyMs));
         formData.set("starterRegions", freeProxySettings.starterRegions);
+        formData.set("inventoryLimit", String(freeProxySettings.inventoryLimit));
+        formData.set(
+            "activeCandidateLimit",
+            String(freeProxySettings.activeCandidateLimit),
+        );
+        formData.set(
+            "idleCandidateLimit",
+            String(freeProxySettings.idleCandidateLimit),
+        );
+        formData.set("readyTarget", String(freeProxySettings.readyTarget));
+        formData.set("reserveTarget", String(freeProxySettings.reserveTarget));
+        formData.set("idleTarget", String(freeProxySettings.idleTarget));
+        formData.set(
+            "emergencyRecoveryEnabled",
+            String(freeProxySettings.emergencyRecoveryEnabled),
+        );
 
         try {
             const result = await updateFreeProxySettings(formData);
@@ -3875,21 +3915,21 @@ export function AdminClient({
                                         </div>
                                     </div>
                                     <div className="space-y-2">
-                                        <Label htmlFor="free-proxy-max-pool">
-                                            Max pool
+                                        <Label htmlFor="free-proxy-inventory-limit">
+                                            Inventory limit
                                         </Label>
                                         <Input
-                                            id="free-proxy-max-pool"
+                                            id="free-proxy-inventory-limit"
                                             type="number"
-                                            min={1}
+                                            min={1000}
                                             value={
-                                                freeProxySettings.maxPoolSize
+                                                freeProxySettings.inventoryLimit
                                             }
                                             onChange={(event) =>
                                                 setFreeProxySettings(
                                                     (prev) => ({
                                                         ...prev,
-                                                        maxPoolSize: Number(
+                                                        inventoryLimit: Number(
                                                             event.target.value,
                                                         ),
                                                     }),
@@ -4040,6 +4080,97 @@ export function AdminClient({
                             </div>
                         </div>
 
+                        <div className="mt-5 rounded-lg border p-4">
+                            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <div>
+                                    <p className="text-sm font-semibold">
+                                        Regional pool scaling
+                                    </p>
+                                    <p className="text-muted-foreground text-xs">
+                                        Used regions build 50 ready clients plus
+                                        a target-validated replacement reserve.
+                                    </p>
+                                </div>
+                                <label className="flex items-center gap-2 text-xs">
+                                    <input
+                                        type="checkbox"
+                                        checked={
+                                            freeProxySettings.emergencyRecoveryEnabled
+                                        }
+                                        onChange={(event) =>
+                                            setFreeProxySettings((prev) => ({
+                                                ...prev,
+                                                emergencyRecoveryEnabled:
+                                                    event.target.checked,
+                                            }))
+                                        }
+                                    />
+                                    Emergency recovery
+                                </label>
+                            </div>
+                            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                                {[
+                                    {
+                                        id: "free-proxy-active-window",
+                                        label: "Used candidates",
+                                        value: freeProxySettings.activeCandidateLimit,
+                                        min: 1000,
+                                        key: "activeCandidateLimit" as const,
+                                    },
+                                    {
+                                        id: "free-proxy-idle-window",
+                                        label: "Idle candidates",
+                                        value: freeProxySettings.idleCandidateLimit,
+                                        min: 1000,
+                                        key: "idleCandidateLimit" as const,
+                                    },
+                                    {
+                                        id: "free-proxy-ready-target",
+                                        label: "Ready target",
+                                        value: freeProxySettings.readyTarget,
+                                        min: 1,
+                                        key: "readyTarget" as const,
+                                    },
+                                    {
+                                        id: "free-proxy-reserve-target",
+                                        label: "Reserve target",
+                                        value: freeProxySettings.reserveTarget,
+                                        min: 1,
+                                        key: "reserveTarget" as const,
+                                    },
+                                    {
+                                        id: "free-proxy-idle-target",
+                                        label: "Idle target",
+                                        value: freeProxySettings.idleTarget,
+                                        min: 1,
+                                        key: "idleTarget" as const,
+                                    },
+                                ].map((field) => (
+                                    <div key={field.id} className="space-y-2">
+                                        <Label htmlFor={field.id}>
+                                            {field.label}
+                                        </Label>
+                                        <Input
+                                            id={field.id}
+                                            type="number"
+                                            min={field.min}
+                                            value={field.value}
+                                            onChange={(event) =>
+                                                setFreeProxySettings(
+                                                    (prev) => ({
+                                                        ...prev,
+                                                        [field.key]: Number(
+                                                            event.target.value,
+                                                        ),
+                                                    }),
+                                                )
+                                            }
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
                         {freeProxySettings.enabled &&
                         freeProxyState.degradationReason ===
                         "host_egress_limited" ? (
@@ -4069,9 +4200,9 @@ export function AdminClient({
                                         Region Health
                                     </p>
                                     <p className="text-muted-foreground text-xs">
-                                        Regions become usable at Min ready and
-                                        keep validating until Target reserve is
-                                        reached.
+                                        Used regions progress toward 50 ready +
+                                        50 reserve; idle starter regions retain
+                                        their smaller baseline.
                                     </p>
                                 </div>
                             </div>
@@ -4080,7 +4211,7 @@ export function AdminClient({
                                     displayedFreeProxyRegions.map((region) => (
                                         <div
                                             key={region.region}
-                                            className="grid gap-3 px-4 py-3 text-sm sm:grid-cols-[150px_1fr_90px_90px_110px]"
+                                            className="grid gap-3 px-4 py-3 text-sm sm:grid-cols-[150px_1fr_130px_90px_120px]"
                                         >
                                             <div className="font-semibold">
                                                 {getRegionLabel(region.region)}
@@ -4096,6 +4227,8 @@ export function AdminClient({
                                                 >
                                                     {region.initializing
                                                         ? "Waiting"
+                                                        : region.recoveryMode
+                                                          ? "Recovery"
                                                         : region.stalled
                                                           ? "Stalled"
                                                           : freeProxySettings.enabled &&
@@ -4103,25 +4236,34 @@ export function AdminClient({
                                                               "host_egress_limited"
                                                             ? "Egress limited"
                                                           : !region.healthy
-                                                            ? "Recovering"
+                                                            ? "Degraded"
                                                             : region.active +
                                                                     region.reserve +
                                                                     region.warming <
-                                                                freeProxySettings.targetActivePerRegion
+                                                                freeProxyTargetForRegion(
+                                                                    region.activeMonitorCount,
+                                                                )
                                                               ? "Building"
                                                               : "Ready"}
                                                 </Badge>
                                                 <span className="text-muted-foreground">
                                                     {region.initializing
                                                         ? "Waiting for the worker to assign candidates"
-                                                        : `${region.stalled ? "Maintainer overdue · " : ""}${region.active + region.reserve + region.warming} usable / ${freeProxySettings.targetActivePerRegion} target / ${region.active} fresh / ${region.reserve} reserve / ${region.warming} warming / ${region.pending} pending / ${region.cooldown} cooldown / ${region.dead} retry-later`}
+                                                        : `${region.stalled ? "Maintainer overdue · " : ""}${region.active}/${region.activeMonitorCount > 0 ? freeProxySettings.readyTarget : freeProxySettings.idleTarget} ready · ${region.reserve}/${region.activeMonitorCount > 0 ? freeProxySettings.reserveTarget : freeProxySettings.idleTarget} reserve · ${region.warming} warming · ${region.candidateWindow} candidates · ${region.activeMonitorCount} monitors`}
+                                                </span>
+                                            </div>
+                                            <div className="text-muted-foreground">
+                                                {region.checkedLastHour}/h checked
+                                                <span className="block text-[11px]">
+                                                    {region.promotedLastHour}/h
+                                                    promoted
                                                 </span>
                                             </div>
                                             <div className="text-muted-foreground">
                                                 {region.successRate === null
                                                     ? "n/a"
                                                     : `${region.successRate}%`}{" "}
-                                                latest ok
+                                                hit rate
                                                 {region.topErrorStage ? (
                                                     <span className="block text-[11px]">
                                                         Top stage:{" "}
@@ -4129,15 +4271,17 @@ export function AdminClient({
                                                     </span>
                                                 ) : null}
                                             </div>
-                                            <div className="text-muted-foreground">
-                                                {region.medianLatencyMs === null
-                                                    ? "n/a"
-                                                    : `${region.medianLatencyMs}ms`}
-                                            </div>
                                             <div className="text-muted-foreground text-xs">
-                                                {formatMetricDate(
-                                                    region.lastCheckedAt,
-                                                )}
+                                                {region.minutesSinceLastSuccess ===
+                                                null
+                                                    ? "No success yet"
+                                                    : `${region.minutesSinceLastSuccess}m since success`}
+                                                <span className="block">
+                                                    {region.medianLatencyMs ===
+                                                    null
+                                                        ? "n/a"
+                                                        : `${region.medianLatencyMs}ms median`}
+                                                </span>
                                             </div>
                                         </div>
                                     ))
@@ -4167,11 +4311,14 @@ export function AdminClient({
                                     freeProxyState.sourceDiagnostics.map(
                                         (diagnostic) => (
                                             <div
-                                                key={`${diagnostic.source}:${diagnostic.protocol}`}
+                                                key={`${diagnostic.region}:${diagnostic.source}:${diagnostic.protocol}`}
                                                 className="grid gap-2 px-4 py-3 text-xs sm:grid-cols-[170px_75px_100px_90px_100px_1fr]"
                                             >
                                                 <span className="font-medium">
-                                                    {diagnostic.source}
+                                                    {getRegionLabel(
+                                                        diagnostic.region,
+                                                    )}{" "}
+                                                    · {diagnostic.source}
                                                 </span>
                                                 <span className="uppercase">
                                                     {diagnostic.protocol}

@@ -28,6 +28,17 @@ const FREE_PROXY_TARGET_ACTIVE_PER_REGION_KEY =
     "free_proxy_target_active_per_region";
 const FREE_PROXY_MAX_LATENCY_MS_KEY = "free_proxy_max_latency_ms";
 const FREE_PROXY_STARTER_REGIONS_KEY = "free_proxy_starter_regions";
+const FREE_PROXY_INVENTORY_LIMIT_KEY = "free_proxy_inventory_limit";
+const FREE_PROXY_ACTIVE_CANDIDATE_LIMIT_KEY =
+    "free_proxy_candidate_limit_active_region";
+const FREE_PROXY_IDLE_CANDIDATE_LIMIT_KEY =
+    "free_proxy_candidate_limit_idle_region";
+const FREE_PROXY_READY_TARGET_KEY = "free_proxy_ready_target_active_region";
+const FREE_PROXY_RESERVE_TARGET_KEY =
+    "free_proxy_reserve_target_active_region";
+const FREE_PROXY_IDLE_TARGET_KEY = "free_proxy_idle_region_target";
+const FREE_PROXY_EMERGENCY_RECOVERY_KEY =
+    "free_proxy_emergency_recovery_enabled";
 const DEFAULT_FREE_PROXY_IMPORT_URL =
     "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/all-proxies.txt";
 const DEFAULT_FREE_PROXY_IMPORT_SOURCE = "iplocate_all";
@@ -38,6 +49,12 @@ const DEFAULT_FREE_PROXY_QUARANTINE_MINUTES = 30;
 const DEFAULT_FREE_PROXY_MIN_ACTIVE_PER_REGION = 25;
 const DEFAULT_FREE_PROXY_TARGET_ACTIVE_PER_REGION = 50;
 const DEFAULT_FREE_PROXY_MAX_LATENCY_MS = 2500;
+const DEFAULT_FREE_PROXY_INVENTORY_LIMIT = 30000;
+const DEFAULT_FREE_PROXY_ACTIVE_CANDIDATE_LIMIT = 10000;
+const DEFAULT_FREE_PROXY_IDLE_CANDIDATE_LIMIT = 5000;
+const DEFAULT_FREE_PROXY_READY_TARGET = 50;
+const DEFAULT_FREE_PROXY_RESERVE_TARGET = 50;
+const DEFAULT_FREE_PROXY_IDLE_TARGET = 10;
 const FREE_PROXY_WRITE_BATCH_SIZE = 500;
 const VALID_PROXY_SCHEMES = ["http", "https", "socks4", "socks5"];
 const FREE_PROXY_SOURCE_URLS: Record<string, string> = {
@@ -128,6 +145,13 @@ type FreeProxySettings = {
     targetActivePerRegion: number;
     maxLatencyMs: number;
     starterRegions: string;
+    inventoryLimit: number;
+    activeCandidateLimit: number;
+    idleCandidateLimit: number;
+    readyTarget: number;
+    reserveTarget: number;
+    idleTarget: number;
+    emergencyRecoveryEnabled: boolean;
 };
 
 type FreeProxyRegionRow = {
@@ -144,9 +168,15 @@ type FreeProxyRegionRow = {
     last_checked_at: Date | null;
     stalled: boolean;
     top_error_stage: string | null;
+    candidate_window: bigint;
+    checked_last_hour: bigint;
+    promoted_last_hour: bigint;
+    minutes_since_last_success: number | null;
+    active_monitor_count: bigint;
 };
 
 type FreeProxySourceDiagnosticRow = {
+    region: string;
     source: string;
     protocol: string;
     proxy_count: bigint;
@@ -686,6 +716,13 @@ async function getFreeProxySettings(): Promise<FreeProxySettings> {
         FREE_PROXY_TARGET_ACTIVE_PER_REGION_KEY,
         FREE_PROXY_MAX_LATENCY_MS_KEY,
         FREE_PROXY_STARTER_REGIONS_KEY,
+        FREE_PROXY_INVENTORY_LIMIT_KEY,
+        FREE_PROXY_ACTIVE_CANDIDATE_LIMIT_KEY,
+        FREE_PROXY_IDLE_CANDIDATE_LIMIT_KEY,
+        FREE_PROXY_READY_TARGET_KEY,
+        FREE_PROXY_RESERVE_TARGET_KEY,
+        FREE_PROXY_IDLE_TARGET_KEY,
+        FREE_PROXY_EMERGENCY_RECOVERY_KEY,
     ];
     const rows = await db.app_settings.findMany({
         where: { key: { in: keys } },
@@ -751,6 +788,46 @@ async function getFreeProxySettings(): Promise<FreeProxySettings> {
         starterRegions:
             values[FREE_PROXY_STARTER_REGIONS_KEY] ??
             DEFAULT_FREE_PROXY_STARTER_REGIONS,
+        inventoryLimit: parsePositiveIntSetting(
+            values[FREE_PROXY_INVENTORY_LIMIT_KEY],
+            DEFAULT_FREE_PROXY_INVENTORY_LIMIT,
+            1000,
+            100000,
+        ),
+        activeCandidateLimit: parsePositiveIntSetting(
+            values[FREE_PROXY_ACTIVE_CANDIDATE_LIMIT_KEY],
+            DEFAULT_FREE_PROXY_ACTIVE_CANDIDATE_LIMIT,
+            1000,
+            50000,
+        ),
+        idleCandidateLimit: parsePositiveIntSetting(
+            values[FREE_PROXY_IDLE_CANDIDATE_LIMIT_KEY],
+            DEFAULT_FREE_PROXY_IDLE_CANDIDATE_LIMIT,
+            1000,
+            50000,
+        ),
+        readyTarget: parsePositiveIntSetting(
+            values[FREE_PROXY_READY_TARGET_KEY],
+            DEFAULT_FREE_PROXY_READY_TARGET,
+            1,
+            1000,
+        ),
+        reserveTarget: parsePositiveIntSetting(
+            values[FREE_PROXY_RESERVE_TARGET_KEY],
+            DEFAULT_FREE_PROXY_RESERVE_TARGET,
+            1,
+            1000,
+        ),
+        idleTarget: parsePositiveIntSetting(
+            values[FREE_PROXY_IDLE_TARGET_KEY],
+            DEFAULT_FREE_PROXY_IDLE_TARGET,
+            1,
+            1000,
+        ),
+        emergencyRecoveryEnabled: parseBooleanSetting(
+            values[FREE_PROXY_EMERGENCY_RECOVERY_KEY],
+            true,
+        ),
     };
 }
 
@@ -1063,14 +1140,35 @@ export async function getFreeProxyAdminState() {
                     FILTER (
                         WHERE last_error_stage IS NOT NULL
                           AND last_checked_at >= NOW() - INTERVAL '24 hours'
-                    ) AS top_error_stage
+                    ) AS top_error_stage,
+                COUNT(*)::bigint AS candidate_window,
+                COUNT(*) FILTER (
+                    WHERE last_checked_at >= NOW() - INTERVAL '1 hour'
+                )::bigint AS checked_last_hour,
+                COUNT(*) FILTER (
+                    WHERE last_success_at >= NOW() - INTERVAL '1 hour'
+                )::bigint AS promoted_last_hour,
+                EXTRACT(EPOCH FROM (NOW() - MAX(last_success_at))) / 60.0
+                    AS minutes_since_last_success,
+                COALESCE(MAX(region_demand.active_monitor_count), 0)::bigint
+                    AS active_monitor_count
             FROM free_proxy_health
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*)::bigint AS active_monitor_count
+                FROM monitors monitor
+                WHERE monitor.status = 'active'
+                  AND monitor.proxy_source = 'free'
+                  AND monitor.region = free_proxy_health.region
+            ) region_demand ON TRUE
+            WHERE candidate_window_token =
+                FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint
             GROUP BY region
             ORDER BY region
         `,
             db.$queryRaw<FreeProxySourceDiagnosticRow[]>`
             SELECT
-                fp.source,
+                fph.region,
+                listed_source.source_name AS source,
                 fp.protocol,
                 COUNT(DISTINCT fp.id)::bigint AS proxy_count,
                 COUNT(*) FILTER (
@@ -1130,9 +1228,17 @@ export async function getFreeProxyAdminState() {
                           AND fph.last_checked_at >= NOW() - INTERVAL '24 hours'
                     ) AS top_error_stage
             FROM free_proxies fp
-            LEFT JOIN free_proxy_health fph ON fph.proxy_id = fp.id
-            GROUP BY fp.source, fp.protocol
-            ORDER BY successful_count DESC, checked_count DESC, fp.source, fp.protocol
+            CROSS JOIN LATERAL unnest(
+                CASE
+                    WHEN cardinality(fp.sources) > 0 THEN fp.sources
+                    ELSE ARRAY[fp.source]::text[]
+                END
+            ) AS listed_source(source_name)
+            JOIN free_proxy_health fph ON fph.proxy_id = fp.id
+            WHERE fph.candidate_window_token =
+                FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint
+            GROUP BY fph.region, listed_source.source_name, fp.protocol
+            ORDER BY fph.region, successful_count DESC, checked_count DESC, listed_source.source_name, fp.protocol
         `,
             db.free_proxies.findMany({
                 orderBy: [{ updated_at: "desc" }],
@@ -1217,6 +1323,18 @@ export async function getFreeProxyAdminState() {
                 lastCheckedAt: row.last_checked_at,
                 stalled: row.stalled,
                 topErrorStage: row.top_error_stage,
+                candidateWindow: Number(row.candidate_window),
+                checkedLastHour: Number(row.checked_last_hour),
+                promotedLastHour: Number(row.promoted_last_hour),
+                minutesSinceLastSuccess:
+                    row.minutes_since_last_success === null
+                        ? null
+                        : Math.round(row.minutes_since_last_success),
+                activeMonitorCount: Number(row.active_monitor_count),
+                recoveryMode:
+                    settings.emergencyRecoveryEnabled &&
+                    Number(row.active_monitor_count) > 0 &&
+                    Number(row.active_count) < settings.readyTarget,
                 healthy:
                     Number(row.active_count) +
                         Number(row.reserve_count) +
@@ -1228,6 +1346,7 @@ export async function getFreeProxyAdminState() {
             const checked = Number(row.checked_count);
             const successful = Number(row.successful_count);
             return {
+                region: row.region,
                 source: row.source,
                 protocol: row.protocol,
                 proxyCount: Number(row.proxy_count),
@@ -1306,6 +1425,44 @@ export async function updateFreeProxySettings(formData: FormData) {
         500,
         15000,
     );
+    const inventoryLimit = parsePositiveIntSetting(
+        formData.get("inventoryLimit") as string | undefined,
+        DEFAULT_FREE_PROXY_INVENTORY_LIMIT,
+        1000,
+        100000,
+    );
+    const activeCandidateLimit = parsePositiveIntSetting(
+        formData.get("activeCandidateLimit") as string | undefined,
+        DEFAULT_FREE_PROXY_ACTIVE_CANDIDATE_LIMIT,
+        1000,
+        inventoryLimit,
+    );
+    const idleCandidateLimit = parsePositiveIntSetting(
+        formData.get("idleCandidateLimit") as string | undefined,
+        DEFAULT_FREE_PROXY_IDLE_CANDIDATE_LIMIT,
+        1000,
+        inventoryLimit,
+    );
+    const readyTarget = parsePositiveIntSetting(
+        formData.get("readyTarget") as string | undefined,
+        DEFAULT_FREE_PROXY_READY_TARGET,
+        1,
+        Math.max(1, activeCandidateLimit - 1),
+    );
+    const reserveTarget = parsePositiveIntSetting(
+        formData.get("reserveTarget") as string | undefined,
+        DEFAULT_FREE_PROXY_RESERVE_TARGET,
+        1,
+        Math.max(1, activeCandidateLimit - readyTarget),
+    );
+    const idleTarget = parsePositiveIntSetting(
+        formData.get("idleTarget") as string | undefined,
+        DEFAULT_FREE_PROXY_IDLE_TARGET,
+        1,
+        idleCandidateLimit,
+    );
+    const emergencyRecoveryEnabled =
+        formData.get("emergencyRecoveryEnabled") !== "false";
     const starterRegionsValue = formData.get("starterRegions");
     const starterRegions = (
         typeof starterRegionsValue === "string"
@@ -1350,6 +1507,22 @@ export async function updateFreeProxySettings(formData: FormData) {
         ),
         setAppSetting(FREE_PROXY_MAX_LATENCY_MS_KEY, String(maxLatencyMs)),
         setAppSetting(FREE_PROXY_STARTER_REGIONS_KEY, starterRegions),
+        setAppSetting(FREE_PROXY_INVENTORY_LIMIT_KEY, String(inventoryLimit)),
+        setAppSetting(
+            FREE_PROXY_ACTIVE_CANDIDATE_LIMIT_KEY,
+            String(activeCandidateLimit),
+        ),
+        setAppSetting(
+            FREE_PROXY_IDLE_CANDIDATE_LIMIT_KEY,
+            String(idleCandidateLimit),
+        ),
+        setAppSetting(FREE_PROXY_READY_TARGET_KEY, String(readyTarget)),
+        setAppSetting(FREE_PROXY_RESERVE_TARGET_KEY, String(reserveTarget)),
+        setAppSetting(FREE_PROXY_IDLE_TARGET_KEY, String(idleTarget)),
+        setAppSetting(
+            FREE_PROXY_EMERGENCY_RECOVERY_KEY,
+            String(emergencyRecoveryEnabled),
+        ),
     ]);
 
     const activeMonitorRegions = await db.monitors.findMany({
@@ -1414,7 +1587,7 @@ export async function importFreeProxiesNow() {
     );
     const remainingCapacity = Math.max(
         0,
-        settings.maxPoolSize - existingProxyUrls.size,
+        settings.inventoryLimit - existingProxyUrls.size,
     );
 
     if (remainingCapacity === 0) {
@@ -1497,7 +1670,7 @@ export async function importFreeProxiesNow() {
         addedCount,
         skippedCount,
         limitReached:
-            existingProxyUrls.size + addedCount >= settings.maxPoolSize,
+            existingProxyUrls.size + addedCount >= settings.inventoryLimit,
     };
 }
 
