@@ -47,6 +47,7 @@ const (
 	defaultMonitorRunStatsRetentionDays   = 90
 	monitorRunPruneBatchSize              = 10_000
 	monitorRunPruneMaximumBatchesPerCycle = 100
+	freeProxyMaintainerAdvisoryLockKey    = int64(8_670_505_012_026)
 )
 
 type proxyGroupBandwidthDelta struct {
@@ -65,6 +66,7 @@ type FreeProxyCandidate struct {
 	Region   string
 	Protocol string
 	Source   string
+	Proven   bool
 }
 
 type FreeProxyRecord struct {
@@ -284,6 +286,47 @@ func NewStore(connStr string, redisCache *cache.RedisCache) (*Store, error) {
 	go store.telemetryFlushLoop()
 
 	return store, nil
+}
+
+// TryAcquireFreeProxyMaintainerLease ensures that only one maintainer process
+// validates the shared inventory at a time. The advisory lock lives on a
+// dedicated PostgreSQL connection and is released automatically if the process
+// or connection disappears.
+func (s *Store) TryAcquireFreeProxyMaintainerLeaseContext(
+	ctx context.Context,
+) (release func(), acquired bool, err error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if err := conn.QueryRowContext(
+		ctx,
+		`SELECT pg_try_advisory_lock($1)`,
+		freeProxyMaintainerAdvisoryLockKey,
+	).Scan(&acquired); err != nil {
+		_ = conn.Close()
+		return nil, false, err
+	}
+	if !acquired {
+		_ = conn.Close()
+		return nil, false, nil
+	}
+
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = conn.ExecContext(
+				releaseCtx,
+				`SELECT pg_advisory_unlock($1)`,
+				freeProxyMaintainerAdvisoryLockKey,
+			)
+			_ = conn.Close()
+		})
+	}
+	return release, true, nil
 }
 
 func (s *Store) BatchIsNew(monitorID int, itemIDs []int64) map[int64]bool {
@@ -1043,30 +1086,8 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 		if claimLimit <= 0 {
 			return nil, nil
 		}
-		explore := lane == "explore"
 		rows, queryErr := tx.QueryContext(ctx, `
-			WITH group_stats AS (
-				SELECT
-					fph.region,
-					listed_source.source_name AS source,
-					fp.protocol,
-					COUNT(*)::double precision AS checked_count,
-					COUNT(*) FILTER (
-						WHERE fph.last_status_code = 200
-						  AND fph.last_error IS NULL
-					)::double precision AS successful_count
-				FROM free_proxies fp
-				JOIN free_proxy_health fph ON fph.proxy_id = fp.id
-				CROSS JOIN LATERAL unnest(
-					CASE
-						WHEN cardinality(fp.sources) > 0 THEN fp.sources
-						ELSE ARRAY[fp.source]::text[]
-					END
-				) AS listed_source(source_name)
-				WHERE fph.region = ANY($1)
-				  AND fph.last_checked_at >= NOW() - INTERVAL '6 hours'
-				GROUP BY fph.region, listed_source.source_name, fp.protocol
-			), proxy_ranked AS (
+			WITH proxy_ranked AS (
 				SELECT
 					fph.id,
 					fph.proxy_id,
@@ -1095,31 +1116,22 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 								ELSE 5
 							END,
 							fph.last_checked_at ASC NULLS FIRST,
-							fph.score DESC,
-							MD5(fp.proxy_url || ':' || fph.region)
+					fph.score DESC,
+					MD5(fp.proxy_url || ':' || fph.region)
 					) AS proxy_rank,
-					COALESCE(source_stats.yield_score, 1.0 / 20.0) AS yield_score,
+					(COALESCE(source_stats.success_count, 0) + 1.0) /
+						(COALESCE(source_stats.checked_count, 0) + 20.0) AS source_yield_score,
+					(fph.success_count + 1.0) /
+						(fph.success_count + fph.failure_count + 20.0) AS proxy_yield_score,
 					fp.last_success_at AS global_last_success_at,
 					fph.last_checked_at,
 					fph.score
 				FROM free_proxy_health fph
 				JOIN free_proxies fp ON fp.id = fph.proxy_id
-				LEFT JOIN LATERAL (
-					SELECT MAX(
-						(group_stats.successful_count + 1.0) /
-						(group_stats.checked_count + 20.0)
-					) AS yield_score
-					FROM unnest(
-						CASE
-							WHEN cardinality(fp.sources) > 0 THEN fp.sources
-							ELSE ARRAY[fp.source]::text[]
-						END
-					) AS candidate_source(source_name)
-					JOIN group_stats
-					  ON group_stats.region = fph.region
-					 AND group_stats.source = candidate_source.source_name
-					 AND group_stats.protocol = fp.protocol
-				) source_stats ON TRUE
+				LEFT JOIN free_proxy_source_health_stats source_stats
+				  ON source_stats.region = fph.region
+				 AND source_stats.source = fp.source
+				 AND source_stats.protocol = fp.protocol
 				WHERE fph.region = ANY($1)
 				  AND fp.status <> 'disabled'
 				  AND (fp.quarantined_until IS NULL OR fp.quarantined_until <= NOW())
@@ -1131,7 +1143,7 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 				  AND fph.candidate_window_token =
 					FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint
 				  AND (fph.next_check_at IS NULL OR fph.next_check_at <= NOW())
-				  AND CASE $5
+				  AND CASE $4
 					WHEN 'explore' THEN fph.last_checked_at IS NULL
 					WHEN 'fanout' THEN fph.success_count = 0 AND fp.success_count > 0
 					WHEN 'keepalive' THEN fph.success_count > 0
@@ -1159,7 +1171,8 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 						PARTITION BY region
 						ORDER BY
 							priority,
-							CASE WHEN NOT $4 THEN yield_score END DESC NULLS LAST,
+							source_yield_score DESC,
+							proxy_yield_score DESC,
 							global_last_success_at DESC NULLS LAST,
 							last_checked_at ASC NULLS FIRST,
 							score DESC
@@ -1174,8 +1187,9 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 				ORDER BY
 					ranked.priority,
 					ranked.region_rank,
-					CASE WHEN $4 THEN ranked.group_rank END,
-					CASE WHEN NOT $4 THEN ranked.yield_score END DESC NULLS LAST,
+					ranked.group_rank,
+					ranked.source_yield_score DESC,
+					ranked.proxy_yield_score DESC,
 					ranked.source_rank,
 					ranked.global_last_success_at DESC NULLS LAST,
 					ranked.last_checked_at ASC NULLS FIRST,
@@ -1195,20 +1209,25 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 					updated_at = NOW()
 				FROM claimed_health
 				WHERE fp.id = claimed_health.proxy_id
-				RETURNING fp.id, fp.proxy_url, fp.protocol, fp.source
+				RETURNING
+					fp.id,
+					fp.proxy_url,
+					fp.protocol,
+					fp.source,
+					fp.success_count > 0 AS proven
 			)
 			SELECT
 				claimed_proxies.proxy_url,
 				claimed_health.region,
 				claimed_proxies.protocol,
-				claimed_proxies.source
+				claimed_proxies.source,
+				claimed_proxies.proven
 			FROM claimed_health
 			JOIN claimed_proxies
 			  ON claimed_proxies.id = claimed_health.proxy_id`,
 			pq.Array(regions),
 			claimLimit,
 			bootstrap,
-			explore,
 			lane,
 		)
 		if queryErr != nil {
@@ -1224,6 +1243,7 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 				&candidate.Region,
 				&candidate.Protocol,
 				&candidate.Source,
+				&candidate.Proven,
 			); scanErr != nil {
 				return nil, scanErr
 			}
@@ -1274,16 +1294,19 @@ func freeProxyLaneQuotas(limit int, bootstrap bool) []freeProxyLaneQuota {
 		}
 	}
 
-	explore := max(1, limit*60/100)
-	fanout := max(1, limit*25/100)
-	if explore+fanout > limit {
-		fanout = max(0, limit-explore)
+	// Recovery gets the fastest known path to usable regional capacity:
+	// proxies already proven in another region first, then regional keepalive,
+	// while retaining a bounded exploration lane for new inventory.
+	fanout := max(1, limit*50/100)
+	keepalive := max(1, limit*30/100)
+	if fanout+keepalive > limit {
+		keepalive = max(0, limit-fanout)
 	}
-	keepalive := max(0, limit-explore-fanout)
+	explore := max(0, limit-fanout-keepalive)
 	return []freeProxyLaneQuota{
-		{name: "explore", limit: explore},
 		{name: "fanout", limit: fanout},
 		{name: "keepalive", limit: keepalive},
+		{name: "explore", limit: explore},
 	}
 }
 
@@ -1337,6 +1360,114 @@ func (s *Store) RecordFreeProxySuccessContext(ctx context.Context, proxyURL stri
 			check_claimed_until = NULL,
 			updated_at = NOW()
 		WHERE fp.id IN (SELECT proxy_id FROM updated_health)`, proxyURL, region, latencyMs)
+	if err != nil {
+		return err
+	}
+	return s.recordFreeProxySourceOutcomeContext(ctx, proxyURL, region, true)
+}
+
+// TouchFreeProxyRuntimeSuccessContext records sampled positive data-plane
+// evidence without incrementing validator counters. Runtime failures are kept
+// local until the maintainer independently reproduces them.
+func (s *Store) TouchFreeProxyRuntimeSuccessContext(
+	ctx context.Context,
+	proxyURL string,
+	region string,
+	latencyMs int,
+) error {
+	if proxyURL == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+		WITH updated_health AS (
+			UPDATE free_proxy_health fph
+			SET status = 'active',
+				success_streak = GREATEST(fph.success_streak, 1),
+				failure_streak = 0,
+				latency_ms = $3,
+				last_status_code = 200,
+				last_checked_at = NOW(),
+				last_success_at = NOW(),
+				last_error = NULL,
+				last_error_code = NULL,
+				last_error_stage = NULL,
+				next_check_at = NOW() + INTERVAL '8 minutes',
+				score = GREATEST(fph.score, 50),
+				updated_at = NOW()
+			FROM free_proxies fp
+			WHERE fp.id = fph.proxy_id
+			  AND fp.proxy_url = $1
+			  AND fph.region = $2
+			RETURNING fph.proxy_id
+		)
+		UPDATE free_proxies fp
+		SET status = 'active',
+			failure_count = 0,
+			last_checked_at = NOW(),
+			last_success_at = NOW(),
+			last_error = NULL,
+			last_error_code = NULL,
+			last_error_stage = NULL,
+			quarantined_until = NULL,
+			updated_at = NOW()
+		WHERE fp.id IN (SELECT proxy_id FROM updated_health)`,
+		proxyURL,
+		region,
+		latencyMs,
+	)
+	return err
+}
+
+func (s *Store) recordFreeProxySourceOutcomeContext(
+	ctx context.Context,
+	proxyURL string,
+	region string,
+	success bool,
+) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO free_proxy_source_health_stats (
+			region,
+			source,
+			protocol,
+			checked_count,
+			success_count,
+			failure_count,
+			last_checked_at,
+			last_success_at,
+			updated_at
+		)
+		SELECT DISTINCT
+			$2,
+			LEFT(source_name, 50),
+			fp.protocol,
+			1,
+			CASE WHEN $3 THEN 1 ELSE 0 END,
+			CASE WHEN $3 THEN 0 ELSE 1 END,
+			NOW(),
+			CASE WHEN $3 THEN NOW() ELSE NULL END,
+			NOW()
+		FROM free_proxies fp
+		CROSS JOIN LATERAL unnest(
+			array_append(COALESCE(fp.sources, ARRAY[]::text[]), fp.source)
+		) AS source_name
+		WHERE fp.proxy_url = $1
+		  AND BTRIM(source_name) <> ''
+		ON CONFLICT (region, source, protocol) DO UPDATE
+		SET checked_count = free_proxy_source_health_stats.checked_count + 1,
+			success_count = free_proxy_source_health_stats.success_count
+				+ CASE WHEN $3 THEN 1 ELSE 0 END,
+			failure_count = free_proxy_source_health_stats.failure_count
+				+ CASE WHEN $3 THEN 0 ELSE 1 END,
+			last_checked_at = NOW(),
+			last_success_at = CASE
+				WHEN $3 THEN NOW()
+				ELSE free_proxy_source_health_stats.last_success_at
+			END,
+			updated_at = NOW()`,
+		proxyURL,
+		region,
+		success,
+	)
 	return err
 }
 
@@ -1600,6 +1731,62 @@ func (s *Store) RecordFreeProxyFailureStageContext(
 			  AND fp.proxy_url = $1
 			  AND fp.quarantined_until IS NOT NULL`, proxyURL)
 	}
+	if err != nil {
+		return err
+	}
+	return s.recordFreeProxySourceOutcomeContext(ctx, proxyURL, region, false)
+}
+
+// RecordFreeProxyInfrastructureFailureContext releases a health-check claim
+// without degrading a previously proven proxy. It is used only while the
+// maintainer's own egress is circuit-broken, where a warmup transport failure
+// is not reliable evidence that the proxy itself stopped working.
+func (s *Store) RecordFreeProxyInfrastructureFailureContext(
+	ctx context.Context,
+	proxyURL string,
+	region string,
+	statusCode int,
+	message string,
+	errorCode string,
+	errorStage string,
+) error {
+	if proxyURL == "" {
+		return nil
+	}
+	if len(message) > 1000 {
+		message = message[:1000]
+	}
+	_, err := s.db.ExecContext(ctx, `
+		WITH observed AS (
+			UPDATE free_proxy_health fph
+			SET last_status_code = NULLIF($3, 0),
+				last_checked_at = NOW(),
+				last_error = $4,
+				last_error_code = $5,
+				last_error_stage = NULLIF($6, ''),
+				next_check_at = NOW() + INTERVAL '10 minutes',
+				updated_at = NOW()
+			FROM free_proxies fp
+			WHERE fp.id = fph.proxy_id
+			  AND fp.proxy_url = $1
+			  AND fph.region = $2
+			RETURNING fph.proxy_id
+		)
+		UPDATE free_proxies fp
+		SET last_checked_at = NOW(),
+			last_error = $4,
+			last_error_code = $5,
+			last_error_stage = NULLIF($6, ''),
+			check_claimed_until = NULL,
+			updated_at = NOW()
+		WHERE fp.id IN (SELECT proxy_id FROM observed)`,
+		proxyURL,
+		region,
+		statusCode,
+		message,
+		errorCode,
+		errorStage,
+	)
 	return err
 }
 

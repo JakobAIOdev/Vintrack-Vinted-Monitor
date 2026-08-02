@@ -147,6 +147,34 @@ func TestFreeProxyWaveClassSlotsPrioritizeUsedRecovery(t *testing.T) {
 	}
 }
 
+func TestFreeProxyRegionWorkClassPrioritizesEveryUnderfilledRegion(t *testing.T) {
+	tests := []struct {
+		name      string
+		bootstrap bool
+		used      bool
+		want      freeProxyRegionWorkClass
+	}{
+		{name: "used recovery", bootstrap: true, used: true, want: freeProxyRegionWorkRecovery},
+		{name: "idle recovery", bootstrap: true, used: false, want: freeProxyRegionWorkRecovery},
+		{name: "used keepalive", used: true, want: freeProxyRegionWorkKeepalive},
+		{name: "idle maintenance", want: freeProxyRegionWorkIdle},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := freeProxyRegionWorkClassFor(test.bootstrap, test.used); got != test.want {
+				t.Fatalf(
+					"freeProxyRegionWorkClassFor(%v, %v) = %d, want %d",
+					test.bootstrap,
+					test.used,
+					got,
+					test.want,
+				)
+			}
+		})
+	}
+}
+
 func TestFreeProxyAdaptiveRegionConcurrency(t *testing.T) {
 	now := time.Now()
 	if got := freeProxyAdaptiveRegionConcurrency(12, now, now.Add(time.Minute), now.Add(6*time.Minute)); got != 6 {

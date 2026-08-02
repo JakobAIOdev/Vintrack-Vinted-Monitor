@@ -192,7 +192,24 @@ model free_proxy_health {
   @@index([region, last_checked_at])
   @@index([region, last_success_at])
   @@index([region, candidate_window_token], map: "free_proxy_health_region_candidate_window_idx")
+  @@index([region, candidate_window_token, next_check_at, status], map: "free_proxy_health_window_due_idx")
   @@index([status, score])
+}
+
+model free_proxy_source_health_stats {
+  region          String    @db.VarChar(10)
+  source          String    @db.VarChar(50)
+  protocol        String    @db.VarChar(20)
+  checked_count   Int       @default(0)
+  success_count   Int       @default(0)
+  failure_count   Int       @default(0)
+  last_checked_at DateTime? @db.Timestamp(6)
+  last_success_at DateTime? @db.Timestamp(6)
+  created_at      DateTime  @default(now()) @db.Timestamp(6)
+  updated_at      DateTime  @updatedAt @db.Timestamp(6)
+
+  @@id([region, source, protocol])
+  @@index([region, success_count, checked_count], map: "free_proxy_source_health_stats_region_yield_idx")
 }
 
 model monitor_runs {

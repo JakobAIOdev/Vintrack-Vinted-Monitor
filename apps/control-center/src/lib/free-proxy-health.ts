@@ -106,29 +106,28 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
         starterRegionsSetting,
         degradationSetting,
         rows,
-    ] =
-        await Promise.all([
-            db.app_settings.findUnique({
-                where: { key: "free_proxy_enabled" },
-                select: { value: true },
-            }),
-            db.app_settings.findUnique({
-                where: { key: "free_proxy_min_active_per_region" },
-                select: { value: true },
-            }),
-            db.app_settings.findUnique({
-                where: { key: "free_proxy_ready_target_active_region" },
-                select: { value: true },
-            }),
-            db.app_settings.findUnique({
-                where: { key: "free_proxy_starter_regions" },
-                select: { value: true },
-            }),
-            db.app_settings.findUnique({
-                where: { key: "free_proxy_degradation_reason" },
-                select: { value: true },
-            }),
-            db.$queryRaw<FreeProxyHealthRow[]>`
+    ] = await Promise.all([
+        db.app_settings.findUnique({
+            where: { key: "free_proxy_enabled" },
+            select: { value: true },
+        }),
+        db.app_settings.findUnique({
+            where: { key: "free_proxy_min_active_per_region" },
+            select: { value: true },
+        }),
+        db.app_settings.findUnique({
+            where: { key: "free_proxy_ready_target_active_region" },
+            select: { value: true },
+        }),
+        db.app_settings.findUnique({
+            where: { key: "free_proxy_starter_regions" },
+            select: { value: true },
+        }),
+        db.app_settings.findUnique({
+            where: { key: "free_proxy_degradation_reason" },
+            select: { value: true },
+        }),
+        db.$queryRaw<FreeProxyHealthRow[]>`
             SELECT
                 region,
                 COUNT(*) FILTER (
@@ -242,7 +241,7 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                 FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint
             GROUP BY region
         `,
-        ]);
+    ]);
 
     const minActivePerRegion = Number(minActiveSetting?.value ?? 25);
     const readyTarget = Number(readyTargetSetting?.value ?? 50);
@@ -328,7 +327,7 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                 promotedLastHour: Number(row.promoted_last_hour),
                 recoveryMode:
                     Number(row.active_monitor_count) > 0 &&
-                    active < readyTarget,
+                    usable < readyTarget,
                 minutesSinceLastSuccess:
                     row.minutes_since_last_success === null
                         ? null
