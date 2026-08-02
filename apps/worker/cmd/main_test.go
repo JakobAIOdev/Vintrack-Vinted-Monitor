@@ -132,6 +132,34 @@ func TestFreeProxyWaveGroupSlotsStayBoundedAndFair(t *testing.T) {
 	}
 }
 
+func TestFreeProxyWaveClassSlotsPrioritizeUsedRecovery(t *testing.T) {
+	recovery, keepalive, idle := freeProxyWaveClassSlots(64, 4, 2, 8)
+	if recovery != 48 || keepalive != 9 || idle != 7 {
+		t.Fatalf("class slots = %d/%d/%d, want 48/9/7", recovery, keepalive, idle)
+	}
+	if recovery+keepalive+idle != 64 {
+		t.Fatalf("class slots total = %d, want 64", recovery+keepalive+idle)
+	}
+
+	recovery, keepalive, idle = freeProxyWaveClassSlots(12, 0, 0, 7)
+	if recovery != 0 || keepalive != 0 || idle != 12 {
+		t.Fatalf("idle-only slots = %d/%d/%d, want 0/0/12", recovery, keepalive, idle)
+	}
+}
+
+func TestFreeProxyAdaptiveRegionConcurrency(t *testing.T) {
+	now := time.Now()
+	if got := freeProxyAdaptiveRegionConcurrency(12, now, now.Add(time.Minute), now.Add(6*time.Minute)); got != 6 {
+		t.Fatalf("throttled concurrency = %d, want 6", got)
+	}
+	if got := freeProxyAdaptiveRegionConcurrency(12, now, now.Add(-time.Minute), now.Add(4*time.Minute)); got != 9 {
+		t.Fatalf("recovering concurrency = %d, want 9", got)
+	}
+	if got := freeProxyAdaptiveRegionConcurrency(12, now, now.Add(-time.Minute), now.Add(-time.Second)); got != 12 {
+		t.Fatalf("restored concurrency = %d, want 12", got)
+	}
+}
+
 func TestWarmupTransportFailureClassification(t *testing.T) {
 	if !isWarmupTransportFailure("timeout", scraper.FreeProxyValidationStageWarmup) {
 		t.Fatal("warmup timeout should be a global transport failure")
@@ -285,12 +313,12 @@ func TestSelectFreeProxyImportCandidatesIsStableAcrossFeedReordering(t *testing.
 	gotFirst, _ := selectFreeProxyImportCandidates(
 		[][]freeProxyImportCandidate{first},
 		maps.Clone(inventory),
-		3,
+		4,
 	)
 	gotSecond, _ := selectFreeProxyImportCandidates(
 		[][]freeProxyImportCandidate{second},
 		maps.Clone(inventory),
-		3,
+		4,
 	)
 
 	if !reflect.DeepEqual(gotFirst, gotSecond) {

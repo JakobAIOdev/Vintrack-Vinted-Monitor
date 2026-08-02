@@ -3,7 +3,10 @@ package database
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -38,6 +41,26 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 		Sources:  []string{"sqlcheck", "secondary"},
 	}}); err != nil {
 		t.Fatalf("upsert free proxy: %v", err)
+	}
+	if _, err := store.UpsertFreeProxiesContext(ctx, []FreeProxyRecord{{
+		ProxyURL: proxyURL,
+		Protocol: "http",
+		Host:     "vintrack-free-proxy-sqlcheck.invalid",
+		Port:     1,
+		Source:   "tertiary",
+		Sources:  []string{"tertiary", "secondary"},
+	}}); err != nil {
+		t.Fatalf("merge free proxy sources: %v", err)
+	}
+	var storedSources pq.StringArray
+	if err := db.QueryRowContext(ctx, `
+		SELECT sources FROM free_proxies WHERE proxy_url = $1`, proxyURL).Scan(&storedSources); err != nil {
+		t.Fatalf("read merged free proxy sources: %v", err)
+	}
+	for _, source := range []string{"sqlcheck", "secondary", "tertiary"} {
+		if !slices.Contains(storedSources, source) {
+			t.Fatalf("merged sources = %#v, missing %q", storedSources, source)
+		}
 	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO free_proxy_health (proxy_id, region, status, next_check_at, updated_at)
@@ -330,21 +353,38 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 		  AND fph.region = 'sqlother'`, proxyURL); err != nil {
 		t.Fatalf("make other region due: %v", err)
 	}
-	if err := store.RecordFreeProxyFailureStageContext(
-		ctx,
-		proxyURL,
-		region,
-		0,
-		"warmup timed out",
-		"timeout",
-		"warmup",
-		3,
-		30,
-	); err != nil {
-		t.Fatalf("record staged warmup failure: %v", err)
+	for failure := 1; failure <= 3; failure++ {
+		if err := store.RecordFreeProxyFailureStageContext(
+			ctx,
+			proxyURL,
+			region,
+			0,
+			"warmup timed out",
+			"timeout",
+			"warmup",
+			3,
+			30,
+		); err != nil {
+			t.Fatalf("record staged warmup failure %d: %v", failure, err)
+		}
+
+		var interimQuarantine sql.NullTime
+		if err := db.QueryRowContext(ctx, `
+			SELECT quarantined_until
+			FROM free_proxies
+			WHERE proxy_url = $1`, proxyURL).Scan(&interimQuarantine); err != nil {
+			t.Fatalf("read staged quarantine after failure %d: %v", failure, err)
+		}
+		if failure < 3 && interimQuarantine.Valid {
+			t.Fatalf(
+				"proven proxy quarantined after transport failure %d: %v",
+				failure,
+				interimQuarantine.Time,
+			)
+		}
 	}
 
-	var stagedQuarantine time.Time
+	var stagedQuarantine sql.NullTime
 	var storedStage sql.NullString
 	if err := db.QueryRowContext(ctx, `
 		SELECT quarantined_until, last_error_stage
@@ -352,8 +392,8 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 		WHERE proxy_url = $1`, proxyURL).Scan(&stagedQuarantine, &storedStage); err != nil {
 		t.Fatalf("read staged global failure: %v", err)
 	}
-	if stagedQuarantine.Before(time.Now().Add(4 * time.Minute)) {
-		t.Fatalf("warmup failure quarantine = %v, want at least about 5 minutes", stagedQuarantine)
+	if !stagedQuarantine.Valid || stagedQuarantine.Time.Before(time.Now().Add(14*time.Minute)) {
+		t.Fatalf("warmup failure quarantine = %v, want about 15 minutes", stagedQuarantine)
 	}
 	if !storedStage.Valid || storedStage.String != "warmup" {
 		t.Fatalf("global error stage = %#v, want warmup", storedStage)
@@ -367,12 +407,88 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 		  AND fph.region = 'sqlother'`, proxyURL).Scan(&otherNextCheck); err != nil {
 		t.Fatalf("read globally delayed region: %v", err)
 	}
-	if otherNextCheck.Before(stagedQuarantine.Add(-time.Second)) {
+	if otherNextCheck.Before(stagedQuarantine.Time.Add(-time.Second)) {
 		t.Fatalf(
 			"other region next check = %v, want global quarantine %v",
 			otherNextCheck,
-			stagedQuarantine,
+			stagedQuarantine.Time,
 		)
+	}
+}
+
+func TestFreeProxyCandidateWindowUsesPerRegionLimit(t *testing.T) {
+	databaseURL := os.Getenv("FREE_PROXY_STORE_INTEGRATION_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("FREE_PROXY_STORE_INTEGRATION_DATABASE_URL is not set")
+	}
+
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatalf("open postgres: %v", err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	store := &Store{db: db}
+	const region = "sqlwindow"
+
+	records := make([]FreeProxyRecord, 0, 7)
+	proxyURLs := make([]string, 0, 7)
+	for index := 0; index < 7; index++ {
+		proxyURL := fmt.Sprintf("http://vintrack-window-%d.invalid:1", index)
+		proxyURLs = append(proxyURLs, proxyURL)
+		records = append(records, FreeProxyRecord{
+			ProxyURL: proxyURL,
+			Protocol: "http",
+			Host:     fmt.Sprintf("vintrack-window-%d.invalid", index),
+			Port:     1,
+			Source:   "sqlwindow",
+		})
+	}
+	defer db.ExecContext(context.Background(), `DELETE FROM free_proxies WHERE proxy_url = ANY($1)`, pq.Array(proxyURLs))
+	if _, err := store.UpsertFreeProxiesContext(ctx, records); err != nil {
+		t.Fatalf("upsert candidate inventory: %v", err)
+	}
+	existingLimits := make(map[string]int)
+	rows, err := db.QueryContext(ctx, `
+		SELECT region, COUNT(*) FROM free_proxy_health GROUP BY region`)
+	if err != nil {
+		t.Fatalf("load existing candidate windows: %v", err)
+	}
+	for rows.Next() {
+		var existingRegion string
+		var count int
+		if err := rows.Scan(&existingRegion, &count); err != nil {
+			rows.Close()
+			t.Fatalf("scan existing candidate window: %v", err)
+		}
+		existingLimits[existingRegion] = count
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close candidate window rows: %v", err)
+	}
+
+	for _, limit := range []int{3, 5, 2} {
+		limits := maps.Clone(existingLimits)
+		limits[region] = limit
+		if err := store.EnsureFreeProxyHealthRowsWithLimitsContext(
+			ctx,
+			limits,
+		); err != nil {
+			t.Fatalf("ensure candidate window %d: %v", limit, err)
+		}
+		var count int
+		if err := db.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM free_proxy_health
+			WHERE region = $1
+			  AND candidate_window_token =
+				FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint`, region).Scan(&count); err != nil {
+			t.Fatalf("count candidate window %d: %v", limit, err)
+		}
+		if count != limit {
+			t.Fatalf("candidate window count = %d, want %d", count, limit)
+		}
 	}
 }
 

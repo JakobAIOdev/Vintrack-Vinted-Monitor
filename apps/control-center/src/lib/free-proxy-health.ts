@@ -4,6 +4,7 @@ const DEFAULT_STARTER_REGIONS = "de,fr,it,es,nl,be,at";
 
 export type FreeProxyRegionHealth = {
     region: string;
+    ready: number;
     active: number;
     reserve: number;
     warming: number;
@@ -19,6 +20,11 @@ export type FreeProxyRegionHealth = {
     neverChecked: number;
     topErrorCode: string | null;
     topErrorStage: string | null;
+    candidateWindow: number;
+    checkedLastHour: number;
+    promotedLastHour: number;
+    recoveryMode: boolean;
+    minutesSinceLastSuccess: number | null;
 };
 
 export type FreeProxyPoolHealth = {
@@ -45,6 +51,11 @@ type FreeProxyHealthRow = {
     never_checked_count: bigint;
     top_error_code: string | null;
     top_error_stage: string | null;
+    candidate_window: bigint;
+    checked_last_hour: bigint;
+    promoted_last_hour: bigint;
+    minutes_since_last_success: number | null;
+    active_monitor_count: bigint;
 };
 
 export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
@@ -62,6 +73,7 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
             regions: {
                 de: {
                     region: "de",
+                    ready: 1,
                     active: 1,
                     reserve: 0,
                     warming: 0,
@@ -77,6 +89,11 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                     neverChecked: 0,
                     topErrorCode: null,
                     topErrorStage: null,
+                    candidateWindow: 1,
+                    checkedLastHour: 1,
+                    promotedLastHour: 1,
+                    recoveryMode: false,
+                    minutesSinceLastSuccess: 0,
                 },
             },
         };
@@ -85,6 +102,7 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
     const [
         setting,
         minActiveSetting,
+        readyTargetSetting,
         starterRegionsSetting,
         degradationSetting,
         rows,
@@ -96,6 +114,10 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
             }),
             db.app_settings.findUnique({
                 where: { key: "free_proxy_min_active_per_region" },
+                select: { value: true },
+            }),
+            db.app_settings.findUnique({
+                where: { key: "free_proxy_ready_target_active_region" },
                 select: { value: true },
             }),
             db.app_settings.findUnique({
@@ -196,13 +218,34 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                     FILTER (
                         WHERE last_error_stage IS NOT NULL
                           AND last_checked_at >= NOW() - INTERVAL '24 hours'
-                    ) AS top_error_stage
+                    ) AS top_error_stage,
+                COUNT(*)::bigint AS candidate_window,
+                COUNT(*) FILTER (
+                    WHERE last_checked_at >= NOW() - INTERVAL '1 hour'
+                )::bigint AS checked_last_hour,
+                COUNT(*) FILTER (
+                    WHERE last_success_at >= NOW() - INTERVAL '1 hour'
+                )::bigint AS promoted_last_hour,
+                EXTRACT(EPOCH FROM (NOW() - MAX(last_success_at))) / 60.0
+                    AS minutes_since_last_success,
+                COALESCE(MAX(region_demand.active_monitor_count), 0)::bigint
+                    AS active_monitor_count
             FROM free_proxy_health
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*)::bigint AS active_monitor_count
+                FROM monitors monitor
+                WHERE monitor.status = 'active'
+                  AND monitor.proxy_source = 'free'
+                  AND monitor.region = free_proxy_health.region
+            ) region_demand ON TRUE
+            WHERE candidate_window_token =
+                FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint
             GROUP BY region
         `,
         ]);
 
     const minActivePerRegion = Number(minActiveSetting?.value ?? 25);
+    const readyTarget = Number(readyTargetSetting?.value ?? 50);
     const configuredRegions = (
         starterRegionsSetting?.value ?? DEFAULT_STARTER_REGIONS
     )
@@ -216,6 +259,7 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
             if (!row) {
                 const emptyHealth: FreeProxyRegionHealth = {
                     region,
+                    ready: 0,
                     active: 0,
                     reserve: 0,
                     warming: 0,
@@ -231,6 +275,11 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                     neverChecked: 0,
                     topErrorCode: null,
                     topErrorStage: null,
+                    candidateWindow: 0,
+                    checkedLastHour: 0,
+                    promotedLastHour: 0,
+                    recoveryMode: false,
+                    minutesSinceLastSuccess: null,
                 };
                 return [region, emptyHealth];
             }
@@ -243,6 +292,7 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
             const recentCheckCount = Number(row.recent_check_count);
             const health: FreeProxyRegionHealth = {
                 region: row.region,
+                ready: active,
                 active,
                 reserve,
                 warming,
@@ -273,6 +323,16 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                 neverChecked: Number(row.never_checked_count),
                 topErrorCode: row.top_error_code,
                 topErrorStage: row.top_error_stage,
+                candidateWindow: Number(row.candidate_window),
+                checkedLastHour: Number(row.checked_last_hour),
+                promotedLastHour: Number(row.promoted_last_hour),
+                recoveryMode:
+                    Number(row.active_monitor_count) > 0 &&
+                    active < readyTarget,
+                minutesSinceLastSuccess:
+                    row.minutes_since_last_success === null
+                        ? null
+                        : Math.round(row.minutes_since_last_success),
             };
             return [region, health];
         }),

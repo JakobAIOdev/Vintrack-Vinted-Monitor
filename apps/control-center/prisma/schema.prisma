@@ -159,34 +159,39 @@ model free_proxies {
   @@index([status, quarantined_until])
   @@index([check_claimed_until])
   @@index([source])
+  @@index([last_seen_at])
 }
 
 model free_proxy_health {
-  id               BigInt       @id @default(autoincrement())
-  proxy_id         Int
-  proxy            free_proxies @relation(fields: [proxy_id], references: [id], onDelete: Cascade)
-  region           String       @db.VarChar(10)
-  status           String       @default("pending") @db.VarChar(30)
-  success_streak   Int          @default(0)
-  failure_streak   Int          @default(0)
-  success_count    Int          @default(0)
-  failure_count    Int          @default(0)
-  latency_ms       Int?
-  last_status_code Int?
-  last_error       String?      @db.Text
-  last_error_code  String?      @db.VarChar(50)
-  last_error_stage String?      @db.VarChar(20)
-  last_checked_at  DateTime?    @db.Timestamp(6)
-  last_success_at  DateTime?    @db.Timestamp(6)
-  last_failure_at  DateTime?    @db.Timestamp(6)
-  next_check_at    DateTime?    @db.Timestamp(6)
-  score            Int          @default(0)
-  created_at       DateTime     @default(now()) @db.Timestamp(6)
-  updated_at       DateTime     @updatedAt @db.Timestamp(6)
+  id                     BigInt       @id @default(autoincrement())
+  proxy_id               Int
+  proxy                  free_proxies @relation(fields: [proxy_id], references: [id], onDelete: Cascade)
+  region                 String       @db.VarChar(10)
+  status                 String       @default("pending") @db.VarChar(30)
+  success_streak         Int          @default(0)
+  failure_streak         Int          @default(0)
+  success_count          Int          @default(0)
+  failure_count          Int          @default(0)
+  latency_ms             Int?
+  last_status_code       Int?
+  last_error             String?      @db.Text
+  last_error_code        String?      @db.VarChar(50)
+  last_error_stage       String?      @db.VarChar(20)
+  last_checked_at        DateTime?    @db.Timestamp(6)
+  last_success_at        DateTime?    @db.Timestamp(6)
+  last_failure_at        DateTime?    @db.Timestamp(6)
+  next_check_at          DateTime?    @db.Timestamp(6)
+  candidate_window_token BigInt?      @default(dbgenerated("FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint"))
+  score                  Int          @default(0)
+  created_at             DateTime     @default(now()) @db.Timestamp(6)
+  updated_at             DateTime     @updatedAt @db.Timestamp(6)
 
   @@unique([proxy_id, region])
   @@index([region, status, next_check_at])
   @@index([region, last_error_stage], map: "free_proxy_health_region_error_stage_idx")
+  @@index([region, last_checked_at])
+  @@index([region, last_success_at])
+  @@index([region, candidate_window_token], map: "free_proxy_health_region_candidate_window_idx")
   @@index([status, score])
 }
 

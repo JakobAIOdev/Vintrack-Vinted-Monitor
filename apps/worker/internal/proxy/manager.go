@@ -173,6 +173,12 @@ func (m *Manager) Count() int {
 	return len(m.proxies)
 }
 
+func (m *Manager) Snapshot() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.proxies...)
+}
+
 func (m *Manager) Next() string {
 	return m.NextExcluding(nil)
 }
