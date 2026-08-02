@@ -63,6 +63,7 @@ import {
     getAdminUsersState,
     getAdminLogs,
     getFreeProxyAdminState,
+    getFreeProxySourceDiagnostics,
     getAdminUserDetails,
     addFreeProxies,
     clearFreeProxyQuarantine,
@@ -199,6 +200,20 @@ type FreeProxyRow = {
 
 type FreeProxyState = {
     degradationReason: "host_egress_limited" | null;
+    maintainerRuntime: {
+        status: string;
+        heartbeatAt: string;
+        startedAt: string;
+        concurrency: number;
+        perRegionConcurrency: number;
+        batchPerRegion: number;
+        bootstrapBatchPerRegion: number;
+        checked: number;
+        passed: number;
+        failed: number;
+        canceled: number;
+        durationMs: number;
+    } | null;
     settings: {
         enabled: boolean;
         autoImportEnabled: boolean;
@@ -246,6 +261,8 @@ type FreeProxyState = {
         minutesSinceLastSuccess: number | null;
         activeMonitorCount: number;
         recoveryMode: boolean;
+        dueNow: number;
+        neverChecked: number;
     }[];
     sourceDiagnostics: {
         region: string;
@@ -278,7 +295,7 @@ function AdminMonitorError({ message }: { message: string }) {
                 <summary className="cursor-pointer font-medium">
                     Technical details
                 </summary>
-                <p className="mt-1 break-words font-mono">{message}</p>
+                <p className="mt-1 font-mono break-words">{message}</p>
             </details>
         </div>
     );
@@ -896,6 +913,13 @@ export function AdminClient({
     const [isAddingFreeProxies, setIsAddingFreeProxies] = useState(false);
     const [isClearingFreeProxyQuarantine, setIsClearingFreeProxyQuarantine] =
         useState(false);
+    const [selectedFreeProxyRegion, setSelectedFreeProxyRegion] = useState<
+        string | null
+    >(null);
+    const [freeProxySourceDiagnostics, setFreeProxySourceDiagnostics] =
+        useState<Record<string, FreeProxyState["sourceDiagnostics"]>>({});
+    const [isLoadingFreeProxySources, setIsLoadingFreeProxySources] =
+        useState(false);
     const starterRegionSet = new Set(
         freeProxySettings.starterRegions
             .split(",")
@@ -905,8 +929,14 @@ export function AdminClient({
     const freeProxyHealthByRegion = new Map(
         freeProxyState.regions.map((region) => [region.region, region]),
     );
+    const displayedFreeProxyRegionCodes = new Set([
+        ...starterRegionSet,
+        ...freeProxyState.regions
+            .filter((region) => region.activeMonitorCount > 0)
+            .map((region) => region.region),
+    ]);
     const displayedFreeProxyRegions = REGIONS.filter((region) =>
-        starterRegionSet.has(region.code),
+        displayedFreeProxyRegionCodes.has(region.code),
     ).map((region) => {
         const health = freeProxyHealthByRegion.get(region.code);
         return health
@@ -931,13 +961,23 @@ export function AdminClient({
                   minutesSinceLastSuccess: null,
                   activeMonitorCount: 0,
                   recoveryMode: false,
+                  dueNow: 0,
+                  neverChecked: 0,
                   initializing: true,
               };
     });
-    const freeProxyTargetForRegion = (activeMonitorCount: number) =>
-        activeMonitorCount > 0
-            ? freeProxySettings.readyTarget + freeProxySettings.reserveTarget
-            : freeProxySettings.idleTarget;
+    const totalFreeProxyMonitors = displayedFreeProxyRegions.reduce(
+        (total, region) => total + region.activeMonitorCount,
+        0,
+    );
+    const selectedFreeProxyHealth = selectedFreeProxyRegion
+        ? displayedFreeProxyRegions.find(
+              (region) => region.region === selectedFreeProxyRegion,
+          )
+        : undefined;
+    const selectedFreeProxySources = selectedFreeProxyRegion
+        ? freeProxySourceDiagnostics[selectedFreeProxyRegion]
+        : undefined;
 
     const toggleStarterRegion = (regionCode: string) => {
         setFreeProxySettings((current) => {
@@ -1652,6 +1692,27 @@ export function AdminClient({
         setFreeProxySettings(normalizeFreeProxySettings(nextState.settings));
     };
 
+    const openFreeProxyRegion = async (region: string) => {
+        setSelectedFreeProxyRegion(region);
+        if (freeProxySourceDiagnostics[region]) return;
+        setIsLoadingFreeProxySources(true);
+        try {
+            const diagnostics = await getFreeProxySourceDiagnostics(region);
+            setFreeProxySourceDiagnostics((current) => ({
+                ...current,
+                [region]: diagnostics,
+            }));
+        } catch (error) {
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to load proxy source diagnostics",
+            );
+        } finally {
+            setIsLoadingFreeProxySources(false);
+        }
+    };
+
     const handleSaveFreeProxySettings = async () => {
         setIsSavingFreeProxySettings(true);
         const formData = new FormData();
@@ -1681,7 +1742,10 @@ export function AdminClient({
         );
         formData.set("maxLatencyMs", String(freeProxySettings.maxLatencyMs));
         formData.set("starterRegions", freeProxySettings.starterRegions);
-        formData.set("inventoryLimit", String(freeProxySettings.inventoryLimit));
+        formData.set(
+            "inventoryLimit",
+            String(freeProxySettings.inventoryLimit),
+        );
         formData.set(
             "activeCandidateLimit",
             String(freeProxySettings.activeCandidateLimit),
@@ -3726,454 +3790,576 @@ export function AdminClient({
                             ))}
                         </div>
 
-                        <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                            <label className="border-border/60 flex items-start gap-3 rounded-lg border px-4 py-3">
-                                <input
-                                    type="checkbox"
-                                    checked={freeProxySettings.enabled}
-                                    onChange={(event) =>
-                                        setFreeProxySettings((prev) => ({
-                                            ...prev,
-                                            enabled: event.target.checked,
-                                        }))
-                                    }
-                                    className="mt-1"
-                                />
-                                <span>
-                                    <span className="text-sm font-medium">
-                                        Enable for users
-                                    </span>
-                                    <span className="text-muted-foreground block text-xs">
-                                        Shows Free Proxy Pool in monitor proxy
-                                        selection.
-                                    </span>
-                                </span>
-                            </label>
-                            <label className="border-border/60 flex items-start gap-3 rounded-lg border px-4 py-3">
-                                <input
-                                    type="checkbox"
-                                    checked={
-                                        freeProxySettings.autoImportEnabled
-                                    }
-                                    onChange={(event) =>
-                                        setFreeProxySettings((prev) => ({
-                                            ...prev,
-                                            autoImportEnabled:
-                                                event.target.checked,
-                                        }))
-                                    }
-                                    className="mt-1"
-                                />
-                                <span>
-                                    <span className="text-sm font-medium">
-                                        Auto import
-                                    </span>
-                                    <span className="text-muted-foreground block text-xs">
-                                        Worker refreshes the configured source
-                                        periodically.
-                                    </span>
-                                </span>
-                            </label>
+                        <div className="border-border/60 bg-muted/20 mt-4 grid gap-3 rounded-lg border p-3 sm:grid-cols-2 xl:grid-cols-4">
+                            <div>
+                                <p className="text-muted-foreground text-[10px] font-medium tracking-widest uppercase">
+                                    Maintainer
+                                </p>
+                                <p className="mt-1 text-sm font-semibold capitalize">
+                                    {freeProxyState.maintainerRuntime?.status ??
+                                        "No heartbeat"}
+                                </p>
+                                <p className="text-muted-foreground text-[11px]">
+                                    {freeProxyState.maintainerRuntime
+                                        ? `Heartbeat ${formatMetricDate(new Date(freeProxyState.maintainerRuntime.heartbeatAt))}`
+                                        : "Deploy the proxy-maintainer to publish runtime state"}
+                                </p>
+                            </div>
+                            <div>
+                                <p className="text-muted-foreground text-[10px] font-medium tracking-widest uppercase">
+                                    Effective slots
+                                </p>
+                                <p className="mt-1 text-sm font-semibold">
+                                    {freeProxyState.maintainerRuntime
+                                        ? `${freeProxyState.maintainerRuntime.concurrency} global · ${freeProxyState.maintainerRuntime.perRegionConcurrency}/region`
+                                        : "—"}
+                                </p>
+                                <p className="text-muted-foreground text-[11px]">
+                                    Actual prod runtime, including overrides
+                                </p>
+                            </div>
+                            <div>
+                                <p className="text-muted-foreground text-[10px] font-medium tracking-widest uppercase">
+                                    Last cycle
+                                </p>
+                                <p className="mt-1 text-sm font-semibold">
+                                    {freeProxyState.maintainerRuntime
+                                        ? `${freeProxyState.maintainerRuntime.checked} checked · ${freeProxyState.maintainerRuntime.passed} passed`
+                                        : "—"}
+                                </p>
+                                <p className="text-muted-foreground text-[11px]">
+                                    {freeProxyState.maintainerRuntime
+                                        ? `${Math.round(freeProxyState.maintainerRuntime.durationMs / 1000)}s · ${freeProxyState.maintainerRuntime.canceled} canceled`
+                                        : "Waiting for the first cycle"}
+                                </p>
+                            </div>
+                            <div>
+                                <p className="text-muted-foreground text-[10px] font-medium tracking-widest uppercase">
+                                    Live demand
+                                </p>
+                                <p className="mt-1 text-sm font-semibold">
+                                    {totalFreeProxyMonitors} free monitors
+                                </p>
+                                <p className="text-muted-foreground text-[11px]">
+                                    Shared by region; no cross-region failover
+                                </p>
+                            </div>
                         </div>
 
-                        <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(420px,0.9fr)]">
-                            <div className="rounded-lg border p-4">
-                                <div className="mb-4">
-                                    <p className="text-sm font-semibold">
-                                        Import Source
-                                    </p>
-                                    <p className="text-muted-foreground text-xs">
-                                        Imported proxies stay pending until
-                                        Vintrack validates them against Vinted
-                                        per starter region.
-                                    </p>
-                                </div>
-                                <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
-                                    <div className="space-y-2">
-                                        <Label htmlFor="free-proxy-source">
-                                            Source
-                                        </Label>
-                                        <select
-                                            id="free-proxy-source"
-                                            value={
-                                                freeProxySettings.importSource
-                                            }
-                                            onChange={(event) => {
-                                                const selected =
-                                                    FREE_PROXY_SOURCE_OPTIONS.find(
-                                                        (option) =>
-                                                            option.value ===
-                                                            event.target.value,
-                                                    );
-                                                setFreeProxySettings(
-                                                    (prev) => ({
-                                                        ...prev,
-                                                        importSource:
-                                                            event.target.value,
-                                                        importUrl:
-                                                            selected?.url ||
-                                                            prev.importUrl,
-                                                    }),
-                                                );
-                                            }}
-                                            className="border-input bg-background h-10 w-full rounded-md border px-3 text-sm"
-                                        >
-                                            {FREE_PROXY_SOURCE_OPTIONS.map(
-                                                (option) => (
-                                                    <option
-                                                        key={option.value}
-                                                        value={option.value}
-                                                    >
-                                                        {option.label}
-                                                    </option>
-                                                ),
-                                            )}
-                                        </select>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label htmlFor="free-proxy-import-url">
-                                            Import URL
-                                        </Label>
-                                        <Input
-                                            id="free-proxy-import-url"
-                                            value={freeProxySettings.importUrl}
+                        <details className="border-border/70 mt-4 rounded-lg border">
+                            <summary className="hover:bg-muted/40 flex cursor-pointer list-none items-center justify-between rounded-lg px-4 py-3 transition-colors [&::-webkit-details-marker]:hidden">
+                                <span>
+                                    <span className="block text-sm font-semibold">
+                                        Pool configuration
+                                    </span>
+                                    <span className="text-muted-foreground block text-xs">
+                                        Import, validation and regional target
+                                        settings
+                                    </span>
+                                </span>
+                                <Settings2 className="text-muted-foreground size-4" />
+                            </summary>
+                            <div className="border-border/60 border-t p-4">
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    <label className="border-border/60 flex items-start gap-3 rounded-lg border px-4 py-3">
+                                        <input
+                                            type="checkbox"
+                                            checked={freeProxySettings.enabled}
                                             onChange={(event) =>
                                                 setFreeProxySettings(
                                                     (prev) => ({
                                                         ...prev,
-                                                        importSource: "custom",
-                                                        importUrl:
-                                                            event.target.value,
+                                                        enabled:
+                                                            event.target
+                                                                .checked,
                                                     }),
                                                 )
                                             }
+                                            className="mt-1"
                                         />
-                                    </div>
-                                </div>
-                                <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_130px]">
-                                    <div className="space-y-2">
-                                        <div className="flex items-center justify-between gap-3">
-                                            <Label>Starter regions</Label>
-                                            <span className="text-muted-foreground text-[11px]">
-                                                {starterRegionSet.size} selected
+                                        <span>
+                                            <span className="text-sm font-medium">
+                                                Enable for users
                                             </span>
+                                            <span className="text-muted-foreground block text-xs">
+                                                Shows Free Proxy Pool in monitor
+                                                proxy selection.
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <label className="border-border/60 flex items-start gap-3 rounded-lg border px-4 py-3">
+                                        <input
+                                            type="checkbox"
+                                            checked={
+                                                freeProxySettings.autoImportEnabled
+                                            }
+                                            onChange={(event) =>
+                                                setFreeProxySettings(
+                                                    (prev) => ({
+                                                        ...prev,
+                                                        autoImportEnabled:
+                                                            event.target
+                                                                .checked,
+                                                    }),
+                                                )
+                                            }
+                                            className="mt-1"
+                                        />
+                                        <span>
+                                            <span className="text-sm font-medium">
+                                                Auto import
+                                            </span>
+                                            <span className="text-muted-foreground block text-xs">
+                                                Worker refreshes the configured
+                                                source periodically.
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+
+                                <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(420px,0.9fr)]">
+                                    <div className="rounded-lg border p-4">
+                                        <div className="mb-4">
+                                            <p className="text-sm font-semibold">
+                                                Import Source
+                                            </p>
+                                            <p className="text-muted-foreground text-xs">
+                                                Imported proxies stay pending
+                                                until Vintrack validates them
+                                                against Vinted per starter
+                                                region.
+                                            </p>
                                         </div>
-                                        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
-                                            {REGIONS.map((region) => {
-                                                const selected =
-                                                    starterRegionSet.has(
-                                                        region.code,
-                                                    );
-                                                const health = selected
-                                                    ? freeProxyHealthByRegion.get(
-                                                          region.code,
-                                                      )
-                                                    : undefined;
-                                                return (
-                                                    <button
-                                                        key={region.code}
-                                                        type="button"
-                                                        onClick={() =>
-                                                            toggleStarterRegion(
+                                        <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
+                                            <div className="space-y-2">
+                                                <Label htmlFor="free-proxy-source">
+                                                    Source
+                                                </Label>
+                                                <select
+                                                    id="free-proxy-source"
+                                                    value={
+                                                        freeProxySettings.importSource
+                                                    }
+                                                    onChange={(event) => {
+                                                        const selected =
+                                                            FREE_PROXY_SOURCE_OPTIONS.find(
+                                                                (option) =>
+                                                                    option.value ===
+                                                                    event.target
+                                                                        .value,
+                                                            );
+                                                        setFreeProxySettings(
+                                                            (prev) => ({
+                                                                ...prev,
+                                                                importSource:
+                                                                    event.target
+                                                                        .value,
+                                                                importUrl:
+                                                                    selected?.url ||
+                                                                    prev.importUrl,
+                                                            }),
+                                                        );
+                                                    }}
+                                                    className="border-input bg-background h-10 w-full rounded-md border px-3 text-sm"
+                                                >
+                                                    {FREE_PROXY_SOURCE_OPTIONS.map(
+                                                        (option) => (
+                                                            <option
+                                                                key={
+                                                                    option.value
+                                                                }
+                                                                value={
+                                                                    option.value
+                                                                }
+                                                            >
+                                                                {option.label}
+                                                            </option>
+                                                        ),
+                                                    )}
+                                                </select>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label htmlFor="free-proxy-import-url">
+                                                    Import URL
+                                                </Label>
+                                                <Input
+                                                    id="free-proxy-import-url"
+                                                    value={
+                                                        freeProxySettings.importUrl
+                                                    }
+                                                    onChange={(event) =>
+                                                        setFreeProxySettings(
+                                                            (prev) => ({
+                                                                ...prev,
+                                                                importSource:
+                                                                    "custom",
+                                                                importUrl:
+                                                                    event.target
+                                                                        .value,
+                                                            }),
+                                                        )
+                                                    }
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_130px]">
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <Label>
+                                                        Starter regions
+                                                    </Label>
+                                                    <span className="text-muted-foreground text-[11px]">
+                                                        {starterRegionSet.size}{" "}
+                                                        selected
+                                                    </span>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
+                                                    {REGIONS.map((region) => {
+                                                        const selected =
+                                                            starterRegionSet.has(
                                                                 region.code,
-                                                            )
-                                                        }
-                                                        aria-pressed={selected}
-                                                        className={`flex min-w-0 items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-left text-xs transition-colors ${
-                                                            selected
-                                                                ? "border-primary bg-primary/5 text-foreground"
-                                                                : "border-border/70 bg-background text-muted-foreground hover:bg-muted/50"
-                                                        }`}
-                                                    >
-                                                        <span className="flex min-w-0 items-center gap-1.5">
-                                                            <span>
-                                                                {region.flag}
-                                                            </span>
-                                                            <span className="truncate">
-                                                                {region.label}
-                                                            </span>
-                                                        </span>
-                                                        <span
-                                                            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                                                                health?.healthy
-                                                                    ? "bg-emerald-500"
-                                                                    : health
-                                                                      ? "bg-amber-500"
-                                                                      : "bg-muted-foreground/30"
-                                                            }`}
-                                                            title={
-                                                                health?.healthy
-                                                                    ? `${health.active + health.warming} usable proxies`
-                                                                    : health
-                                                                      ? "Pool is degraded"
-                                                                      : "No pool checks yet"
-                                                            }
-                                                        />
-                                                    </button>
-                                                );
-                                            })}
+                                                            );
+                                                        const health = selected
+                                                            ? freeProxyHealthByRegion.get(
+                                                                  region.code,
+                                                              )
+                                                            : undefined;
+                                                        return (
+                                                            <button
+                                                                key={
+                                                                    region.code
+                                                                }
+                                                                type="button"
+                                                                onClick={() =>
+                                                                    toggleStarterRegion(
+                                                                        region.code,
+                                                                    )
+                                                                }
+                                                                aria-pressed={
+                                                                    selected
+                                                                }
+                                                                className={`flex min-w-0 items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-left text-xs transition-colors ${
+                                                                    selected
+                                                                        ? "border-primary bg-primary/5 text-foreground"
+                                                                        : "border-border/70 bg-background text-muted-foreground hover:bg-muted/50"
+                                                                }`}
+                                                            >
+                                                                <span className="flex min-w-0 items-center gap-1.5">
+                                                                    <span>
+                                                                        {
+                                                                            region.flag
+                                                                        }
+                                                                    </span>
+                                                                    <span className="truncate">
+                                                                        {
+                                                                            region.label
+                                                                        }
+                                                                    </span>
+                                                                </span>
+                                                                <span
+                                                                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                                                                        health?.healthy
+                                                                            ? "bg-emerald-500"
+                                                                            : health
+                                                                              ? "bg-amber-500"
+                                                                              : "bg-muted-foreground/30"
+                                                                    }`}
+                                                                    title={
+                                                                        health?.healthy
+                                                                            ? `${health.active + health.warming} usable proxies`
+                                                                            : health
+                                                                              ? "Pool is degraded"
+                                                                              : "No pool checks yet"
+                                                                    }
+                                                                />
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label htmlFor="free-proxy-inventory-limit">
+                                                    Inventory limit
+                                                </Label>
+                                                <Input
+                                                    id="free-proxy-inventory-limit"
+                                                    type="number"
+                                                    min={1000}
+                                                    value={
+                                                        freeProxySettings.inventoryLimit
+                                                    }
+                                                    onChange={(event) =>
+                                                        setFreeProxySettings(
+                                                            (prev) => ({
+                                                                ...prev,
+                                                                inventoryLimit:
+                                                                    Number(
+                                                                        event
+                                                                            .target
+                                                                            .value,
+                                                                    ),
+                                                            }),
+                                                        )
+                                                    }
+                                                />
+                                            </div>
                                         </div>
                                     </div>
-                                    <div className="space-y-2">
-                                        <Label htmlFor="free-proxy-inventory-limit">
-                                            Inventory limit
-                                        </Label>
-                                        <Input
-                                            id="free-proxy-inventory-limit"
-                                            type="number"
-                                            min={1000}
-                                            value={
-                                                freeProxySettings.inventoryLimit
-                                            }
-                                            onChange={(event) =>
-                                                setFreeProxySettings(
-                                                    (prev) => ({
-                                                        ...prev,
-                                                        inventoryLimit: Number(
-                                                            event.target.value,
-                                                        ),
-                                                    }),
-                                                )
-                                            }
-                                        />
-                                    </div>
-                                </div>
-                            </div>
 
-                            <div className="rounded-lg border p-4">
-                                <div className="mb-4">
-                                    <p className="text-sm font-semibold">
-                                        Validation Rules
-                                    </p>
-                                    <p className="text-muted-foreground text-xs">
-                                        Two successful Vinted checks are needed
-                                        before a proxy enters rotation.
-                                    </p>
+                                    <div className="rounded-lg border p-4">
+                                        <div className="mb-4">
+                                            <p className="text-sm font-semibold">
+                                                Validation Rules
+                                            </p>
+                                            <p className="text-muted-foreground text-xs">
+                                                Two successful Vinted checks are
+                                                needed before a proxy enters
+                                                rotation.
+                                            </p>
+                                        </div>
+                                        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                                            <div className="space-y-2">
+                                                <Label htmlFor="free-proxy-failures">
+                                                    Failures
+                                                </Label>
+                                                <Input
+                                                    id="free-proxy-failures"
+                                                    type="number"
+                                                    min={1}
+                                                    value={
+                                                        freeProxySettings.failureThreshold
+                                                    }
+                                                    onChange={(event) =>
+                                                        setFreeProxySettings(
+                                                            (prev) => ({
+                                                                ...prev,
+                                                                failureThreshold:
+                                                                    Number(
+                                                                        event
+                                                                            .target
+                                                                            .value,
+                                                                    ),
+                                                            }),
+                                                        )
+                                                    }
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label htmlFor="free-proxy-quarantine">
+                                                    Cooldown
+                                                </Label>
+                                                <Input
+                                                    id="free-proxy-quarantine"
+                                                    type="number"
+                                                    min={1}
+                                                    value={
+                                                        freeProxySettings.quarantineMinutes
+                                                    }
+                                                    onChange={(event) =>
+                                                        setFreeProxySettings(
+                                                            (prev) => ({
+                                                                ...prev,
+                                                                quarantineMinutes:
+                                                                    Number(
+                                                                        event
+                                                                            .target
+                                                                            .value,
+                                                                    ),
+                                                            }),
+                                                        )
+                                                    }
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label htmlFor="free-proxy-min-active">
+                                                    Min ready
+                                                </Label>
+                                                <Input
+                                                    id="free-proxy-min-active"
+                                                    type="number"
+                                                    min={1}
+                                                    value={
+                                                        freeProxySettings.minActivePerRegion
+                                                    }
+                                                    onChange={(event) =>
+                                                        setFreeProxySettings(
+                                                            (prev) => ({
+                                                                ...prev,
+                                                                minActivePerRegion:
+                                                                    Number(
+                                                                        event
+                                                                            .target
+                                                                            .value,
+                                                                    ),
+                                                            }),
+                                                        )
+                                                    }
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label htmlFor="free-proxy-target-active">
+                                                    Target reserve
+                                                </Label>
+                                                <Input
+                                                    id="free-proxy-target-active"
+                                                    type="number"
+                                                    min={
+                                                        freeProxySettings.minActivePerRegion
+                                                    }
+                                                    value={
+                                                        freeProxySettings.targetActivePerRegion
+                                                    }
+                                                    onChange={(event) =>
+                                                        setFreeProxySettings(
+                                                            (prev) => ({
+                                                                ...prev,
+                                                                targetActivePerRegion:
+                                                                    Number(
+                                                                        event
+                                                                            .target
+                                                                            .value,
+                                                                    ),
+                                                            }),
+                                                        )
+                                                    }
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label htmlFor="free-proxy-max-latency">
+                                                    Max ms
+                                                </Label>
+                                                <Input
+                                                    id="free-proxy-max-latency"
+                                                    type="number"
+                                                    min={500}
+                                                    value={
+                                                        freeProxySettings.maxLatencyMs
+                                                    }
+                                                    onChange={(event) =>
+                                                        setFreeProxySettings(
+                                                            (prev) => ({
+                                                                ...prev,
+                                                                maxLatencyMs:
+                                                                    Number(
+                                                                        event
+                                                                            .target
+                                                                            .value,
+                                                                    ),
+                                                            }),
+                                                        )
+                                                    }
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                                    <div className="space-y-2">
-                                        <Label htmlFor="free-proxy-failures">
-                                            Failures
-                                        </Label>
-                                        <Input
-                                            id="free-proxy-failures"
-                                            type="number"
-                                            min={1}
-                                            value={
-                                                freeProxySettings.failureThreshold
-                                            }
-                                            onChange={(event) =>
-                                                setFreeProxySettings(
-                                                    (prev) => ({
-                                                        ...prev,
-                                                        failureThreshold:
-                                                            Number(
-                                                                event.target
-                                                                    .value,
-                                                            ),
-                                                    }),
-                                                )
-                                            }
-                                        />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label htmlFor="free-proxy-quarantine">
-                                            Cooldown
-                                        </Label>
-                                        <Input
-                                            id="free-proxy-quarantine"
-                                            type="number"
-                                            min={1}
-                                            value={
-                                                freeProxySettings.quarantineMinutes
-                                            }
-                                            onChange={(event) =>
-                                                setFreeProxySettings(
-                                                    (prev) => ({
-                                                        ...prev,
-                                                        quarantineMinutes:
-                                                            Number(
-                                                                event.target
-                                                                    .value,
-                                                            ),
-                                                    }),
-                                                )
-                                            }
-                                        />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label htmlFor="free-proxy-min-active">
-                                            Min ready
-                                        </Label>
-                                        <Input
-                                            id="free-proxy-min-active"
-                                            type="number"
-                                            min={1}
-                                            value={
-                                                freeProxySettings.minActivePerRegion
-                                            }
-                                            onChange={(event) =>
-                                                setFreeProxySettings(
-                                                    (prev) => ({
-                                                        ...prev,
-                                                        minActivePerRegion:
-                                                            Number(
-                                                                event.target
-                                                                    .value,
-                                                            ),
-                                                    }),
-                                                )
-                                            }
-                                        />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label htmlFor="free-proxy-target-active">
-                                            Target reserve
-                                        </Label>
-                                        <Input
-                                            id="free-proxy-target-active"
-                                            type="number"
-                                            min={
-                                                freeProxySettings.minActivePerRegion
-                                            }
-                                            value={
-                                                freeProxySettings.targetActivePerRegion
-                                            }
-                                            onChange={(event) =>
-                                                setFreeProxySettings(
-                                                    (prev) => ({
-                                                        ...prev,
-                                                        targetActivePerRegion:
-                                                            Number(
-                                                                event.target
-                                                                    .value,
-                                                            ),
-                                                    }),
-                                                )
-                                            }
-                                        />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label htmlFor="free-proxy-max-latency">
-                                            Max ms
-                                        </Label>
-                                        <Input
-                                            id="free-proxy-max-latency"
-                                            type="number"
-                                            min={500}
-                                            value={
-                                                freeProxySettings.maxLatencyMs
-                                            }
-                                            onChange={(event) =>
-                                                setFreeProxySettings(
-                                                    (prev) => ({
-                                                        ...prev,
-                                                        maxLatencyMs: Number(
-                                                            event.target.value,
-                                                        ),
-                                                    }),
-                                                )
-                                            }
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
 
-                        <div className="mt-5 rounded-lg border p-4">
-                            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                                <div>
-                                    <p className="text-sm font-semibold">
-                                        Regional pool scaling
-                                    </p>
-                                    <p className="text-muted-foreground text-xs">
-                                        Used regions build 50 ready clients plus
-                                        a target-validated replacement reserve.
-                                    </p>
-                                </div>
-                                <label className="flex items-center gap-2 text-xs">
-                                    <input
-                                        type="checkbox"
-                                        checked={
-                                            freeProxySettings.emergencyRecoveryEnabled
-                                        }
-                                        onChange={(event) =>
-                                            setFreeProxySettings((prev) => ({
-                                                ...prev,
-                                                emergencyRecoveryEnabled:
-                                                    event.target.checked,
-                                            }))
-                                        }
-                                    />
-                                    Emergency recovery
-                                </label>
-                            </div>
-                            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                                {[
-                                    {
-                                        id: "free-proxy-active-window",
-                                        label: "Used candidates",
-                                        value: freeProxySettings.activeCandidateLimit,
-                                        min: 1000,
-                                        key: "activeCandidateLimit" as const,
-                                    },
-                                    {
-                                        id: "free-proxy-idle-window",
-                                        label: "Idle candidates",
-                                        value: freeProxySettings.idleCandidateLimit,
-                                        min: 1000,
-                                        key: "idleCandidateLimit" as const,
-                                    },
-                                    {
-                                        id: "free-proxy-ready-target",
-                                        label: "Ready target",
-                                        value: freeProxySettings.readyTarget,
-                                        min: 1,
-                                        key: "readyTarget" as const,
-                                    },
-                                    {
-                                        id: "free-proxy-reserve-target",
-                                        label: "Reserve target",
-                                        value: freeProxySettings.reserveTarget,
-                                        min: 1,
-                                        key: "reserveTarget" as const,
-                                    },
-                                    {
-                                        id: "free-proxy-idle-target",
-                                        label: "Idle target",
-                                        value: freeProxySettings.idleTarget,
-                                        min: 1,
-                                        key: "idleTarget" as const,
-                                    },
-                                ].map((field) => (
-                                    <div key={field.id} className="space-y-2">
-                                        <Label htmlFor={field.id}>
-                                            {field.label}
-                                        </Label>
-                                        <Input
-                                            id={field.id}
-                                            type="number"
-                                            min={field.min}
-                                            value={field.value}
-                                            onChange={(event) =>
-                                                setFreeProxySettings(
-                                                    (prev) => ({
-                                                        ...prev,
-                                                        [field.key]: Number(
-                                                            event.target.value,
-                                                        ),
-                                                    }),
-                                                )
-                                            }
-                                        />
+                                <div className="mt-5 rounded-lg border p-4">
+                                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                        <div>
+                                            <p className="text-sm font-semibold">
+                                                Regional pool scaling
+                                            </p>
+                                            <p className="text-muted-foreground text-xs">
+                                                Used regions build 50 ready
+                                                clients plus a target-validated
+                                                replacement reserve.
+                                            </p>
+                                        </div>
+                                        <label className="flex items-center gap-2 text-xs">
+                                            <input
+                                                type="checkbox"
+                                                checked={
+                                                    freeProxySettings.emergencyRecoveryEnabled
+                                                }
+                                                onChange={(event) =>
+                                                    setFreeProxySettings(
+                                                        (prev) => ({
+                                                            ...prev,
+                                                            emergencyRecoveryEnabled:
+                                                                event.target
+                                                                    .checked,
+                                                        }),
+                                                    )
+                                                }
+                                            />
+                                            Emergency recovery
+                                        </label>
                                     </div>
-                                ))}
+                                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                                        {[
+                                            {
+                                                id: "free-proxy-active-window",
+                                                label: "Used candidates",
+                                                value: freeProxySettings.activeCandidateLimit,
+                                                min: 1000,
+                                                key: "activeCandidateLimit" as const,
+                                            },
+                                            {
+                                                id: "free-proxy-idle-window",
+                                                label: "Idle candidates",
+                                                value: freeProxySettings.idleCandidateLimit,
+                                                min: 1000,
+                                                key: "idleCandidateLimit" as const,
+                                            },
+                                            {
+                                                id: "free-proxy-ready-target",
+                                                label: "Ready target",
+                                                value: freeProxySettings.readyTarget,
+                                                min: 1,
+                                                key: "readyTarget" as const,
+                                            },
+                                            {
+                                                id: "free-proxy-reserve-target",
+                                                label: "Reserve target",
+                                                value: freeProxySettings.reserveTarget,
+                                                min: 1,
+                                                key: "reserveTarget" as const,
+                                            },
+                                            {
+                                                id: "free-proxy-idle-target",
+                                                label: "Idle target",
+                                                value: freeProxySettings.idleTarget,
+                                                min: 1,
+                                                key: "idleTarget" as const,
+                                            },
+                                        ].map((field) => (
+                                            <div
+                                                key={field.id}
+                                                className="space-y-2"
+                                            >
+                                                <Label htmlFor={field.id}>
+                                                    {field.label}
+                                                </Label>
+                                                <Input
+                                                    id={field.id}
+                                                    type="number"
+                                                    min={field.min}
+                                                    value={field.value}
+                                                    onChange={(event) =>
+                                                        setFreeProxySettings(
+                                                            (prev) => ({
+                                                                ...prev,
+                                                                [field.key]:
+                                                                    Number(
+                                                                        event
+                                                                            .target
+                                                                            .value,
+                                                                    ),
+                                                            }),
+                                                        )
+                                                    }
+                                                />
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
                             </div>
-                        </div>
+                        </details>
 
                         {freeProxySettings.enabled &&
                         freeProxyState.degradationReason ===
-                        "host_egress_limited" ? (
+                            "host_egress_limited" ? (
                             <div className="mt-5 flex gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
                                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                                 <div>
@@ -4193,166 +4379,175 @@ export function AdminClient({
                             </div>
                         ) : null}
 
-                        <div className="mt-5 rounded-lg border">
+                        <div className="mt-4 rounded-lg border">
                             <div className="border-border/60 flex items-center justify-between border-b px-4 py-3">
                                 <div>
                                     <p className="text-sm font-semibold">
                                         Region Health
                                     </p>
                                     <p className="text-muted-foreground text-xs">
-                                        Used regions progress toward 50 ready +
-                                        50 reserve; idle starter regions retain
-                                        their smaller baseline.
+                                        Compact live view. Open a region for
+                                        source and failure diagnostics.
                                     </p>
                                 </div>
                             </div>
                             <div className="divide-border/60 divide-y">
                                 {displayedFreeProxyRegions.length > 0 ? (
-                                    displayedFreeProxyRegions.map((region) => (
-                                        <div
-                                            key={region.region}
-                                            className="grid gap-3 px-4 py-3 text-sm sm:grid-cols-[150px_1fr_130px_90px_120px]"
-                                        >
-                                            <div className="font-semibold">
-                                                {getRegionLabel(region.region)}
-                                            </div>
-                                            <div className="flex flex-wrap gap-2 text-xs">
-                                                <Badge
-                                                    variant={
-                                                        region.healthy
-                                                            ? "secondary"
-                                                            : "outline"
-                                                    }
-                                                    className="rounded-md uppercase"
-                                                >
-                                                    {region.initializing
-                                                        ? "Waiting"
-                                                        : region.recoveryMode
-                                                          ? "Recovery"
-                                                        : region.stalled
-                                                          ? "Stalled"
-                                                          : freeProxySettings.enabled &&
-                                                              freeProxyState.degradationReason ===
-                                                              "host_egress_limited"
-                                                            ? "Egress limited"
-                                                          : !region.healthy
-                                                            ? "Degraded"
-                                                            : region.active +
-                                                                    region.reserve +
-                                                                    region.warming <
-                                                                freeProxyTargetForRegion(
-                                                                    region.activeMonitorCount,
-                                                                )
-                                                              ? "Building"
-                                                              : "Ready"}
-                                                </Badge>
-                                                <span className="text-muted-foreground">
-                                                    {region.initializing
-                                                        ? "Waiting for the worker to assign candidates"
-                                                        : `${region.stalled ? "Maintainer overdue · " : ""}${region.active}/${region.activeMonitorCount > 0 ? freeProxySettings.readyTarget : freeProxySettings.idleTarget} ready · ${region.reserve}/${region.activeMonitorCount > 0 ? freeProxySettings.reserveTarget : freeProxySettings.idleTarget} reserve · ${region.warming} warming · ${region.candidateWindow} candidates · ${region.activeMonitorCount} monitors`}
-                                                </span>
-                                            </div>
-                                            <div className="text-muted-foreground">
-                                                {region.checkedLastHour}/h checked
-                                                <span className="block text-[11px]">
-                                                    {region.promotedLastHour}/h
-                                                    promoted
-                                                </span>
-                                            </div>
-                                            <div className="text-muted-foreground">
-                                                {region.successRate === null
-                                                    ? "n/a"
-                                                    : `${region.successRate}%`}{" "}
-                                                hit rate
-                                                {region.topErrorStage ? (
-                                                    <span className="block text-[11px]">
-                                                        Top stage:{" "}
-                                                        {region.topErrorStage}
+                                    displayedFreeProxyRegions.map((region) => {
+                                        const used =
+                                            region.activeMonitorCount > 0;
+                                        const readyTarget = used
+                                            ? freeProxySettings.readyTarget
+                                            : freeProxySettings.idleTarget;
+                                        const reserveTarget = used
+                                            ? freeProxySettings.reserveTarget
+                                            : freeProxySettings.idleTarget;
+                                        const usable =
+                                            region.active +
+                                            region.reserve +
+                                            region.warming;
+                                        const readyProgress = Math.min(
+                                            100,
+                                            (usable /
+                                                Math.max(1, readyTarget)) *
+                                                100,
+                                        );
+                                        const reserveProgress = Math.min(
+                                            100,
+                                            (region.reserve /
+                                                Math.max(1, reserveTarget)) *
+                                                100,
+                                        );
+                                        const status = region.initializing
+                                            ? "Waiting"
+                                            : region.recoveryMode
+                                              ? "Recovery"
+                                              : region.stalled
+                                                ? "Stalled"
+                                                : freeProxySettings.enabled &&
+                                                    freeProxyState.degradationReason ===
+                                                        "host_egress_limited"
+                                                  ? "Egress limited"
+                                                  : usable === 0 && used
+                                                    ? "Outage"
+                                                    : usable < readyTarget
+                                                      ? "Building"
+                                                      : used
+                                                        ? "Ready"
+                                                        : "Standby";
+                                        return (
+                                            <button
+                                                key={region.region}
+                                                type="button"
+                                                onClick={() =>
+                                                    void openFreeProxyRegion(
+                                                        region.region,
+                                                    )
+                                                }
+                                                className="hover:bg-muted/30 grid w-full gap-3 px-4 py-3 text-left text-sm transition-colors lg:grid-cols-[170px_minmax(220px,1fr)_130px_125px_130px_20px] lg:items-center"
+                                            >
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-semibold">
+                                                        {getRegionLabel(
+                                                            region.region,
+                                                        )}
                                                     </span>
-                                                ) : null}
-                                            </div>
-                                            <div className="text-muted-foreground text-xs">
-                                                {region.minutesSinceLastSuccess ===
-                                                null
-                                                    ? "No success yet"
-                                                    : `${region.minutesSinceLastSuccess}m since success`}
-                                                <span className="block">
-                                                    {region.medianLatencyMs ===
-                                                    null
-                                                        ? "n/a"
-                                                        : `${region.medianLatencyMs}ms median`}
-                                                </span>
-                                            </div>
-                                        </div>
-                                    ))
+                                                    <Badge
+                                                        variant={
+                                                            status ===
+                                                                "Ready" ||
+                                                            status === "Standby"
+                                                                ? "secondary"
+                                                                : "outline"
+                                                        }
+                                                        className="rounded-md text-[9px] uppercase"
+                                                    >
+                                                        {status}
+                                                    </Badge>
+                                                </div>
+                                                <div className="grid gap-2 sm:grid-cols-2">
+                                                    <div>
+                                                        <div className="mb-1 flex justify-between text-[11px]">
+                                                            <span>Usable</span>
+                                                            <span className="font-medium">
+                                                                {usable}/
+                                                                {readyTarget}
+                                                            </span>
+                                                        </div>
+                                                        <div className="bg-muted h-1.5 overflow-hidden rounded-full">
+                                                            <div
+                                                                className="h-full rounded-full bg-emerald-500"
+                                                                style={{
+                                                                    width: `${readyProgress}%`,
+                                                                }}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="mb-1 flex justify-between text-[11px]">
+                                                            <span>Reserve</span>
+                                                            <span className="font-medium">
+                                                                {region.reserve}
+                                                                /{reserveTarget}
+                                                            </span>
+                                                        </div>
+                                                        <div className="bg-muted h-1.5 overflow-hidden rounded-full">
+                                                            <div
+                                                                className="bg-primary h-full rounded-full"
+                                                                style={{
+                                                                    width: `${reserveProgress}%`,
+                                                                }}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <p className="font-medium">
+                                                        {
+                                                            region.activeMonitorCount
+                                                        }{" "}
+                                                        monitors
+                                                    </p>
+                                                    <p className="text-muted-foreground text-[11px]">
+                                                        {region.candidateWindow.toLocaleString()}{" "}
+                                                        candidates
+                                                    </p>
+                                                </div>
+                                                <div>
+                                                    <p className="font-medium">
+                                                        {region.checkedLastHour}
+                                                        /h checked
+                                                    </p>
+                                                    <p className="text-muted-foreground text-[11px]">
+                                                        {
+                                                            region.promotedLastHour
+                                                        }{" "}
+                                                        had success
+                                                    </p>
+                                                </div>
+                                                <div>
+                                                    <p className="font-medium">
+                                                        {region.successRate ===
+                                                        null
+                                                            ? "n/a"
+                                                            : `${region.successRate}%`}{" "}
+                                                        pass rate
+                                                    </p>
+                                                    <p className="text-muted-foreground text-[11px]">
+                                                        {region.dueNow} due ·{" "}
+                                                        {region.neverChecked}{" "}
+                                                        unchecked
+                                                    </p>
+                                                </div>
+                                                <ChevronRight className="text-muted-foreground hidden size-4 lg:block" />
+                                            </button>
+                                        );
+                                    })
                                 ) : (
                                     <p className="text-muted-foreground px-4 py-6 text-sm">
                                         No region health checks yet. Import
                                         proxies and let the worker validate
                                         them.
-                                    </p>
-                                )}
-                            </div>
-                        </div>
-
-                        <div className="mt-5 rounded-lg border">
-                            <div className="border-border/60 border-b px-4 py-3">
-                                <p className="text-sm font-semibold">
-                                    Source and protocol yield
-                                </p>
-                                <p className="text-muted-foreground text-xs">
-                                    Latest regional outcome for rows checked in
-                                    the last 24 hours. This is pool state, not a
-                                    request-level success rate.
-                                </p>
-                            </div>
-                            <div className="divide-border/60 divide-y">
-                                {freeProxyState.sourceDiagnostics.length > 0 ? (
-                                    freeProxyState.sourceDiagnostics.map(
-                                        (diagnostic) => (
-                                            <div
-                                                key={`${diagnostic.region}:${diagnostic.source}:${diagnostic.protocol}`}
-                                                className="grid gap-2 px-4 py-3 text-xs sm:grid-cols-[170px_75px_100px_90px_100px_1fr]"
-                                            >
-                                                <span className="font-medium">
-                                                    {getRegionLabel(
-                                                        diagnostic.region,
-                                                    )}{" "}
-                                                    · {diagnostic.source}
-                                                </span>
-                                                <span className="uppercase">
-                                                    {diagnostic.protocol}
-                                                </span>
-                                                <span>
-                                                    {diagnostic.successful}/
-                                                    {diagnostic.checked} ok
-                                                </span>
-                                                <span>
-                                                    {diagnostic.successRate ===
-                                                    null
-                                                        ? "n/a"
-                                                        : `${diagnostic.successRate}%`}
-                                                </span>
-                                                <span>
-                                                    {diagnostic.active} fresh ·{" "}
-                                                    {diagnostic.reserve} reserve
-                                                    {" · "}
-                                                    {diagnostic.proxyCount}{" "}
-                                                    proxies ·{" "}
-                                                    {diagnostic.neverChecked}{" "}
-                                                    unchecked region rows
-                                                </span>
-                                                <span className="text-muted-foreground">
-                                                    {diagnostic.topErrorCode
-                                                        ? `Top error: ${diagnostic.topErrorCode}${diagnostic.topErrorStage ? ` during ${diagnostic.topErrorStage}` : ""}`
-                                                        : "No recent error class"}
-                                                </span>
-                                            </div>
-                                        ),
-                                    )
-                                ) : (
-                                    <p className="text-muted-foreground px-4 py-6 text-sm">
-                                        No source diagnostics yet.
                                     </p>
                                 )}
                             </div>
@@ -4517,6 +4712,118 @@ export function AdminClient({
                     </div>
                 </div>
             ) : null}
+
+            <Dialog
+                open={selectedFreeProxyRegion !== null}
+                onOpenChange={(open) => {
+                    if (!open) setSelectedFreeProxyRegion(null);
+                }}
+            >
+                <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
+                    <DialogHeader>
+                        <DialogTitle>
+                            {selectedFreeProxyRegion
+                                ? getRegionLabel(selectedFreeProxyRegion)
+                                : "Proxy region"}
+                        </DialogTitle>
+                        <DialogDescription>
+                            Regional capacity, backlog and source yield. Source
+                            diagnostics are loaded only when this view opens.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    {selectedFreeProxyHealth ? (
+                        <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                            {[
+                                ["Ready", selectedFreeProxyHealth.active],
+                                ["Reserve", selectedFreeProxyHealth.reserve],
+                                [
+                                    "Monitors",
+                                    selectedFreeProxyHealth.activeMonitorCount,
+                                ],
+                                [
+                                    "Checked 1h",
+                                    selectedFreeProxyHealth.checkedLastHour,
+                                ],
+                                ["Due now", selectedFreeProxyHealth.dueNow],
+                                [
+                                    "Unchecked",
+                                    selectedFreeProxyHealth.neverChecked,
+                                ],
+                            ].map(([label, value]) => (
+                                <div
+                                    key={label}
+                                    className="border-border/60 rounded-lg border px-3 py-2"
+                                >
+                                    <p className="text-muted-foreground text-[10px] uppercase">
+                                        {label}
+                                    </p>
+                                    <p className="mt-1 text-lg font-semibold">
+                                        {value}
+                                    </p>
+                                </div>
+                            ))}
+                        </div>
+                    ) : null}
+
+                    <div className="rounded-lg border">
+                        <div className="border-border/60 border-b px-4 py-3">
+                            <p className="text-sm font-semibold">
+                                Source and protocol yield · last hour
+                            </p>
+                            <p className="text-muted-foreground text-xs">
+                                Regional validation outcomes; this is not the
+                                member request success rate.
+                            </p>
+                        </div>
+                        {isLoadingFreeProxySources &&
+                        !selectedFreeProxySources ? (
+                            <div className="text-muted-foreground flex items-center gap-2 px-4 py-8 text-sm">
+                                <Activity className="size-4 animate-pulse" />
+                                Loading regional diagnostics…
+                            </div>
+                        ) : selectedFreeProxySources &&
+                          selectedFreeProxySources.length > 0 ? (
+                            <div className="divide-border/60 divide-y">
+                                {selectedFreeProxySources.map((diagnostic) => (
+                                    <div
+                                        key={`${diagnostic.source}:${diagnostic.protocol}`}
+                                        className="grid gap-2 px-4 py-3 text-xs md:grid-cols-[minmax(140px,1fr)_70px_100px_150px_minmax(160px,1fr)] md:items-center"
+                                    >
+                                        <span className="font-medium">
+                                            {diagnostic.source}
+                                        </span>
+                                        <span className="uppercase">
+                                            {diagnostic.protocol}
+                                        </span>
+                                        <span>
+                                            {diagnostic.successful}/
+                                            {diagnostic.checked} ok ·{" "}
+                                            {diagnostic.successRate === null
+                                                ? "n/a"
+                                                : `${diagnostic.successRate}%`}
+                                        </span>
+                                        <span>
+                                            {diagnostic.active} ready ·{" "}
+                                            {diagnostic.reserve} reserve ·{" "}
+                                            {diagnostic.neverChecked} unchecked
+                                        </span>
+                                        <span className="text-muted-foreground">
+                                            {diagnostic.topErrorCode
+                                                ? `${diagnostic.topErrorCode}${diagnostic.topErrorStage ? ` · ${diagnostic.topErrorStage}` : ""}`
+                                                : "No recent error class"}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <p className="text-muted-foreground px-4 py-8 text-sm">
+                                No source diagnostics in the last hour.
+                            </p>
+                        )}
+                    </div>
+                </DialogContent>
+            </Dialog>
 
             <Dialog open={isOpen} onOpenChange={setIsOpen}>
                 <DialogContent className="sm:max-w-md">

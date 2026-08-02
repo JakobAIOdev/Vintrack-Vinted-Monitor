@@ -17,9 +17,9 @@ func TestPruneUnselectedFreeProxiesSkipsEmptyKeepSet(t *testing.T) {
 func TestFreeProxyLaneQuotas(t *testing.T) {
 	bootstrap := freeProxyLaneQuotas(100, true)
 	wantBootstrap := []freeProxyLaneQuota{
-		{name: "explore", limit: 60},
-		{name: "fanout", limit: 25},
-		{name: "keepalive", limit: 15},
+		{name: "fanout", limit: 50},
+		{name: "keepalive", limit: 30},
+		{name: "explore", limit: 20},
 	}
 	if len(bootstrap) != len(wantBootstrap) {
 		t.Fatalf("bootstrap lanes = %#v, want %#v", bootstrap, wantBootstrap)

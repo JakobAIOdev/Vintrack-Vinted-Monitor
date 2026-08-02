@@ -13,6 +13,49 @@ import (
 	"github.com/lib/pq"
 )
 
+func TestFreeProxyMaintainerLeaseIsClusterWide(t *testing.T) {
+	databaseURL := os.Getenv("FREE_PROXY_STORE_INTEGRATION_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("FREE_PROXY_STORE_INTEGRATION_DATABASE_URL is not set")
+	}
+
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatalf("open postgres: %v", err)
+	}
+	defer db.Close()
+	store := &Store{db: db}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	releaseFirst, acquired, err := store.TryAcquireFreeProxyMaintainerLeaseContext(ctx)
+	if err != nil {
+		t.Fatalf("acquire first maintainer lease: %v", err)
+	}
+	if !acquired {
+		t.Fatal("first maintainer lease was not acquired")
+	}
+	defer releaseFirst()
+
+	_, acquired, err = store.TryAcquireFreeProxyMaintainerLeaseContext(ctx)
+	if err != nil {
+		t.Fatalf("acquire competing maintainer lease: %v", err)
+	}
+	if acquired {
+		t.Fatal("competing maintainer unexpectedly acquired cluster-wide lease")
+	}
+
+	releaseFirst()
+	releaseSecond, acquired, err := store.TryAcquireFreeProxyMaintainerLeaseContext(ctx)
+	if err != nil {
+		t.Fatalf("reacquire released maintainer lease: %v", err)
+	}
+	if !acquired {
+		t.Fatal("released maintainer lease could not be reacquired")
+	}
+	releaseSecond()
+}
+
 func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 	databaseURL := os.Getenv("FREE_PROXY_STORE_INTEGRATION_DATABASE_URL")
 	if databaseURL == "" {
@@ -133,6 +176,84 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 	if err := store.RecordFreeProxySuccessContext(ctx, proxyURL, region, 250); err != nil {
 		t.Fatalf("record success: %v", err)
 	}
+	if err := store.RecordFreeProxyInfrastructureFailureContext(
+		ctx,
+		proxyURL,
+		region,
+		0,
+		"maintainer host could not reach proxy warmup",
+		"timeout",
+		"warmup",
+	); err != nil {
+		t.Fatalf("record infrastructure failure: %v", err)
+	}
+	var infrastructureStatus string
+	var infrastructureFailureStreak int
+	var infrastructureGlobalFailures int
+	var infrastructureQuarantine sql.NullTime
+	var validatorSuccessCount int
+	if err := db.QueryRowContext(ctx, `
+		SELECT
+			fph.status,
+			fph.failure_streak,
+			fph.success_count,
+			fp.failure_count,
+			fp.quarantined_until
+		FROM free_proxy_health fph
+		JOIN free_proxies fp ON fp.id = fph.proxy_id
+		WHERE fp.proxy_url = $1
+		  AND fph.region = $2`, proxyURL, region).Scan(
+		&infrastructureStatus,
+		&infrastructureFailureStreak,
+		&validatorSuccessCount,
+		&infrastructureGlobalFailures,
+		&infrastructureQuarantine,
+	); err != nil {
+		t.Fatalf("read infrastructure failure state: %v", err)
+	}
+	if infrastructureStatus != "active" ||
+		infrastructureFailureStreak != 0 ||
+		validatorSuccessCount != 1 ||
+		infrastructureGlobalFailures != 0 ||
+		infrastructureQuarantine.Valid {
+		t.Fatalf(
+			"infrastructure failure degraded proven proxy: status=%s regional=%d successes=%d global=%d quarantine=%v",
+			infrastructureStatus,
+			infrastructureFailureStreak,
+			validatorSuccessCount,
+			infrastructureGlobalFailures,
+			infrastructureQuarantine,
+		)
+	}
+	if err := store.TouchFreeProxyRuntimeSuccessContext(
+		ctx,
+		proxyURL,
+		region,
+		175,
+	); err != nil {
+		t.Fatalf("touch sampled runtime success: %v", err)
+	}
+	var sampledSuccessCount int
+	var sampledLatency int
+	if err := db.QueryRowContext(ctx, `
+		SELECT fph.success_count, fph.latency_ms
+		FROM free_proxy_health fph
+		JOIN free_proxies fp ON fp.id = fph.proxy_id
+		WHERE fp.proxy_url = $1
+		  AND fph.region = $2`, proxyURL, region).Scan(
+		&sampledSuccessCount,
+		&sampledLatency,
+	); err != nil {
+		t.Fatalf("read sampled runtime success: %v", err)
+	}
+	if sampledSuccessCount != validatorSuccessCount || sampledLatency != 175 {
+		t.Fatalf(
+			"sampled runtime success changed validator count/latency = %d/%d, want %d/175",
+			sampledSuccessCount,
+			sampledLatency,
+			validatorSuccessCount,
+		)
+	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO free_proxy_health (proxy_id, region, status, next_check_at, updated_at)
 		SELECT id, 'sqlother', 'pending', NOW(), NOW()
@@ -156,6 +277,9 @@ func TestFreeProxyStoreQueriesAgainstPostgres(t *testing.T) {
 			"fanout candidates = %#v, want globally successful proxy",
 			fanoutCandidates,
 		)
+	}
+	if !fanoutCandidates[0].Proven {
+		t.Fatal("globally successful candidate was not marked proven")
 	}
 	if err := store.RecordFreeProxySuccessContext(ctx, proxyURL, "sqlother", 275); err != nil {
 		t.Fatalf("record fanout success: %v", err)
@@ -519,6 +643,11 @@ func TestFreeProxyClaimUsesRegionalSourceProtocolYield(t *testing.T) {
 		`DELETE FROM free_proxies WHERE source = ANY($1)`,
 		pq.Array([]string{highSource, lowSource}),
 	)
+	defer db.ExecContext(
+		context.Background(),
+		`DELETE FROM free_proxy_source_health_stats WHERE region = $1`,
+		region,
+	)
 
 	for _, record := range []FreeProxyRecord{
 		{
@@ -650,6 +779,33 @@ func TestFreeProxyClaimUsesRegionalSourceProtocolYield(t *testing.T) {
 		region,
 	); err != nil {
 		t.Fatalf("seed regional yield history: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO free_proxy_source_health_stats (
+			region,
+			source,
+			protocol,
+			checked_count,
+			success_count,
+			failure_count,
+			last_checked_at,
+			last_success_at,
+			updated_at
+		) VALUES
+			($1, $2, 'http', 100, 50, 50, NOW(), NOW(), NOW()),
+			($1, $3, 'http', 100, 1, 99, NOW(), NOW(), NOW())
+		ON CONFLICT (region, source, protocol) DO UPDATE
+		SET checked_count = EXCLUDED.checked_count,
+			success_count = EXCLUDED.success_count,
+			failure_count = EXCLUDED.failure_count,
+			last_checked_at = EXCLUDED.last_checked_at,
+			last_success_at = EXCLUDED.last_success_at,
+			updated_at = NOW()`,
+		region,
+		highSource,
+		lowSource,
+	); err != nil {
+		t.Fatalf("seed cached regional source yield: %v", err)
 	}
 
 	candidates, err := store.ClaimFreeProxiesDueForCheck(

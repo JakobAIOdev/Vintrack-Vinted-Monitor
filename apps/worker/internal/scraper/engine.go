@@ -29,6 +29,7 @@ const (
 	maximumFreeProxyClientPoolSize  = 100
 	freeProxyMaxInFlightPerClient   = 2
 	defaultFreeProxyHedgeDelayMilli = 900
+	freeProxyRuntimeSuccessInterval = 5 * time.Minute
 )
 
 type Engine struct {
@@ -45,6 +46,8 @@ type Engine struct {
 	enrichersMu            sync.RWMutex
 	notificationPolicies   map[int]bool
 	notificationPoliciesMu sync.RWMutex
+	freeProxySuccessSeen   map[string]time.Time
+	freeProxySuccessSeenMu sync.Mutex
 	discoveryMode          string
 	jobsCtx                context.Context
 	jobsCancel             context.CancelFunc
@@ -80,6 +83,7 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 		pools:                make(map[string]*ClientPool),
 		enrichers:            make(map[string]*SellerEnricher),
 		notificationPolicies: make(map[int]bool),
+		freeProxySuccessSeen: make(map[string]time.Time),
 		discoveryMode:        discoveryMode,
 		jobsCtx:              jobsCtx,
 		jobsCancel:           jobsCancel,
@@ -529,7 +533,18 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 		checks = nextCheck
 		gotSuccess := result.err == nil && result.status == 200
-		e.recordFreeProxyAttempts(proxySource, m.Region, result)
+		// Runtime failures only drive this process's ClientPool cooldowns and
+		// replacements. The regional maintainer is the sole authority for shared
+		// negative health transitions, while successful catalog evidence is
+		// sampled below to avoid the old per-request write storm.
+		if gotSuccess {
+			e.observeFreeProxyRuntimeSuccess(
+				proxySource,
+				m.Region,
+				result.client,
+				int(result.duration.Milliseconds()),
+			)
+		}
 
 		if !gotSuccess {
 			failureMessage := catalogFailureMessage(result)
@@ -814,78 +829,43 @@ func (e *Engine) isProxyGroupBandwidthLimitReached(m model.Monitor) bool {
 	return txBytes+rxBytes >= *m.ProxyGroupLimitBytes
 }
 
-func (e *Engine) recordFreeProxySuccess(proxySource string, client *Client, region string, latencyMs int) {
-	if proxySource != "free" || client == nil {
+// observeFreeProxyRuntimeSuccess preserves useful positive evidence without
+// restoring the old per-request write storm. Negative runtime outcomes remain
+// local to ClientPool; the maintainer must reproduce them before shared health
+// is degraded.
+func (e *Engine) observeFreeProxyRuntimeSuccess(
+	proxySource string,
+	region string,
+	client *Client,
+	latencyMs int,
+) {
+	if proxySource != "free" || client == nil || client.ProxyURL == "" {
 		return
 	}
-	e.db.RecordFreeProxySuccess(client.ProxyURL, region, latencyMs)
-}
-
-func (e *Engine) recordFreeProxyAttempts(proxySource string, region string, result catalogFetchResult) {
-	if proxySource != "free" {
+	proxyURL := client.ProxyURL
+	key := strings.ToLower(strings.TrimSpace(region)) + "\x00" + proxyURL
+	now := time.Now()
+	e.freeProxySuccessSeenMu.Lock()
+	lastSeen := e.freeProxySuccessSeen[key]
+	if !lastSeen.IsZero() && now.Sub(lastSeen) < freeProxyRuntimeSuccessInterval {
+		e.freeProxySuccessSeenMu.Unlock()
 		return
 	}
+	e.freeProxySuccessSeen[key] = now
+	e.freeProxySuccessSeenMu.Unlock()
 
-	if len(result.attempts) == 0 {
-		if result.err == nil && result.status == 200 {
-			e.recordFreeProxySuccess(proxySource, result.client, region, int(result.duration.Milliseconds()))
-		} else if result.client != nil && !errors.Is(result.err, context.Canceled) {
-			message := fmt.Sprintf("status %d", result.status)
-			if result.err != nil {
-				message = result.err.Error()
-			}
-			e.recordFreeProxyFailure(proxySource, result.client, region, result.status, message)
+	go func() {
+		ctx, cancel := context.WithTimeout(e.jobsCtx, 5*time.Second)
+		defer cancel()
+		if err := e.db.TouchFreeProxyRuntimeSuccessContext(
+			ctx,
+			proxyURL,
+			region,
+			latencyMs,
+		); err != nil {
+			log.Printf("free proxy runtime success update failed: %v", err)
 		}
-		return
-	}
-
-	for _, attempt := range result.attempts {
-		if attempt.err == nil && attempt.status == 200 {
-			e.recordFreeProxySuccess(proxySource, attempt.client, region, int(attempt.duration.Milliseconds()))
-			continue
-		}
-		if attempt.client == nil || errors.Is(attempt.err, context.Canceled) {
-			continue
-		}
-		message := fmt.Sprintf("status %d", attempt.status)
-		if attempt.err != nil {
-			message = attempt.err.Error()
-		}
-		e.recordFreeProxyFailure(proxySource, attempt.client, region, attempt.status, message)
-	}
-}
-
-func (e *Engine) recordFreeProxyFailure(proxySource string, client *Client, region string, statusCode int, message string) {
-	if proxySource != "free" || client == nil {
-		return
-	}
-	e.db.RecordFreeProxyFailureClass(
-		client.ProxyURL,
-		region,
-		statusCode,
-		message,
-		ClassifyFreeProxyFailure(errors.New(message), statusCode),
-		e.freeProxyFailureThreshold(),
-		e.freeProxyQuarantineMinutes(),
-	)
-}
-
-func (e *Engine) freeProxyFailureThreshold() int {
-	if value, ok, err := e.db.GetSettingValue("free_proxy_failure_threshold"); err == nil && ok {
-		if parsed, parseErr := strconv.Atoi(strings.TrimSpace(value)); parseErr == nil && parsed > 0 {
-			return parsed
-		}
-	}
-	return 3
-}
-
-func (e *Engine) freeProxyQuarantineMinutes() int {
-	if value, ok, err := e.db.GetSettingValue("free_proxy_quarantine_minutes"); err == nil && ok {
-		if parsed, parseErr := strconv.Atoi(strings.TrimSpace(value)); parseErr == nil && parsed > 0 {
-			return parsed
-		}
-	}
-	return 30
+	}()
 }
 
 func clientProxyLabel(client *Client, fallback string) string {

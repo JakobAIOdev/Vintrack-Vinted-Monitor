@@ -34,8 +34,7 @@ const FREE_PROXY_ACTIVE_CANDIDATE_LIMIT_KEY =
 const FREE_PROXY_IDLE_CANDIDATE_LIMIT_KEY =
     "free_proxy_candidate_limit_idle_region";
 const FREE_PROXY_READY_TARGET_KEY = "free_proxy_ready_target_active_region";
-const FREE_PROXY_RESERVE_TARGET_KEY =
-    "free_proxy_reserve_target_active_region";
+const FREE_PROXY_RESERVE_TARGET_KEY = "free_proxy_reserve_target_active_region";
 const FREE_PROXY_IDLE_TARGET_KEY = "free_proxy_idle_region_target";
 const FREE_PROXY_EMERGENCY_RECOVERY_KEY =
     "free_proxy_emergency_recovery_enabled";
@@ -173,6 +172,8 @@ type FreeProxyRegionRow = {
     promoted_last_hour: bigint;
     minutes_since_last_success: number | null;
     active_monitor_count: bigint;
+    due_now_count: bigint;
+    never_checked_count: bigint;
 };
 
 type FreeProxySourceDiagnosticRow = {
@@ -189,6 +190,49 @@ type FreeProxySourceDiagnosticRow = {
     top_error_code: string | null;
     top_error_stage: string | null;
 };
+
+type FreeProxyMaintainerRuntime = {
+    status: string;
+    heartbeatAt: string;
+    startedAt: string;
+    concurrency: number;
+    perRegionConcurrency: number;
+    batchPerRegion: number;
+    bootstrapBatchPerRegion: number;
+    checked: number;
+    passed: number;
+    failed: number;
+    canceled: number;
+    durationMs: number;
+};
+
+function parseFreeProxyMaintainerRuntime(
+    value: string | undefined,
+): FreeProxyMaintainerRuntime | null {
+    if (!value) return null;
+    try {
+        const parsed = JSON.parse(value) as Partial<FreeProxyMaintainerRuntime>;
+        if (!parsed.heartbeatAt || !parsed.status) return null;
+        return {
+            status: parsed.status,
+            heartbeatAt: parsed.heartbeatAt,
+            startedAt: parsed.startedAt ?? parsed.heartbeatAt,
+            concurrency: Number(parsed.concurrency ?? 0),
+            perRegionConcurrency: Number(parsed.perRegionConcurrency ?? 0),
+            batchPerRegion: Number(parsed.batchPerRegion ?? 0),
+            bootstrapBatchPerRegion: Number(
+                parsed.bootstrapBatchPerRegion ?? 0,
+            ),
+            checked: Number(parsed.checked ?? 0),
+            passed: Number(parsed.passed ?? 0),
+            failed: Number(parsed.failed ?? 0),
+            canceled: Number(parsed.canceled ?? 0),
+            durationMs: Number(parsed.durationMs ?? 0),
+        };
+    } catch {
+        return null;
+    }
+}
 
 type ParsedProxy = {
     proxyUrl: string;
@@ -1036,20 +1080,26 @@ export async function getFreeProxyAdminState() {
         settings,
         counts,
         regionRows,
-        sourceRows,
         recent,
         degradationSetting,
-    ] =
-        await Promise.all([
-            getFreeProxySettings(),
-            db.$queryRaw<FreeProxyStatusCountRow[]>`
+        runtimeSetting,
+    ] = await Promise.all([
+        getFreeProxySettings(),
+        db.$queryRaw<FreeProxyStatusCountRow[]>`
             SELECT status, COUNT(*)::bigint AS proxy_count
             FROM free_proxies
             GROUP BY status
         `,
-            db.$queryRaw<FreeProxyRegionRow[]>`
+        db.$queryRaw<FreeProxyRegionRow[]>`
+            WITH region_demand AS (
+                SELECT region, COUNT(*)::bigint AS active_monitor_count
+                FROM monitors
+                WHERE status = 'active'
+                  AND proxy_source = 'free'
+                GROUP BY region
+            )
             SELECT
-                region,
+                fph.region,
                 COUNT(*) FILTER (
                     WHERE (
                         status = 'active'
@@ -1110,12 +1160,12 @@ export async function getFreeProxyAdminState() {
                 )::bigint AS cooldown_count,
                 COUNT(*) FILTER (WHERE status = 'dead')::bigint AS dead_count,
                 COUNT(*) FILTER (
-                    WHERE last_checked_at >= NOW() - INTERVAL '24 hours'
+                    WHERE last_checked_at >= NOW() - INTERVAL '1 hour'
                       AND last_status_code = 200
                       AND last_error IS NULL
                 )::bigint AS recent_success_count,
                 COUNT(*) FILTER (
-                    WHERE last_checked_at >= NOW() - INTERVAL '24 hours'
+                    WHERE last_checked_at >= NOW() - INTERVAL '1 hour'
                 )::bigint AS recent_check_count,
                 percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms)
                     FILTER (
@@ -1139,7 +1189,7 @@ export async function getFreeProxyAdminState() {
                 mode() WITHIN GROUP (ORDER BY last_error_stage)
                     FILTER (
                         WHERE last_error_stage IS NOT NULL
-                          AND last_checked_at >= NOW() - INTERVAL '24 hours'
+                          AND last_checked_at >= NOW() - INTERVAL '1 hour'
                     ) AS top_error_stage,
                 COUNT(*)::bigint AS candidate_window,
                 COUNT(*) FILTER (
@@ -1150,119 +1200,48 @@ export async function getFreeProxyAdminState() {
                 )::bigint AS promoted_last_hour,
                 EXTRACT(EPOCH FROM (NOW() - MAX(last_success_at))) / 60.0
                     AS minutes_since_last_success,
-                COALESCE(MAX(region_demand.active_monitor_count), 0)::bigint
-                    AS active_monitor_count
-            FROM free_proxy_health
-            LEFT JOIN LATERAL (
-                SELECT COUNT(*)::bigint AS active_monitor_count
-                FROM monitors monitor
-                WHERE monitor.status = 'active'
-                  AND monitor.proxy_source = 'free'
-                  AND monitor.region = free_proxy_health.region
-            ) region_demand ON TRUE
-            WHERE candidate_window_token =
-                FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint
-            GROUP BY region
-            ORDER BY region
-        `,
-            db.$queryRaw<FreeProxySourceDiagnosticRow[]>`
-            SELECT
-                fph.region,
-                listed_source.source_name AS source,
-                fp.protocol,
-                COUNT(DISTINCT fp.id)::bigint AS proxy_count,
+                COALESCE(region_demand.active_monitor_count, 0)::bigint
+                    AS active_monitor_count,
                 COUNT(*) FILTER (
-                    WHERE fph.last_checked_at >= NOW() - INTERVAL '24 hours'
-                )::bigint AS checked_count,
+                    WHERE next_check_at IS NULL OR next_check_at <= NOW()
+                )::bigint AS due_now_count,
                 COUNT(*) FILTER (
-                    WHERE fph.last_checked_at >= NOW() - INTERVAL '24 hours'
-                      AND fph.last_status_code = 200
-                      AND fph.last_error IS NULL
-                )::bigint AS successful_count,
-                COUNT(*) FILTER (
-                    WHERE fph.last_checked_at IS NULL
-                )::bigint AS never_checked_count,
-                COUNT(*) FILTER (
-                    WHERE (
-                        fph.status = 'active'
-                        OR (
-                            fph.status = 'cooldown'
-                            AND fph.success_count > 0
-                            AND fph.failure_streak <= 2
-                        )
-                      )
-                      AND fph.last_success_at >= NOW() - INTERVAL '20 minutes'
-                )::bigint AS active_count,
-                COUNT(*) FILTER (
-                    WHERE (
-                        fph.status = 'active'
-                        OR (
-                            fph.status = 'cooldown'
-                            AND fph.success_count > 0
-                        )
-                      )
-                      AND fph.failure_streak <= 2
-                      AND fph.last_success_at >= NOW() - INTERVAL '90 minutes'
-                      AND fph.last_success_at < NOW() - INTERVAL '20 minutes'
-                )::bigint AS reserve_count,
-                COUNT(*) FILTER (
-                    WHERE fph.status = 'dead'
-                       OR (
-                            fph.status = 'cooldown'
-                            AND (
-                                fph.success_count = 0
-                                OR fph.failure_streak > 2
-                                OR fph.last_success_at IS NULL
-                                OR fph.last_success_at < NOW() - INTERVAL '90 minutes'
-                            )
-                       )
-                )::bigint AS cooldown_count,
-                mode() WITHIN GROUP (ORDER BY fph.last_error_code)
-                    FILTER (
-                        WHERE fph.last_error_code IS NOT NULL
-                          AND fph.last_checked_at >= NOW() - INTERVAL '24 hours'
-                    ) AS top_error_code,
-                mode() WITHIN GROUP (ORDER BY fph.last_error_stage)
-                    FILTER (
-                        WHERE fph.last_error_stage IS NOT NULL
-                          AND fph.last_checked_at >= NOW() - INTERVAL '24 hours'
-                    ) AS top_error_stage
-            FROM free_proxies fp
-            CROSS JOIN LATERAL unnest(
-                CASE
-                    WHEN cardinality(fp.sources) > 0 THEN fp.sources
-                    ELSE ARRAY[fp.source]::text[]
-                END
-            ) AS listed_source(source_name)
-            JOIN free_proxy_health fph ON fph.proxy_id = fp.id
+                    WHERE last_checked_at IS NULL
+                )::bigint AS never_checked_count
+            FROM free_proxy_health fph
+            LEFT JOIN region_demand ON region_demand.region = fph.region
             WHERE fph.candidate_window_token =
                 FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint
-            GROUP BY fph.region, listed_source.source_name, fp.protocol
-            ORDER BY fph.region, successful_count DESC, checked_count DESC, listed_source.source_name, fp.protocol
+            GROUP BY fph.region, region_demand.active_monitor_count
+            ORDER BY fph.region
         `,
-            db.free_proxies.findMany({
-                orderBy: [{ updated_at: "desc" }],
-                take: 20,
-                select: {
-                    id: true,
-                    proxy_url: true,
-                    protocol: true,
-                    source: true,
-                    status: true,
-                    success_count: true,
-                    failure_count: true,
-                    last_checked_at: true,
-                    last_success_at: true,
-                    last_failure_at: true,
-                    quarantined_until: true,
-                    last_error: true,
-                },
-            }),
-            db.app_settings.findUnique({
-                where: { key: "free_proxy_degradation_reason" },
-                select: { value: true },
-            }),
-        ]);
+        db.free_proxies.findMany({
+            orderBy: [{ updated_at: "desc" }],
+            take: 20,
+            select: {
+                id: true,
+                proxy_url: true,
+                protocol: true,
+                source: true,
+                status: true,
+                success_count: true,
+                failure_count: true,
+                last_checked_at: true,
+                last_success_at: true,
+                last_failure_at: true,
+                quarantined_until: true,
+                last_error: true,
+            },
+        }),
+        db.app_settings.findUnique({
+            where: { key: "free_proxy_degradation_reason" },
+            select: { value: true },
+        }),
+        db.app_settings.findUnique({
+            where: { key: "free_proxy_maintainer_runtime" },
+            select: { value: true },
+        }),
+    ]);
 
     const countsByStatus = Object.fromEntries(
         counts.map((row) => [row.status, Number(row.proxy_count)]),
@@ -1287,6 +1266,9 @@ export async function getFreeProxyAdminState() {
             degradationSetting?.value === "host_egress_limited"
                 ? ("host_egress_limited" as const)
                 : null,
+        maintainerRuntime: parseFreeProxyMaintainerRuntime(
+            runtimeSetting?.value,
+        ),
         counts: {
             active: activeHealthCount,
             pending: pendingHealthCount || (countsByStatus.pending ?? 0),
@@ -1301,6 +1283,10 @@ export async function getFreeProxyAdminState() {
         regions: regionRows.map((row) => {
             const recentSuccessCount = Number(row.recent_success_count);
             const recentCheckCount = Number(row.recent_check_count);
+            const usableCount =
+                Number(row.active_count) +
+                Number(row.reserve_count) +
+                Number(row.warming_count);
 
             return {
                 region: row.region,
@@ -1334,7 +1320,9 @@ export async function getFreeProxyAdminState() {
                 recoveryMode:
                     settings.emergencyRecoveryEnabled &&
                     Number(row.active_monitor_count) > 0 &&
-                    Number(row.active_count) < settings.readyTarget,
+                    usableCount < settings.readyTarget,
+                dueNow: Number(row.due_now_count),
+                neverChecked: Number(row.never_checked_count),
                 healthy:
                     Number(row.active_count) +
                         Number(row.reserve_count) +
@@ -1342,30 +1330,119 @@ export async function getFreeProxyAdminState() {
                     settings.minActivePerRegion,
             };
         }),
-        sourceDiagnostics: sourceRows.map((row) => {
-            const checked = Number(row.checked_count);
-            const successful = Number(row.successful_count);
-            return {
-                region: row.region,
-                source: row.source,
-                protocol: row.protocol,
-                proxyCount: Number(row.proxy_count),
-                checked,
-                successful,
-                successRate:
-                    checked > 0
-                        ? Math.round((successful / checked) * 1000) / 10
-                        : null,
-                neverChecked: Number(row.never_checked_count),
-                active: Number(row.active_count),
-                reserve: Number(row.reserve_count),
-                cooldown: Number(row.cooldown_count),
-                topErrorCode: row.top_error_code,
-                topErrorStage: row.top_error_stage,
-            };
-        }),
+        sourceDiagnostics: [],
         recent,
     };
+}
+
+export async function getFreeProxySourceDiagnostics(region: string) {
+    await requireAdmin();
+    const normalizedRegion = region.trim().toLowerCase();
+    if (!/^[a-z]{2}$/.test(normalizedRegion)) {
+        return [];
+    }
+
+    const rows = await db.$queryRaw<FreeProxySourceDiagnosticRow[]>`
+        SELECT
+            fph.region,
+            listed_source.source_name AS source,
+            fp.protocol,
+            COUNT(DISTINCT fp.id)::bigint AS proxy_count,
+            COUNT(*) FILTER (
+                WHERE fph.last_checked_at >= NOW() - INTERVAL '1 hour'
+            )::bigint AS checked_count,
+            COUNT(*) FILTER (
+                WHERE fph.last_checked_at >= NOW() - INTERVAL '1 hour'
+                  AND fph.last_status_code = 200
+                  AND fph.last_error IS NULL
+            )::bigint AS successful_count,
+            COUNT(*) FILTER (
+                WHERE fph.last_checked_at IS NULL
+            )::bigint AS never_checked_count,
+            COUNT(*) FILTER (
+                WHERE (
+                    fph.status = 'active'
+                    OR (
+                        fph.status = 'cooldown'
+                        AND fph.success_count > 0
+                        AND fph.failure_streak <= 2
+                    )
+                  )
+                  AND fph.last_success_at >= NOW() - INTERVAL '20 minutes'
+            )::bigint AS active_count,
+            COUNT(*) FILTER (
+                WHERE (
+                    fph.status = 'active'
+                    OR (
+                        fph.status = 'cooldown'
+                        AND fph.success_count > 0
+                    )
+                  )
+                  AND fph.failure_streak <= 2
+                  AND fph.last_success_at >= NOW() - INTERVAL '90 minutes'
+                  AND fph.last_success_at < NOW() - INTERVAL '20 minutes'
+            )::bigint AS reserve_count,
+            COUNT(*) FILTER (
+                WHERE fph.status = 'dead'
+                   OR (
+                        fph.status = 'cooldown'
+                        AND (
+                            fph.success_count = 0
+                            OR fph.failure_streak > 2
+                            OR fph.last_success_at IS NULL
+                            OR fph.last_success_at < NOW() - INTERVAL '90 minutes'
+                        )
+                   )
+            )::bigint AS cooldown_count,
+            mode() WITHIN GROUP (ORDER BY fph.last_error_code)
+                FILTER (
+                    WHERE fph.last_error_code IS NOT NULL
+                      AND fph.last_checked_at >= NOW() - INTERVAL '1 hour'
+                ) AS top_error_code,
+            mode() WITHIN GROUP (ORDER BY fph.last_error_stage)
+                FILTER (
+                    WHERE fph.last_error_stage IS NOT NULL
+                      AND fph.last_checked_at >= NOW() - INTERVAL '1 hour'
+                ) AS top_error_stage
+        FROM free_proxies fp
+        CROSS JOIN LATERAL unnest(
+            CASE
+                WHEN cardinality(fp.sources) > 0 THEN fp.sources
+                ELSE ARRAY[fp.source]::text[]
+            END
+        ) AS listed_source(source_name)
+        JOIN free_proxy_health fph ON fph.proxy_id = fp.id
+        WHERE fph.region = ${normalizedRegion}
+          AND fph.candidate_window_token =
+            FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint
+        GROUP BY fph.region, listed_source.source_name, fp.protocol
+        ORDER BY successful_count DESC, checked_count DESC,
+            listed_source.source_name, fp.protocol
+        LIMIT 12
+    `;
+
+    return rows.map((row) => {
+        const checked = Number(row.checked_count);
+        const successful = Number(row.successful_count);
+        return {
+            region: row.region,
+            source: row.source,
+            protocol: row.protocol,
+            proxyCount: Number(row.proxy_count),
+            checked,
+            successful,
+            successRate:
+                checked > 0
+                    ? Math.round((successful / checked) * 1000) / 10
+                    : null,
+            neverChecked: Number(row.never_checked_count),
+            active: Number(row.active_count),
+            reserve: Number(row.reserve_count),
+            cooldown: Number(row.cooldown_count),
+            topErrorCode: row.top_error_code,
+            topErrorStage: row.top_error_stage,
+        };
+    });
 }
 
 export async function updateFreeProxySettings(formData: FormData) {
