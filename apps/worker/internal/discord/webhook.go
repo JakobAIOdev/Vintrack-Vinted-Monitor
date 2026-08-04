@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -16,12 +17,12 @@ import (
 
 var httpClient = &http.Client{Timeout: 5 * time.Second}
 
-func SendWebhook(webhookURL string, item model.Item, monitorName string, proxySource string) error {
+func SendWebhook(webhookURL string, item model.Item, monitorName string, proxySource string, style model.NotificationMessageStyle) error {
 	if webhookURL == "" {
 		return nil
 	}
 
-	payload := buildItemWebhookPayload(item, monitorName, proxySource)
+	payload := buildItemWebhookPayload(item, monitorName, proxySource, style)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		log.Printf("webhook marshal error: %v", err)
@@ -64,7 +65,66 @@ func SendWebhook(webhookURL string, item model.Item, monitorName string, proxySo
 	return fmt.Errorf("discord webhook returned %d", resp.StatusCode)
 }
 
-func buildItemWebhookPayload(item model.Item, monitorName string, proxySource string) map[string]interface{} {
+func buildItemWebhookPayload(item model.Item, monitorName string, proxySource string, style model.NotificationMessageStyle) map[string]interface{} {
+	if model.NormalizeNotificationMessageStyle(style) == model.NotificationMessageStyleCompact {
+		return buildCompactItemWebhookPayload(item, monitorName)
+	}
+	return buildRichItemWebhookPayload(item, monitorName, proxySource)
+}
+
+func buildCompactItemWebhookPayload(item model.Item, monitorName string) map[string]interface{} {
+	embed := map[string]interface{}{
+		"title":       fallbackText(item.Title, "New Vinted listing"),
+		"color":       0x007782,
+		"description": itemPriceValue(item),
+	}
+	if monitorName != "" {
+		embed["author"] = map[string]string{
+			"name": fmt.Sprintf("New match • %s", monitorName),
+		}
+	}
+	if fields := buildCompactFields(item); len(fields) > 0 {
+		embed["fields"] = fields
+	}
+	if imageURL := absoluteDashboardURL(item.ImageURL); imageURL != "" {
+		embed["thumbnail"] = map[string]string{"url": imageURL}
+	}
+	if isHTTPURL(item.URL) {
+		embed["url"] = item.URL
+	}
+
+	return map[string]interface{}{
+		"username":   "Vintrack",
+		"avatar_url": "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
+		"embeds":     []map[string]interface{}{embed},
+	}
+}
+
+func buildCompactFields(item model.Item) []map[string]interface{} {
+	values := []struct {
+		name  string
+		value string
+	}{
+		{name: "Brand", value: item.Brand},
+		{name: "Size", value: item.Size},
+		{name: "Condition", value: item.Condition},
+		{name: "Region", value: item.Location},
+		{name: "Seller rating", value: item.Rating},
+	}
+
+	fields := make([]map[string]interface{}, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value.value) == "" {
+			continue
+		}
+		fields = append(fields, map[string]interface{}{
+			"name": value.name, "value": value.value, "inline": true,
+		})
+	}
+	return fields
+}
+
+func buildRichItemWebhookPayload(item model.Item, monitorName string, proxySource string) map[string]interface{} {
 	baseURL := os.Getenv("DASHBOARD_URL")
 	if baseURL == "" {
 		baseURL = "http://localhost:3000"
@@ -170,13 +230,8 @@ func SendStartupWebhook(webhookURL string, monitorName string) {
 }
 
 func buildFields(item model.Item) []map[string]interface{} {
-	priceValue := fmt.Sprintf("**%s**", fallbackText(item.Price, "Unknown"))
-	if item.TotalPrice != "" && item.TotalPrice != item.Price {
-		priceValue = fmt.Sprintf("**%s**\n%s total", fallbackText(item.Price, "Unknown"), item.TotalPrice)
-	}
-
 	fields := []map[string]interface{}{
-		{"name": "Price", "value": priceValue, "inline": true},
+		{"name": "Price", "value": itemPriceValue(item), "inline": true},
 		{"name": "Size", "value": fallbackText(item.Size, "Not specified"), "inline": true},
 		{"name": "Condition", "value": fallbackText(item.Condition, "Not specified"), "inline": true},
 	}
@@ -208,6 +263,19 @@ func buildFields(item model.Item) []map[string]interface{} {
 	}
 
 	return fields
+}
+
+func itemPriceValue(item model.Item) string {
+	priceValue := fmt.Sprintf("**%s**", fallbackText(item.Price, "Unknown"))
+	if item.TotalPrice != "" && item.TotalPrice != item.Price {
+		priceValue = fmt.Sprintf("**%s**\n%s total", fallbackText(item.Price, "Unknown"), item.TotalPrice)
+	}
+	return priceValue
+}
+
+func isHTTPURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != ""
 }
 
 func fallbackText(value string, fallback string) string {

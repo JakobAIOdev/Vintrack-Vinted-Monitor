@@ -138,6 +138,10 @@ https://vintrack.example.com/api/telegram/webhook
 Users connect through a generated one-time command. They do not need access to
 the bot token or a numeric chat ID.
 
+Users can choose `Rich` or `Compact` item alerts in **Dashboard settings**.
+Message styles are account-wide but configured independently for Discord and
+Telegram; the default remains `Rich` for both channels.
+
 ## Proxy sources
 
 Vintrack can use:

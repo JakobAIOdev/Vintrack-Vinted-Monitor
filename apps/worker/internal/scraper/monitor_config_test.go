@@ -102,7 +102,7 @@ func TestMonitorConfigFingerprintIgnoresWebhookState(t *testing.T) {
 }
 
 func TestNotificationPolicyRefreshDoesNotChangeMonitorFingerprint(t *testing.T) {
-	engine := &Engine{notificationPolicies: make(map[int]bool)}
+	engine := &Engine{notificationPolicies: make(map[int]notificationPolicy)}
 	monitor := model.Monitor{
 		ID:                   42,
 		Query:                "nike",
@@ -113,10 +113,16 @@ func TestNotificationPolicyRefreshDoesNotChangeMonitorFingerprint(t *testing.T) 
 
 	muted := monitor
 	muted.NotificationsEnabled = false
+	muted.TelegramMessageStyle = model.NotificationMessageStyleCompact
+	muted.DiscordMessageStyle = model.NotificationMessageStyleCompact
 	engine.SyncNotificationPolicies([]model.Monitor{muted})
 
 	if engine.monitorNotificationsEnabled(monitor) {
 		t.Fatal("notification policy refresh did not mute the monitor")
+	}
+	telegramStyle, discordStyle := engine.monitorNotificationMessageStyles(monitor)
+	if telegramStyle != model.NotificationMessageStyleCompact || discordStyle != model.NotificationMessageStyleCompact {
+		t.Fatalf("notification policy refresh did not update message styles: telegram=%q discord=%q", telegramStyle, discordStyle)
 	}
 	if monitorConfigFingerprint(muted) != originalFingerprint {
 		t.Fatal("notification policy refresh should not restart the monitor")

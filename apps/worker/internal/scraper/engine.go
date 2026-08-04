@@ -44,7 +44,7 @@ type Engine struct {
 	poolsMu                sync.RWMutex
 	enrichers              map[string]*SellerEnricher
 	enrichersMu            sync.RWMutex
-	notificationPolicies   map[int]bool
+	notificationPolicies   map[int]notificationPolicy
 	notificationPoliciesMu sync.RWMutex
 	freeProxySuccessSeen   map[string]time.Time
 	freeProxySuccessSeenMu sync.Mutex
@@ -56,6 +56,12 @@ type Engine struct {
 	telegramJobs           chan alertJob
 	enrichmentJobs         chan enrichmentJob
 	jobsWG                 sync.WaitGroup
+}
+
+type notificationPolicy struct {
+	enabled       bool
+	telegramStyle model.NotificationMessageStyle
+	discordStyle  model.NotificationMessageStyle
 }
 
 func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools) *Engine {
@@ -82,7 +88,7 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 		freePoolSize:         freePoolSize,
 		pools:                make(map[string]*ClientPool),
 		enrichers:            make(map[string]*SellerEnricher),
-		notificationPolicies: make(map[int]bool),
+		notificationPolicies: make(map[int]notificationPolicy),
 		freeProxySuccessSeen: make(map[string]time.Time),
 		discoveryMode:        discoveryMode,
 		jobsCtx:              jobsCtx,
@@ -97,9 +103,13 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 }
 
 func (e *Engine) SyncNotificationPolicies(monitors []model.Monitor) {
-	policies := make(map[int]bool, len(monitors))
+	policies := make(map[int]notificationPolicy, len(monitors))
 	for _, monitor := range monitors {
-		policies[monitor.ID] = monitor.NotificationsEnabled
+		policies[monitor.ID] = notificationPolicy{
+			enabled:       monitor.NotificationsEnabled,
+			telegramStyle: model.NormalizeNotificationMessageStyle(monitor.TelegramMessageStyle),
+			discordStyle:  model.NormalizeNotificationMessageStyle(monitor.DiscordMessageStyle),
+		}
 	}
 
 	e.notificationPoliciesMu.Lock()
@@ -109,12 +119,22 @@ func (e *Engine) SyncNotificationPolicies(monitors []model.Monitor) {
 
 func (e *Engine) monitorNotificationsEnabled(monitor model.Monitor) bool {
 	e.notificationPoliciesMu.RLock()
-	enabled, ok := e.notificationPolicies[monitor.ID]
+	policy, ok := e.notificationPolicies[monitor.ID]
 	e.notificationPoliciesMu.RUnlock()
 	if ok {
-		return enabled
+		return policy.enabled
 	}
 	return monitor.NotificationsEnabled
+}
+
+func (e *Engine) monitorNotificationMessageStyles(monitor model.Monitor) (model.NotificationMessageStyle, model.NotificationMessageStyle) {
+	e.notificationPoliciesMu.RLock()
+	policy, ok := e.notificationPolicies[monitor.ID]
+	e.notificationPoliciesMu.RUnlock()
+	if ok {
+		return policy.telegramStyle, policy.discordStyle
+	}
+	return model.NormalizeNotificationMessageStyle(monitor.TelegramMessageStyle), model.NormalizeNotificationMessageStyle(monitor.DiscordMessageStyle)
 }
 
 func (e *Engine) ServerProxyVersion() uint64 {

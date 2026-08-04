@@ -81,6 +81,49 @@ test.describe("dashboard overview", () => {
         });
     });
 
+    test("persists independent Telegram and Discord message styles", async ({
+        page,
+    }, testInfo) => {
+        test.skip(
+            testInfo.project.name !== "chromium",
+            "Global notification preference mutation is covered once.",
+        );
+        await page.goto("/dashboard");
+        await page.getByRole("button", { name: "Dashboard settings" }).click();
+
+        const settings = page.getByRole("dialog", {
+            name: "Dashboard settings",
+        });
+        await settings.getByLabel("Telegram").selectOption("compact");
+        await settings.getByLabel("Discord").selectOption("compact");
+        await expect(settings.getByLabel("Telegram")).toHaveValue("compact");
+        await expect(settings.getByLabel("Discord")).toHaveValue("compact");
+        await expect(settings.getByLabel("Telegram")).toBeEnabled();
+        await expect(settings.getByLabel("Discord")).toBeEnabled();
+
+        await settings
+            .getByRole("button", { name: "Close", exact: true })
+            .last()
+            .click();
+        await page.reload();
+        await page.getByRole("button", { name: "Dashboard settings" }).click();
+
+        const reloadedSettings = page.getByRole("dialog", {
+            name: "Dashboard settings",
+        });
+        await expect(reloadedSettings.getByLabel("Telegram")).toHaveValue(
+            "compact",
+        );
+        await expect(reloadedSettings.getByLabel("Discord")).toHaveValue(
+            "compact",
+        );
+
+        await reloadedSettings.getByLabel("Telegram").selectOption("rich");
+        await reloadedSettings.getByLabel("Discord").selectOption("rich");
+        await expect(reloadedSettings.getByLabel("Telegram")).toBeEnabled();
+        await expect(reloadedSettings.getByLabel("Discord")).toBeEnabled();
+    });
+
     test("bulk edits query delay and quiet hours", async ({ page }) => {
         await page.goto("/dashboard");
 

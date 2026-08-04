@@ -45,6 +45,8 @@ model User {
   role                      String    @default("free") @db.VarChar(20)
   monitor_onboarding_status String    @default("pending") @db.VarChar(20)
   dedupe_monitor_alerts     Boolean   @default(false)
+  telegram_message_style    String    @default("rich") @db.VarChar(20)
+  discord_message_style     String    @default("rich") @db.VarChar(20)
   accounts                  Account[]
   sessions                  Session[]
 

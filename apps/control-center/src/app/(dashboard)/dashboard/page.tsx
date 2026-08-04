@@ -6,6 +6,7 @@ import { DashboardClient, type Monitor } from "./client";
 import { getBannedSellerIds, visibleSellerWhere } from "@/lib/seller-bans";
 import { getFreeProxyPoolHealth } from "@/lib/free-proxy-health";
 import { normalizeMonitorOnboardingStatus } from "@/lib/monitor-presets";
+import { normalizeNotificationMessageStyle } from "@/lib/notification-message-style";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,8 @@ export default async function DashboardPage() {
         where: { id: session.user.id },
         select: {
             dedupe_monitor_alerts: true,
+            telegram_message_style: true,
+            discord_message_style: true,
             monitor_onboarding_status: true,
         },
     });
@@ -112,6 +115,12 @@ export default async function DashboardPage() {
             initialDedupeMonitorAlerts={
                 userSettings?.dedupe_monitor_alerts ?? false
             }
+            initialTelegramMessageStyle={normalizeNotificationMessageStyle(
+                userSettings?.telegram_message_style,
+            )}
+            initialDiscordMessageStyle={normalizeNotificationMessageStyle(
+                userSettings?.discord_message_style,
+            )}
             quickStartEligible={quickStartEligible}
             initialQuickStartOpen={
                 quickStartEligible && onboardingStatus === "pending"

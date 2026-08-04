@@ -75,7 +75,7 @@ func TestSendItemUsesPhotoAndEscapesCaption(t *testing.T) {
 		Condition: "New",
 		URL:       "https://example.test/item?x=1&y=2",
 		ImageURL:  "https://example.test/image.jpg",
-	}, "monitor <one>", "server")
+	}, "monitor <one>", "server", model.NotificationMessageStyleRich)
 
 	if payload["chat_id"] != "-1001" {
 		t.Fatalf("unexpected chat_id: %v", payload["chat_id"])
@@ -90,6 +90,98 @@ func TestSendItemUsesPhotoAndEscapesCaption(t *testing.T) {
 	if strings.Contains(caption, "A&B") {
 		t.Fatalf("caption did not escape brand: %q", caption)
 	}
+}
+
+func TestSendItemCompactUsesSmallPreviewKeyDetailsAndVintedButton(t *testing.T) {
+	var payload map[string]interface{}
+	withTelegramServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bottest-token/sendMessage" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	})
+
+	SendItem("-1001", model.Item{
+		MonitorID:   7,
+		Title:       "Nike <Dunk>",
+		Brand:       "Nike",
+		Price:       "12 EUR",
+		TotalPrice:  "14 EUR",
+		Size:        "42",
+		Condition:   "New",
+		URL:         "https://example.test/item",
+		ImageURL:    "https://example.test/image.jpg",
+		Location:    "Berlin",
+		Rating:      "4.9 (120)",
+		SellerLogin: "seller",
+		SellerURL:   "https://example.test/seller",
+	}, "monitor", "server", model.NotificationMessageStyleCompact)
+
+	if _, ok := payload["disable_web_page_preview"]; ok {
+		t.Fatalf("compact payload disabled its small image preview: %#v", payload)
+	}
+	preview := payload["link_preview_options"].(map[string]interface{})
+	if preview["url"] != "https://example.test/image.jpg" || preview["prefer_small_media"] != true || preview["show_above_text"] != false {
+		t.Fatalf("unexpected compact preview options: %#v", preview)
+	}
+	text, _ := payload["text"].(string)
+	if text != "<b>Nike &lt;Dunk&gt;</b>\n💰 <b>12 EUR (14 EUR)</b>\n🏷️ Nike • 📏 42\n✨ New\n📍 Berlin • ⭐ 4.9 (120)\n📡 <i>monitor</i>" {
+		t.Fatalf("unexpected compact text: %q", text)
+	}
+	for _, excluded := range []string{"seller", "server"} {
+		if strings.Contains(text, excluded) {
+			t.Fatalf("compact text contained %q: %q", excluded, text)
+		}
+	}
+	keyboard := payload["reply_markup"].(map[string]interface{})
+	rows := keyboard["inline_keyboard"].([]interface{})
+	buttons := rows[0].([]interface{})
+	if len(buttons) != 1 {
+		t.Fatalf("expected one compact button, got %d", len(buttons))
+	}
+	button := buttons[0].(map[string]interface{})
+	if button["text"] != "View on Vinted" || button["url"] != "https://example.test/item" {
+		t.Fatalf("unexpected compact button: %#v", button)
+	}
+}
+
+func TestSendItemCompactSendsTextWithoutInvalidURLButton(t *testing.T) {
+	var payload map[string]interface{}
+	withTelegramServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	SendItem("-1001", model.Item{Title: "Item", Price: "12 EUR", URL: "not-a-url"}, "monitor", "server", model.NotificationMessageStyleCompact)
+
+	if _, ok := payload["reply_markup"]; ok {
+		t.Fatalf("compact payload included keyboard for invalid URL: %#v", payload)
+	}
+	if payload["disable_web_page_preview"] != true {
+		t.Fatalf("compact payload without a public image did not disable previews: %#v", payload)
+	}
+}
+
+func TestSendItemUnknownStyleFallsBackToRich(t *testing.T) {
+	withTelegramServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bottest-token/sendPhoto" {
+			t.Fatalf("unknown style did not use rich photo payload: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	SendItem("-1001", model.Item{
+		Title:    "Item",
+		Price:    "12 EUR",
+		URL:      "https://example.test/item",
+		ImageURL: "https://example.test/image.jpg",
+	}, "monitor", "server", model.NotificationMessageStyle("unknown"))
 }
 
 func TestSendItemFallsBackToMessageWhenPhotoFails(t *testing.T) {
@@ -113,7 +205,7 @@ func TestSendItemFallsBackToMessageWhenPhotoFails(t *testing.T) {
 		Price:     "12 EUR",
 		URL:       "https://example.test/item",
 		ImageURL:  "https://example.test/image.jpg",
-	}, "monitor", "server")
+	}, "monitor", "server", model.NotificationMessageStyleRich)
 
 	if len(calls) != 2 {
 		t.Fatalf("expected photo plus fallback message, got %v", calls)
@@ -146,7 +238,7 @@ func TestSendItemRetriesPhotoTimeout(t *testing.T) {
 		Price:     "12 EUR",
 		URL:       "https://example.test/item",
 		ImageURL:  "https://example.test/image.jpg",
-	}, "monitor", "server")
+	}, "monitor", "server", model.NotificationMessageStyleRich)
 
 	pathsMu.Lock()
 	gotPaths := append([]string(nil), paths...)
@@ -185,7 +277,7 @@ func TestSendItemSkipsInvalidDashboardButton(t *testing.T) {
 		Title:     "Item",
 		Price:     "12 EUR",
 		URL:       "https://example.test/item",
-	}, "monitor", "server")
+	}, "monitor", "server", model.NotificationMessageStyleRich)
 
 	keyboard := payload["reply_markup"].(map[string]interface{})
 	rows := keyboard["inline_keyboard"].([]interface{})
@@ -218,7 +310,7 @@ func TestSendItemIncludesPublicDashboardButton(t *testing.T) {
 		Title:     "Item",
 		Price:     "12 EUR",
 		URL:       "https://example.test/item",
-	}, "monitor", "server")
+	}, "monitor", "server", model.NotificationMessageStyleRich)
 
 	keyboard := payload["reply_markup"].(map[string]interface{})
 	rows := keyboard["inline_keyboard"].([]interface{})

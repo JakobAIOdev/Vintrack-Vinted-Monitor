@@ -46,8 +46,36 @@ func safeTelegramRequestError(err error) error {
 	return &telegramRequestError{cause: err, message: message}
 }
 
-func SendItem(chatID string, item model.Item, monitorName string, proxySource string) error {
+func SendItem(chatID string, item model.Item, monitorName string, proxySource string, style model.NotificationMessageStyle) error {
 	if chatID == "" {
+		return nil
+	}
+	style = model.NormalizeNotificationMessageStyle(style)
+
+	if style == model.NotificationMessageStyleCompact {
+		payload := map[string]interface{}{
+			"chat_id":    chatID,
+			"text":       compactItemText(item, monitorName),
+			"parse_mode": "HTML",
+		}
+		previewURL := absoluteDashboardURL(item.ImageURL)
+		if isTelegramButtonURL(previewURL) {
+			payload["link_preview_options"] = map[string]interface{}{
+				"url":                previewURL,
+				"prefer_small_media": true,
+				"show_above_text":    false,
+			}
+		} else {
+			payload["disable_web_page_preview"] = true
+		}
+		if keyboard := compactItemKeyboard(item); keyboard != nil {
+			payload["reply_markup"] = keyboard
+		}
+
+		if err := send("sendMessage", payload); err != nil {
+			log.Printf("telegram send compact item error: %v", err)
+			return err
+		}
 		return nil
 	}
 
@@ -193,16 +221,11 @@ func post(endpoint string, body []byte) (*int, error) {
 }
 
 func itemCaption(item model.Item, monitorName string, proxySource string) string {
-	price := item.Price
-	if item.TotalPrice != "" {
-		price = fmt.Sprintf("%s (%s)", item.Price, item.TotalPrice)
-	}
-
 	lines := []string{
 		"🔔 <b>New Vintrack Match</b>",
 		fmt.Sprintf("<b>%s</b>", escape(item.Title)),
 		"",
-		fmt.Sprintf("💰 <b>%s</b>", escape(price)),
+		fmt.Sprintf("💰 <b>%s</b>", escape(itemPrice(item))),
 		fmt.Sprintf("🏷️ %s", escape(defaultValue(item.Brand, "No brand"))),
 		fmt.Sprintf("📏 %s", escape(defaultValue(item.Size, "No size"))),
 		fmt.Sprintf("✨ %s", escape(defaultValue(item.Condition, "No condition"))),
@@ -229,6 +252,62 @@ func itemCaption(item model.Item, monitorName string, proxySource string) string
 	)
 
 	return strings.Join(lines, "\n")
+}
+
+func compactItemText(item model.Item, monitorName string) string {
+	lines := []string{
+		fmt.Sprintf("<b>%s</b>", escape(defaultValue(item.Title, "New Vinted listing"))),
+		fmt.Sprintf("💰 <b>%s</b>", escape(defaultValue(itemPrice(item), "Unknown"))),
+	}
+
+	itemDetails := make([]string, 0, 2)
+	if item.Brand != "" {
+		itemDetails = append(itemDetails, fmt.Sprintf("🏷️ %s", escape(item.Brand)))
+	}
+	if item.Size != "" {
+		itemDetails = append(itemDetails, fmt.Sprintf("📏 %s", escape(item.Size)))
+	}
+	if len(itemDetails) > 0 {
+		lines = append(lines, strings.Join(itemDetails, " • "))
+	}
+	if item.Condition != "" {
+		lines = append(lines, fmt.Sprintf("✨ %s", escape(item.Condition)))
+	}
+
+	sellerDetails := make([]string, 0, 2)
+	if item.Location != "" {
+		sellerDetails = append(sellerDetails, fmt.Sprintf("📍 %s", escape(item.Location)))
+	}
+	if item.Rating != "" {
+		sellerDetails = append(sellerDetails, fmt.Sprintf("⭐ %s", escape(item.Rating)))
+	}
+	if len(sellerDetails) > 0 {
+		lines = append(lines, strings.Join(sellerDetails, " • "))
+	}
+	if monitorName != "" {
+		lines = append(lines, fmt.Sprintf("📡 <i>%s</i>", escape(monitorName)))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func itemPrice(item model.Item) string {
+	price := item.Price
+	if item.TotalPrice != "" {
+		price = fmt.Sprintf("%s (%s)", item.Price, item.TotalPrice)
+	}
+	return price
+}
+
+func compactItemKeyboard(item model.Item) map[string]interface{} {
+	if !isTelegramButtonURL(item.URL) {
+		return nil
+	}
+	return map[string]interface{}{
+		"inline_keyboard": [][]map[string]string{{
+			{"text": "View on Vinted", "url": item.URL},
+		}},
+	}
 }
 
 func itemKeyboard(item model.Item) map[string]interface{} {
