@@ -15,7 +15,9 @@ additional checks required before a public deployment.
    - paste a Discord webhook URL into the monitor notification dialog;
    - select **Connect Telegram** and send the generated one-time command to the
      bot shown in the dialog.
-6. Watch results in the monitor view, live feed, Discord, or Telegram.
+6. Open **Dashboard settings** to choose `Rich` or `Compact` item alerts
+   independently for Discord and Telegram.
+7. Watch results in the monitor view, live feed, Discord, or Telegram.
 
 The public demo is shared, best-effort infrastructure. Free proxy health,
 latency, and region availability change over time. Use a personal proxy group

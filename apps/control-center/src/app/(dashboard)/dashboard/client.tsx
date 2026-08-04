@@ -66,7 +66,12 @@ import {
     type BulkMonitorUpdateInput,
 } from "@/actions/dashboard-actions";
 import { testDiscordWebhook } from "@/actions/monitor";
-import { updateMonitorAlertDedupe } from "@/actions/account";
+import {
+    updateDiscordMessageStyle,
+    updateMonitorAlertDedupe,
+    updateTelegramMessageStyle,
+} from "@/actions/account";
+import type { NotificationMessageStyle } from "@/lib/notification-message-style";
 import { getBrandLabels } from "@/lib/brands";
 import { getColorLabels } from "@/lib/colors";
 import { getSizeLabels } from "@/lib/sizes";
@@ -271,6 +276,8 @@ export function DashboardClient({
     initialMonitors,
     userName,
     initialDedupeMonitorAlerts,
+    initialTelegramMessageStyle,
+    initialDiscordMessageStyle,
     quickStartEligible,
     initialQuickStartOpen,
     quickStartPool,
@@ -279,6 +286,8 @@ export function DashboardClient({
     initialMonitors: Monitor[];
     userName: string;
     initialDedupeMonitorAlerts: boolean;
+    initialTelegramMessageStyle: NotificationMessageStyle;
+    initialDiscordMessageStyle: NotificationMessageStyle;
     quickStartEligible: boolean;
     initialQuickStartOpen: boolean;
     quickStartPool: QuickStartPool | null;
@@ -337,6 +346,12 @@ export function DashboardClient({
     const [dedupeMonitorAlerts, setDedupeMonitorAlerts] = useState(
         initialDedupeMonitorAlerts,
     );
+    const [telegramMessageStyle, setTelegramMessageStyle] = useState(
+        initialTelegramMessageStyle,
+    );
+    const [discordMessageStyle, setDiscordMessageStyle] = useState(
+        initialDiscordMessageStyle,
+    );
     const [sellerBans, setSellerBans] = useState<SellerBan[]>([]);
     const [isSellerBansLoading, setIsSellerBansLoading] = useState(true);
     const [removingSellerId, setRemovingSellerId] = useState<string | null>(
@@ -346,6 +361,10 @@ export function DashboardClient({
         {},
     );
     const [isDedupePending, startDedupeTransition] = useTransition();
+    const [isTelegramStylePending, startTelegramStyleTransition] =
+        useTransition();
+    const [isDiscordStylePending, startDiscordStyleTransition] =
+        useTransition();
     const [isQuickStartOpen, setIsQuickStartOpen] = useState(
         initialQuickStartOpen,
     );
@@ -785,6 +804,38 @@ export function DashboardClient({
                     ? "Duplicate item alerts are collapsed"
                     : "Monitor alerts are independent again",
             );
+        });
+    };
+
+    const handleTelegramMessageStyleChange = (
+        style: NotificationMessageStyle,
+    ) => {
+        const previous = telegramMessageStyle;
+        setTelegramMessageStyle(style);
+        startTelegramStyleTransition(async () => {
+            const result = await updateTelegramMessageStyle(style);
+            if ("error" in result) {
+                setTelegramMessageStyle(previous);
+                toast.error(result.error);
+                return;
+            }
+            toast.success(`Telegram alerts set to ${style}`);
+        });
+    };
+
+    const handleDiscordMessageStyleChange = (
+        style: NotificationMessageStyle,
+    ) => {
+        const previous = discordMessageStyle;
+        setDiscordMessageStyle(style);
+        startDiscordStyleTransition(async () => {
+            const result = await updateDiscordMessageStyle(style);
+            if ("error" in result) {
+                setDiscordMessageStyle(previous);
+                toast.error(result.error);
+                return;
+            }
+            toast.success(`Discord alerts set to ${style}`);
         });
     };
 
@@ -2047,6 +2098,87 @@ export function DashboardClient({
                         </div>
 
                         <div className="border-border/80 rounded-lg border">
+                            <div className="border-border/80 border-b p-3">
+                                <h3 className="text-sm font-medium">
+                                    Notification message style
+                                </h3>
+                                <p className="text-muted-foreground mt-0.5 text-[12px]">
+                                    Choose how much space item alerts use. These
+                                    settings apply to every monitor and can be
+                                    different per channel.
+                                </p>
+                            </div>
+                            <div className="grid gap-3 p-3 sm:grid-cols-2">
+                                <div className="space-y-2">
+                                    <Label
+                                        htmlFor="telegram-message-style"
+                                        className="text-xs"
+                                    >
+                                        Telegram
+                                    </Label>
+                                    <select
+                                        id="telegram-message-style"
+                                        value={telegramMessageStyle}
+                                        disabled={isTelegramStylePending}
+                                        onChange={(event) =>
+                                            handleTelegramMessageStyleChange(
+                                                event.target
+                                                    .value as NotificationMessageStyle,
+                                            )
+                                        }
+                                        className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+                                    >
+                                        <option value="rich">
+                                            Rich — image and details
+                                        </option>
+                                        <option value="compact">
+                                            Compact — small preview and details
+                                        </option>
+                                    </select>
+                                    <p className="text-muted-foreground text-[11px] leading-4">
+                                        Compact requests a small preview when
+                                        Telegram supports it and keeps size,
+                                        condition, region, rating and the item
+                                        link.
+                                    </p>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <Label
+                                        htmlFor="discord-message-style"
+                                        className="text-xs"
+                                    >
+                                        Discord
+                                    </Label>
+                                    <select
+                                        id="discord-message-style"
+                                        value={discordMessageStyle}
+                                        disabled={isDiscordStylePending}
+                                        onChange={(event) =>
+                                            handleDiscordMessageStyleChange(
+                                                event.target
+                                                    .value as NotificationMessageStyle,
+                                            )
+                                        }
+                                        className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+                                    >
+                                        <option value="rich">
+                                            Rich — gallery and details
+                                        </option>
+                                        <option value="compact">
+                                            Compact — thumbnail and details
+                                        </option>
+                                    </select>
+                                    <p className="text-muted-foreground text-[11px] leading-4">
+                                        Compact uses one clean embed with a
+                                        thumbnail and the important item and
+                                        seller details.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="border-border/80 rounded-lg border">
                             <div className="border-border/80 flex items-start justify-between gap-3 border-b p-3">
                                 <div>
                                     <div className="flex items-center gap-2">
@@ -2239,6 +2371,27 @@ export function DashboardClient({
                                 />
                             </div>
                         )}
+
+                        <div className="border-border/80 bg-muted/25 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2">
+                            <p className="text-muted-foreground text-[12px]">
+                                Message styles are account-wide and can be
+                                changed in Dashboard settings.
+                            </p>
+                            <div className="flex items-center gap-1.5">
+                                <Badge
+                                    variant="outline"
+                                    className="bg-background text-[10px] capitalize"
+                                >
+                                    Discord: {discordMessageStyle}
+                                </Badge>
+                                <Badge
+                                    variant="outline"
+                                    className="bg-background text-[10px] capitalize"
+                                >
+                                    Telegram: {telegramMessageStyle}
+                                </Badge>
+                            </div>
+                        </div>
 
                         <div className="grid gap-2">
                             <Label htmlFor="webhook">Discord Webhook URL</Label>

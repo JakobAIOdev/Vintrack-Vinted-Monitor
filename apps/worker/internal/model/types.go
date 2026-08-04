@@ -5,6 +5,20 @@ import (
 	"time"
 )
 
+type NotificationMessageStyle string
+
+const (
+	NotificationMessageStyleRich    NotificationMessageStyle = "rich"
+	NotificationMessageStyleCompact NotificationMessageStyle = "compact"
+)
+
+func NormalizeNotificationMessageStyle(style NotificationMessageStyle) NotificationMessageStyle {
+	if style == NotificationMessageStyleCompact {
+		return style
+	}
+	return NotificationMessageStyleRich
+}
+
 // Monitor represents a user-configured search monitor.
 type Monitor struct {
 	ID                    int
@@ -37,6 +51,8 @@ type Monitor struct {
 	TelegramActive        bool
 	NotificationsEnabled  bool
 	DedupeMonitorAlerts   bool
+	TelegramMessageStyle  NotificationMessageStyle
+	DiscordMessageStyle   NotificationMessageStyle
 	BannedSellerIDs       []int64
 	ProxyGroupID          *int
 	ProxySource           string

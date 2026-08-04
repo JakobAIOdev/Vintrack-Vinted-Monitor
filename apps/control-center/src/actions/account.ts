@@ -4,6 +4,10 @@ import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { revalidatePath } from "next/cache";
 import { logAuditEvent } from "@/lib/audit";
+import {
+    isNotificationMessageStyle,
+    type NotificationMessageStyle,
+} from "@/lib/notification-message-style";
 
 const API_URL = process.env.VINTED_SERVICE_URL || "http://localhost:4000";
 
@@ -132,6 +136,42 @@ export async function updateMonitorAlertDedupe(enabled: boolean) {
     revalidatePath("/account");
     revalidatePath("/dashboard");
     return { success: true, dedupe_monitor_alerts: enabled };
+}
+
+async function updateNotificationMessageStyle(
+    channel: "telegram" | "discord",
+    style: NotificationMessageStyle,
+) {
+    const session = await auth();
+    if (!session?.user?.id) {
+        return { error: "Not authenticated" };
+    }
+    if (!isNotificationMessageStyle(style)) {
+        return { error: "Invalid notification message style" };
+    }
+
+    await db.user.update({
+        where: { id: session.user.id },
+        data:
+            channel === "telegram"
+                ? { telegram_message_style: style }
+                : { discord_message_style: style },
+    });
+
+    revalidatePath("/dashboard");
+    return { success: true, style };
+}
+
+export async function updateTelegramMessageStyle(
+    style: NotificationMessageStyle,
+) {
+    return updateNotificationMessageStyle("telegram", style);
+}
+
+export async function updateDiscordMessageStyle(
+    style: NotificationMessageStyle,
+) {
+    return updateNotificationMessageStyle("discord", style);
 }
 
 export async function linkVintedAccount(

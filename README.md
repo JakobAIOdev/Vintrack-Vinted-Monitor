@@ -131,6 +131,10 @@ actions never use the shared free proxy pool.
    - **Discord:** paste a webhook URL into the monitor's notification dialog.
    - **Telegram:** select **Connect Telegram** and send the generated one-time
      command to the bot shown in Vintrack.
+   - In **Dashboard settings**, choose `Rich` or `Compact` independently for
+     Discord and Telegram item alerts. Compact alerts use a thumbnail or small
+     preview when supported while keeping the title, price, size, condition,
+     region, rating, and item link.
 6. Watch matching listings in the monitor view, live feed, Discord, or Telegram.
 
 Optionally install the browser extension and open **Account → Link With Installed
@@ -285,6 +289,10 @@ channel:
   size, condition, seller details, and direct links.
 - **Telegram:** users connect to the operator's bot with a one-time code and can
   enable delivery per monitor.
+
+Each account can select `Rich` or `Compact` item alerts independently for
+Discord and Telegram from **Dashboard settings**. Existing accounts default to
+the current rich format.
 
 Notification delivery uses bounded worker pools so slow webhooks do not block
 catalog processing.

@@ -351,6 +351,7 @@ export default function GuidePage() {
                                         "Open Discord Channel Settings, then Integrations and Webhooks.",
                                         "Create a webhook and copy its URL.",
                                         "Paste it into the monitor's Notifications section.",
+                                        "Choose Rich or Compact in Dashboard settings.",
                                         "Use Test before saving to verify delivery.",
                                     ]}
                                 />
@@ -368,6 +369,7 @@ export default function GuidePage() {
                                         "Generate a Telegram connection code.",
                                         "Send the code to the Vintrack bot.",
                                         "Enable Telegram and save the monitor.",
+                                        "Choose Rich or Compact in Dashboard settings.",
                                     ]}
                                 />
                             </div>

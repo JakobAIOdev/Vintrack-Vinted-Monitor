@@ -59,12 +59,16 @@ async function main() {
             email: "e2e@vintrack.test",
             role: onboardingMode ? "free" : "admin",
             monitor_onboarding_status: onboardingMode ? "pending" : "completed",
+            telegram_message_style: "rich",
+            discord_message_style: "rich",
         },
         update: {
             name: "E2E User",
             email: "e2e@vintrack.test",
             role: onboardingMode ? "free" : "admin",
             monitor_onboarding_status: onboardingMode ? "pending" : "completed",
+            telegram_message_style: "rich",
+            discord_message_style: "rich",
         },
     });
 

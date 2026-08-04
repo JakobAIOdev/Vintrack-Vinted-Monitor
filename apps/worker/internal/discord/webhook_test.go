@@ -29,7 +29,7 @@ func TestBuildItemWebhookPayloadUsesStructuredEmbedAndGallery(t *testing.T) {
 		FoundAt:     foundAt,
 	}
 
-	payload := buildItemWebhookPayload(item, "Dunks", "free")
+	payload := buildItemWebhookPayload(item, "Dunks", "free", model.NotificationMessageStyleRich)
 	embeds, ok := payload["embeds"].([]map[string]interface{})
 	if !ok || len(embeds) != 2 {
 		t.Fatalf("expected item embed and one gallery embed, got %#v", payload["embeds"])
@@ -83,11 +83,98 @@ func TestBuildItemWebhookPayloadLimitsGalleryToThreeImages(t *testing.T) {
 			"https://images.example/two.jpg",
 			"https://images.example/three.jpg",
 		},
-	}, "Monitor", "server")
+	}, "Monitor", "server", model.NotificationMessageStyleRich)
 
 	embeds := payload["embeds"].([]map[string]interface{})
 	if len(embeds) != 3 {
 		t.Fatalf("expected a maximum of three image embeds, got %d", len(embeds))
+	}
+}
+
+func TestBuildItemWebhookPayloadCompactUsesMinimalEmbed(t *testing.T) {
+	item := model.Item{
+		MonitorID:   7,
+		Title:       "Nike Dunk Low",
+		Brand:       "Nike",
+		Price:       "85.00 EUR",
+		TotalPrice:  "90.20 EUR",
+		Size:        "42",
+		Condition:   "Very good",
+		URL:         "https://www.vinted.de/items/42",
+		ImageURL:    "https://images.example/item.jpg",
+		ExtraImages: []string{"https://images.example/extra.jpg"},
+		Location:    "Germany",
+		Rating:      "4.9 (120)",
+		SellerLogin: "seller",
+		SellerURL:   "https://www.vinted.de/member/5-seller",
+		FoundAt:     time.Unix(1_720_000_000, 0).UTC(),
+	}
+
+	payload := buildItemWebhookPayload(item, "Dunks", "free", model.NotificationMessageStyleCompact)
+	embeds := payload["embeds"].([]map[string]interface{})
+	if len(embeds) != 1 {
+		t.Fatalf("expected one compact embed, got %d", len(embeds))
+	}
+	embed := embeds[0]
+	if embed["title"] != item.Title || embed["url"] != item.URL {
+		t.Fatalf("unexpected compact title or URL: %#v", embed)
+	}
+	if embed["description"] != "**85.00 EUR**\n90.20 EUR total" {
+		t.Fatalf("unexpected compact price: %#v", embed["description"])
+	}
+	thumbnail := embed["thumbnail"].(map[string]string)
+	if thumbnail["url"] != item.ImageURL {
+		t.Fatalf("unexpected compact thumbnail: %#v", thumbnail)
+	}
+	author := embed["author"].(map[string]string)
+	if author["name"] != "New match • Dunks" {
+		t.Fatalf("unexpected compact author: %#v", author)
+	}
+	fields := embed["fields"].([]map[string]interface{})
+	fieldsByName := make(map[string]interface{}, len(fields))
+	for _, field := range fields {
+		name, _ := field["name"].(string)
+		fieldsByName[name] = field["value"]
+	}
+	for name, expected := range map[string]string{
+		"Brand": item.Brand, "Size": item.Size, "Condition": item.Condition,
+		"Region": item.Location, "Seller rating": item.Rating,
+	} {
+		if fieldsByName[name] != expected {
+			t.Fatalf("compact field %q = %#v, want %q", name, fieldsByName[name], expected)
+		}
+	}
+	for _, excluded := range []string{"image", "footer", "timestamp"} {
+		if _, ok := embed[excluded]; ok {
+			t.Fatalf("compact embed included %q: %#v", excluded, embed)
+		}
+	}
+}
+
+func TestBuildItemWebhookPayloadCompactOmitsInvalidURL(t *testing.T) {
+	payload := buildItemWebhookPayload(model.Item{
+		Title: "Item",
+		Price: "10.00 EUR",
+		URL:   "not-a-url",
+	}, "Monitor", "server", model.NotificationMessageStyleCompact)
+
+	embed := payload["embeds"].([]map[string]interface{})[0]
+	if _, ok := embed["url"]; ok {
+		t.Fatalf("compact embed included invalid URL: %#v", embed)
+	}
+}
+
+func TestBuildItemWebhookPayloadUnknownStyleFallsBackToRich(t *testing.T) {
+	payload := buildItemWebhookPayload(model.Item{
+		Title:    "Item",
+		Price:    "10.00 EUR",
+		URL:      "https://www.vinted.de/items/42",
+		ImageURL: "https://images.example/item.jpg",
+	}, "Monitor", "server", model.NotificationMessageStyle("unknown"))
+
+	embed := payload["embeds"].([]map[string]interface{})[0]
+	if _, ok := embed["image"]; !ok {
+		t.Fatalf("unknown style did not fall back to rich: %#v", embed)
 	}
 }
 

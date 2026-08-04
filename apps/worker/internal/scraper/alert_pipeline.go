@@ -185,7 +185,8 @@ func (e *Engine) deliverDiscordAlert(job alertJob) {
 		return
 	default:
 	}
-	if err := discord.SendWebhook(job.monitor.DiscordWebhook.String, job.item, job.monitor.Name, job.proxySource); err != nil {
+	_, style := e.monitorNotificationMessageStyles(job.monitor)
+	if err := discord.SendWebhook(job.monitor.DiscordWebhook.String, job.item, job.monitor.Name, job.proxySource, style); err != nil {
 		e.db.RecordAlertEvent(model.AlertEvent{
 			UserID: job.monitor.UserID, MonitorID: job.monitor.ID, ItemID: job.item.ID,
 			Channel: "discord", Status: "failed", FailureReason: err.Error(),
@@ -217,7 +218,8 @@ func (e *Engine) deliverTelegramAlert(job alertJob) {
 		return
 	default:
 	}
-	if err := telegram.SendItem(job.monitor.TelegramChatID.String, job.item, job.monitor.Name, job.proxySource); err != nil {
+	style, _ := e.monitorNotificationMessageStyles(job.monitor)
+	if err := telegram.SendItem(job.monitor.TelegramChatID.String, job.item, job.monitor.Name, job.proxySource, style); err != nil {
 		e.db.RecordAlertEvent(model.AlertEvent{
 			UserID: job.monitor.UserID, MonitorID: job.monitor.ID, ItemID: job.item.ID,
 			Channel: "telegram", Status: "failed", FailureReason: err.Error(),
