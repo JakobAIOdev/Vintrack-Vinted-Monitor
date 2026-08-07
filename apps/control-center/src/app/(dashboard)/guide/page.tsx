@@ -65,7 +65,7 @@ const MONITOR_SECTIONS = [
     },
     {
         title: "Filters",
-        detail: "Price, brand, size, condition, color, and seller countries.",
+        detail: "Price, brand, size, condition, color, seller countries, and seller quality.",
         icon: ListFilter,
     },
     {

@@ -31,6 +31,9 @@ test.describe("dashboard overview", () => {
         await expect(monitorCard.getByText("Server Proxies")).toBeVisible();
         await expect(monitorCard.getByText(/items found/i)).toBeVisible();
         await expect(
+            monitorCard.getByText("Seller ≥ 4.5★ · 5+ ratings"),
+        ).toBeVisible();
+        await expect(
             monitorCard.getByText("Alerts on", { exact: true }),
         ).toBeVisible();
         await expect(
@@ -39,6 +42,82 @@ test.describe("dashboard overview", () => {
         await expect(
             monitorCard.getByRole("link", { name: /View/i }),
         ).toHaveAttribute("href", "/monitors/990001");
+
+        await monitorCard.getByRole("link", { name: /View/i }).click();
+        await expect(page.getByText("★ ≥ 4.5 · 5+ ratings")).toBeVisible();
+        await page.getByRole("link", { name: "Edit" }).click();
+
+        const editQueryField = page.getByTestId("query-filter-field");
+        await expect(editQueryField).toHaveAttribute("data-state", "active");
+        await expect(
+            editQueryField.getByText("1 search", { exact: true }),
+        ).toBeVisible();
+
+        const editAntiKeywordsField = page.getByTestId(
+            "anti-keywords-filter-field",
+        );
+        await expect(editAntiKeywordsField).toHaveAttribute(
+            "data-state",
+            "inactive",
+        );
+        await page.getByLabel("Anti Keywords (optional)").fill("fake");
+        await page.getByRole("button", { name: "Add anti keyword" }).click();
+        await expect(editAntiKeywordsField).toHaveAttribute(
+            "data-state",
+            "active",
+        );
+        await expect(
+            editAntiKeywordsField.getByText("1 anti keyword", { exact: true }),
+        ).toBeVisible();
+        await page.getByRole("button", { name: "Remove fake" }).click();
+        await expect(editAntiKeywordsField).toHaveAttribute(
+            "data-state",
+            "inactive",
+        );
+
+        await page.getByText("Filters", { exact: true }).click();
+        const editPriceField = page.getByTestId("price-filter-field");
+        await expect(editPriceField).toHaveAttribute("data-state", "active");
+        await expect(
+            editPriceField.getByText("€12–€22", { exact: true }),
+        ).toBeVisible();
+        await expect(
+            page.getByRole("switch", {
+                name: "Enable seller quality filter",
+            }),
+        ).toBeChecked();
+        await expect(
+            page.locator('input[name="min_seller_rating"]'),
+        ).toHaveValue("4.5");
+        await expect(
+            page.locator('input[name="min_seller_rating_count"]'),
+        ).toHaveValue("5");
+
+        await page.getByText("Quiet Hours", { exact: true }).click();
+        const editQuietHoursField = page.getByTestId(
+            "quiet-hours-filter-field",
+        );
+        const editQuietHoursSwitch = page.getByRole("switch", {
+            name: "Enable daily quiet hours",
+        });
+        await expect(editQuietHoursField).toHaveAttribute(
+            "data-state",
+            "inactive",
+        );
+        await editQuietHoursSwitch.click();
+        await expect(editQuietHoursField).toHaveAttribute(
+            "data-state",
+            "active",
+        );
+        await editQuietHoursSwitch.click();
+        await expect(editQuietHoursField).toHaveAttribute(
+            "data-state",
+            "inactive",
+        );
+
+        await page.getByRole("button", { name: "Save Changes" }).click();
+        await expect(page).toHaveURL("/monitors/990001");
+        await expect(page.getByText("★ ≥ 4.5 · 5+ ratings")).toBeVisible();
     });
 
     test("feed APIs return seeded monitor and item metadata", async ({

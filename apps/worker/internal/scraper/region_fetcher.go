@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/url"
 	"strings"
 	"sync"
@@ -18,8 +19,11 @@ import (
 )
 
 type SellerInfo struct {
-	Region string
-	Rating string
+	Region          string
+	Rating          string
+	RatingStars     float64
+	RatingCount     int
+	RatingAvailable bool
 }
 
 var countryMap = map[string]string{
@@ -113,7 +117,7 @@ var isoCountryMap = map[string]string{
 }
 
 func logSellerEnrichmentSuccess(source string, userID int64, info SellerInfo) {
-	log.Printf("[seller-enrich] user=%d source=%s success region=%q rating=%q", userID, source, info.Region, info.Rating)
+	log.Printf("[seller-enrich] user=%d source=%s success region=%q rating=%q rating_available=%v", userID, source, info.Region, info.Rating, info.RatingAvailable)
 }
 
 func logSellerEnrichmentFailure(source string, userID int64, format string, args ...interface{}) {
@@ -122,7 +126,22 @@ func logSellerEnrichmentFailure(source string, userID int64, format string, args
 }
 
 func isSellerInfoComplete(info SellerInfo) bool {
-	return info.Region != "" && info.Rating != ""
+	return info.Region != "" && info.RatingAvailable
+}
+
+func normalizeSellerRating(feedbackCount int, feedbackReputation float64) (string, float64, int, bool) {
+	if feedbackCount > 0 &&
+		!math.IsNaN(feedbackReputation) &&
+		!math.IsInf(feedbackReputation, 0) &&
+		feedbackReputation >= 0 &&
+		feedbackReputation <= 1 {
+		rating := math.Round(feedbackReputation*50.0) / 10.0
+		return fmt.Sprintf("⭐ %.1f (%d)", rating, feedbackCount), rating, feedbackCount, true
+	}
+	if feedbackCount == 0 && feedbackReputation == 0 {
+		return "No rating", 0, 0, true
+	}
+	return "", 0, 0, false
 }
 
 type SellerEnricher struct {
@@ -287,12 +306,8 @@ func (s *SellerEnricher) fetchFromAPI(client *Client, userID int64) (SellerInfo,
 				}
 			}
 
-			if resp.User.FeedbackCount > 0 {
-				rating := resp.User.FeedbackReputation * 5.0
-				info.Rating = fmt.Sprintf("⭐ %.1f (%d)", rating, resp.User.FeedbackCount)
-			} else {
-				info.Rating = "No rating"
-			}
+			info.Rating, info.RatingStars, info.RatingCount, info.RatingAvailable =
+				normalizeSellerRating(resp.User.FeedbackCount, resp.User.FeedbackReputation)
 
 			if info.Region != "" {
 				logSellerEnrichmentSuccess("seller-api", userID, info)

@@ -137,6 +137,8 @@ export type Monitor = {
     size_id: string | null;
     region: string;
     allowed_countries: string | null;
+    min_seller_rating: number | null;
+    min_seller_rating_count: number | null;
     discord_webhook: string | null;
     webhook_active: boolean;
     telegram_active: boolean;
@@ -252,6 +254,14 @@ function getMonitorFilterLabels(monitor: Monitor): string[] {
     if (monitor.allowed_countries) {
         labels.push(
             `From ${getRegionFlags(monitor.allowed_countries).join(" ")}`,
+        );
+    }
+    if (
+        monitor.min_seller_rating != null &&
+        monitor.min_seller_rating_count != null
+    ) {
+        labels.unshift(
+            `Seller ≥ ${monitor.min_seller_rating.toFixed(1)}★ · ${monitor.min_seller_rating_count}+ ratings`,
         );
     }
 

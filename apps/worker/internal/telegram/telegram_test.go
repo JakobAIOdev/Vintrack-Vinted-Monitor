@@ -116,7 +116,7 @@ func TestSendItemCompactUsesSmallPreviewKeyDetailsAndVintedButton(t *testing.T) 
 		URL:         "https://example.test/item",
 		ImageURL:    "https://example.test/image.jpg",
 		Location:    "Berlin",
-		Rating:      "4.9 (120)",
+		Rating:      "⭐ 4.9 (120)",
 		SellerLogin: "seller",
 		SellerURL:   "https://example.test/seller",
 	}, "monitor", "server", model.NotificationMessageStyleCompact)
@@ -146,6 +146,21 @@ func TestSendItemCompactUsesSmallPreviewKeyDetailsAndVintedButton(t *testing.T) 
 	button := buttons[0].(map[string]interface{})
 	if button["text"] != "View on Vinted" || button["url"] != "https://example.test/item" {
 		t.Fatalf("unexpected compact button: %#v", button)
+	}
+}
+
+func TestRatingLabelAddsExactlyOneStar(t *testing.T) {
+	tests := map[string]string{
+		"4.9 (120)":     "⭐ 4.9 (120)",
+		"⭐ 4.9 (120)":   "⭐ 4.9 (120)",
+		"⭐ ⭐ 4.9 (120)": "⭐ 4.9 (120)",
+		"":              "",
+	}
+
+	for input, expected := range tests {
+		if actual := ratingLabel(input); actual != expected {
+			t.Errorf("ratingLabel(%q) = %q, want %q", input, actual, expected)
+		}
 	}
 }
 

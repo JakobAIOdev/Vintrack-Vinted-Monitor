@@ -95,6 +95,8 @@ async function main() {
             catalog_ids: "2309,1918",
             brand_ids: "112202",
             region: "de",
+            min_seller_rating: 4.5,
+            min_seller_rating_count: 5,
             status: "active",
             demo_expires_at: null,
             discord_webhook:
@@ -114,6 +116,8 @@ async function main() {
             quiet_hours_mode: "pause",
             quiet_hours_delay_ms: 60000,
             quiet_hours_timezone: "Europe/Berlin",
+            min_seller_rating: 4.5,
+            min_seller_rating_count: 5,
             status: "active",
             demo_expires_at: null,
             discord_webhook:

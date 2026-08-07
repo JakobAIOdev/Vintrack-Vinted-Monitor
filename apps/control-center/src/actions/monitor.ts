@@ -28,6 +28,50 @@ import {
     normalizeMonitorAntiKeywords,
 } from "@/lib/monitor-anti-keywords";
 
+function normalizeSellerQualityFilter(formData: FormData) {
+    const rawRating = String(formData.get("min_seller_rating") ?? "").trim();
+    const rawCount = String(
+        formData.get("min_seller_rating_count") ?? "",
+    ).trim();
+
+    if (!rawRating && !rawCount) {
+        return {
+            minSellerRating: null,
+            minSellerRatingCount: null,
+        };
+    }
+    if (!rawRating || !rawCount) {
+        throw new Error(
+            "Minimum seller rating and rating count must be enabled together.",
+        );
+    }
+
+    const minSellerRating = Number(rawRating);
+    const minSellerRatingCount = Number(rawCount);
+    const ratingTenths = minSellerRating * 10;
+    if (
+        !Number.isFinite(minSellerRating) ||
+        minSellerRating < 1 ||
+        minSellerRating > 5 ||
+        Math.abs(ratingTenths - Math.round(ratingTenths)) > 1e-9
+    ) {
+        throw new Error(
+            "Minimum seller rating must be between 1.0 and 5.0 in 0.1 steps.",
+        );
+    }
+    if (
+        !Number.isSafeInteger(minSellerRatingCount) ||
+        minSellerRatingCount < 1 ||
+        minSellerRatingCount > 2_147_483_647
+    ) {
+        throw new Error(
+            "Minimum seller rating count must be a positive whole number.",
+        );
+    }
+
+    return { minSellerRating, minSellerRatingCount };
+}
+
 async function sendTelegramStatusIfConfigured(
     monitor: {
         name: string;
@@ -133,8 +177,7 @@ export async function createMonitor(
         ? Number(formData.get("price_max"))
         : null;
     const sizeId = formData.get("size_id") as string;
-    const requestedCatalogIds =
-        (formData.get("catalog_ids") as string) || null;
+    const requestedCatalogIds = (formData.get("catalog_ids") as string) || null;
     const brandIds = (formData.get("brand_ids") as string) || null;
     const colorIds = (formData.get("color_ids") as string) || null;
     const statusIds = (formData.get("status_ids") as string) || null;
@@ -146,6 +189,8 @@ export async function createMonitor(
     const region = (formData.get("region") as string) || "de";
     const allowedCountries =
         (formData.get("allowed_countries") as string) || null;
+    const { minSellerRating, minSellerRatingCount } =
+        normalizeSellerQualityFilter(formData);
     const discordWebhook = (formData.get("discord_webhook") as string) || null;
     const wantsTelegramActive = formData.get("telegram_active") === "true";
     const proxyGroupRaw = formData.get("proxy_group_id") as string;
@@ -210,6 +255,8 @@ export async function createMonitor(
                 video_game_platform_ids: videoGamePlatformIds || null,
                 region,
                 allowed_countries: allowedCountries || null,
+                min_seller_rating: minSellerRating,
+                min_seller_rating_count: minSellerRatingCount,
                 discord_webhook: urlToSave,
                 telegram_active: Boolean(telegramConnection),
                 proxy_group_id: proxyGroupId,
@@ -574,8 +621,7 @@ export async function updateMonitor(id: number, formData: FormData) {
         ? Number(formData.get("price_max"))
         : null;
     const sizeId = formData.get("size_id") as string;
-    const requestedCatalogIds =
-        (formData.get("catalog_ids") as string) || null;
+    const requestedCatalogIds = (formData.get("catalog_ids") as string) || null;
     const brandIds = (formData.get("brand_ids") as string) || null;
     const colorIds = (formData.get("color_ids") as string) || null;
     const statusIds = (formData.get("status_ids") as string) || null;
@@ -587,6 +633,8 @@ export async function updateMonitor(id: number, formData: FormData) {
     const region = (formData.get("region") as string) || "de";
     const allowedCountries =
         (formData.get("allowed_countries") as string) || null;
+    const { minSellerRating, minSellerRatingCount } =
+        normalizeSellerQualityFilter(formData);
     const returnTo = (formData.get("return_to") as string) || "detail";
     const discordWebhook = (formData.get("discord_webhook") as string) || null;
     const wantsTelegramActive = formData.get("telegram_active") === "true";
@@ -648,6 +696,8 @@ export async function updateMonitor(id: number, formData: FormData) {
             video_game_platform_ids: videoGamePlatformIds || null,
             region,
             allowed_countries: allowedCountries || null,
+            min_seller_rating: minSellerRating,
+            min_seller_rating_count: minSellerRatingCount,
             discord_webhook: urlToSave,
             proxy_group_id: proxyGroupId,
             proxy_source: proxySource,
@@ -693,8 +743,7 @@ export async function updateMonitorAndReturn(
         ? Number(formData.get("price_max"))
         : null;
     const sizeId = formData.get("size_id") as string;
-    const requestedCatalogIds =
-        (formData.get("catalog_ids") as string) || null;
+    const requestedCatalogIds = (formData.get("catalog_ids") as string) || null;
     const brandIds = (formData.get("brand_ids") as string) || null;
     const colorIds = (formData.get("color_ids") as string) || null;
     const statusIds = (formData.get("status_ids") as string) || null;
@@ -706,6 +755,8 @@ export async function updateMonitorAndReturn(
     const region = (formData.get("region") as string) || "de";
     const allowedCountries =
         (formData.get("allowed_countries") as string) || null;
+    const { minSellerRating, minSellerRatingCount } =
+        normalizeSellerQualityFilter(formData);
     const returnTo = (formData.get("return_to") as string) || "detail";
     const discordWebhook = (formData.get("discord_webhook") as string) || null;
     const wantsTelegramActive = formData.get("telegram_active") === "true";
@@ -773,6 +824,8 @@ export async function updateMonitorAndReturn(
             video_game_platform_ids: videoGamePlatformIds || null,
             region,
             allowed_countries: allowedCountries || null,
+            min_seller_rating: minSellerRating,
+            min_seller_rating_count: minSellerRatingCount,
             discord_webhook: urlToSave,
             proxy_group_id: proxyGroupId,
             proxy_source: proxySource,

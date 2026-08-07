@@ -112,6 +112,8 @@ model monitors {
   video_game_platform_ids  String?   @db.VarChar(500)
   region                   String    @default("de") @db.VarChar(10)
   allowed_countries        String?   @db.VarChar(500)
+  min_seller_rating        Float?
+  min_seller_rating_count  Int?
   status                   String?   @default("active") @db.VarChar(50)
   created_at               DateTime? @default(now()) @db.Timestamp(6)
   demo_expires_at          DateTime? @db.Timestamp(6)

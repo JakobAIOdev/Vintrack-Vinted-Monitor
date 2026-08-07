@@ -18,6 +18,8 @@ func TestMonitorConfigFingerprintIncludesRuntimeFilters(t *testing.T) {
 	platformIDs := "1277,1278"
 	allowedCountries := "de,fr"
 	antiKeywords := "fake,replica"
+	minSellerRating := 4.5
+	minSellerRatingCount := 5
 
 	base := model.Monitor{
 		ID:                   7,
@@ -34,6 +36,8 @@ func TestMonitorConfigFingerprintIncludesRuntimeFilters(t *testing.T) {
 		VideoGamePlatformIDs: &platformIDs,
 		Region:               "de",
 		AllowedCountries:     &allowedCountries,
+		MinSellerRating:      &minSellerRating,
+		MinSellerRatingCount: &minSellerRatingCount,
 		Proxies:              sql.NullString{Valid: true, String: "http://proxy-a:8080"},
 		DiscordWebhook:       sql.NullString{Valid: true, String: "https://discord.test/webhook"},
 		WebhookActive:        true,
@@ -65,6 +69,8 @@ func TestMonitorConfigFingerprintIncludesRuntimeFilters(t *testing.T) {
 		{name: "platform", mutate: func(m *model.Monitor) { v := "1280,1281"; m.VideoGamePlatformIDs = &v }},
 		{name: "region", mutate: func(m *model.Monitor) { m.Region = "fr" }},
 		{name: "allowed countries", mutate: func(m *model.Monitor) { v := "it"; m.AllowedCountries = &v }},
+		{name: "minimum seller rating", mutate: func(m *model.Monitor) { v := 4.8; m.MinSellerRating = &v }},
+		{name: "minimum seller rating count", mutate: func(m *model.Monitor) { v := 10; m.MinSellerRatingCount = &v }},
 		{name: "proxies", mutate: func(m *model.Monitor) { m.Proxies = sql.NullString{Valid: true, String: "http://proxy-b:8080"} }},
 	}
 

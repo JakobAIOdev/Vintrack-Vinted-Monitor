@@ -135,7 +135,11 @@ func (e *Engine) DiscoveryTask(ctx context.Context, spec DiscoverySpec) {
 	}
 	pool := e.GetOrCreatePoolSized(pm, domain, discoveryPoolKey, trafficRecorder, proxySource+":discovery", discoveryPoolSize)
 	var enricher *SellerEnricher
-	if e.enrichSeller {
+	needsSellerEnrichment := e.enrichSeller
+	for _, monitor := range spec.Monitors {
+		needsSellerEnrichment = needsSellerEnrichment || requiresSellerEnrichment(monitor)
+	}
+	if e.fetcher.RequiresNetwork() && needsSellerEnrichment {
 		enricher = e.GetOrCreateEnricher(pm, domain, proxyKey, trafficRecorder, proxySource)
 	}
 
