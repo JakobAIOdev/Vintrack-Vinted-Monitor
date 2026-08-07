@@ -20,11 +20,13 @@ import {
 type AntiKeywordInputProps = {
     name: string;
     defaultValue?: string | null;
+    onCountChange?: (count: number) => void;
 };
 
 export function AntiKeywordInput({
     name,
     defaultValue,
+    onCountChange,
 }: AntiKeywordInputProps) {
     const [keywords, setKeywords] = useState<string[]>(() =>
         parseMonitorAntiKeywords(defaultValue || ""),
@@ -43,29 +45,26 @@ export function AntiKeywordInput({
         const next = parseMonitorAntiKeywords(value);
         if (next.length === 0) return;
 
-        setKeywords((current) => {
-            const seen = new Set(
-                current.map((keyword) => keyword.toLowerCase()),
-            );
-            const merged = [...current];
-            for (const keyword of next) {
-                const key = keyword.toLowerCase();
-                if (seen.has(key)) continue;
-                seen.add(key);
-                merged.push(keyword);
-            }
-            return merged;
-        });
+        const seen = new Set(keywords.map((keyword) => keyword.toLowerCase()));
+        const merged = [...keywords];
+        for (const keyword of next) {
+            const key = keyword.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            merged.push(keyword);
+        }
+        setKeywords(merged);
+        onCountChange?.(merged.length);
         setDraft("");
     };
 
     const removeKeyword = (keyword: string) => {
-        setKeywords((current) =>
-            current.filter(
-                (currentKeyword) =>
-                    currentKeyword.toLowerCase() !== keyword.toLowerCase(),
-            ),
+        const remaining = keywords.filter(
+            (currentKeyword) =>
+                currentKeyword.toLowerCase() !== keyword.toLowerCase(),
         );
+        setKeywords(remaining);
+        onCountChange?.(remaining.length);
     };
 
     const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {

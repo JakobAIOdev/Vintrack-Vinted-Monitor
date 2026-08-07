@@ -15,6 +15,11 @@ import { StatusPicker } from "@/components/monitors/status-picker";
 import { PlatformPicker } from "@/components/monitors/platform-picker";
 import { AntiKeywordInput } from "@/components/monitors/anti-keyword-input";
 import { SellerQualityFilter } from "@/components/monitors/seller-quality-filter";
+import {
+    ActiveFilterField,
+    formatFilterCount,
+    formatPriceFilterSummary,
+} from "@/components/monitors/active-filter-field";
 import { MonitorPresetPicker } from "@/components/monitors/preset-picker";
 import {
     FormSection,
@@ -95,6 +100,7 @@ export default function NewMonitorPage() {
     >([]);
     const [query, setQuery] = useState("");
     const [titleOnly, setTitleOnly] = useState(false);
+    const [antiKeywordCount, setAntiKeywordCount] = useState(0);
     const [priceMin, setPriceMin] = useState("");
     const [priceMax, setPriceMax] = useState("");
     const [sellerQualityEnabled, setSellerQualityEnabled] = useState(false);
@@ -120,6 +126,7 @@ export default function NewMonitorPage() {
         setName(preset.name);
         setQuery(preset.query);
         setTitleOnly(false);
+        setAntiKeywordCount(preset.antiKeywords.length);
         setAntiKeywordResetKey((current) => current + 1);
         setSelectedBrands([...preset.brandIds]);
         setSelectedCategories([...preset.catalogIds]);
@@ -141,6 +148,7 @@ export default function NewMonitorPage() {
         setName("");
         setQuery("");
         setTitleOnly(false);
+        setAntiKeywordCount(0);
         setSelectedBrands([]);
         setSelectedCategories([]);
         setSelectedCategoryLabels([]);
@@ -338,6 +346,7 @@ export default function NewMonitorPage() {
         selectedSizes.length > 0,
         sellerQualityEnabled,
     ].filter(Boolean).length;
+    const priceFilterSummary = formatPriceFilterSummary(priceMin, priceMax);
     const notificationChannelCount =
         Number(Boolean(webhookUrl)) + Number(telegramEnabled);
     const selectedProxySummary = loading
@@ -457,88 +466,118 @@ export default function NewMonitorPage() {
                                 </p>
                             </div>
 
-                            <div className="space-y-2">
-                                <Label htmlFor="query" className="text-[13px]">
-                                    Search Queries{" "}
-                                    <span className="text-muted-foreground font-normal">
-                                        (optional)
-                                    </span>
-                                </Label>
-                                <Input
-                                    name="query"
-                                    id="query"
-                                    placeholder="e.g. ps1, playstation 1, ps one"
-                                    value={query}
-                                    maxLength={MAX_MONITOR_QUERY_LENGTH}
-                                    onChange={(event) =>
-                                        setQuery(event.target.value)
-                                    }
-                                />
-                                <p className="text-muted-foreground text-[12px]">
-                                    Separate alternative searches with commas.
-                                    Vintrack rotates them without increasing the
-                                    polling rate
-                                    {queryAlternativeCount > 1
-                                        ? ` (${queryAlternativeCount} searches)`
-                                        : ""}
-                                    .
-                                </p>
-                            </div>
-
-                            <div className="space-y-2">
-                                <input
-                                    type="hidden"
-                                    name="title_only"
-                                    value={titleOnly ? "true" : "false"}
-                                />
-                                <div className="border-border/80 bg-muted/30 flex items-center justify-between gap-4 rounded-lg border p-3">
-                                    <div className="space-y-0.5">
-                                        <Label
-                                            htmlFor="title-only-switch"
-                                            className="text-[13px]"
-                                        >
-                                            Match title only
-                                        </Label>
-                                        <p className="text-muted-foreground text-[12px]">
-                                            Skip items whose search terms only
-                                            appear in the description.
-                                        </p>
-                                    </div>
-                                    <Switch
-                                        id="title-only-switch"
-                                        checked={titleOnly}
-                                        onCheckedChange={setTitleOnly}
+                            <ActiveFilterField
+                                active={queryAlternativeCount > 0}
+                                summary={formatFilterCount(
+                                    queryAlternativeCount,
+                                    "search",
+                                    "searches",
+                                )}
+                                testId="query-filter-field"
+                            >
+                                <div className="space-y-2">
+                                    <Label
+                                        htmlFor="query"
+                                        className="text-[13px]"
+                                    >
+                                        Search Queries{" "}
+                                        <span className="text-muted-foreground font-normal">
+                                            (optional)
+                                        </span>
+                                    </Label>
+                                    <Input
+                                        name="query"
+                                        id="query"
+                                        placeholder="e.g. ps1, playstation 1, ps one"
+                                        value={query}
+                                        maxLength={MAX_MONITOR_QUERY_LENGTH}
+                                        onChange={(event) =>
+                                            setQuery(event.target.value)
+                                        }
                                     />
+                                    <p className="text-muted-foreground text-[12px]">
+                                        Separate alternative searches with
+                                        commas. Vintrack rotates them without
+                                        increasing the polling rate
+                                        {queryAlternativeCount > 1
+                                            ? ` (${queryAlternativeCount} searches)`
+                                            : ""}
+                                        .
+                                    </p>
                                 </div>
-                            </div>
+                            </ActiveFilterField>
 
-                            <div className="space-y-2">
-                                <Label
-                                    htmlFor="anti_keywords"
-                                    className="text-[13px]"
-                                >
-                                    Anti Keywords{" "}
-                                    <span className="text-muted-foreground font-normal">
-                                        (optional)
-                                    </span>
-                                </Label>
-                                <AntiKeywordInput
-                                    key={antiKeywordResetKey}
-                                    name="anti_keywords"
-                                    defaultValue={
-                                        selectedPreset
-                                            ? getMonitorPreset(
-                                                  selectedPreset,
-                                              )?.antiKeywords.join(",")
-                                            : undefined
-                                    }
-                                />
-                                <p className="text-muted-foreground text-[12px]">
-                                    New items matching any anti keyword in title
-                                    or description will be skipped. Duplicate
-                                    entries are removed automatically.
-                                </p>
-                            </div>
+                            <ActiveFilterField
+                                active={titleOnly}
+                                summary="Titles only"
+                                testId="title-only-filter-field"
+                            >
+                                <div className="space-y-2">
+                                    <input
+                                        type="hidden"
+                                        name="title_only"
+                                        value={titleOnly ? "true" : "false"}
+                                    />
+                                    <div className="border-border/80 bg-muted/30 flex items-center justify-between gap-4 rounded-lg border p-3">
+                                        <div className="space-y-0.5">
+                                            <Label
+                                                htmlFor="title-only-switch"
+                                                className="text-[13px]"
+                                            >
+                                                Match title only
+                                            </Label>
+                                            <p className="text-muted-foreground text-[12px]">
+                                                Skip items whose search terms
+                                                only appear in the description.
+                                            </p>
+                                        </div>
+                                        <Switch
+                                            id="title-only-switch"
+                                            checked={titleOnly}
+                                            onCheckedChange={setTitleOnly}
+                                        />
+                                    </div>
+                                </div>
+                            </ActiveFilterField>
+
+                            <ActiveFilterField
+                                active={antiKeywordCount > 0}
+                                summary={formatFilterCount(
+                                    antiKeywordCount,
+                                    "anti keyword",
+                                )}
+                                testId="anti-keywords-filter-field"
+                            >
+                                <div className="space-y-2">
+                                    <Label
+                                        htmlFor="anti_keywords"
+                                        className="text-[13px]"
+                                    >
+                                        Anti Keywords{" "}
+                                        <span className="text-muted-foreground font-normal">
+                                            (optional)
+                                        </span>
+                                    </Label>
+                                    <AntiKeywordInput
+                                        key={antiKeywordResetKey}
+                                        name="anti_keywords"
+                                        defaultValue={
+                                            selectedPreset
+                                                ? getMonitorPreset(
+                                                      selectedPreset,
+                                                  )?.antiKeywords.join(",")
+                                                : undefined
+                                        }
+                                        onCountChange={setAntiKeywordCount}
+                                    />
+                                    <p className="text-muted-foreground text-[12px]">
+                                        New items matching any anti keyword in
+                                        title or description will be skipped.
+                                        Duplicate entries are removed
+                                        automatically.
+                                    </p>
+                                </div>
+                            </ActiveFilterField>
 
                             <div className="space-y-2">
                                 <Label
@@ -598,55 +637,77 @@ export default function NewMonitorPage() {
                                     : "Optional"
                             }
                         >
-                            <div className="space-y-2">
-                                <Label className="text-[13px]">
-                                    Strict Item Location Filter{" "}
-                                    <span className="text-muted-foreground font-normal">
-                                        (optional)
-                                    </span>
-                                </Label>
-                                <CountryFilterPicker
-                                    selected={selectedAllowedCountries}
-                                    onChange={setSelectedAllowedCountries}
-                                />
-                                <input
-                                    type="hidden"
-                                    name="allowed_countries"
-                                    value={selectedAllowedCountries.join(",")}
-                                />
-                                <p className="text-muted-foreground text-[12px]">
-                                    Only items located in these countries will
-                                    be sent/saved. Leave empty to allow all
-                                    countries.
-                                </p>
-                            </div>
+                            <ActiveFilterField
+                                active={selectedAllowedCountries.length > 0}
+                                summary={formatFilterCount(
+                                    selectedAllowedCountries.length,
+                                    "country",
+                                    "countries",
+                                )}
+                                testId="location-filter-field"
+                            >
+                                <div className="space-y-2">
+                                    <Label className="text-[13px]">
+                                        Strict Item Location Filter{" "}
+                                        <span className="text-muted-foreground font-normal">
+                                            (optional)
+                                        </span>
+                                    </Label>
+                                    <CountryFilterPicker
+                                        selected={selectedAllowedCountries}
+                                        onChange={setSelectedAllowedCountries}
+                                    />
+                                    <input
+                                        type="hidden"
+                                        name="allowed_countries"
+                                        value={selectedAllowedCountries.join(
+                                            ",",
+                                        )}
+                                    />
+                                    <p className="text-muted-foreground text-[12px]">
+                                        Only items located in these countries
+                                        will be sent/saved. Leave empty to allow
+                                        all countries.
+                                    </p>
+                                </div>
+                            </ActiveFilterField>
 
-                            <div className="space-y-2">
-                                <Label className="text-[13px]">
-                                    Category Filter{" "}
-                                    <span className="text-muted-foreground font-normal">
-                                        (optional)
-                                    </span>
-                                </Label>
-                                <CategoryPicker
-                                    region={selectedRegion}
-                                    selected={selectedCategories}
-                                    onChange={handleCategoryChange}
-                                    onSelectionMetaChange={
-                                        handleCategorySelectionMetaChange
-                                    }
-                                />
-                                <input
-                                    type="hidden"
-                                    name="catalog_ids"
-                                    value={selectedCategories.join(",")}
-                                />
-                                <p className="text-muted-foreground text-[12px]">
-                                    Limit results to specific Vinted categories.
-                                    Select only Video games & consoles to unlock
-                                    the Platform filter.
-                                </p>
-                            </div>
+                            <ActiveFilterField
+                                active={selectedCategories.length > 0}
+                                summary={formatFilterCount(
+                                    selectedCategories.length,
+                                    "category",
+                                    "categories",
+                                )}
+                                testId="category-filter-field"
+                            >
+                                <div className="space-y-2">
+                                    <Label className="text-[13px]">
+                                        Category Filter{" "}
+                                        <span className="text-muted-foreground font-normal">
+                                            (optional)
+                                        </span>
+                                    </Label>
+                                    <CategoryPicker
+                                        region={selectedRegion}
+                                        selected={selectedCategories}
+                                        onChange={handleCategoryChange}
+                                        onSelectionMetaChange={
+                                            handleCategorySelectionMetaChange
+                                        }
+                                    />
+                                    <input
+                                        type="hidden"
+                                        name="catalog_ids"
+                                        value={selectedCategories.join(",")}
+                                    />
+                                    <p className="text-muted-foreground text-[12px]">
+                                        Limit results to specific Vinted
+                                        categories. Select only Video games &
+                                        consoles to unlock the Platform filter.
+                                    </p>
+                                </div>
+                            </ActiveFilterField>
 
                             <SellerQualityFilter
                                 idPrefix="new-monitor"
@@ -658,173 +719,229 @@ export default function NewMonitorPage() {
                                 onRatingCountChange={setMinSellerRatingCount}
                             />
 
-                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                                <div className="space-y-2">
-                                    <Label
-                                        htmlFor="price_min"
-                                        className="text-[13px]"
-                                    >
-                                        Min Price
-                                    </Label>
-                                    <div className="relative">
-                                        <span className="text-muted-foreground absolute top-1/2 left-3 -translate-y-1/2 text-sm">
-                                            €
-                                        </span>
-                                        <Input
-                                            type="number"
-                                            name="price_min"
-                                            placeholder="0"
-                                            className="pl-7"
-                                            value={priceMin}
-                                            onChange={(event) =>
-                                                setPriceMin(event.target.value)
-                                            }
-                                        />
+                            <ActiveFilterField
+                                active={Boolean(priceFilterSummary)}
+                                summary={priceFilterSummary}
+                                testId="price-filter-field"
+                            >
+                                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                    <div className="space-y-2">
+                                        <Label
+                                            htmlFor="price_min"
+                                            className="text-[13px]"
+                                        >
+                                            Min Price
+                                        </Label>
+                                        <div className="relative">
+                                            <span className="text-muted-foreground absolute top-1/2 left-3 -translate-y-1/2 text-sm">
+                                                €
+                                            </span>
+                                            <Input
+                                                type="number"
+                                                name="price_min"
+                                                placeholder="0"
+                                                className="pl-7"
+                                                value={priceMin}
+                                                onChange={(event) =>
+                                                    setPriceMin(
+                                                        event.target.value,
+                                                    )
+                                                }
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label
+                                            htmlFor="price_max"
+                                            className="text-[13px]"
+                                        >
+                                            Max Price
+                                        </Label>
+                                        <div className="relative">
+                                            <span className="text-muted-foreground absolute top-1/2 left-3 -translate-y-1/2 text-sm">
+                                                €
+                                            </span>
+                                            <Input
+                                                type="number"
+                                                name="price_max"
+                                                placeholder="Any"
+                                                className="pl-7"
+                                                value={priceMax}
+                                                onChange={(event) =>
+                                                    setPriceMax(
+                                                        event.target.value,
+                                                    )
+                                                }
+                                            />
+                                        </div>
                                     </div>
                                 </div>
-                                <div className="space-y-2">
-                                    <Label
-                                        htmlFor="price_max"
-                                        className="text-[13px]"
-                                    >
-                                        Max Price
-                                    </Label>
-                                    <div className="relative">
-                                        <span className="text-muted-foreground absolute top-1/2 left-3 -translate-y-1/2 text-sm">
-                                            €
-                                        </span>
-                                        <Input
-                                            type="number"
-                                            name="price_max"
-                                            placeholder="Any"
-                                            className="pl-7"
-                                            value={priceMax}
-                                            onChange={(event) =>
-                                                setPriceMax(event.target.value)
-                                            }
-                                        />
-                                    </div>
-                                </div>
-                            </div>
+                            </ActiveFilterField>
 
-                            <div className="space-y-2">
-                                <Label className="text-[13px]">
-                                    Brand Filter{" "}
-                                    <span className="text-muted-foreground font-normal">
-                                        (optional)
-                                    </span>
-                                </Label>
-                                <BrandPicker
-                                    selected={selectedBrands}
-                                    onChange={setSelectedBrands}
-                                    region={selectedRegion}
-                                    catalogIds={selectedCategories}
-                                />
-                                <input
-                                    type="hidden"
-                                    name="brand_ids"
-                                    value={selectedBrands.join(",")}
-                                />
-                                <p className="text-muted-foreground text-[12px]">
-                                    Limit results to specific brands.
-                                </p>
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label className="text-[13px]">
-                                    Color Filter{" "}
-                                    <span className="text-muted-foreground font-normal">
-                                        (optional)
-                                    </span>
-                                </Label>
-                                <ColorPicker
-                                    selected={selectedColors}
-                                    onChange={setSelectedColors}
-                                />
-                                <input
-                                    type="hidden"
-                                    name="color_ids"
-                                    value={selectedColors.join(",")}
-                                />
-                                <p className="text-muted-foreground text-[12px]">
-                                    Limit results to specific colors.
-                                </p>
-                            </div>
-
-                            {hasVideoGamePlatformContext && (
+                            <ActiveFilterField
+                                active={selectedBrands.length > 0}
+                                summary={formatFilterCount(
+                                    selectedBrands.length,
+                                    "brand",
+                                )}
+                                testId="brand-filter-field"
+                            >
                                 <div className="space-y-2">
                                     <Label className="text-[13px]">
-                                        Platform Filter{" "}
+                                        Brand Filter{" "}
                                         <span className="text-muted-foreground font-normal">
                                             (optional)
                                         </span>
                                     </Label>
-                                    <PlatformPicker
-                                        selected={selectedPlatforms}
-                                        onChange={setSelectedPlatforms}
+                                    <BrandPicker
+                                        selected={selectedBrands}
+                                        onChange={setSelectedBrands}
                                         region={selectedRegion}
                                         catalogIds={selectedCategories}
                                     />
                                     <input
                                         type="hidden"
-                                        name="video_game_platform_ids"
-                                        value={selectedPlatforms.join(",")}
+                                        name="brand_ids"
+                                        value={selectedBrands.join(",")}
                                     />
                                     <p className="text-muted-foreground text-[12px]">
-                                        Available for Video games & consoles.
-                                        This is separate from Brand.
+                                        Limit results to specific brands.
                                     </p>
                                 </div>
+                            </ActiveFilterField>
+
+                            <ActiveFilterField
+                                active={selectedColors.length > 0}
+                                summary={formatFilterCount(
+                                    selectedColors.length,
+                                    "color",
+                                )}
+                                testId="color-filter-field"
+                            >
+                                <div className="space-y-2">
+                                    <Label className="text-[13px]">
+                                        Color Filter{" "}
+                                        <span className="text-muted-foreground font-normal">
+                                            (optional)
+                                        </span>
+                                    </Label>
+                                    <ColorPicker
+                                        selected={selectedColors}
+                                        onChange={setSelectedColors}
+                                    />
+                                    <input
+                                        type="hidden"
+                                        name="color_ids"
+                                        value={selectedColors.join(",")}
+                                    />
+                                    <p className="text-muted-foreground text-[12px]">
+                                        Limit results to specific colors.
+                                    </p>
+                                </div>
+                            </ActiveFilterField>
+
+                            {hasVideoGamePlatformContext && (
+                                <ActiveFilterField
+                                    active={selectedPlatforms.length > 0}
+                                    summary={formatFilterCount(
+                                        selectedPlatforms.length,
+                                        "platform",
+                                    )}
+                                    testId="platform-filter-field"
+                                >
+                                    <div className="space-y-2">
+                                        <Label className="text-[13px]">
+                                            Platform Filter{" "}
+                                            <span className="text-muted-foreground font-normal">
+                                                (optional)
+                                            </span>
+                                        </Label>
+                                        <PlatformPicker
+                                            selected={selectedPlatforms}
+                                            onChange={setSelectedPlatforms}
+                                            region={selectedRegion}
+                                            catalogIds={selectedCategories}
+                                        />
+                                        <input
+                                            type="hidden"
+                                            name="video_game_platform_ids"
+                                            value={selectedPlatforms.join(",")}
+                                        />
+                                        <p className="text-muted-foreground text-[12px]">
+                                            Available for Video games &
+                                            consoles. This is separate from
+                                            Brand.
+                                        </p>
+                                    </div>
+                                </ActiveFilterField>
                             )}
 
-                            <div className="space-y-2">
-                                <Label className="text-[13px]">
-                                    Condition Filter{" "}
-                                    <span className="text-muted-foreground font-normal">
-                                        (optional)
-                                    </span>
-                                </Label>
-                                <StatusPicker
-                                    selected={selectedStatuses}
-                                    onChange={setSelectedStatuses}
-                                    locale={getStatusLocaleForRegionCodes(
-                                        selectedAllowedCountries.join(","),
-                                        selectedRegion,
-                                    )}
-                                />
-                                <input
-                                    type="hidden"
-                                    name="status_ids"
-                                    value={selectedStatuses.join(",")}
-                                />
-                                <p className="text-muted-foreground text-[12px]">
-                                    Pick one or more item conditions. Leave
-                                    empty to allow all conditions.
-                                </p>
-                            </div>
+                            <ActiveFilterField
+                                active={selectedStatuses.length > 0}
+                                summary={formatFilterCount(
+                                    selectedStatuses.length,
+                                    "condition",
+                                )}
+                                testId="condition-filter-field"
+                            >
+                                <div className="space-y-2">
+                                    <Label className="text-[13px]">
+                                        Condition Filter{" "}
+                                        <span className="text-muted-foreground font-normal">
+                                            (optional)
+                                        </span>
+                                    </Label>
+                                    <StatusPicker
+                                        selected={selectedStatuses}
+                                        onChange={setSelectedStatuses}
+                                        locale={getStatusLocaleForRegionCodes(
+                                            selectedAllowedCountries.join(","),
+                                            selectedRegion,
+                                        )}
+                                    />
+                                    <input
+                                        type="hidden"
+                                        name="status_ids"
+                                        value={selectedStatuses.join(",")}
+                                    />
+                                    <p className="text-muted-foreground text-[12px]">
+                                        Pick one or more item conditions. Leave
+                                        empty to allow all conditions.
+                                    </p>
+                                </div>
+                            </ActiveFilterField>
 
-                            <div className="space-y-2.5">
-                                <Label className="text-[13px]">
-                                    Size Filter{" "}
-                                    <span className="text-muted-foreground font-normal">
-                                        (optional)
-                                    </span>
-                                </Label>
-                                <SizePicker
-                                    key={`sizes-${selectedPreset ?? "custom"}`}
-                                    selected={selectedSizes}
-                                    onChange={setSelectedSizes}
-                                    defaultGroup={
-                                        getMonitorPreset(selectedPreset)
-                                            ?.sizeGroupKey
-                                    }
-                                />
-                                <input
-                                    type="hidden"
-                                    name="size_id"
-                                    value={selectedSizes.join(",")}
-                                />
-                            </div>
+                            <ActiveFilterField
+                                active={selectedSizes.length > 0}
+                                summary={formatFilterCount(
+                                    selectedSizes.length,
+                                    "size",
+                                )}
+                                testId="size-filter-field"
+                            >
+                                <div className="space-y-2.5">
+                                    <Label className="text-[13px]">
+                                        Size Filter{" "}
+                                        <span className="text-muted-foreground font-normal">
+                                            (optional)
+                                        </span>
+                                    </Label>
+                                    <SizePicker
+                                        key={`sizes-${selectedPreset ?? "custom"}`}
+                                        selected={selectedSizes}
+                                        onChange={setSelectedSizes}
+                                        defaultGroup={
+                                            getMonitorPreset(selectedPreset)
+                                                ?.sizeGroupKey
+                                        }
+                                    />
+                                    <input
+                                        type="hidden"
+                                        name="size_id"
+                                        value={selectedSizes.join(",")}
+                                    />
+                                </div>
+                            </ActiveFilterField>
                         </FormSection>
 
                         <QuietHoursSection />
