@@ -235,7 +235,7 @@ func itemCaption(item model.Item, monitorName string, proxySource string) string
 		lines = append(lines, fmt.Sprintf("📍 %s", escape(item.Location)))
 	}
 	if item.Rating != "" {
-		lines = append(lines, fmt.Sprintf("⭐ %s", escape(item.Rating)))
+		lines = append(lines, escape(ratingLabel(item.Rating)))
 	}
 	if item.SellerURL != "" {
 		label := "Seller"
@@ -279,7 +279,7 @@ func compactItemText(item model.Item, monitorName string) string {
 		sellerDetails = append(sellerDetails, fmt.Sprintf("📍 %s", escape(item.Location)))
 	}
 	if item.Rating != "" {
-		sellerDetails = append(sellerDetails, fmt.Sprintf("⭐ %s", escape(item.Rating)))
+		sellerDetails = append(sellerDetails, escape(ratingLabel(item.Rating)))
 	}
 	if len(sellerDetails) > 0 {
 		lines = append(lines, strings.Join(sellerDetails, " • "))
@@ -297,6 +297,17 @@ func itemPrice(item model.Item) string {
 		price = fmt.Sprintf("%s (%s)", item.Price, item.TotalPrice)
 	}
 	return price
+}
+
+func ratingLabel(rating string) string {
+	rating = strings.TrimSpace(rating)
+	for strings.HasPrefix(rating, "⭐") {
+		rating = strings.TrimSpace(strings.TrimPrefix(rating, "⭐"))
+	}
+	if rating == "" {
+		return ""
+	}
+	return "⭐ " + rating
 }
 
 func compactItemKeyboard(item model.Item) map[string]interface{} {
