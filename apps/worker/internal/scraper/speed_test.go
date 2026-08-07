@@ -382,6 +382,73 @@ func TestDetectedItemAlertPlanPreservesStrictRegionFilter(t *testing.T) {
 	}
 }
 
+func TestSellerQualityAllowed(t *testing.T) {
+	minRating := 4.5
+	minCount := 5
+	monitor := model.Monitor{
+		MinSellerRating:      &minRating,
+		MinSellerRatingCount: &minCount,
+	}
+
+	cases := []struct {
+		name string
+		item model.Item
+		want bool
+	}{
+		{
+			name: "exact threshold",
+			item: model.Item{SellerRating: 4.5, SellerRatingCount: 5, SellerRatingAvailable: true},
+			want: true,
+		},
+		{
+			name: "rating below threshold",
+			item: model.Item{SellerRating: 4.4, SellerRatingCount: 50, SellerRatingAvailable: true},
+		},
+		{
+			name: "count below threshold",
+			item: model.Item{SellerRating: 5, SellerRatingCount: 4, SellerRatingAvailable: true},
+		},
+		{name: "unrated", item: model.Item{SellerRatingAvailable: true}},
+		{name: "unavailable", item: model.Item{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sellerQualityAllowed(tc.item, monitor); got != tc.want {
+				t.Fatalf("sellerQualityAllowed() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	if !sellerQualityAllowed(model.Item{}, model.Monitor{}) {
+		t.Fatal("disabled seller quality filter rejected an item")
+	}
+	if !requiresSellerEnrichment(monitor) {
+		t.Fatal("seller quality filter did not require enrichment")
+	}
+}
+
+func TestSellerQualityFilterUsesStrictAlertGate(t *testing.T) {
+	minRating := 4.8
+	minCount := 10
+	monitor := model.Monitor{
+		MinSellerRating:      &minRating,
+		MinSellerRatingCount: &minCount,
+	}
+
+	publishNow, alertAfterEnrich := detectedItemAlertPlan(
+		monitor,
+		requiresSellerEnrichment(monitor),
+		true,
+	)
+	if publishNow {
+		t.Fatal("seller quality filter published before enrichment")
+	}
+	if !alertAfterEnrich {
+		t.Fatal("seller quality filter did not schedule post-enrichment handling")
+	}
+}
+
 func TestDetectedItemAlertPlanSkipsDeferredWorkWithoutExternalAlerts(t *testing.T) {
 	publishNow, alertAfterEnrich := detectedItemAlertPlan(
 		model.Monitor{},

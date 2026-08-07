@@ -18,6 +18,7 @@ import { ColorPicker } from "@/components/monitors/color-picker";
 import { StatusPicker } from "@/components/monitors/status-picker";
 import { PlatformPicker } from "@/components/monitors/platform-picker";
 import { AntiKeywordInput } from "@/components/monitors/anti-keyword-input";
+import { SellerQualityFilter } from "@/components/monitors/seller-quality-filter";
 import {
     FormSection,
     RegionPoolStatus,
@@ -92,6 +93,8 @@ type MonitorData = {
     video_game_platform_ids: string | null;
     region: string;
     allowed_countries: string | null;
+    min_seller_rating: number | null;
+    min_seller_rating_count: number | null;
     discord_webhook: string | null;
     telegram_active: boolean;
     proxy_group_id: number | null;
@@ -124,6 +127,9 @@ export default function EditMonitorPage() {
     const [titleOnly, setTitleOnly] = useState(false);
     const [priceMin, setPriceMin] = useState("");
     const [priceMax, setPriceMax] = useState("");
+    const [sellerQualityEnabled, setSellerQualityEnabled] = useState(false);
+    const [minSellerRating, setMinSellerRating] = useState(4.5);
+    const [minSellerRatingCount, setMinSellerRatingCount] = useState(5);
     const [proxyGroups, setProxyGroups] = useState<ProxyGroupOption[]>([]);
     const [freeProxy, setFreeProxy] = useState<FreeProxyOption>({
         enabled: false,
@@ -224,6 +230,12 @@ export default function EditMonitorPage() {
                     setTitleOnly(Boolean(m.title_only));
                     setPriceMin(m.price_min != null ? String(m.price_min) : "");
                     setPriceMax(m.price_max != null ? String(m.price_max) : "");
+                    setSellerQualityEnabled(
+                        m.min_seller_rating != null &&
+                            m.min_seller_rating_count != null,
+                    );
+                    setMinSellerRating(m.min_seller_rating ?? 4.5);
+                    setMinSellerRatingCount(m.min_seller_rating_count ?? 5);
                     setSelectedSizes(
                         m.size_id ? m.size_id.split(",").filter(Boolean) : [],
                     );
@@ -325,6 +337,7 @@ export default function EditMonitorPage() {
         selectedStatuses.length > 0,
         activeVideoGamePlatformIds.length > 0,
         selectedSizes.length > 0,
+        sellerQualityEnabled,
     ].filter(Boolean).length;
     const notificationChannelCount =
         Number(Boolean(webhookUrl)) + Number(telegramEnabled);
@@ -622,7 +635,17 @@ export default function EditMonitorPage() {
                                 </p>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-4">
+                            <SellerQualityFilter
+                                idPrefix="edit-monitor"
+                                enabled={sellerQualityEnabled}
+                                rating={minSellerRating}
+                                ratingCount={minSellerRatingCount}
+                                onEnabledChange={setSellerQualityEnabled}
+                                onRatingChange={setMinSellerRating}
+                                onRatingCountChange={setMinSellerRatingCount}
+                            />
+
+                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                                 <div className="space-y-2">
                                     <Label
                                         htmlFor="price_min"

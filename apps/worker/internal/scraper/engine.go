@@ -365,7 +365,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	}
 
 	var enricher *SellerEnricher
-	if e.enrichSeller {
+	if e.fetcher.RequiresNetwork() && (e.enrichSeller || requiresSellerEnrichment(m)) {
 		enricher = e.GetOrCreateEnricher(pm, domain, proxyKey, trafficRecorder, proxySource)
 	}
 
@@ -670,10 +670,11 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			filteredSeeds, _ = filterBannedSellerItems(filteredSeeds, m.BannedSellerIDs)
 			for _, seed := range filteredSeeds {
 				built := e.buildItems(m, []model.VintedItem{seed})[0]
+				requireSellerMatch := requiresSellerEnrichment(m)
 				e.enqueueItem(enrichmentJob{
 					ctx: ctx, item: built, vintedItem: seed, monitor: m, proxySource: proxySource,
 					enricher: enricher, publishUpdate: false,
-					requireCountryMatch: hasCountryFilter(m.AllowedCountries),
+					requireSellerMatch: requireSellerMatch,
 				}, false)
 			}
 			log.Printf("[%d] initial scan seeded %d items without notifications", m.ID, len(items))
@@ -793,16 +794,16 @@ func (e *Engine) handleDetectedItem(ctx context.Context, monitor model.Monitor, 
 	}
 	item := e.buildItems(monitor, []model.VintedItem{vintedItem})[0]
 	log.Printf("[%d] NEW via %s: %s (%s) [%s]", monitor.ID, source, item.Title, item.Price, item.Size)
-	strictCountryGate := hasCountryFilter(monitor.AllowedCountries)
+	strictSellerGate := requiresSellerEnrichment(monitor)
 	publishNow, alertAfterEnrich := detectedItemAlertPlan(
 		monitor,
-		strictCountryGate,
+		strictSellerGate,
 		e.monitorNotificationsEnabled(monitor),
 	)
 	e.enqueueItem(enrichmentJob{
 		ctx: ctx, item: item, vintedItem: vintedItem, monitor: monitor, proxySource: proxySource,
-		enricher: enricher, publishUpdate: !strictCountryGate,
-		requireCountryMatch: strictCountryGate, alertAfterEnrich: alertAfterEnrich,
+		enricher: enricher, publishUpdate: !strictSellerGate,
+		requireSellerMatch: strictSellerGate, alertAfterEnrich: alertAfterEnrich,
 	}, publishNow)
 	return true
 }
@@ -1048,9 +1049,12 @@ func (e *Engine) buildItems(m model.Monitor, vItems []model.VintedItem) []model.
 		}
 
 		if e != nil && e.fetcher != nil && !e.fetcher.RequiresNetwork() {
-			location, rating := mockSellerMetadata(vItem.User.ID, vItem.ID)
-			items[i].Location = location
-			items[i].Rating = rating
+			info := mockSellerMetadata(vItem.User.ID, vItem.ID)
+			items[i].Location = info.Region
+			items[i].Rating = info.Rating
+			items[i].SellerRating = info.RatingStars
+			items[i].SellerRatingCount = info.RatingCount
+			items[i].SellerRatingAvailable = info.RatingAvailable
 		}
 	}
 
@@ -1068,7 +1072,7 @@ func buildSellerProfileURL(domain string, sellerID int64, sellerLogin string) st
 	return fmt.Sprintf("https://%s/member/%s", domain, sellerPath)
 }
 
-func mockSellerMetadata(userID int64, itemID int64) (string, string) {
+func mockSellerMetadata(userID int64, itemID int64) SellerInfo {
 	locations := []string{
 		"🇩🇪 DE",
 		"🇫🇷 FR",
@@ -1077,17 +1081,18 @@ func mockSellerMetadata(userID int64, itemID int64) (string, string) {
 		"🇪🇸 ES",
 		"🇦🇹 AT",
 	}
-	ratings := []string{
-		"⭐ 5.0 (124)",
-		"⭐ 4.9 (58)",
-		"⭐ 4.8 (203)",
-		"⭐ 4.7 (31)",
-		"No rating",
+	ratings := []SellerInfo{
+		{Rating: "⭐ 5.0 (124)", RatingStars: 5.0, RatingCount: 124, RatingAvailable: true},
+		{Rating: "⭐ 4.9 (58)", RatingStars: 4.9, RatingCount: 58, RatingAvailable: true},
+		{Rating: "⭐ 4.8 (203)", RatingStars: 4.8, RatingCount: 203, RatingAvailable: true},
+		{Rating: "⭐ 4.7 (31)", RatingStars: 4.7, RatingCount: 31, RatingAvailable: true},
+		{Rating: "No rating", RatingAvailable: true},
 	}
 
 	location := locations[int((userID+itemID)%int64(len(locations)))]
-	rating := ratings[int((userID+itemID)%int64(len(ratings)))]
-	return location, rating
+	info := ratings[int((userID+itemID)%int64(len(ratings)))]
+	info.Region = location
+	return info
 }
 
 func getEnvInt(key string, fallback int) int {

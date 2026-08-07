@@ -10,7 +10,7 @@ import (
 
 func monitorConfigFingerprint(mon model.Monitor) string {
 	return fmt.Sprintf(
-		"query=%s|titleOnly=%v|anti=%s|queryDelayMs=%d|quiet=%v:%d:%d:%s:%d:%s|priceMin=%s|priceMax=%s|size=%s|catalog=%s|brand=%s|color=%s|status=%s|platform=%s|region=%s|allowed=%s|bannedSellers=%s|proxySource=%s|proxies=%s",
+		"query=%s|titleOnly=%v|anti=%s|queryDelayMs=%d|quiet=%v:%d:%d:%s:%d:%s|priceMin=%s|priceMax=%s|size=%s|catalog=%s|brand=%s|color=%s|status=%s|platform=%s|region=%s|allowed=%s|minSellerRating=%s|minSellerRatingCount=%s|bannedSellers=%s|proxySource=%s|proxies=%s",
 		mon.Query,
 		mon.TitleOnly,
 		nullableString(mon.AntiKeywords),
@@ -31,10 +31,19 @@ func monitorConfigFingerprint(mon model.Monitor) string {
 		nullableString(mon.VideoGamePlatformIDs),
 		mon.Region,
 		nullableString(mon.AllowedCountries),
+		nullableFloat(mon.MinSellerRating),
+		nullableInt(mon.MinSellerRatingCount),
 		int64ListFingerprint(mon.BannedSellerIDs),
 		mon.ProxySource,
 		proxyFingerprint(mon),
 	)
+}
+
+func nullableFloat(v *float64) string {
+	if v == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%.1f", *v)
 }
 
 func proxyFingerprint(mon model.Monitor) string {

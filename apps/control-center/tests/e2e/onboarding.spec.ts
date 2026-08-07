@@ -64,7 +64,7 @@ test.describe("first monitor onboarding", () => {
         await expect(page.getByLabel("Monitor Name")).toHaveValue("Levi's 501");
         await expect(
             page.getByRole("textbox", {
-                name: "Keywords (optional)",
+                name: "Search Queries (optional)",
                 exact: true,
             }),
         ).toHaveValue("501");
@@ -91,5 +91,25 @@ test.describe("first monitor onboarding", () => {
         await expect(page.locator('input[name="price_max"]')).toHaveValue(
             "100",
         );
+
+        await page.getByText("Filters", { exact: true }).click();
+        const sellerQuality = page.getByTestId("seller-quality-filter");
+        await sellerQuality
+            .getByRole("switch", { name: "Enable seller quality filter" })
+            .click();
+        await expect(
+            page.locator('input[name="min_seller_rating"]'),
+        ).toHaveValue("4.5");
+        await expect(
+            page.locator('input[name="min_seller_rating_count"]'),
+        ).toHaveValue("5");
+        await sellerQuality.getByRole("button", { name: "4.9" }).click();
+        await sellerQuality.getByRole("button", { name: "10+" }).click();
+        await expect(
+            page.locator('input[name="min_seller_rating"]'),
+        ).toHaveValue("4.9");
+        await expect(
+            page.locator('input[name="min_seller_rating_count"]'),
+        ).toHaveValue("10");
     });
 });

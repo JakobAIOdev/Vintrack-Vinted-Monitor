@@ -7,7 +7,7 @@ func TestSellerInfoCache_SetAndGet(t *testing.T) {
 		cache: make(map[int64]sellerCacheEntry, 16),
 	}
 
-	info := SellerInfo{Region: "🇩🇪 DE", Rating: "⭐ 4.5 (10)"}
+	info := SellerInfo{Region: "🇩🇪 DE", Rating: "⭐ 4.5 (10)", RatingStars: 4.5, RatingCount: 10, RatingAvailable: true}
 	cache.Set(123, info)
 
 	got, ok := cache.Get(123)
@@ -60,7 +60,23 @@ func TestIsSellerInfoComplete(t *testing.T) {
 	if isSellerInfoComplete(SellerInfo{Region: "🇩🇪 DE"}) {
 		t.Fatal("expected incomplete info when rating is missing")
 	}
-	if !isSellerInfoComplete(SellerInfo{Region: "🇩🇪 DE", Rating: "⭐ 5.0 (1)"}) {
+	if !isSellerInfoComplete(SellerInfo{Region: "🇩🇪 DE", Rating: "⭐ 5.0 (1)", RatingAvailable: true}) {
 		t.Fatal("expected complete info when region and rating are present")
+	}
+}
+
+func TestNormalizeSellerRating(t *testing.T) {
+	display, stars, count, available := normalizeSellerRating(58, 0.981)
+	if !available || display != "⭐ 4.9 (58)" || stars != 4.9 || count != 58 {
+		t.Fatalf("normalized rating = %q %.1f %d %v", display, stars, count, available)
+	}
+
+	display, stars, count, available = normalizeSellerRating(0, 0)
+	if !available || display != "No rating" || stars != 0 || count != 0 {
+		t.Fatalf("unrated seller = %q %.1f %d %v", display, stars, count, available)
+	}
+
+	if _, _, _, available = normalizeSellerRating(10, 1.2); available {
+		t.Fatal("malformed reputation unexpectedly became available")
 	}
 }

@@ -70,6 +70,8 @@ export default async function DashboardPage() {
             size_id: m.size_id ?? null,
             region: m.region ?? "de",
             allowed_countries: m.allowed_countries ?? null,
+            min_seller_rating: m.min_seller_rating ?? null,
+            min_seller_rating_count: m.min_seller_rating_count ?? null,
             discord_webhook: m.discord_webhook ?? null,
             webhook_active: m.webhook_active ?? true,
             telegram_active: m.telegram_active ?? false,

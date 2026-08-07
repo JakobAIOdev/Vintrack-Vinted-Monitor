@@ -133,8 +133,7 @@ export default async function MonitorPage({
               },
           })
         : 0;
-    const lastErrorRun =
-        recentRuns.find((run) => run.error_message) ?? null;
+    const lastErrorRun = recentRuns.find((run) => run.error_message) ?? null;
     const lastError = lastErrorRun?.error_message ?? null;
     const lastErrorCode = lastError
         ? inferProxyErrorCode(lastError, lastErrorRun?.status_code)
@@ -278,7 +277,10 @@ export default async function MonitorPage({
                                 monitor.status_ids ||
                                 monitor.video_game_platform_ids ||
                                 monitor.size_id ||
-                                monitor.allowed_countries) && (
+                                monitor.allowed_countries ||
+                                (monitor.min_seller_rating != null &&
+                                    monitor.min_seller_rating_count !=
+                                        null)) && (
                                 <div className="mt-2 flex flex-wrap gap-1">
                                     {monitor.allowed_countries && (
                                         <span
@@ -290,6 +292,24 @@ export default async function MonitorPage({
                                             ).join(" ")}
                                         </span>
                                     )}
+                                    {monitor.min_seller_rating != null &&
+                                        monitor.min_seller_rating_count !=
+                                            null && (
+                                            <span
+                                                className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300"
+                                                title="Unrated or unavailable sellers are excluded"
+                                            >
+                                                ★ ≥{" "}
+                                                {monitor.min_seller_rating.toFixed(
+                                                    1,
+                                                )}{" "}
+                                                ·{" "}
+                                                {
+                                                    monitor.min_seller_rating_count
+                                                }
+                                                + ratings
+                                            </span>
+                                        )}
                                     {categoryLabels.map((label) => (
                                         <span
                                             key={`cat-${label}`}

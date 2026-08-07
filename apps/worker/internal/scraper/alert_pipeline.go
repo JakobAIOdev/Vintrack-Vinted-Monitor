@@ -21,15 +21,15 @@ type alertJob struct {
 }
 
 type enrichmentJob struct {
-	ctx                 context.Context
-	item                model.Item
-	vintedItem          model.VintedItem
-	monitor             model.Monitor
-	proxySource         string
-	enricher            *SellerEnricher
-	publishUpdate       bool
-	requireCountryMatch bool
-	alertAfterEnrich    bool
+	ctx                context.Context
+	item               model.Item
+	vintedItem         model.VintedItem
+	monitor            model.Monitor
+	proxySource        string
+	enricher           *SellerEnricher
+	publishUpdate      bool
+	requireSellerMatch bool
+	alertAfterEnrich   bool
 }
 
 func (e *Engine) startPipelines() {
@@ -246,22 +246,32 @@ func (e *Engine) enrichmentWorker() {
 }
 
 func (e *Engine) enrichAndPersist(job enrichmentJob) {
-	if !job.requireCountryMatch {
+	if !job.requireSellerMatch {
 		if err := e.db.SaveItem(job.item); err != nil {
 			log.Printf("[%d] save item %d: %v", job.monitor.ID, job.item.ID, err)
 		}
 	}
 
-	enriched := false
-	if e.enrichSeller && job.enricher != nil && job.vintedItem.User.ID > 0 {
+	info := SellerInfo{
+		Region:          job.item.Location,
+		Rating:          job.item.Rating,
+		RatingStars:     job.item.SellerRating,
+		RatingCount:     job.item.SellerRatingCount,
+		RatingAvailable: job.item.SellerRatingAvailable,
+	}
+	enriched := info.Region != "" || info.RatingAvailable
+	if (e.enrichSeller || job.requireSellerMatch) && job.enricher != nil && job.vintedItem.User.ID > 0 {
 		info := job.enricher.FetchSellerInfo(job.vintedItem.User.ID)
 		if info.Region != "" && info.Region != "NaN" {
 			job.item.Location = info.Region
 			job.item.Rating = info.Rating
+			job.item.SellerRating = info.RatingStars
+			job.item.SellerRatingCount = info.RatingCount
+			job.item.SellerRatingAvailable = info.RatingAvailable
 			enriched = true
 		}
 	}
-	if job.requireCountryMatch && !sellerCountryAllowed(job.item.Location, job.monitor.AllowedCountries) {
+	if hasCountryFilter(job.monitor.AllowedCountries) && !sellerCountryAllowed(job.item.Location, job.monitor.AllowedCountries) {
 		reason := "seller location unavailable"
 		if strings.TrimSpace(job.item.Location) != "" {
 			reason = "seller location mismatch"
@@ -269,8 +279,16 @@ func (e *Engine) enrichAndPersist(job enrichmentJob) {
 		log.Printf("[%d] item %d skipped after strict country check: %s", job.monitor.ID, job.item.ID, reason)
 		return
 	}
+	if hasSellerQualityFilter(job.monitor) && !sellerQualityAllowed(job.item, job.monitor) {
+		reason := "seller rating unavailable"
+		if job.item.SellerRatingAvailable {
+			reason = "seller quality below threshold"
+		}
+		log.Printf("[%d] item %d skipped after strict seller quality check: %s", job.monitor.ID, job.item.ID, reason)
+		return
+	}
 
-	if job.requireCountryMatch || enriched {
+	if job.requireSellerMatch || enriched {
 		if err := e.db.SaveItem(job.item); err != nil {
 			log.Printf("[%d] save enriched item %d: %v", job.monitor.ID, job.item.ID, err)
 		}
@@ -279,8 +297,8 @@ func (e *Engine) enrichAndPersist(job enrichmentJob) {
 	if job.alertAfterEnrich {
 		e.enqueueAlert(alertJob{
 			ctx: job.ctx, item: job.item, monitor: job.monitor, proxySource: job.proxySource,
-			publish: job.requireCountryMatch, deliverExternal: true,
-		}, job.requireCountryMatch)
+			publish: job.requireSellerMatch, deliverExternal: true,
+		}, job.requireSellerMatch)
 	}
 	if job.publishUpdate && (job.item.Location != "" || job.item.Rating != "") {
 		if err := e.db.PublishItem(job.item); err != nil {
@@ -307,18 +325,37 @@ func effectiveExternalAlerts(
 
 func detectedItemAlertPlan(
 	monitor model.Monitor,
-	strictCountryGate bool,
+	strictSellerGate bool,
 	notificationsEnabled bool,
 ) (bool, bool) {
 	hasDiscord, hasTelegram := configuredExternalAlerts(monitor)
-	publishNow := !strictCountryGate
+	publishNow := !strictSellerGate
 	alertAfterEnrich :=
-		strictCountryGate || (notificationsEnabled && (hasDiscord || hasTelegram))
+		strictSellerGate || (notificationsEnabled && (hasDiscord || hasTelegram))
 	return publishNow, alertAfterEnrich
 }
 
 func hasCountryFilter(allowedCountries *string) bool {
 	return allowedCountries != nil && strings.TrimSpace(*allowedCountries) != ""
+}
+
+func hasSellerQualityFilter(monitor model.Monitor) bool {
+	return monitor.MinSellerRating != nil || monitor.MinSellerRatingCount != nil
+}
+
+func requiresSellerEnrichment(monitor model.Monitor) bool {
+	return hasCountryFilter(monitor.AllowedCountries) || hasSellerQualityFilter(monitor)
+}
+
+func sellerQualityAllowed(item model.Item, monitor model.Monitor) bool {
+	if !hasSellerQualityFilter(monitor) {
+		return true
+	}
+	if monitor.MinSellerRating == nil || monitor.MinSellerRatingCount == nil || !item.SellerRatingAvailable {
+		return false
+	}
+	return item.SellerRating >= *monitor.MinSellerRating &&
+		item.SellerRatingCount >= *monitor.MinSellerRatingCount
 }
 
 func sellerCountryAllowed(location string, allowedCountries *string) bool {

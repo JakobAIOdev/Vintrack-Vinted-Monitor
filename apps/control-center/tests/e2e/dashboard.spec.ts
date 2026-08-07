@@ -31,6 +31,9 @@ test.describe("dashboard overview", () => {
         await expect(monitorCard.getByText("Server Proxies")).toBeVisible();
         await expect(monitorCard.getByText(/items found/i)).toBeVisible();
         await expect(
+            monitorCard.getByText("Seller ≥ 4.5★ · 5+ ratings"),
+        ).toBeVisible();
+        await expect(
             monitorCard.getByText("Alerts on", { exact: true }),
         ).toBeVisible();
         await expect(
@@ -39,6 +42,25 @@ test.describe("dashboard overview", () => {
         await expect(
             monitorCard.getByRole("link", { name: /View/i }),
         ).toHaveAttribute("href", "/monitors/990001");
+
+        await monitorCard.getByRole("link", { name: /View/i }).click();
+        await expect(page.getByText("★ ≥ 4.5 · 5+ ratings")).toBeVisible();
+        await page.getByRole("link", { name: "Edit" }).click();
+        await page.getByText("Filters", { exact: true }).click();
+        await expect(
+            page.getByRole("switch", {
+                name: "Enable seller quality filter",
+            }),
+        ).toBeChecked();
+        await expect(
+            page.locator('input[name="min_seller_rating"]'),
+        ).toHaveValue("4.5");
+        await expect(
+            page.locator('input[name="min_seller_rating_count"]'),
+        ).toHaveValue("5");
+        await page.getByRole("button", { name: "Save Changes" }).click();
+        await expect(page).toHaveURL("/monitors/990001");
+        await expect(page.getByText("★ ≥ 4.5 · 5+ ratings")).toBeVisible();
     });
 
     test("feed APIs return seeded monitor and item metadata", async ({

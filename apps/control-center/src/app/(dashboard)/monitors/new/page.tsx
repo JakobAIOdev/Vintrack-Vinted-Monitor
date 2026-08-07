@@ -14,6 +14,7 @@ import { ColorPicker } from "@/components/monitors/color-picker";
 import { StatusPicker } from "@/components/monitors/status-picker";
 import { PlatformPicker } from "@/components/monitors/platform-picker";
 import { AntiKeywordInput } from "@/components/monitors/anti-keyword-input";
+import { SellerQualityFilter } from "@/components/monitors/seller-quality-filter";
 import { MonitorPresetPicker } from "@/components/monitors/preset-picker";
 import {
     FormSection,
@@ -96,6 +97,9 @@ export default function NewMonitorPage() {
     const [titleOnly, setTitleOnly] = useState(false);
     const [priceMin, setPriceMin] = useState("");
     const [priceMax, setPriceMax] = useState("");
+    const [sellerQualityEnabled, setSellerQualityEnabled] = useState(false);
+    const [minSellerRating, setMinSellerRating] = useState(4.5);
+    const [minSellerRatingCount, setMinSellerRatingCount] = useState(5);
     const [proxyGroups, setProxyGroups] = useState<ProxyGroupOption[]>([]);
     const [freeProxy, setFreeProxy] = useState<FreeProxyOption>({
         enabled: false,
@@ -127,6 +131,9 @@ export default function NewMonitorPage() {
         setSelectedAllowedCountries([selectedRegion]);
         setPriceMin(String(preset.priceMin));
         setPriceMax(String(preset.priceMax));
+        setSellerQualityEnabled(false);
+        setMinSellerRating(4.5);
+        setMinSellerRatingCount(5);
     };
 
     const handleClearPreset = () => {
@@ -144,6 +151,9 @@ export default function NewMonitorPage() {
         setSelectedAllowedCountries([]);
         setPriceMin("");
         setPriceMax("");
+        setSellerQualityEnabled(false);
+        setMinSellerRating(4.5);
+        setMinSellerRatingCount(5);
         setAntiKeywordResetKey((current) => current + 1);
     };
 
@@ -326,6 +336,7 @@ export default function NewMonitorPage() {
         selectedStatuses.length > 0,
         activeVideoGamePlatformIds.length > 0,
         selectedSizes.length > 0,
+        sellerQualityEnabled,
     ].filter(Boolean).length;
     const notificationChannelCount =
         Number(Boolean(webhookUrl)) + Number(telegramEnabled);
@@ -636,6 +647,16 @@ export default function NewMonitorPage() {
                                     the Platform filter.
                                 </p>
                             </div>
+
+                            <SellerQualityFilter
+                                idPrefix="new-monitor"
+                                enabled={sellerQualityEnabled}
+                                rating={minSellerRating}
+                                ratingCount={minSellerRatingCount}
+                                onEnabledChange={setSellerQualityEnabled}
+                                onRatingChange={setMinSellerRating}
+                                onRatingCountChange={setMinSellerRatingCount}
+                            />
 
                             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                                 <div className="space-y-2">
