@@ -2,9 +2,12 @@ package discord
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,51 +21,114 @@ import (
 var httpClient = &http.Client{Timeout: 5 * time.Second}
 
 func SendWebhook(webhookURL string, item model.Item, monitorName string, proxySource string, style model.NotificationMessageStyle) error {
-	if webhookURL == "" {
+	payload := buildItemWebhookPayload(item, monitorName, proxySource, style)
+	result := SendPayloadAttempt(context.Background(), webhookURL, payload)
+	if result.Success {
 		return nil
 	}
+	return fmt.Errorf("%s", result.Detail)
+}
 
-	payload := buildItemWebhookPayload(item, monitorName, proxySource, style)
+func SendWebhookAttempt(
+	ctx context.Context,
+	webhookURL string,
+	item model.Item,
+	monitorName string,
+	proxySource string,
+	style model.NotificationMessageStyle,
+) model.AlertDeliveryResult {
+	return SendPayloadAttempt(ctx, webhookURL, buildItemWebhookPayload(item, monitorName, proxySource, style))
+}
+
+func SendStatusAttempt(ctx context.Context, webhookURL string, title string, message string) model.AlertDeliveryResult {
+	payload := map[string]interface{}{
+		"username": "Vintrack Monitor",
+		"embeds": []map[string]interface{}{{
+			"title": title, "description": message, "color": 3447003,
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
+		}},
+	}
+	return SendPayloadAttempt(ctx, webhookURL, payload)
+}
+
+func SendPayloadAttempt(ctx context.Context, webhookURL string, payload interface{}) model.AlertDeliveryResult {
+	if strings.TrimSpace(webhookURL) == "" {
+		return model.AlertDeliveryResult{ReasonCode: "invalid_destination", Detail: "discord webhook is not configured"}
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("webhook marshal error: %v", err)
-		return err
+		return model.AlertDeliveryResult{ReasonCode: "provider_rejected", Detail: "discord payload could not be encoded"}
 	}
-
-	resp, err := httpClient.Post(webhookURL, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
 	if err != nil {
-		log.Printf("webhook error: %v", err)
-		return err
+		return model.AlertDeliveryResult{ReasonCode: "invalid_destination", Detail: "discord webhook URL is invalid"}
 	}
-	resp.Body.Close()
-
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
-	}
-
-	if resp.StatusCode == 429 {
-		if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
-			if secs, err := strconv.ParseFloat(retryAfter, 64); err == nil {
-				wait := time.Duration(secs*1000+500) * time.Millisecond
-				if wait > 10*time.Second {
-					wait = 10 * time.Second
-				}
-				time.Sleep(wait)
-				resp2, err := httpClient.Post(webhookURL, "application/json", bytes.NewReader(body))
-				if err == nil {
-					resp2.Body.Close()
-					if resp2.StatusCode >= 200 && resp2.StatusCode < 300 {
-						return nil
-					}
-					return fmt.Errorf("discord webhook returned %d after retry", resp2.StatusCode)
-				}
-				return err
-			}
-		} else {
-			time.Sleep(2 * time.Second)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		reason := "network_error"
+		var netErr net.Error
+		if ctx.Err() != nil || (errors.As(err, &netErr) && netErr.Timeout()) {
+			reason = "network_timeout"
 		}
+		return model.AlertDeliveryResult{Retryable: true, ReasonCode: reason, Detail: "discord request failed"}
 	}
-	return fmt.Errorf("discord webhook returned %d", resp.StatusCode)
+	defer resp.Body.Close()
+	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	result := model.AlertDeliveryResult{
+		HTTPStatus:      resp.StatusCode,
+		RateLimitBucket: resp.Header.Get("X-RateLimit-Bucket"),
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		result.Success = true
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			result.RetryAfter = parseDiscordDuration(resp.Header.Get("X-RateLimit-Reset-After"))
+		}
+		return result
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		result.Retryable = true
+		result.ReasonCode = "rate_limited"
+		result.Detail = "discord rate limit reached"
+		result.GlobalRateLimit = strings.EqualFold(resp.Header.Get("X-RateLimit-Global"), "true") ||
+			strings.EqualFold(resp.Header.Get("X-RateLimit-Scope"), "global")
+		result.RetryAfter = parseDiscordDuration(resp.Header.Get("Retry-After"))
+		if result.RetryAfter <= 0 {
+			result.RetryAfter = parseDiscordDuration(resp.Header.Get("X-RateLimit-Reset-After"))
+		}
+		if result.RetryAfter <= 0 {
+			var rateLimit struct {
+				RetryAfter float64 `json:"retry_after"`
+			}
+			if json.Unmarshal(responseBody, &rateLimit) == nil && rateLimit.RetryAfter > 0 {
+				result.RetryAfter = time.Duration(rateLimit.RetryAfter * float64(time.Second))
+			}
+		}
+		if result.RetryAfter <= 0 {
+			result.RetryAfter = 2 * time.Second
+		}
+		return result
+	}
+	if resp.StatusCode >= 500 {
+		result.Retryable = true
+		result.ReasonCode = "provider_5xx"
+		result.Detail = fmt.Sprintf("discord returned %d", resp.StatusCode)
+		return result
+	}
+	result.ReasonCode = "provider_rejected"
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+		result.ReasonCode = "invalid_destination"
+	}
+	result.Detail = fmt.Sprintf("discord returned %d", resp.StatusCode)
+	return result
+}
+
+func parseDiscordDuration(value string) time.Duration {
+	seconds, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds * float64(time.Second))
 }
 
 func buildItemWebhookPayload(item model.Item, monitorName string, proxySource string, style model.NotificationMessageStyle) map[string]interface{} {

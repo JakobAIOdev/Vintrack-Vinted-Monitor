@@ -5,14 +5,18 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { isValidDiscordWebhook } from "@/lib/validation";
-import { monitorStatusTelegramText, sendTelegramMessage } from "@/lib/telegram";
 import { getTelegramConnection } from "@/lib/telegram-connection";
+import { enqueueMonitorStatusNotification } from "@/lib/alert-outbox";
 import {
     DEFAULT_QUERY_DELAY_MS,
     normalizeQueryDelayMs,
 } from "@/lib/monitor-delay";
 import { normalizeQuietHours } from "@/lib/monitor-schedule";
-import { getMonitorActivationState } from "@/lib/monitor-limits";
+import {
+    getMonitorActivationState,
+    monitorActivationErrorMessage,
+    withMonitorActivationLock,
+} from "@/lib/monitor-limits";
 import { getFreeProxyPoolHealth } from "@/lib/free-proxy-health";
 import { getMonitorPreset } from "@/lib/monitor-presets";
 import { REGIONS } from "@/lib/regions";
@@ -72,28 +76,6 @@ function normalizeSellerQualityFilter(formData: FormData) {
     return { minSellerRating, minSellerRatingCount };
 }
 
-async function sendTelegramStatusIfConfigured(
-    monitor: {
-        name: string;
-        userId: string;
-        telegram_active: boolean;
-        notifications_enabled: boolean;
-    },
-    status: "created" | "started" | "paused",
-) {
-    if (!monitor.notifications_enabled || !monitor.telegram_active) return;
-
-    const connection = await getTelegramConnection(monitor.userId);
-    if (!connection) return;
-    const result = await sendTelegramMessage(
-        connection.chat_id,
-        monitorStatusTelegramText(monitor.name, status),
-    );
-    if ("error" in result) {
-        console.error("Failed to send Telegram status message", result.error);
-    }
-}
-
 async function isFreeProxyPoolAvailable(region: string) {
     void region;
     const health = await getFreeProxyPoolHealth();
@@ -150,6 +132,7 @@ export type CreateMonitorResult =
           redirectTo: string;
           started: boolean;
           activeLimit: number | null;
+          pauseReason: "active-limit" | "free-proxy-limit" | null;
       }
     | { ok: false; message: string };
 
@@ -227,52 +210,67 @@ export async function createMonitor(
         ? await getTelegramConnection(userId)
         : null;
 
-    const activationState = await getMonitorActivationState(userId);
-    const initialStatus = activationState.canActivate ? "active" : "paused";
-
-    const monitor = await db.$transaction(async (tx) => {
-        const createdMonitor = await tx.monitors.create({
-            data: {
+    const { monitor, activationState, initialStatus } =
+        await withMonitorActivationLock(userId, async (tx) => {
+            const activationState = await getMonitorActivationState(
                 userId,
-                name: normalizedName,
-                query: normalizedQuery,
-                title_only: titleOnly,
-                anti_keywords: antiKeywords,
-                query_delay_ms: queryDelayMs,
-                quiet_hours_enabled: quietHours.enabled,
-                quiet_hours_start_minute: quietHours.startMinute,
-                quiet_hours_end_minute: quietHours.endMinute,
-                quiet_hours_mode: quietHours.mode,
-                quiet_hours_delay_ms: quietHours.delayMs,
-                quiet_hours_timezone: quietHours.timezone,
-                price_min: priceMin,
-                price_max: priceMax,
-                size_id: sizeId,
-                catalog_ids: catalogIds || null,
-                brand_ids: brandIds || null,
-                color_ids: colorIds || null,
-                status_ids: statusIds || null,
-                video_game_platform_ids: videoGamePlatformIds || null,
-                region,
-                allowed_countries: allowedCountries || null,
-                min_seller_rating: minSellerRating,
-                min_seller_rating_count: minSellerRatingCount,
-                discord_webhook: urlToSave,
-                telegram_active: Boolean(telegramConnection),
-                proxy_group_id: proxyGroupId,
-                proxy_source: proxySource,
-                status: initialStatus,
-                webhook_active: urlToSave ? true : false,
-            },
-        });
+                proxySource,
+                tx,
+            );
+            const initialStatus = activationState.canActivate
+                ? "active"
+                : "paused";
+            const createdMonitor = await tx.monitors.create({
+                data: {
+                    userId,
+                    name: normalizedName,
+                    query: normalizedQuery,
+                    title_only: titleOnly,
+                    anti_keywords: antiKeywords,
+                    query_delay_ms: queryDelayMs,
+                    quiet_hours_enabled: quietHours.enabled,
+                    quiet_hours_start_minute: quietHours.startMinute,
+                    quiet_hours_end_minute: quietHours.endMinute,
+                    quiet_hours_mode: quietHours.mode,
+                    quiet_hours_delay_ms: quietHours.delayMs,
+                    quiet_hours_timezone: quietHours.timezone,
+                    price_min: priceMin,
+                    price_max: priceMax,
+                    size_id: sizeId,
+                    catalog_ids: catalogIds || null,
+                    brand_ids: brandIds || null,
+                    color_ids: colorIds || null,
+                    status_ids: statusIds || null,
+                    video_game_platform_ids: videoGamePlatformIds || null,
+                    region,
+                    allowed_countries: allowedCountries || null,
+                    min_seller_rating: minSellerRating,
+                    min_seller_rating_count: minSellerRatingCount,
+                    discord_webhook: urlToSave,
+                    telegram_active: Boolean(telegramConnection),
+                    proxy_group_id: proxyGroupId,
+                    proxy_source: proxySource,
+                    status: initialStatus,
+                    webhook_active: urlToSave ? true : false,
+                },
+            });
 
-        await tx.user.update({
-            where: { id: userId },
-            data: { monitor_onboarding_status: "completed" },
-        });
+            await tx.user.update({
+                where: { id: userId },
+                data: { monitor_onboarding_status: "completed" },
+            });
 
-        return createdMonitor;
-    });
+            if (initialStatus === "active") {
+                await enqueueMonitorStatusNotification(tx, createdMonitor, {
+                    kind: "monitor_created",
+                    title: "Monitor created and started",
+                    message: `The monitor ${createdMonitor.name} was created and is now active.`,
+                    idempotencyKey: `monitor-created:${createdMonitor.id}`,
+                });
+            }
+
+            return { monitor: createdMonitor, activationState, initialStatus };
+        });
 
     if (appliedPreset) {
         await logAuditEvent({
@@ -290,52 +288,18 @@ export async function createMonitor(
         });
     }
 
-    if (
-        initialStatus === "active" &&
-        monitor.notifications_enabled &&
-        monitor.discord_webhook &&
-        monitor.webhook_active
-    ) {
-        try {
-            const payload = {
-                username: "Vintrack Monitor",
-                avatar_url:
-                    "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                embeds: [
-                    {
-                        title: "🚀 New Monitor Created & Started",
-                        description: `The monitor **${monitor.name}** has been successfully created and is now active.`,
-                        color: 3066993, // Green
-                        footer: {
-                            text: "Vintrack • Status Update",
-                            icon_url:
-                                "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                        },
-                        timestamp: new Date().toISOString(),
-                    },
-                ],
-            };
-
-            await fetch(monitor.discord_webhook, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-            });
-        } catch (error) {
-            console.error("Failed to send status webhook", error);
-        }
-    }
-
-    if (initialStatus === "active") {
-        await sendTelegramStatusIfConfigured(monitor, "created");
-    }
-
     revalidatePath("/dashboard");
     return {
         ok: true,
         redirectTo: `/monitors/${monitor.id}`,
         started: initialStatus === "active",
         activeLimit: activationState.activeLimit,
+        pauseReason:
+            initialStatus === "active"
+                ? null
+                : activationState.freeProxyLimitReached
+                  ? "free-proxy-limit"
+                  : "active-limit",
     };
 }
 
@@ -345,6 +309,7 @@ export type CreatePresetMonitorResult =
           redirectTo: string;
           started: boolean;
           activeLimit: number | null;
+          pauseReason: "active-limit" | "free-proxy-limit" | null;
       }
     | {
           ok: false;
@@ -395,62 +360,72 @@ export async function createPresetMonitor(input: {
         };
     }
 
-    const activationState = await getMonitorActivationState(userId);
-    const initialStatus = activationState.canActivate ? "active" : "paused";
     const demoExpiresAt = getNextDemoMonitorExpiry();
 
     try {
-        const monitor = await db.$transaction(async (tx) => {
-            const existingMonitorCount = await tx.monitors.count({
-                where: { userId },
-            });
+        const { monitor, activationState, initialStatus } =
+            await withMonitorActivationLock(userId, async (tx) => {
+                const activationState = await getMonitorActivationState(
+                    userId,
+                    "free",
+                    tx,
+                );
+                const initialStatus = activationState.canActivate
+                    ? "active"
+                    : "paused";
+                const existingMonitorCount = await tx.monitors.count({
+                    where: { userId },
+                });
 
-            if (existingMonitorCount > 0) {
-                await tx.user.updateMany({
-                    where: { id: userId },
+                if (existingMonitorCount > 0) {
+                    await tx.user.updateMany({
+                        where: { id: userId },
+                        data: { monitor_onboarding_status: "completed" },
+                    });
+                    return { monitor: null, activationState, initialStatus };
+                }
+
+                const claim = await tx.user.updateMany({
+                    where: {
+                        id: userId,
+                        monitor_onboarding_status: {
+                            in: ["pending", "dismissed"],
+                        },
+                    },
                     data: { monitor_onboarding_status: "completed" },
                 });
-                return null;
-            }
 
-            const claim = await tx.user.updateMany({
-                where: {
-                    id: userId,
-                    monitor_onboarding_status: {
-                        in: ["pending", "dismissed"],
+                if (claim.count !== 1) {
+                    return { monitor: null, activationState, initialStatus };
+                }
+
+                const monitor = await tx.monitors.create({
+                    data: {
+                        userId,
+                        name: preset.name,
+                        query: preset.query,
+                        anti_keywords: preset.antiKeywords.join(",") || null,
+                        query_delay_ms: DEFAULT_QUERY_DELAY_MS,
+                        price_min: preset.priceMin,
+                        price_max: preset.priceMax,
+                        size_id: preset.sizeIds.join(",") || null,
+                        catalog_ids: preset.catalogIds.join(",") || null,
+                        brand_ids: preset.brandIds.join(","),
+                        color_ids: preset.colorIds.join(",") || null,
+                        status_ids: preset.statusIds.join(",") || null,
+                        region,
+                        allowed_countries: region,
+                        discord_webhook: null,
+                        webhook_active: false,
+                        telegram_active: false,
+                        proxy_group_id: null,
+                        proxy_source: "free",
+                        status: initialStatus,
+                        demo_expires_at: demoExpiresAt,
                     },
-                },
-                data: { monitor_onboarding_status: "completed" },
+                });
+                return { monitor, activationState, initialStatus };
             });
-
-            if (claim.count !== 1) return null;
-
-            return tx.monitors.create({
-                data: {
-                    userId,
-                    name: preset.name,
-                    query: preset.query,
-                    anti_keywords: preset.antiKeywords.join(",") || null,
-                    query_delay_ms: DEFAULT_QUERY_DELAY_MS,
-                    price_min: preset.priceMin,
-                    price_max: preset.priceMax,
-                    size_id: preset.sizeIds.join(",") || null,
-                    catalog_ids: preset.catalogIds.join(",") || null,
-                    brand_ids: preset.brandIds.join(","),
-                    color_ids: preset.colorIds.join(",") || null,
-                    status_ids: preset.statusIds.join(",") || null,
-                    region,
-                    allowed_countries: region,
-                    discord_webhook: null,
-                    webhook_active: false,
-                    telegram_active: false,
-                    proxy_group_id: null,
-                    proxy_source: "free",
-                    status: initialStatus,
-                    demo_expires_at: demoExpiresAt,
-                },
-            });
-        });
 
         if (!monitor) {
             return {
@@ -482,6 +457,12 @@ export async function createPresetMonitor(input: {
             redirectTo: `/monitors/${monitor.id}`,
             started: initialStatus === "active",
             activeLimit: activationState.activeLimit,
+            pauseReason:
+                initialStatus === "active"
+                    ? null
+                    : activationState.freeProxyLimitReached
+                      ? "free-proxy-limit"
+                      : "active-limit",
         };
     } catch (error) {
         console.error("Failed to create preset monitor", error);
@@ -523,28 +504,42 @@ export async function extendDemoMonitor(id: number) {
     if (!session?.user?.id) throw new Error("Unauthorized");
     const userId = session.user.id;
 
-    const existing = await db.monitors.findFirst({
-        where: { id, userId },
-        select: { id: true, status: true, demo_expires_at: true },
-    });
-    if (!existing) throw new Error("Monitor not found");
-    if (!existing.demo_expires_at) {
-        throw new Error("This monitor is no longer in demo mode");
-    }
-
-    if (existing.status !== "active") {
-        const activationState = await getMonitorActivationState(userId);
-        if (!activationState.canActivate) {
-            throw new Error(
-                `Active monitor limit reached (${activationState.activeCount}/${activationState.activeLimit}). Pause another monitor first.`,
-            );
-        }
-    }
-
     const expiresAt = getNextDemoMonitorExpiry();
-    await db.monitors.update({
-        where: { id, userId },
-        data: { status: "active", demo_expires_at: expiresAt },
+    await withMonitorActivationLock(userId, async (tx) => {
+        const existing = await tx.monitors.findFirst({
+            where: { id, userId },
+            select: {
+                id: true,
+                status: true,
+                demo_expires_at: true,
+                proxy_source: true,
+            },
+        });
+        if (!existing) throw new Error("Monitor not found");
+        if (!existing.demo_expires_at) {
+            throw new Error("This monitor is no longer in demo mode");
+        }
+
+        if (existing.status !== "active") {
+            const activationState = await getMonitorActivationState(
+                userId,
+                existing.proxy_source,
+                tx,
+            );
+            if (!activationState.canActivate) {
+                throw new Error(
+                    monitorActivationErrorMessage(
+                        activationState,
+                        existing.proxy_source,
+                    ),
+                );
+            }
+        }
+
+        await tx.monitors.update({
+            where: { id, userId },
+            data: { status: "active", demo_expires_at: expiresAt },
+        });
     });
     await logAuditEvent({
         userId,
@@ -568,28 +563,46 @@ export async function keepDemoMonitorRunning(id: number) {
     if (!session?.user?.id) throw new Error("Unauthorized");
     const userId = session.user.id;
 
-    const existing = await db.monitors.findFirst({
-        where: { id, userId },
-        select: { id: true, status: true, demo_expires_at: true },
-    });
-    if (!existing) throw new Error("Monitor not found");
-    if (!existing.demo_expires_at) {
-        return { ok: true, status: existing.status, expiresAt: null };
-    }
-
-    if (existing.status !== "active") {
-        const activationState = await getMonitorActivationState(userId);
-        if (!activationState.canActivate) {
-            throw new Error(
-                `Active monitor limit reached (${activationState.activeCount}/${activationState.activeLimit}). Pause another monitor first.`,
-            );
+    const result = await withMonitorActivationLock(userId, async (tx) => {
+        const existing = await tx.monitors.findFirst({
+            where: { id, userId },
+            select: {
+                id: true,
+                status: true,
+                demo_expires_at: true,
+                proxy_source: true,
+            },
+        });
+        if (!existing) throw new Error("Monitor not found");
+        if (!existing.demo_expires_at) {
+            return { status: existing.status, changed: false };
         }
-    }
 
-    await db.monitors.update({
-        where: { id, userId },
-        data: { status: "active", demo_expires_at: null },
+        if (existing.status !== "active") {
+            const activationState = await getMonitorActivationState(
+                userId,
+                existing.proxy_source,
+                tx,
+            );
+            if (!activationState.canActivate) {
+                throw new Error(
+                    monitorActivationErrorMessage(
+                        activationState,
+                        existing.proxy_source,
+                    ),
+                );
+            }
+        }
+
+        await tx.monitors.update({
+            where: { id, userId },
+            data: { status: "active", demo_expires_at: null },
+        });
+        return { status: "active", changed: true };
     });
+    if (!result.changed) {
+        return { ok: true, status: result.status, expiresAt: null };
+    }
     await logAuditEvent({
         userId,
         action: "monitor.demo_converted",
@@ -605,6 +618,7 @@ export async function keepDemoMonitorRunning(id: number) {
 export async function updateMonitor(id: number, formData: FormData) {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Unauthorized");
+    const userId = session.user.id;
 
     const name = formData.get("name") as string;
     const normalizedQuery = normalizeMonitorQuery(formData.get("query"));
@@ -659,7 +673,7 @@ export async function updateMonitor(id: number, formData: FormData) {
     if (!existing) throw new Error("Monitor not found");
 
     const { proxyGroupId, proxySource } = await resolveMonitorProxySelection(
-        session.user.id,
+        userId,
         proxyGroupRaw,
         region,
     );
@@ -669,42 +683,69 @@ export async function updateMonitor(id: number, formData: FormData) {
         throw new Error("Invalid Discord Webhook URL");
     }
     const telegramConnection = wantsTelegramActive
-        ? await getTelegramConnection(session.user.id)
+        ? await getTelegramConnection(userId)
         : null;
 
-    await db.monitors.update({
-        where: { id, userId: session.user.id },
-        data: {
-            name: normalizedName,
-            query: normalizedQuery,
-            title_only: titleOnly,
-            anti_keywords: antiKeywords,
-            query_delay_ms: queryDelayMs,
-            quiet_hours_enabled: quietHours.enabled,
-            quiet_hours_start_minute: quietHours.startMinute,
-            quiet_hours_end_minute: quietHours.endMinute,
-            quiet_hours_mode: quietHours.mode,
-            quiet_hours_delay_ms: quietHours.delayMs,
-            quiet_hours_timezone: quietHours.timezone,
-            price_min: priceMin,
-            price_max: priceMax,
-            size_id: sizeId,
-            catalog_ids: catalogIds || null,
-            brand_ids: brandIds || null,
-            color_ids: colorIds || null,
-            status_ids: statusIds || null,
-            video_game_platform_ids: videoGamePlatformIds || null,
-            region,
-            allowed_countries: allowedCountries || null,
-            min_seller_rating: minSellerRating,
-            min_seller_rating_count: minSellerRatingCount,
-            discord_webhook: urlToSave,
-            proxy_group_id: proxyGroupId,
-            proxy_source: proxySource,
-            webhook_active: urlToSave ? true : false,
-            telegram_active: Boolean(telegramConnection),
+    const pausedByFreeProxyLimit = await withMonitorActivationLock(
+        userId,
+        async (tx) => {
+            const currentMonitor = await tx.monitors.findFirst({
+                where: { id, userId },
+                select: { status: true, proxy_source: true },
+            });
+            if (!currentMonitor) throw new Error("Monitor not found");
+
+            let pauseForFreeProxyLimit = false;
+            if (
+                currentMonitor.status === "active" &&
+                currentMonitor.proxy_source !== "free" &&
+                proxySource === "free"
+            ) {
+                const activationState = await getMonitorActivationState(
+                    userId,
+                    "free",
+                    tx,
+                );
+                pauseForFreeProxyLimit = activationState.freeProxyLimitReached;
+            }
+
+            await tx.monitors.update({
+                where: { id, userId },
+                data: {
+                    name: normalizedName,
+                    query: normalizedQuery,
+                    title_only: titleOnly,
+                    anti_keywords: antiKeywords,
+                    query_delay_ms: queryDelayMs,
+                    quiet_hours_enabled: quietHours.enabled,
+                    quiet_hours_start_minute: quietHours.startMinute,
+                    quiet_hours_end_minute: quietHours.endMinute,
+                    quiet_hours_mode: quietHours.mode,
+                    quiet_hours_delay_ms: quietHours.delayMs,
+                    quiet_hours_timezone: quietHours.timezone,
+                    price_min: priceMin,
+                    price_max: priceMax,
+                    size_id: sizeId,
+                    catalog_ids: catalogIds || null,
+                    brand_ids: brandIds || null,
+                    color_ids: colorIds || null,
+                    status_ids: statusIds || null,
+                    video_game_platform_ids: videoGamePlatformIds || null,
+                    region,
+                    allowed_countries: allowedCountries || null,
+                    min_seller_rating: minSellerRating,
+                    min_seller_rating_count: minSellerRatingCount,
+                    discord_webhook: urlToSave,
+                    proxy_group_id: proxyGroupId,
+                    proxy_source: proxySource,
+                    webhook_active: urlToSave ? true : false,
+                    telegram_active: Boolean(telegramConnection),
+                    ...(pauseForFreeProxyLimit ? { status: "paused" } : {}),
+                },
+            });
+            return pauseForFreeProxyLimit;
         },
-    });
+    );
 
     revalidatePath("/dashboard");
     revalidatePath(`/monitors/${id}`);
@@ -714,11 +755,19 @@ export async function updateMonitor(id: number, formData: FormData) {
         redirect("/dashboard");
     }
 
-    redirect(`/monitors/${id}`);
+    redirect(
+        pausedByFreeProxyLimit
+            ? `/monitors/${id}?paused=free-proxy-limit`
+            : `/monitors/${id}`,
+    );
 }
 
 export type UpdateMonitorResult =
-    | { success: true; redirectTo: string }
+    | {
+          success: true;
+          redirectTo: string;
+          pausedByFreeProxyLimit: boolean;
+      }
     | { success: false; message: string };
 
 export async function updateMonitorAndReturn(
@@ -727,6 +776,7 @@ export async function updateMonitorAndReturn(
 ): Promise<UpdateMonitorResult> {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Unauthorized");
+    const userId = session.user.id;
 
     const name = formData.get("name") as string;
     const normalizedQuery = normalizeMonitorQuery(formData.get("query"));
@@ -787,7 +837,7 @@ export async function updateMonitorAndReturn(
     if (!existing) throw new Error("Monitor not found");
 
     const { proxyGroupId, proxySource } = await resolveMonitorProxySelection(
-        session.user.id,
+        userId,
         proxyGroupRaw,
         region,
     );
@@ -797,42 +847,69 @@ export async function updateMonitorAndReturn(
         throw new Error("Invalid Discord Webhook URL");
     }
     const telegramConnection = wantsTelegramActive
-        ? await getTelegramConnection(session.user.id)
+        ? await getTelegramConnection(userId)
         : null;
 
-    await db.monitors.update({
-        where: { id, userId: session.user.id },
-        data: {
-            name: normalizedName,
-            query: normalizedQuery,
-            title_only: titleOnly,
-            anti_keywords: antiKeywords,
-            query_delay_ms: queryDelayMs,
-            quiet_hours_enabled: quietHours.enabled,
-            quiet_hours_start_minute: quietHours.startMinute,
-            quiet_hours_end_minute: quietHours.endMinute,
-            quiet_hours_mode: quietHours.mode,
-            quiet_hours_delay_ms: quietHours.delayMs,
-            quiet_hours_timezone: quietHours.timezone,
-            price_min: priceMin,
-            price_max: priceMax,
-            size_id: sizeId,
-            catalog_ids: catalogIds || null,
-            brand_ids: brandIds || null,
-            color_ids: colorIds || null,
-            status_ids: statusIds || null,
-            video_game_platform_ids: videoGamePlatformIds || null,
-            region,
-            allowed_countries: allowedCountries || null,
-            min_seller_rating: minSellerRating,
-            min_seller_rating_count: minSellerRatingCount,
-            discord_webhook: urlToSave,
-            proxy_group_id: proxyGroupId,
-            proxy_source: proxySource,
-            webhook_active: urlToSave ? true : false,
-            telegram_active: Boolean(telegramConnection),
+    const pausedByFreeProxyLimit = await withMonitorActivationLock(
+        userId,
+        async (tx) => {
+            const currentMonitor = await tx.monitors.findFirst({
+                where: { id, userId },
+                select: { status: true, proxy_source: true },
+            });
+            if (!currentMonitor) throw new Error("Monitor not found");
+
+            let pauseForFreeProxyLimit = false;
+            if (
+                currentMonitor.status === "active" &&
+                currentMonitor.proxy_source !== "free" &&
+                proxySource === "free"
+            ) {
+                const activationState = await getMonitorActivationState(
+                    userId,
+                    "free",
+                    tx,
+                );
+                pauseForFreeProxyLimit = activationState.freeProxyLimitReached;
+            }
+
+            await tx.monitors.update({
+                where: { id, userId },
+                data: {
+                    name: normalizedName,
+                    query: normalizedQuery,
+                    title_only: titleOnly,
+                    anti_keywords: antiKeywords,
+                    query_delay_ms: queryDelayMs,
+                    quiet_hours_enabled: quietHours.enabled,
+                    quiet_hours_start_minute: quietHours.startMinute,
+                    quiet_hours_end_minute: quietHours.endMinute,
+                    quiet_hours_mode: quietHours.mode,
+                    quiet_hours_delay_ms: quietHours.delayMs,
+                    quiet_hours_timezone: quietHours.timezone,
+                    price_min: priceMin,
+                    price_max: priceMax,
+                    size_id: sizeId,
+                    catalog_ids: catalogIds || null,
+                    brand_ids: brandIds || null,
+                    color_ids: colorIds || null,
+                    status_ids: statusIds || null,
+                    video_game_platform_ids: videoGamePlatformIds || null,
+                    region,
+                    allowed_countries: allowedCountries || null,
+                    min_seller_rating: minSellerRating,
+                    min_seller_rating_count: minSellerRatingCount,
+                    discord_webhook: urlToSave,
+                    proxy_group_id: proxyGroupId,
+                    proxy_source: proxySource,
+                    webhook_active: urlToSave ? true : false,
+                    telegram_active: Boolean(telegramConnection),
+                    ...(pauseForFreeProxyLimit ? { status: "paused" } : {}),
+                },
+            });
+            return pauseForFreeProxyLimit;
         },
-    });
+    );
 
     revalidatePath("/dashboard");
     revalidatePath(`/monitors/${id}`);
@@ -840,84 +917,63 @@ export async function updateMonitorAndReturn(
 
     return {
         success: true,
-        redirectTo: returnTo === "dashboard" ? "/dashboard" : `/monitors/${id}`,
+        redirectTo:
+            returnTo === "dashboard"
+                ? "/dashboard"
+                : pausedByFreeProxyLimit
+                  ? `/monitors/${id}?paused=free-proxy-limit`
+                  : `/monitors/${id}`,
+        pausedByFreeProxyLimit,
     };
 }
 
 export async function toggleMonitorStatus(id: number, currentStatus: string) {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Unauthorized");
+    const userId = session.user.id;
 
     const newStatus = currentStatus === "active" ? "paused" : "active";
-    const existing = await db.monitors.findFirst({
-        where: { id, userId: session.user.id },
-        select: { demo_expires_at: true },
-    });
-    if (!existing) throw new Error("Monitor not found");
+    await withMonitorActivationLock(userId, async (tx) => {
+        const existing = await tx.monitors.findFirst({
+            where: { id, userId },
+            select: { demo_expires_at: true, proxy_source: true },
+        });
+        if (!existing) throw new Error("Monitor not found");
 
-    if (newStatus === "active") {
-        const activationState = await getMonitorActivationState(
-            session.user.id,
-        );
-        if (!activationState.canActivate) {
-            throw new Error(
-                `Active monitor limit reached (${activationState.activeCount}/${activationState.activeLimit}). Pause another monitor before resuming this one.`,
+        if (newStatus === "active") {
+            const activationState = await getMonitorActivationState(
+                userId,
+                existing.proxy_source,
+                tx,
             );
+            if (!activationState.canActivate) {
+                throw new Error(
+                    monitorActivationErrorMessage(
+                        activationState,
+                        existing.proxy_source,
+                    ),
+                );
+            }
         }
-    }
 
-    const monitor = await db.monitors.update({
-        where: { id, userId: session.user.id },
-        data: {
-            status: newStatus,
-            ...(newStatus === "active" && existing.demo_expires_at
-                ? { demo_expires_at: getNextDemoMonitorExpiry() }
-                : {}),
-        },
+        const monitor = await tx.monitors.update({
+            where: { id, userId },
+            data: {
+                status: newStatus,
+                ...(newStatus === "active" && existing.demo_expires_at
+                    ? { demo_expires_at: getNextDemoMonitorExpiry() }
+                    : {}),
+            },
+        });
+        await enqueueMonitorStatusNotification(tx, monitor, {
+            kind: newStatus === "active" ? "monitor_started" : "monitor_paused",
+            title:
+                newStatus === "active" ? "Monitor started" : "Monitor paused",
+            message: `The monitor ${monitor.name} was ${newStatus === "active" ? "started" : "paused"}.`,
+            idempotencyKey: `monitor-${newStatus}:${monitor.id}:${Date.now()}`,
+        });
+        return monitor;
     });
-
-    if (
-        monitor.notifications_enabled &&
-        monitor.discord_webhook &&
-        monitor.webhook_active
-    ) {
-        try {
-            const isStarting = newStatus === "active";
-            const payload = {
-                username: "Vintrack Monitor",
-                avatar_url:
-                    "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                embeds: [
-                    {
-                        title: isStarting
-                            ? "▶️ Monitor Started"
-                            : "⏸️ Monitor Paused",
-                        description: `The monitor **${monitor.name}** has been ${isStarting ? "started" : "paused"}.`,
-                        color: isStarting ? 3066993 : 16753920, // Green for start, Orange for pause
-                        footer: {
-                            text: "Vintrack • Status Update",
-                            icon_url:
-                                "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                        },
-                        timestamp: new Date().toISOString(),
-                    },
-                ],
-            };
-
-            await fetch(monitor.discord_webhook, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-            });
-        } catch (error) {
-            console.error("Failed to send status webhook", error);
-        }
-    }
-
-    await sendTelegramStatusIfConfigured(
-        monitor,
-        newStatus === "active" ? "started" : "paused",
-    );
 
     revalidatePath(`/monitors/${id}`);
     revalidatePath("/dashboard");

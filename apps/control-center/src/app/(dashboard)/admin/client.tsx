@@ -54,14 +54,19 @@ import {
 import { Separator } from "@/components/ui/separator";
 import {
     setGlobalActiveMonitorLimit,
+    setGlobalFreeProxyMonitorLimit,
     setRoleActiveMonitorLimit,
+    setRoleFreeProxyMonitorLimit,
     setUserRole,
     setUserActiveMonitorLimit,
+    setUserFreeProxyMonitorLimit,
     getAdminActiveMonitors,
+    getAdminOverviewState,
+    getAdminRuntimeInsights,
+    getAdminUsersPage,
     getAdminMemberInsights,
-    getAdminUserMetricsState,
-    getAdminUsersState,
-    getAdminLogs,
+    getAdminOperationsPage,
+    getAdminOperationsSummary,
     getFreeProxyAdminState,
     getFreeProxySourceDiagnostics,
     getAdminUserDetails,
@@ -84,21 +89,34 @@ type UserMonitor = {
     status: string | null;
     region: string;
     created_at: Date | null;
+    active_since: Date | null;
+    runtime_total_seconds: number;
     price_min: number | null;
     price_max: number | null;
     discord_webhook: string | null;
     webhook_active: boolean;
     telegram_active: boolean;
+    proxy_source: string;
     proxy_group: { name: string } | null;
     _count: { items: number };
 };
 
 type ActiveMonitor = Omit<UserMonitor, "discord_webhook"> & {
     discord_configured: boolean;
+    userId: string;
+    user: {
+        id: string;
+        name: string | null;
+        email: string | null;
+        role: string;
+        image: string | null;
+        _count: { monitors: number; proxy_groups: number };
+    };
 };
 
 type AdminUserMetrics = {
     runningMonitors: number;
+    runningFreeProxyMonitors: number;
     pausedMonitors: number;
     totalItems: number;
     newItems24h: number;
@@ -109,6 +127,19 @@ type AdminUserMetrics = {
     avgDurationMs24h: number | null;
     lastCheckAt: Date | null;
     latestError24h: string | null;
+    currentRuntimeSeconds: number;
+    totalRuntimeSeconds: number;
+    oldestActiveSince: Date | null;
+};
+
+type AdminOverviewState = Awaited<ReturnType<typeof getAdminOverviewState>>;
+type RuntimeInsights = Awaited<ReturnType<typeof getAdminRuntimeInsights>>;
+
+type UserRuntimeDetails = {
+    currentRuntimeSeconds: number;
+    totalRuntimeSeconds: number;
+    runtimeSeconds7d: number;
+    averageSessionSeconds: number;
 };
 
 type UserRow = {
@@ -121,6 +152,7 @@ type UserRow = {
     monitors: UserMonitor[];
     activeMonitors: ActiveMonitor[];
     metrics: AdminUserMetrics;
+    runtimeDetails?: UserRuntimeDetails;
 };
 
 type AdminTab =
@@ -134,7 +166,7 @@ type AdminTab =
 
 type AdminLogRow = {
     id: string;
-    type: "audit" | "monitor" | "alert";
+    type: "audit" | "monitor" | "delivery" | "proxy";
     title: string;
     detail: string | null;
     status: string;
@@ -142,6 +174,44 @@ type AdminLogRow = {
     actor: string | null;
     createdAt: Date;
 };
+
+type AdminOperationsSummary = {
+    windowHours: number;
+    sent: number;
+    failed: number;
+    deduplicated: number;
+    queued: number;
+    retryScheduled: number;
+    pending: number;
+    retrying: number;
+    successRate: number | null;
+    oldestPendingAt: Date | null;
+    byChannel: Record<
+        string,
+        { sent: number; failed: number; deduplicated: number }
+    >;
+    topFailures: {
+        channel: string;
+        reasonCode: string;
+        count: number;
+        lastSeenAt: Date;
+    }[];
+    proxyIncidents: {
+        open: number;
+        recovered: number;
+        brief: number;
+        briefGroups: {
+            domain: string;
+            proxySource: string;
+            incidents: number;
+            waits: number;
+        }[];
+    };
+    trackedSince: string | null;
+    dispatcherHeartbeat: string | null;
+};
+
+type AdminOperationFilter = "all" | "delivery" | "proxy" | "monitor" | "audit";
 
 type MemberInsights = {
     summary: {
@@ -181,6 +251,9 @@ type MonitorLimits = {
     global: number | null;
     roles: Record<string, number | null>;
     users: Record<string, number | null>;
+    freeProxyGlobal: number | null;
+    freeProxyRoles: Record<string, number | null>;
+    freeProxyUsers: Record<string, number | null>;
 };
 
 type FreeProxyRow = {
@@ -787,12 +860,127 @@ function formatDuration(value: number | null) {
     return value === null ? "n/a" : `${value} ms`;
 }
 
+function formatRuntime(totalSeconds: number) {
+    const seconds = Math.max(0, Math.floor(totalSeconds));
+    const days = Math.floor(seconds / 86_400);
+    const hours = Math.floor((seconds % 86_400) / 3_600);
+    const minutes = Math.floor((seconds % 3_600) / 60);
+    if (days > 0) return `${days}d ${hours}h`;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
+}
+
+function monitorRuntimeSeconds(monitor: UserMonitor, nowMs: number) {
+    const currentSeconds =
+        monitor.status === "active" && monitor.active_since
+            ? Math.max(
+                  0,
+                  Math.floor(
+                      (nowMs - new Date(monitor.active_since).getTime()) / 1000,
+                  ),
+              )
+            : 0;
+    return monitor.runtime_total_seconds + currentSeconds;
+}
+
+function RuntimeStackedChart({ data }: { data: RuntimeInsights["daily"] }) {
+    const totals = data.map(
+        (day) => day.freeSeconds + day.serverSeconds + day.groupSeconds,
+    );
+    const maximum = Math.max(1, ...totals);
+    const totalHours = totals.reduce((sum, value) => sum + value, 0) / 3_600;
+
+    return (
+        <div>
+            <div className="mb-4 flex flex-wrap items-center gap-4 text-xs">
+                {[
+                    ["Free pool", "bg-amber-500"],
+                    ["Server", "bg-sky-500"],
+                    ["Own pools", "bg-violet-500"],
+                ].map(([label, color]) => (
+                    <span key={label} className="flex items-center gap-2">
+                        <span className={`h-2.5 w-2.5 rounded-sm ${color}`} />
+                        <span className="text-muted-foreground">{label}</span>
+                    </span>
+                ))}
+                <span className="text-muted-foreground ml-auto tabular-nums">
+                    {totalHours.toFixed(1)} monitor-hours / 30d
+                </span>
+            </div>
+            <div
+                className="flex h-64 items-end gap-1 rounded-lg border border-dashed p-3"
+                role="img"
+                aria-label="Monitor runtime by proxy source over the last 30 days"
+            >
+                {data.map((day, index) => {
+                    const total = totals[index];
+                    const height = Math.max(
+                        total > 0 ? 2 : 0,
+                        (total / maximum) * 100,
+                    );
+                    const date = new Intl.DateTimeFormat("de-DE", {
+                        day: "2-digit",
+                        month: "short",
+                    }).format(new Date(`${day.date}T12:00:00Z`));
+                    return (
+                        <div
+                            key={day.date}
+                            className="group relative flex h-full min-w-0 flex-1 items-end"
+                            title={`${date}: ${(total / 3_600).toFixed(1)} monitor-hours`}
+                        >
+                            <div
+                                className="flex w-full flex-col-reverse overflow-hidden rounded-sm transition-opacity group-hover:opacity-80"
+                                style={{ height: `${height}%` }}
+                            >
+                                {total > 0 ? (
+                                    <>
+                                        <div
+                                            className="bg-amber-500"
+                                            style={{
+                                                height: `${(day.freeSeconds / total) * 100}%`,
+                                            }}
+                                        />
+                                        <div
+                                            className="bg-sky-500"
+                                            style={{
+                                                height: `${(day.serverSeconds / total) * 100}%`,
+                                            }}
+                                        />
+                                        <div
+                                            className="bg-violet-500"
+                                            style={{
+                                                height: `${(day.groupSeconds / total) * 100}%`,
+                                            }}
+                                        />
+                                    </>
+                                ) : null}
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+            <div className="text-muted-foreground mt-2 flex justify-between text-[10px]">
+                <span>{data[0]?.date ?? ""}</span>
+                <span>{data[data.length - 1]?.date ?? ""}</span>
+            </div>
+        </div>
+    );
+}
+
 function limitInputValue(value: number | null | undefined) {
     return value === null || value === undefined ? "" : String(value);
 }
 
 function formatLimit(value: number | null) {
     return value === null ? "Unlimited" : `${value} active`;
+}
+
+function monitorProxyLabel(monitor: {
+    proxy_source: string;
+    proxy_group: { name: string } | null;
+}) {
+    if (monitor.proxy_source === "free") return "Free Proxy Pool";
+    return monitor.proxy_group?.name ?? "Server Proxies";
 }
 
 function normalizeTab(value: string | null | undefined): AdminTab {
@@ -828,7 +1016,37 @@ export function AdminClient({
     monitorLimits: MonitorLimits;
 }) {
     const [users, setUsers] = useState<UserRow[]>(initialUsers);
+    const [overviewState, setOverviewState] =
+        useState<AdminOverviewState | null>(null);
+    const [isLoadingOverview, setIsLoadingOverview] = useState(false);
+    const [overviewLoadFailed, setOverviewLoadFailed] = useState(false);
+    const overviewRequestRef = useRef<Promise<void> | null>(null);
+    const [runtimeInsights, setRuntimeInsights] =
+        useState<RuntimeInsights | null>(null);
+    const [isLoadingRuntimeInsights, setIsLoadingRuntimeInsights] =
+        useState(false);
+    const [runtimeInsightsLoadFailed, setRuntimeInsightsLoadFailed] =
+        useState(false);
+    const runtimeInsightsRequestRef = useRef<Promise<void> | null>(null);
+    const [activeMonitorRows, setActiveMonitorRows] = useState<ActiveMonitor[]>(
+        [],
+    );
+    const [userPagination, setUserPagination] = useState({
+        page: 1,
+        pageSize: 25,
+        total: initialUsers.length,
+        totalPages: 1,
+    });
+    const usersRequestSequenceRef = useRef(0);
+    const [nowMs, setNowMs] = useState(() => Date.now());
     const [adminLogs, setAdminLogs] = useState<AdminLogRow[]>(logs);
+    const [operationsSummary, setOperationsSummary] =
+        useState<AdminOperationsSummary | null>(null);
+    const [operationFilter, setOperationFilter] =
+        useState<AdminOperationFilter>("all");
+    const [operationNextCursor, setOperationNextCursor] = useState<
+        string | null
+    >(null);
     const [logsLoaded, setLogsLoaded] = useState(logs.length > 0);
     const [isLoadingLogs, setIsLoadingLogs] = useState(false);
     const [memberInsights, setMemberInsights] = useState<MemberInsights | null>(
@@ -839,20 +1057,8 @@ export function AdminClient({
     const [memberInsightsLoadFailed, setMemberInsightsLoadFailed] =
         useState(false);
     const memberInsightsRequestRef = useRef<Promise<void> | null>(null);
-    const [usersLoaded, setUsersLoaded] = useState(initialUsers.length > 0);
     const [isLoadingUsers, setIsLoadingUsers] = useState(false);
     const [usersLoadFailed, setUsersLoadFailed] = useState(false);
-    const usersLoadedRef = useRef(initialUsers.length > 0);
-    const usersRequestRef = useRef<Promise<boolean> | null>(null);
-    const [userMetricsLoaded, setUserMetricsLoaded] = useState(false);
-    const [isLoadingUserMetrics, setIsLoadingUserMetrics] = useState(false);
-    const [userMetricsLoadFailed, setUserMetricsLoadFailed] = useState(false);
-    const userMetricsLoadedRef = useRef(false);
-    const userMetricsRequestRef = useRef<Promise<void> | null>(null);
-    const userMetricsSnapshotRef = useRef<Record<
-        string,
-        AdminUserMetrics
-    > | null>(null);
     const [activeMonitorsLoaded, setActiveMonitorsLoaded] = useState(false);
     const [isLoadingActiveMonitors, setIsLoadingActiveMonitors] =
         useState(false);
@@ -900,6 +1106,22 @@ export function AdminClient({
         ),
     );
     const [userLimitInput, setUserLimitInput] = useState("");
+    const [globalFreeProxyLimitInput, setGlobalFreeProxyLimitInput] = useState(
+        limitInputValue(initialMonitorLimits.freeProxyGlobal),
+    );
+    const [roleFreeProxyLimitInputs, setRoleFreeProxyLimitInputs] = useState<
+        Record<string, string>
+    >(
+        Object.fromEntries(
+            LIMIT_ROLES.map((role) => [
+                role.value,
+                limitInputValue(
+                    initialMonitorLimits.freeProxyRoles[role.value],
+                ),
+            ]),
+        ),
+    );
+    const [userFreeProxyLimitInput, setUserFreeProxyLimitInput] = useState("");
     const [serverProxies, setServerProxies] = useState(initialServerProxies);
     const [isSavingServerProxies, setIsSavingServerProxies] = useState(false);
     const [freeProxyState, setFreeProxyState] = useState(initialFreeProxyState);
@@ -1005,13 +1227,34 @@ export function AdminClient({
         });
     };
 
-    const loadAdminLogs = () => {
-        if (logsLoaded || isLoadingLogs) return;
+    const loadAdminLogs = (
+        filter: AdminOperationFilter = operationFilter,
+        append = false,
+    ) => {
+        if (
+            (!append && logsLoaded && filter === operationFilter) ||
+            isLoadingLogs
+        )
+            return;
 
         setIsLoadingLogs(true);
-        getAdminLogs()
-            .then((nextLogs) => {
-                setAdminLogs(nextLogs);
+        Promise.all([
+            operationsSummary
+                ? Promise.resolve(operationsSummary)
+                : getAdminOperationsSummary(),
+            getAdminOperationsPage({
+                filter,
+                cursor: append ? operationNextCursor : null,
+                pageSize: 50,
+            }),
+        ])
+            .then(([summary, page]) => {
+                setOperationsSummary(summary);
+                setAdminLogs((current) =>
+                    append ? [...current, ...page.rows] : page.rows,
+                );
+                setOperationNextCursor(page.nextCursor);
+                setOperationFilter(filter);
                 setLogsLoaded(true);
             })
             .catch(() => {
@@ -1042,68 +1285,72 @@ export function AdminClient({
         memberInsightsRequestRef.current = request;
     };
 
-    const loadAdminUserMetrics = () => {
-        if (userMetricsLoadedRef.current || userMetricsRequestRef.current) {
-            return;
-        }
-
-        setIsLoadingUserMetrics(true);
-        setUserMetricsLoadFailed(false);
-
-        const request = getAdminUserMetricsState()
-            .then((metricsByUser) => {
-                userMetricsSnapshotRef.current = metricsByUser;
-                setUsers((currentUsers) =>
-                    currentUsers.map((user) => ({
-                        ...user,
-                        metrics: metricsByUser[user.id] ?? user.metrics,
-                    })),
-                );
-                userMetricsLoadedRef.current = true;
-                setUserMetricsLoaded(true);
+    const loadOverview = () => {
+        if (overviewState || overviewRequestRef.current) return;
+        setIsLoadingOverview(true);
+        setOverviewLoadFailed(false);
+        const request = Promise.all([
+            getAdminOverviewState(),
+            getAdminOperationsSummary(),
+            getAdminOperationsPage({ filter: "all", pageSize: 6 }),
+        ])
+            .then(([overview, summary, operations]) => {
+                setOverviewState(overview);
+                setOperationsSummary(summary);
+                setAdminLogs(operations.rows);
             })
             .catch(() => {
-                setUserMetricsLoadFailed(true);
-                toast.error("Failed to load member metrics");
+                setOverviewLoadFailed(true);
+                toast.error("Failed to load admin overview");
             })
             .finally(() => {
-                userMetricsRequestRef.current = null;
-                setIsLoadingUserMetrics(false);
+                overviewRequestRef.current = null;
+                setIsLoadingOverview(false);
             });
-
-        userMetricsRequestRef.current = request;
+        overviewRequestRef.current = request;
     };
 
-    const loadAdminUsers = () => {
-        if (usersLoadedRef.current) return Promise.resolve(true);
-        if (usersRequestRef.current) return usersRequestRef.current;
+    const loadRuntimeInsights = () => {
+        if (runtimeInsights || runtimeInsightsRequestRef.current) return;
+        setIsLoadingRuntimeInsights(true);
+        setRuntimeInsightsLoadFailed(false);
+        const request = getAdminRuntimeInsights()
+            .then(setRuntimeInsights)
+            .catch(() => {
+                setRuntimeInsightsLoadFailed(true);
+                toast.error("Failed to load runtime insights");
+            })
+            .finally(() => {
+                runtimeInsightsRequestRef.current = null;
+                setIsLoadingRuntimeInsights(false);
+            });
+        runtimeInsightsRequestRef.current = request;
+    };
 
+    const loadAdminUsers = (
+        query = searchQuery,
+        page = userPage,
+        pageSize = usersPerPage,
+    ) => {
+        const requestSequence = ++usersRequestSequenceRef.current;
         setIsLoadingUsers(true);
         setUsersLoadFailed(false);
 
-        const request = getAdminUsersState()
+        const request = getAdminUsersPage({ query, page, pageSize })
             .then((state) => {
-                const metricsByUser = userMetricsSnapshotRef.current;
-                setUsers((currentUsers) => {
-                    const activeMonitorsByUser = new Map(
-                        currentUsers.map((user) => [
-                            user.id,
-                            user.activeMonitors,
-                        ]),
-                    );
-
-                    return state.users.map((user) => ({
-                        ...user,
-                        metrics: metricsByUser?.[user.id] ?? user.metrics,
-                        activeMonitors: activeMonitorsByUser.get(user.id) ?? [],
-                    }));
-                });
+                if (requestSequence !== usersRequestSequenceRef.current) {
+                    return false;
+                }
+                setUsers(state.users);
+                setUserPagination(state.pagination);
                 setMonitorLimits((current) => ({
                     ...current,
-                    users: state.userLimits,
+                    users: { ...current.users, ...state.userLimits },
+                    freeProxyUsers: {
+                        ...current.freeProxyUsers,
+                        ...state.userFreeProxyLimits,
+                    },
                 }));
-                usersLoadedRef.current = true;
-                setUsersLoaded(true);
                 return true;
             })
             .catch(() => {
@@ -1112,11 +1359,11 @@ export function AdminClient({
                 return false;
             })
             .finally(() => {
-                usersRequestRef.current = null;
-                setIsLoadingUsers(false);
+                if (requestSequence === usersRequestSequenceRef.current) {
+                    setIsLoadingUsers(false);
+                }
             });
 
-        usersRequestRef.current = request;
         return request;
     };
 
@@ -1126,29 +1373,9 @@ export function AdminClient({
         setIsLoadingActiveMonitors(true);
         setActiveMonitorsLoadFailed(false);
 
-        const request = loadAdminUsers()
-            .then((loaded) =>
-                loaded ? getAdminActiveMonitors() : Promise.resolve(null),
-            )
+        const request = getAdminActiveMonitors()
             .then((monitors) => {
-                if (!monitors) {
-                    setActiveMonitorsLoadFailed(true);
-                    return;
-                }
-                const monitorsByUser = new Map<string, ActiveMonitor[]>();
-
-                for (const { userId, ...monitor } of monitors) {
-                    const current = monitorsByUser.get(userId) ?? [];
-                    current.push(monitor);
-                    monitorsByUser.set(userId, current);
-                }
-
-                setUsers((currentUsers) =>
-                    currentUsers.map((user) => ({
-                        ...user,
-                        activeMonitors: monitorsByUser.get(user.id) ?? [],
-                    })),
-                );
+                setActiveMonitorRows(monitors);
                 setActiveMonitorsLoaded(true);
             })
             .catch(() => {
@@ -1167,9 +1394,12 @@ export function AdminClient({
         const params = new URLSearchParams(window.location.search);
         const tab = normalizeTab(params.get("tab"));
         setActiveTab(tab);
-        loadAdminUserMetrics();
-        void loadAdminUsers();
-        if (tab === "insights") loadMemberInsights();
+        loadOverview();
+        if (["users", "roles"].includes(tab)) void loadAdminUsers();
+        if (tab === "insights") {
+            loadMemberInsights();
+            loadRuntimeInsights();
+        }
         if (tab === "logs") loadAdminLogs();
         if (tab === "monitors") loadActiveMonitors();
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1181,44 +1411,80 @@ export function AdminClient({
         url.searchParams.set("tab", tab);
         window.history.replaceState(null, "", url.toString());
 
-        if (["overview", "monitors", "users", "roles"].includes(tab)) {
+        if (["users", "roles"].includes(tab)) {
             void loadAdminUsers();
         }
-        if (tab === "insights") loadMemberInsights();
+        if (tab === "overview") loadOverview();
+        if (tab === "insights") {
+            loadMemberInsights();
+            loadRuntimeInsights();
+        }
         if (tab === "logs") loadAdminLogs();
         if (tab === "monitors") loadActiveMonitors();
     };
 
+    useEffect(() => {
+        const interval = window.setInterval(() => setNowMs(Date.now()), 60_000);
+        return () => window.clearInterval(interval);
+    }, []);
+
+    useEffect(() => {
+        if (!["users", "roles"].includes(activeTab)) return;
+        const timeout = window.setTimeout(() => {
+            void loadAdminUsers(searchQuery, userPage, usersPerPage);
+        }, 300);
+        return () => window.clearTimeout(timeout);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [searchQuery, userPage, usersPerPage, activeTab]);
+
     const normalizedQuery = searchQuery.trim().toLowerCase();
-    const filteredUsers = users.filter((user) => {
-        if (!normalizedQuery) return true;
-
-        const searchable = [user.name ?? "", user.email ?? "", user.role]
-            .join(" ")
-            .toLowerCase();
-
-        return searchable.includes(normalizedQuery);
-    });
-    const totalUserPages = Math.max(
-        1,
-        Math.ceil(filteredUsers.length / usersPerPage),
-    );
-    const currentUserPage = Math.min(userPage, totalUserPages);
+    const totalUserPages = userPagination.totalPages;
+    const currentUserPage = Math.min(userPagination.page, totalUserPages);
     const userPageStart = (currentUserPage - 1) * usersPerPage;
-    const paginatedUsers = filteredUsers.slice(
-        userPageStart,
-        userPageStart + usersPerPage,
-    );
-    const shownUserStart = filteredUsers.length === 0 ? 0 : userPageStart + 1;
+    const paginatedUsers = users;
+    const shownUserStart = userPagination.total === 0 ? 0 : userPageStart + 1;
     const shownUserEnd = Math.min(
-        userPageStart + usersPerPage,
-        filteredUsers.length,
+        userPageStart + users.length,
+        userPagination.total,
     );
 
     const normalizedMonitorQuery = monitorSearchQuery.trim().toLowerCase();
-    const activeMonitorMembers = users.filter(
-        (user) => user.activeMonitors.length > 0,
-    );
+    const activeMonitorMemberMap = new Map<string, UserRow>();
+    for (const monitor of activeMonitorRows) {
+        const current = activeMonitorMemberMap.get(monitor.userId);
+        if (current) {
+            current.activeMonitors.push(monitor);
+            current.metrics.runningMonitors += 1;
+            if (monitor.proxy_source === "free") {
+                current.metrics.runningFreeProxyMonitors += 1;
+            }
+            continue;
+        }
+        activeMonitorMemberMap.set(monitor.userId, {
+            ...monitor.user,
+            monitors: [],
+            activeMonitors: [monitor],
+            metrics: {
+                runningMonitors: 1,
+                runningFreeProxyMonitors:
+                    monitor.proxy_source === "free" ? 1 : 0,
+                pausedMonitors: 0,
+                totalItems: 0,
+                newItems24h: 0,
+                checks24h: 0,
+                successfulChecks24h: 0,
+                failedChecks24h: 0,
+                successRate24h: null,
+                avgDurationMs24h: null,
+                lastCheckAt: null,
+                latestError24h: null,
+                currentRuntimeSeconds: 0,
+                totalRuntimeSeconds: 0,
+                oldestActiveSince: monitor.active_since,
+            },
+        });
+    }
+    const activeMonitorMembers = Array.from(activeMonitorMemberMap.values());
     const filteredActiveMonitorMembers = activeMonitorMembers
         .map((user) => {
             if (!normalizedMonitorQuery) {
@@ -1238,7 +1504,7 @@ export function AdminClient({
                           monitor.query,
                           monitor.region,
                           getRegionLabel(monitor.region),
-                          monitor.proxy_group?.name ?? "Server Proxies",
+                          monitorProxyLabel(monitor),
                       ]
                           .join(" ")
                           .toLowerCase()
@@ -1277,50 +1543,48 @@ export function AdminClient({
         });
     };
 
-    const totalUsers = users.length;
-    const freeUsers = users.filter((u) => u.role === "free").length;
-    const premiumUsers = users.filter((u) => u.role === "premium").length;
-    const adminUsers = users.filter((u) => u.role === "admin").length;
-    const runningMonitors = users.reduce(
-        (sum, user) => sum + user.metrics.runningMonitors,
-        0,
+    const totalUsers = overviewState?.users.total ?? 0;
+    const freeUsers = overviewState?.users.free ?? 0;
+    const premiumUsers = overviewState?.users.premium ?? 0;
+    const adminUsers = overviewState?.users.admin ?? 0;
+    const runningMonitors = overviewState?.monitors.running ?? 0;
+    const newItems24h = overviewState?.activity24h.newItems ?? 0;
+    const failedChecks24h = overviewState?.activity24h.failedChecks ?? 0;
+    const totalMonitors = overviewState?.monitors.total ?? 0;
+    const pausedMonitors = overviewState?.monitors.paused ?? 0;
+    const checks24h = overviewState?.activity24h.checks ?? 0;
+    const successfulChecks24h =
+        overviewState?.activity24h.successfulChecks ?? 0;
+    const successRate24h = overviewState?.activity24h.successRate ?? null;
+    const topUsers: UserRow[] = (overviewState?.topMembers ?? []).map(
+        (member) => ({
+            id: member.userId,
+            name: member.name,
+            email: member.email,
+            image: null,
+            role: member.role,
+            _count: { monitors: member.runningMonitors, proxy_groups: 0 },
+            monitors: [],
+            activeMonitors: [],
+            metrics: {
+                runningMonitors: member.runningMonitors,
+                runningFreeProxyMonitors: 0,
+                pausedMonitors: 0,
+                totalItems: 0,
+                newItems24h: 0,
+                checks24h: 0,
+                successfulChecks24h: 0,
+                failedChecks24h: 0,
+                successRate24h: null,
+                avgDurationMs24h: null,
+                lastCheckAt: null,
+                latestError24h: null,
+                currentRuntimeSeconds: member.currentRuntimeSeconds,
+                totalRuntimeSeconds: member.totalRuntimeSeconds,
+                oldestActiveSince: null,
+            },
+        }),
     );
-    const newItems24h = users.reduce(
-        (sum, user) => sum + user.metrics.newItems24h,
-        0,
-    );
-    const failedChecks24h = users.reduce(
-        (sum, user) => sum + user.metrics.failedChecks24h,
-        0,
-    );
-    const totalMonitors = users.reduce(
-        (sum, user) => sum + user._count.monitors,
-        0,
-    );
-    const pausedMonitors = users.reduce(
-        (sum, user) => sum + user.metrics.pausedMonitors,
-        0,
-    );
-    const checks24h = users.reduce(
-        (sum, user) => sum + user.metrics.checks24h,
-        0,
-    );
-    const successfulChecks24h = users.reduce(
-        (sum, user) => sum + user.metrics.successfulChecks24h,
-        0,
-    );
-    const successRate24h =
-        checks24h > 0
-            ? Math.round((successfulChecks24h / checks24h) * 100)
-            : null;
-    const topUsers = [...users]
-        .sort(
-            (a, b) =>
-                b.metrics.runningMonitors - a.metrics.runningMonitors ||
-                b.metrics.newItems24h - a.metrics.newItems24h ||
-                b._count.monitors - a._count.monitors,
-        )
-        .slice(0, 5);
     const importantLogs = adminLogs
         .filter(
             (log) =>
@@ -1354,37 +1618,60 @@ export function AdminClient({
 
         return { value: null, source: "Unlimited" };
     };
-    const limitedUsers = users.filter((user) => {
-        const limit = getEffectiveLimit(user);
-        return (
-            limit.value !== null && user.metrics.runningMonitors >= limit.value
-        );
-    });
-    const userOverrides = users.filter(
-        (user) =>
-            monitorLimits.users[user.id] !== null &&
-            monitorLimits.users[user.id] !== undefined,
-    ).length;
-    const roleLimitsConfigured = Object.values(monitorLimits.roles).filter(
-        (value) => value !== null && value !== undefined,
-    ).length;
+    const getEffectiveFreeProxyLimit = (user: UserRow) => {
+        if (user.role === "admin") {
+            return { value: null, source: "Admin" };
+        }
+
+        const userLimit = monitorLimits.freeProxyUsers[user.id];
+        if (userLimit !== null && userLimit !== undefined) {
+            return { value: userLimit, source: "User" };
+        }
+
+        const roleLimit = monitorLimits.freeProxyRoles[user.role];
+        if (roleLimit !== null && roleLimit !== undefined) {
+            return { value: roleLimit, source: "Role" };
+        }
+
+        if (monitorLimits.freeProxyGlobal !== null) {
+            return { value: monitorLimits.freeProxyGlobal, source: "Global" };
+        }
+
+        return { value: null, source: "Unlimited" };
+    };
+    const usersAtLimit = overviewState?.limits.usersAtLimit ?? 0;
+    const userOverrides = overviewState?.limits.userOverrides ?? 0;
+    const roleLimitsConfigured = overviewState?.limits.roleLimits ?? 0;
     const activeMonitorShare =
         totalMonitors > 0
             ? Math.round((runningMonitors / totalMonitors) * 100)
             : 0;
 
     const hydrateUserDetails = async (user: UserRow) => {
-        if (user.monitors.length > 0 || user._count.monitors === 0) {
+        if (user.monitors.length > 0) {
             return user;
         }
 
         setLoadingUserDetailsId(user.id);
-        const monitors = await getAdminUserDetails(user.id);
+        const details = await getAdminUserDetails(user.id);
+        const monitors = details.monitors;
+        setMonitorLimits((current) => ({
+            ...current,
+            users: { ...current.users, [user.id]: details.limits.active },
+            freeProxyUsers: {
+                ...current.freeProxyUsers,
+                [user.id]: details.limits.freeProxy,
+            },
+        }));
         const hydratedUser = {
             ...user,
             monitors,
+            _count: { ...user._count, monitors: monitors.length },
+            runtimeDetails: details.runtime,
             metrics: {
                 ...user.metrics,
+                currentRuntimeSeconds: details.runtime.currentRuntimeSeconds,
+                totalRuntimeSeconds: details.runtime.totalRuntimeSeconds,
                 totalItems: monitors.reduce(
                     (sum, monitor) => sum + monitor._count.items,
                     0,
@@ -1405,6 +1692,9 @@ export function AdminClient({
         setSelected(user);
         setPendingRole(user.role);
         setUserLimitInput(limitInputValue(monitorLimits.users[user.id]));
+        setUserFreeProxyLimitInput(
+            limitInputValue(monitorLimits.freeProxyUsers[user.id]),
+        );
         setIsDetailsOpen(true);
 
         hydrateUserDetails(user)
@@ -1445,6 +1735,18 @@ export function AdminClient({
 
         if (stoppedCount === 0) return user;
 
+        const stoppedFreeProxyCount =
+            monitorId === null
+                ? user.metrics.runningFreeProxyMonitors
+                : [...user.activeMonitors, ...user.monitors].some(
+                        (monitor) =>
+                            monitor.id === monitorId &&
+                            monitor.status === "active" &&
+                            monitor.proxy_source === "free",
+                    )
+                  ? 1
+                  : 0;
+
         return {
             ...user,
             monitors: user.monitors.map((monitor) =>
@@ -1461,6 +1763,11 @@ export function AdminClient({
                 runningMonitors: Math.max(
                     0,
                     user.metrics.runningMonitors - stoppedCount,
+                ),
+                runningFreeProxyMonitors: Math.max(
+                    0,
+                    user.metrics.runningFreeProxyMonitors -
+                        stoppedFreeProxyCount,
                 ),
                 pausedMonitors: user.metrics.pausedMonitors + stoppedCount,
             },
@@ -1484,23 +1791,32 @@ export function AdminClient({
         );
         setIsOpen(false);
 
-        toast.promise(setUserRole(selected.id, pendingRole), {
-            loading: "Updating role...",
-            success: `${selected.name ?? "User"} is now ${pendingRole}`,
-            error: () => {
-                setUsers((prev) =>
-                    prev.map((u) =>
-                        u.id === selected.id ? { ...u, role: prevRole } : u,
-                    ),
-                );
-                setSelected((prev) =>
-                    prev?.id === selected.id
-                        ? { ...prev, role: prevRole }
-                        : prev,
-                );
-                return "Failed to update role";
+        toast.promise(
+            setUserRole(selected.id, pendingRole).then((result) => {
+                applyAutomaticallyPausedMonitors(result.pausedMonitorIds);
+                return result;
+            }),
+            {
+                loading: "Updating role...",
+                success: (result) =>
+                    result.pausedCount > 0
+                        ? `${selected.name ?? "User"} is now ${pendingRole} · ${result.pausedCount} paused`
+                        : `${selected.name ?? "User"} is now ${pendingRole}`,
+                error: () => {
+                    setUsers((prev) =>
+                        prev.map((u) =>
+                            u.id === selected.id ? { ...u, role: prevRole } : u,
+                        ),
+                    );
+                    setSelected((prev) =>
+                        prev?.id === selected.id
+                            ? { ...prev, role: prevRole }
+                            : prev,
+                    );
+                    return "Failed to update role";
+                },
             },
-        });
+        );
     };
 
     const handleSaveGlobalLimit = async () => {
@@ -1520,6 +1836,164 @@ export function AdminClient({
                 error instanceof Error
                     ? error.message
                     : "Failed to save global monitor limit",
+            );
+        }
+    };
+
+    const applyAutomaticallyPausedMonitors = (monitorIds: number[]) => {
+        if (monitorIds.length === 0) return;
+        const pausedIds = new Set(monitorIds);
+        setActiveMonitorRows((current) =>
+            current.filter((monitor) => !pausedIds.has(monitor.id)),
+        );
+        const updateUser = (user: UserRow) => {
+            const knownMonitors = [...user.monitors, ...user.activeMonitors];
+            const pausedForUser = new Map(
+                knownMonitors
+                    .filter((monitor) => pausedIds.has(monitor.id))
+                    .map((monitor) => [monitor.id, monitor]),
+            );
+            if (pausedForUser.size === 0) return user;
+
+            const pausedFreeCount = Array.from(pausedForUser.values()).filter(
+                (monitor) => monitor.proxy_source === "free",
+            ).length;
+            return {
+                ...user,
+                monitors: user.monitors.map((monitor) =>
+                    pausedIds.has(monitor.id)
+                        ? { ...monitor, status: "paused" }
+                        : monitor,
+                ),
+                activeMonitors: user.activeMonitors.filter(
+                    (monitor) => !pausedIds.has(monitor.id),
+                ),
+                metrics: {
+                    ...user.metrics,
+                    runningMonitors: Math.max(
+                        user.metrics.runningMonitors - pausedForUser.size,
+                        0,
+                    ),
+                    runningFreeProxyMonitors: Math.max(
+                        user.metrics.runningFreeProxyMonitors - pausedFreeCount,
+                        0,
+                    ),
+                    pausedMonitors:
+                        user.metrics.pausedMonitors + pausedForUser.size,
+                },
+            };
+        };
+
+        setUsers((current) => current.map(updateUser));
+        setSelected((current) => (current ? updateUser(current) : current));
+    };
+
+    const handleSaveGlobalFreeProxyLimit = async () => {
+        const previous = monitorLimits.freeProxyGlobal;
+        const next = globalFreeProxyLimitInput.trim()
+            ? Number(globalFreeProxyLimitInput.trim())
+            : null;
+        setMonitorLimits((current) => ({
+            ...current,
+            freeProxyGlobal: next,
+        }));
+        try {
+            const result = await setGlobalFreeProxyMonitorLimit(
+                globalFreeProxyLimitInput,
+            );
+            applyAutomaticallyPausedMonitors(result.pausedMonitorIds);
+            toast.success(
+                result.pausedCount > 0
+                    ? `Free proxy limit saved · ${result.pausedCount} monitor${result.pausedCount === 1 ? "" : "s"} paused`
+                    : "Global free proxy monitor limit saved",
+            );
+        } catch (error) {
+            setMonitorLimits((current) => ({
+                ...current,
+                freeProxyGlobal: previous,
+            }));
+            setGlobalFreeProxyLimitInput(limitInputValue(previous));
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save global free proxy limit",
+            );
+        }
+    };
+
+    const handleSaveRoleFreeProxyLimit = async (role: string) => {
+        const previous = monitorLimits.freeProxyRoles[role] ?? null;
+        const input = roleFreeProxyLimitInputs[role] ?? "";
+        const next = input.trim() ? Number(input.trim()) : null;
+        setMonitorLimits((current) => ({
+            ...current,
+            freeProxyRoles: { ...current.freeProxyRoles, [role]: next },
+        }));
+        try {
+            const result = await setRoleFreeProxyMonitorLimit(role, input);
+            applyAutomaticallyPausedMonitors(result.pausedMonitorIds);
+            toast.success(
+                result.pausedCount > 0
+                    ? `${role} free proxy limit saved · ${result.pausedCount} paused`
+                    : `${role} free proxy monitor limit saved`,
+            );
+        } catch (error) {
+            setMonitorLimits((current) => ({
+                ...current,
+                freeProxyRoles: {
+                    ...current.freeProxyRoles,
+                    [role]: previous,
+                },
+            }));
+            setRoleFreeProxyLimitInputs((current) => ({
+                ...current,
+                [role]: limitInputValue(previous),
+            }));
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save role free proxy limit",
+            );
+        }
+    };
+
+    const handleSaveUserFreeProxyLimit = async () => {
+        if (!selected) return;
+        const previous = monitorLimits.freeProxyUsers[selected.id] ?? null;
+        const next = userFreeProxyLimitInput.trim()
+            ? Number(userFreeProxyLimitInput.trim())
+            : null;
+        setMonitorLimits((current) => ({
+            ...current,
+            freeProxyUsers: {
+                ...current.freeProxyUsers,
+                [selected.id]: next,
+            },
+        }));
+        try {
+            const result = await setUserFreeProxyMonitorLimit(
+                selected.id,
+                userFreeProxyLimitInput,
+            );
+            applyAutomaticallyPausedMonitors(result.pausedMonitorIds);
+            toast.success(
+                result.pausedCount > 0
+                    ? `Free proxy limit saved · ${result.pausedCount} paused`
+                    : "User free proxy monitor limit saved",
+            );
+        } catch (error) {
+            setMonitorLimits((current) => ({
+                ...current,
+                freeProxyUsers: {
+                    ...current.freeProxyUsers,
+                    [selected.id]: previous,
+                },
+            }));
+            setUserFreeProxyLimitInput(limitInputValue(previous));
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save user free proxy limit",
             );
         }
     };
@@ -1590,6 +2064,10 @@ export function AdminClient({
         try {
             const result = await stopUserActiveMonitors(selected.id);
 
+            setActiveMonitorRows((current) =>
+                current.filter((monitor) => monitor.userId !== selected.id),
+            );
+
             setUsers((prev) =>
                 prev.map((user) =>
                     user.id === selected.id
@@ -1622,6 +2100,10 @@ export function AdminClient({
 
         try {
             const result = await stopSingleUserMonitor(userId, monitorId);
+
+            setActiveMonitorRows((current) =>
+                current.filter((monitor) => monitor.id !== monitorId),
+            );
 
             setUsers((prev) =>
                 prev.map((user) =>
@@ -1867,9 +2349,18 @@ export function AdminClient({
         selected && selected.monitors.length > 0
             ? selectedActiveMonitors.length
             : (selected?.metrics.runningMonitors ?? 0);
+    const selectedRunningFreeProxyMonitors =
+        selected && selected.monitors.length > 0
+            ? selectedActiveMonitors.filter(
+                  (monitor) => monitor.proxy_source === "free",
+              ).length
+            : (selected?.metrics.runningFreeProxyMonitors ?? 0);
     const selectedItems = selected?.metrics.totalItems ?? 0;
     const selectedEffectiveLimit = selected
         ? getEffectiveLimit(selected)
+        : { value: null, source: "Unlimited" };
+    const selectedEffectiveFreeProxyLimit = selected
+        ? getEffectiveFreeProxyLimit(selected)
         : { value: null, source: "Unlimited" };
     const isLoadingSelectedDetails =
         selected !== null && loadingUserDetailsId === selected.id;
@@ -1883,7 +2374,10 @@ export function AdminClient({
     const activeTabDefinition =
         ADMIN_TABS.find((tab) => tab.value === activeTab) ?? ADMIN_TABS[0];
     const ActiveTabIcon = activeTabDefinition.icon;
-    const areUserMetricsPending = !userMetricsLoaded && !userMetricsLoadFailed;
+    const userMetricsLoaded = overviewState !== null;
+    const userMetricsLoadFailed = overviewLoadFailed;
+    const isLoadingUserMetrics = isLoadingOverview;
+    const areUserMetricsPending = !overviewState && !overviewLoadFailed;
     const hasOperationalIssues = successRate24h !== null && successRate24h < 90;
     const membersWithoutMonitors = memberInsights
         ? Math.max(
@@ -1946,18 +2440,16 @@ export function AdminClient({
                         <button
                             type="button"
                             className="text-amber-600 hover:underline dark:text-amber-400"
-                            onClick={loadAdminUserMetrics}
+                            onClick={loadOverview}
                             disabled={isLoadingUserMetrics}
                         >
                             Retry member metrics
                         </button>
                     ) : (
                         <span className="text-muted-foreground">
-                            {!usersLoaded
-                                ? "Loading members..."
-                                : userMetricsLoaded
-                                  ? `${runningMonitors} running monitors`
-                                  : "Loading member metrics..."}
+                            {userMetricsLoaded
+                                ? `${runningMonitors} running monitors`
+                                : "Loading overview..."}
                         </span>
                     )}
                     <span className="text-muted-foreground">
@@ -2045,6 +2537,105 @@ export function AdminClient({
                             icon={Globe}
                             iconClassName="bg-amber-500/10 text-amber-600"
                         />
+                    </div>
+                    <div className="border-border/60 bg-card rounded-lg border p-5">
+                        <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <p className="text-foreground text-sm font-semibold">
+                                    Runtime Snapshot
+                                </p>
+                                <p className="text-muted-foreground text-xs">
+                                    Aggregate monitor-hours without scanning
+                                    runtime history.
+                                </p>
+                            </div>
+                            <Badge
+                                variant="outline"
+                                className="rounded-md text-[10px] uppercase"
+                            >
+                                {overviewState?.runtime.trackedSince
+                                    ? `Tracked since ${new Intl.DateTimeFormat("de-DE", { dateStyle: "medium" }).format(new Date(overviewState.runtime.trackedSince))}`
+                                    : "Tracking starts with migration"}
+                            </Badge>
+                        </div>
+                        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                            <div className="bg-muted/30 rounded-lg px-4 py-3">
+                                <p className="text-muted-foreground text-[11px] uppercase">
+                                    Total runtime
+                                </p>
+                                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                    {overviewState
+                                        ? formatRuntime(
+                                              overviewState.runtime
+                                                  .totalSeconds,
+                                          )
+                                        : "—"}
+                                </p>
+                            </div>
+                            <div className="bg-muted/30 rounded-lg px-4 py-3">
+                                <p className="text-muted-foreground text-[11px] uppercase">
+                                    Open sessions
+                                </p>
+                                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                    {overviewState
+                                        ? formatRuntime(
+                                              overviewState.runtime
+                                                  .currentSeconds,
+                                          )
+                                        : "—"}
+                                </p>
+                            </div>
+                            <div className="bg-muted/30 rounded-lg px-4 py-3">
+                                <p className="text-muted-foreground text-[11px] uppercase">
+                                    Oldest running
+                                </p>
+                                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                    {overviewState?.runtime.oldestActiveSince
+                                        ? formatRuntime(
+                                              (nowMs -
+                                                  new Date(
+                                                      overviewState.runtime
+                                                          .oldestActiveSince,
+                                                  ).getTime()) /
+                                                  1000,
+                                          )
+                                        : "—"}
+                                </p>
+                            </div>
+                            <div className="bg-muted/30 rounded-lg px-4 py-3">
+                                <p className="text-muted-foreground text-[11px] uppercase">
+                                    Active source mix
+                                </p>
+                                <div className="bg-muted mt-3 flex h-3 overflow-hidden rounded-full">
+                                    {(["free", "server", "group"] as const).map(
+                                        (source) => (
+                                            <span
+                                                key={source}
+                                                className={
+                                                    source === "free"
+                                                        ? "bg-amber-500"
+                                                        : source === "server"
+                                                          ? "bg-sky-500"
+                                                          : "bg-violet-500"
+                                                }
+                                                style={{
+                                                    width: `${runningMonitors > 0 ? ((overviewState?.monitors.sources[source] ?? 0) / runningMonitors) * 100 : 0}%`,
+                                                }}
+                                            />
+                                        ),
+                                    )}
+                                </div>
+                                <p className="text-muted-foreground mt-2 text-[10px]">
+                                    {overviewState?.monitors.sources.free ?? 0}{" "}
+                                    free ·{" "}
+                                    {overviewState?.monitors.sources.server ??
+                                        0}{" "}
+                                    server ·{" "}
+                                    {overviewState?.monitors.sources.group ?? 0}{" "}
+                                    own
+                                </p>
+                            </div>
+                        </div>
                     </div>
                     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
                         <div className="border-border/60 bg-card flex h-full flex-col rounded-lg border p-5">
@@ -2200,7 +2791,7 @@ export function AdminClient({
                             </div>
                             <div className="space-y-3">
                                 {[
-                                    ["Users at limit", limitedUsers.length],
+                                    ["Users at limit", usersAtLimit],
                                     ["User overrides", userOverrides],
                                     ["Role limits", roleLimitsConfigured],
                                 ].map(([label, count]) => (
@@ -2217,14 +2808,12 @@ export function AdminClient({
                                     </div>
                                 ))}
                             </div>
-                            {limitedUsers.length > 0 ? (
+                            {usersAtLimit > 0 ? (
                                 <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-500/20 dark:bg-amber-500/10">
                                     <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
-                                        {limitedUsers.length} user
-                                        {limitedUsers.length === 1
-                                            ? ""
-                                            : "s"}{" "}
-                                        at active monitor capacity
+                                        {usersAtLimit} user
+                                        {usersAtLimit === 1 ? "" : "s"} at
+                                        active monitor capacity
                                     </p>
                                     <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
                                         Review role or user overrides in the
@@ -2244,11 +2833,10 @@ export function AdminClient({
                         <div className="border-border/60 bg-card overflow-hidden rounded-lg border">
                             <div className="border-border/60 border-b px-5 py-4">
                                 <p className="text-foreground text-sm font-semibold">
-                                    Top Active Users
+                                    Runtime Leaders
                                 </p>
                                 <p className="text-muted-foreground text-xs">
-                                    Sorted by running monitors and 24h item
-                                    output.
+                                    Highest tracked aggregate monitor runtime.
                                 </p>
                             </div>
                             <div className="divide-border/50 divide-y">
@@ -2269,12 +2857,19 @@ export function AdminClient({
                                         </div>
                                         <div className="text-right text-xs">
                                             <p className="text-foreground font-semibold">
-                                                {user.metrics.runningMonitors}{" "}
-                                                running
+                                                {formatRuntime(
+                                                    user.metrics
+                                                        .totalRuntimeSeconds,
+                                                )}
                                             </p>
                                             <p className="text-muted-foreground">
-                                                {user.metrics.newItems24h} items
-                                                / 24h
+                                                {user.metrics.runningMonitors}{" "}
+                                                running ·{" "}
+                                                {formatRuntime(
+                                                    user.metrics
+                                                        .currentRuntimeSeconds,
+                                                )}{" "}
+                                                open
                                             </p>
                                         </div>
                                     </button>
@@ -2333,6 +2928,168 @@ export function AdminClient({
 
             {activeTab === "insights" ? (
                 <div className="space-y-5">
+                    {isLoadingRuntimeInsights && !runtimeInsights ? (
+                        <div className="border-border/60 bg-card text-muted-foreground flex min-h-48 items-center justify-center rounded-lg border text-sm">
+                            Loading runtime analytics...
+                        </div>
+                    ) : runtimeInsightsLoadFailed && !runtimeInsights ? (
+                        <div className="border-border/60 bg-card flex min-h-48 flex-col items-center justify-center gap-3 rounded-lg border text-center">
+                            <AlertTriangle className="h-6 w-6 text-amber-500" />
+                            <p className="text-sm font-medium">
+                                Runtime analytics could not be loaded
+                            </p>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={loadRuntimeInsights}
+                            >
+                                Retry runtime analytics
+                            </Button>
+                        </div>
+                    ) : runtimeInsights ? (
+                        <>
+                            <div className="grid gap-4 sm:grid-cols-3">
+                                <MemberMetricCard
+                                    label="Monitor-hours 7d"
+                                    value={formatRuntime(
+                                        runtimeInsights.daily
+                                            .slice(-7)
+                                            .reduce(
+                                                (sum, day) =>
+                                                    sum +
+                                                    day.freeSeconds +
+                                                    day.serverSeconds +
+                                                    day.groupSeconds,
+                                                0,
+                                            ),
+                                    )}
+                                    detail="Aggregate active time across all monitors"
+                                    icon={Clock3}
+                                    tone="sky"
+                                />
+                                <MemberMetricCard
+                                    label="Median session 7d"
+                                    value={formatRuntime(
+                                        runtimeInsights.medianSessionSeconds7d,
+                                    )}
+                                    detail="Completed active sessions"
+                                    icon={Activity}
+                                    tone="violet"
+                                />
+                                <MemberMetricCard
+                                    label="Tracked members 7d"
+                                    value={runtimeInsights.leaderboard.length}
+                                    detail="Top runtime members shown below"
+                                    icon={Users}
+                                    tone="amber"
+                                />
+                            </div>
+                            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(340px,1fr)]">
+                                <div className="border-border/60 bg-card rounded-xl border p-5 shadow-sm sm:p-6">
+                                    <div className="mb-5">
+                                        <p className="text-sm font-semibold">
+                                            Runtime by proxy source
+                                        </p>
+                                        <p className="text-muted-foreground text-xs">
+                                            UTC day buckets · tracked since{" "}
+                                            {runtimeInsights.trackedSince
+                                                ? new Intl.DateTimeFormat(
+                                                      "de-DE",
+                                                      { dateStyle: "medium" },
+                                                  ).format(
+                                                      new Date(
+                                                          runtimeInsights.trackedSince,
+                                                      ),
+                                                  )
+                                                : "feature launch"}
+                                        </p>
+                                    </div>
+                                    <RuntimeStackedChart
+                                        data={runtimeInsights.daily}
+                                    />
+                                </div>
+                                <div className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm">
+                                    <div className="border-border/50 border-b px-5 py-4">
+                                        <p className="text-sm font-semibold">
+                                            7-day runtime leaderboard
+                                        </p>
+                                        <p className="text-muted-foreground text-xs">
+                                            Efficiency uses existing hourly
+                                            worker stats.
+                                        </p>
+                                    </div>
+                                    <div className="divide-border/50 divide-y">
+                                        {runtimeInsights.leaderboard.map(
+                                            (member, index) => {
+                                                const maximum =
+                                                    runtimeInsights
+                                                        .leaderboard[0]
+                                                        ?.runtimeSeconds7d || 1;
+                                                return (
+                                                    <div
+                                                        key={member.userId}
+                                                        className="px-5 py-3"
+                                                    >
+                                                        <div className="flex items-center gap-3">
+                                                            <span className="text-muted-foreground w-5 text-xs tabular-nums">
+                                                                #{index + 1}
+                                                            </span>
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="flex items-center justify-between gap-3">
+                                                                    <p className="truncate text-sm font-medium">
+                                                                        {member.name ??
+                                                                            member.email ??
+                                                                            "Unknown"}
+                                                                    </p>
+                                                                    <span className="text-xs font-semibold tabular-nums">
+                                                                        {formatRuntime(
+                                                                            member.runtimeSeconds7d,
+                                                                        )}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="bg-muted mt-2 h-1.5 overflow-hidden rounded-full">
+                                                                    <div
+                                                                        className="h-full rounded-full bg-violet-500"
+                                                                        style={{
+                                                                            width: `${(member.runtimeSeconds7d / maximum) * 100}%`,
+                                                                        }}
+                                                                    />
+                                                                </div>
+                                                                <p className="text-muted-foreground mt-1 text-[10px]">
+                                                                    {member.checksPerRuntimeHour ===
+                                                                    null
+                                                                        ? "—"
+                                                                        : member.checksPerRuntimeHour.toFixed(
+                                                                              1,
+                                                                          )}{" "}
+                                                                    checks/h ·{" "}
+                                                                    {member.newItemsPer100RuntimeHours ===
+                                                                    null
+                                                                        ? "—"
+                                                                        : member.newItemsPer100RuntimeHours.toFixed(
+                                                                              1,
+                                                                          )}{" "}
+                                                                    items/100h
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            },
+                                        )}
+                                        {runtimeInsights.leaderboard.length ===
+                                        0 ? (
+                                            <p className="text-muted-foreground px-5 py-8 text-center text-sm">
+                                                Runtime tracking has just
+                                                started.
+                                            </p>
+                                        ) : null}
+                                    </div>
+                                </div>
+                            </div>
+                        </>
+                    ) : null}
                     {isLoadingMemberInsights && !memberInsights ? (
                         <div className="border-border/60 bg-card text-muted-foreground flex min-h-72 items-center justify-center rounded-lg border text-sm">
                             Loading member insights...
@@ -3078,10 +3835,9 @@ export function AdminClient({
                                                                                 )}
                                                                             </p>
                                                                             <p className="truncate">
-                                                                                {monitor
-                                                                                    .proxy_group
-                                                                                    ?.name ??
-                                                                                    "Server Proxies"}
+                                                                                {monitorProxyLabel(
+                                                                                    monitor,
+                                                                                )}
                                                                             </p>
                                                                         </div>
 
@@ -3203,8 +3959,7 @@ export function AdminClient({
                                 Team Members
                             </p>
                             <p className="text-muted-foreground text-xs">
-                                {filteredUsers.length} of {totalUsers} users
-                                shown
+                                {userPagination.total} matching users
                             </p>
                         </div>
                         <div className="flex w-full flex-col gap-2 sm:flex-row lg:max-w-xl">
@@ -3241,6 +3996,9 @@ export function AdminClient({
                                     </th>
                                     <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
                                         Role
+                                    </th>
+                                    <th className="text-muted-foreground px-5 py-3 text-center text-[11px] font-medium tracking-wider uppercase">
+                                        Runtime
                                     </th>
                                     <th className="text-muted-foreground px-5 py-3 text-center text-[11px] font-medium tracking-wider uppercase">
                                         Monitors
@@ -3298,6 +4056,23 @@ export function AdminClient({
                                             </td>
                                             <td className="px-5 py-3.5">
                                                 {getRoleBadge(user.role)}
+                                            </td>
+                                            <td className="px-5 py-3.5 text-center">
+                                                <div className="flex flex-col items-center gap-1">
+                                                    <span className="text-foreground inline-flex items-center gap-1 text-sm font-medium tabular-nums">
+                                                        <Clock3 className="text-muted-foreground h-3.5 w-3.5" />
+                                                        {formatRuntime(
+                                                            user.metrics
+                                                                .totalRuntimeSeconds,
+                                                        )}
+                                                    </span>
+                                                    <span className="text-muted-foreground text-[10px] uppercase">
+                                                        {user.metrics
+                                                            .oldestActiveSince
+                                                            ? `${formatRuntime((nowMs - new Date(user.metrics.oldestActiveSince).getTime()) / 1000)} longest open`
+                                                            : "No open session"}
+                                                    </span>
+                                                </div>
                                             </td>
                                             <td className="px-5 py-3.5 text-center">
                                                 <div className="flex flex-col items-center gap-1">
@@ -3410,7 +4185,7 @@ export function AdminClient({
                                 {paginatedUsers.length === 0 ? (
                                     <tr>
                                         <td
-                                            colSpan={7}
+                                            colSpan={8}
                                             className="px-5 py-12 text-center"
                                         >
                                             <div className="mx-auto flex max-w-sm flex-col items-center gap-2">
@@ -3434,7 +4209,7 @@ export function AdminClient({
                     <div className="border-border/60 flex flex-col gap-3 border-t px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
                         <div className="text-muted-foreground text-xs">
                             Showing {shownUserStart}-{shownUserEnd} of{" "}
-                            {filteredUsers.length} users
+                            {userPagination.total} users
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
                             <label className="text-muted-foreground flex items-center gap-2 text-xs">
@@ -3618,97 +4393,414 @@ export function AdminClient({
                             ))}
                         </div>
                     </div>
+
+                    <div className="border-border/60 bg-card rounded-lg border p-5">
+                        <div className="mb-4 flex items-center justify-between gap-3">
+                            <div>
+                                <p className="text-foreground text-sm font-semibold">
+                                    Running Free Proxy Monitor Limits
+                                </p>
+                                <p className="text-muted-foreground text-xs">
+                                    Empty role values inherit the global
+                                    default. Lowering a limit pauses the newest
+                                    excess Free Proxy Pool monitors
+                                    automatically.
+                                </p>
+                            </div>
+                            <div className="bg-primary/10 text-primary rounded-lg p-2">
+                                <Gauge className="h-4 w-4" />
+                            </div>
+                        </div>
+
+                        <div className="grid gap-3 lg:grid-cols-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="global-free-proxy-monitor-limit">
+                                    Global default
+                                </Label>
+                                <div className="flex gap-2">
+                                    <Input
+                                        id="global-free-proxy-monitor-limit"
+                                        type="number"
+                                        min={0}
+                                        value={globalFreeProxyLimitInput}
+                                        onChange={(event) =>
+                                            setGlobalFreeProxyLimitInput(
+                                                event.target.value,
+                                            )
+                                        }
+                                        placeholder="Unlimited"
+                                    />
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={handleSaveGlobalFreeProxyLimit}
+                                    >
+                                        Save
+                                    </Button>
+                                </div>
+                            </div>
+
+                            {LIMIT_ROLES.map((role) => (
+                                <div key={role.value} className="space-y-2">
+                                    <Label
+                                        htmlFor={`role-free-proxy-monitor-limit-${role.value}`}
+                                    >
+                                        {role.label}
+                                    </Label>
+                                    <div className="flex gap-2">
+                                        <Input
+                                            id={`role-free-proxy-monitor-limit-${role.value}`}
+                                            type="number"
+                                            min={0}
+                                            value={
+                                                roleFreeProxyLimitInputs[
+                                                    role.value
+                                                ] ?? ""
+                                            }
+                                            onChange={(event) =>
+                                                setRoleFreeProxyLimitInputs(
+                                                    (current) => ({
+                                                        ...current,
+                                                        [role.value]:
+                                                            event.target.value,
+                                                    }),
+                                                )
+                                            }
+                                            placeholder="Global"
+                                        />
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={() =>
+                                                handleSaveRoleFreeProxyLimit(
+                                                    role.value,
+                                                )
+                                            }
+                                        >
+                                            Save
+                                        </Button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
                 </>
             ) : null}
 
             {activeTab === "logs" ? (
-                <div className="border-border/60 bg-card overflow-hidden rounded-lg border">
-                    <div className="border-border/60 flex flex-col gap-1 border-b px-5 py-4">
-                        <p className="text-foreground text-sm font-semibold">
-                            Admin Logs
-                        </p>
-                        <p className="text-muted-foreground text-xs">
-                            Latest audit, monitor, and alert events.
-                        </p>
-                    </div>
-                    {isLoadingLogs ? (
-                        <div className="text-muted-foreground px-5 py-12 text-center text-sm">
-                            Loading admin logs...
-                        </div>
-                    ) : adminLogs.length > 0 ? (
-                        <div className="overflow-x-auto">
-                            <table className="w-full">
-                                <thead className="bg-muted/30">
-                                    <tr className="border-border border-b">
-                                        <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
-                                            Event
-                                        </th>
-                                        <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
-                                            Subject
-                                        </th>
-                                        <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
-                                            Actor
-                                        </th>
-                                        <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
-                                            Status
-                                        </th>
-                                        <th className="text-muted-foreground px-5 py-3 text-right text-[11px] font-medium tracking-wider uppercase">
-                                            Time
-                                        </th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-border/50 divide-y">
-                                    {adminLogs.map((log) => (
-                                        <tr key={log.id}>
-                                            <td className="px-5 py-3.5">
-                                                <div className="space-y-1">
-                                                    <div className="flex flex-wrap items-center gap-2">
-                                                        <Badge
-                                                            variant="outline"
-                                                            className="rounded-md text-[10px] uppercase"
-                                                        >
-                                                            {log.type}
-                                                        </Badge>
-                                                        <p className="text-foreground text-sm font-medium">
-                                                            {log.title}
-                                                        </p>
+                <div className="space-y-4">
+                    {operationsSummary ? (
+                        <>
+                            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                                {[
+                                    {
+                                        label: "Delivered (24h)",
+                                        value: operationsSummary.sent,
+                                        detail:
+                                            operationsSummary.successRate ===
+                                            null
+                                                ? "No terminal deliveries"
+                                                : `${operationsSummary.successRate.toFixed(2)}% success`,
+                                    },
+                                    {
+                                        label: "Pending / retrying",
+                                        value: operationsSummary.pending,
+                                        detail: operationsSummary.oldestPendingAt
+                                            ? `${operationsSummary.retrying} retrying · oldest ${formatMetricDate(operationsSummary.oldestPendingAt)}`
+                                            : `${operationsSummary.retrying} waiting for retry`,
+                                    },
+                                    {
+                                        label: "Failed (24h)",
+                                        value: operationsSummary.failed,
+                                        detail: "Terminal failures only",
+                                    },
+                                    {
+                                        label: "Deduplicated (24h)",
+                                        value: operationsSummary.deduplicated,
+                                        detail: "Expected duplicate suppression",
+                                    },
+                                    {
+                                        label: "Open proxy incidents",
+                                        value: operationsSummary.proxyIncidents
+                                            .open,
+                                        detail: `${operationsSummary.proxyIncidents.brief} brief recoveries`,
+                                    },
+                                ].map((metric) => (
+                                    <div
+                                        key={metric.label}
+                                        className="border-border/60 bg-card rounded-lg border px-4 py-3"
+                                    >
+                                        <p className="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
+                                            {metric.label}
+                                        </p>
+                                        <p className="text-foreground mt-1 text-2xl font-semibold">
+                                            {metric.value.toLocaleString()}
+                                        </p>
+                                        <p className="text-muted-foreground mt-1 text-xs">
+                                            {metric.detail}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="border-border/60 bg-card grid gap-4 rounded-lg border p-4 lg:grid-cols-3">
+                                <div>
+                                    <p className="text-foreground text-sm font-semibold">
+                                        Channel health
+                                    </p>
+                                    <div className="mt-3 space-y-2">
+                                        {["discord", "telegram"].map(
+                                            (channel) => {
+                                                const health = operationsSummary
+                                                    .byChannel[channel] ?? {
+                                                    sent: 0,
+                                                    failed: 0,
+                                                    deduplicated: 0,
+                                                };
+                                                return (
+                                                    <div
+                                                        key={channel}
+                                                        className="bg-muted/30 flex items-center justify-between rounded-md px-3 py-2 text-xs"
+                                                    >
+                                                        <span className="font-medium capitalize">
+                                                            {channel}
+                                                        </span>
+                                                        <span className="text-muted-foreground">
+                                                            {health.sent.toLocaleString()}{" "}
+                                                            sent ·{" "}
+                                                            {health.failed.toLocaleString()}{" "}
+                                                            failed
+                                                        </span>
                                                     </div>
-                                                    {log.detail ? (
-                                                        <p className="text-muted-foreground max-w-xl truncate text-xs">
-                                                            {log.detail}
-                                                        </p>
-                                                    ) : null}
-                                                </div>
-                                            </td>
-                                            <td className="text-muted-foreground px-5 py-3.5 text-sm">
-                                                {log.subject ?? "-"}
-                                            </td>
-                                            <td className="text-muted-foreground px-5 py-3.5 text-sm">
-                                                {log.actor ?? "-"}
-                                            </td>
-                                            <td className="px-5 py-3.5">
-                                                <Badge
-                                                    variant="secondary"
-                                                    className="rounded-md text-[10px] uppercase"
-                                                >
-                                                    {log.status}
-                                                </Badge>
-                                            </td>
-                                            <td className="text-muted-foreground px-5 py-3.5 text-right text-xs">
-                                                {formatMetricDate(
-                                                    log.createdAt,
-                                                )}
-                                            </td>
-                                        </tr>
+                                                );
+                                            },
+                                        )}
+                                    </div>
+                                </div>
+                                <div>
+                                    <p className="text-foreground text-sm font-semibold">
+                                        Top failure reasons
+                                    </p>
+                                    <div className="mt-3 space-y-2">
+                                        {operationsSummary.topFailures.length >
+                                        0 ? (
+                                            operationsSummary.topFailures
+                                                .slice(0, 4)
+                                                .map((failure) => (
+                                                    <div
+                                                        key={`${failure.channel}-${failure.reasonCode}`}
+                                                        className="bg-muted/30 flex items-center justify-between rounded-md px-3 py-2 text-xs"
+                                                    >
+                                                        <span>
+                                                            {failure.channel} ·{" "}
+                                                            {failure.reasonCode}
+                                                        </span>
+                                                        <span className="font-semibold">
+                                                            {failure.count.toLocaleString()}
+                                                        </span>
+                                                    </div>
+                                                ))
+                                        ) : (
+                                            <p className="text-muted-foreground text-xs">
+                                                No terminal delivery failures in
+                                                this window.
+                                            </p>
+                                        )}
+                                    </div>
+                                </div>
+                                <div>
+                                    <p className="text-foreground text-sm font-semibold">
+                                        Brief proxy recoveries
+                                    </p>
+                                    <div className="mt-3 space-y-2">
+                                        {operationsSummary.proxyIncidents
+                                            .briefGroups.length > 0 ? (
+                                            operationsSummary.proxyIncidents.briefGroups
+                                                .slice(0, 4)
+                                                .map((group) => (
+                                                    <div
+                                                        key={`${group.domain}-${group.proxySource}`}
+                                                        className="bg-muted/30 flex items-center justify-between rounded-md px-3 py-2 text-xs"
+                                                    >
+                                                        <span>
+                                                            {group.domain} ·{" "}
+                                                            {group.proxySource}
+                                                        </span>
+                                                        <span className="font-semibold">
+                                                            {group.incidents.toLocaleString()}{" "}
+                                                            ·{" "}
+                                                            {group.waits.toLocaleString()}{" "}
+                                                            waits
+                                                        </span>
+                                                    </div>
+                                                ))
+                                        ) : (
+                                            <p className="text-muted-foreground text-xs">
+                                                No brief proxy recoveries in
+                                                this window.
+                                            </p>
+                                        )}
+                                    </div>
+                                </div>
+                                <p className="text-muted-foreground text-[11px] lg:col-span-3">
+                                    Tracked since{" "}
+                                    {operationsSummary.trackedSince
+                                        ? formatMetricDate(
+                                              new Date(
+                                                  operationsSummary.trackedSince,
+                                              ),
+                                          )
+                                        : "deployment"}
+                                    . Dispatcher heartbeat{" "}
+                                    {operationsSummary.dispatcherHeartbeat
+                                        ? formatMetricDate(
+                                              new Date(
+                                                  operationsSummary.dispatcherHeartbeat,
+                                              ),
+                                          )
+                                        : "not reported yet"}
+                                    .
+                                </p>
+                            </div>
+                        </>
+                    ) : null}
+
+                    <div className="border-border/60 bg-card overflow-hidden rounded-lg border">
+                        <div className="border-border/60 flex flex-col gap-1 border-b px-5 py-4">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                    <p className="text-foreground text-sm font-semibold">
+                                        Operations
+                                    </p>
+                                    <p className="text-muted-foreground text-xs">
+                                        Actual failures, relevant incidents and
+                                        audit activity without
+                                        successful-delivery noise.
+                                    </p>
+                                </div>
+                                <div className="flex flex-wrap gap-1">
+                                    {(
+                                        [
+                                            "all",
+                                            "delivery",
+                                            "proxy",
+                                            "monitor",
+                                            "audit",
+                                        ] as AdminOperationFilter[]
+                                    ).map((filter) => (
+                                        <Button
+                                            key={filter}
+                                            type="button"
+                                            size="sm"
+                                            variant={
+                                                operationFilter === filter
+                                                    ? "secondary"
+                                                    : "ghost"
+                                            }
+                                            className="h-7 capitalize"
+                                            onClick={() => {
+                                                setLogsLoaded(false);
+                                                loadAdminLogs(filter);
+                                            }}
+                                        >
+                                            {filter}
+                                        </Button>
                                     ))}
-                                </tbody>
-                            </table>
+                                </div>
+                            </div>
                         </div>
-                    ) : (
-                        <div className="text-muted-foreground px-5 py-12 text-center text-sm">
-                            No admin logs found yet.
-                        </div>
-                    )}
+                        {isLoadingLogs ? (
+                            <div className="text-muted-foreground px-5 py-12 text-center text-sm">
+                                Loading admin logs...
+                            </div>
+                        ) : adminLogs.length > 0 ? (
+                            <div className="overflow-x-auto">
+                                <table className="w-full">
+                                    <thead className="bg-muted/30">
+                                        <tr className="border-border border-b">
+                                            <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
+                                                Event
+                                            </th>
+                                            <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
+                                                Subject
+                                            </th>
+                                            <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
+                                                Actor
+                                            </th>
+                                            <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
+                                                Status
+                                            </th>
+                                            <th className="text-muted-foreground px-5 py-3 text-right text-[11px] font-medium tracking-wider uppercase">
+                                                Time
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-border/50 divide-y">
+                                        {adminLogs.map((log) => (
+                                            <tr key={log.id}>
+                                                <td className="px-5 py-3.5">
+                                                    <div className="space-y-1">
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <Badge
+                                                                variant="outline"
+                                                                className="rounded-md text-[10px] uppercase"
+                                                            >
+                                                                {log.type}
+                                                            </Badge>
+                                                            <p className="text-foreground text-sm font-medium">
+                                                                {log.title}
+                                                            </p>
+                                                        </div>
+                                                        {log.detail ? (
+                                                            <p className="text-muted-foreground max-w-xl truncate text-xs">
+                                                                {log.detail}
+                                                            </p>
+                                                        ) : null}
+                                                    </div>
+                                                </td>
+                                                <td className="text-muted-foreground px-5 py-3.5 text-sm">
+                                                    {log.subject ?? "-"}
+                                                </td>
+                                                <td className="text-muted-foreground px-5 py-3.5 text-sm">
+                                                    {log.actor ?? "-"}
+                                                </td>
+                                                <td className="px-5 py-3.5">
+                                                    <Badge
+                                                        variant="secondary"
+                                                        className="rounded-md text-[10px] uppercase"
+                                                    >
+                                                        {log.status}
+                                                    </Badge>
+                                                </td>
+                                                <td className="text-muted-foreground px-5 py-3.5 text-right text-xs">
+                                                    {formatMetricDate(
+                                                        log.createdAt,
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ) : (
+                            <div className="text-muted-foreground px-5 py-12 text-center text-sm">
+                                No admin logs found yet.
+                            </div>
+                        )}
+                        {operationNextCursor && !isLoadingLogs ? (
+                            <div className="border-border/60 border-t p-3 text-center">
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() =>
+                                        loadAdminLogs(operationFilter, true)
+                                    }
+                                >
+                                    Load more
+                                </Button>
+                            </div>
+                        ) : null}
+                    </div>
                 </div>
             ) : null}
 
@@ -5095,6 +6187,153 @@ export function AdminClient({
                                 </div>
                             </div>
 
+                            <div className="border-border/60 bg-card rounded-lg border px-4 py-4 sm:px-5">
+                                <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(260px,320px)] md:items-center">
+                                    <div className="min-w-0 space-y-3">
+                                        <div>
+                                            <p className="text-foreground text-sm font-semibold">
+                                                Running Free Proxy Monitor Limit
+                                            </p>
+                                            <p className="text-muted-foreground mt-1 text-xs">
+                                                Empty override uses the role or
+                                                global fallback. Lower limits
+                                                pause the newest excess
+                                                monitors.
+                                            </p>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2">
+                                            <Badge
+                                                variant="outline"
+                                                className="rounded-md px-2 py-1 text-[11px]"
+                                            >
+                                                Effective:{" "}
+                                                {formatLimit(
+                                                    selectedEffectiveFreeProxyLimit.value,
+                                                )}
+                                            </Badge>
+                                            <Badge
+                                                variant="secondary"
+                                                className="rounded-md px-2 py-1 text-[11px]"
+                                            >
+                                                Source:{" "}
+                                                {
+                                                    selectedEffectiveFreeProxyLimit.source
+                                                }
+                                            </Badge>
+                                            <Badge
+                                                variant="secondary"
+                                                className="rounded-md px-2 py-1 text-[11px]"
+                                            >
+                                                Running Free Pool:{" "}
+                                                {
+                                                    selectedRunningFreeProxyMonitors
+                                                }
+                                            </Badge>
+                                        </div>
+                                    </div>
+                                    {selected.role === "admin" ? (
+                                        <div className="border-border/60 bg-muted/30 text-muted-foreground rounded-lg border px-3 py-2 text-xs">
+                                            Admin accounts are always unlimited.
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-2">
+                                            <Label
+                                                htmlFor="user-free-proxy-monitor-limit"
+                                                className="text-xs"
+                                            >
+                                                User override
+                                            </Label>
+                                            <div className="flex gap-2">
+                                                <Input
+                                                    id="user-free-proxy-monitor-limit"
+                                                    type="number"
+                                                    min={0}
+                                                    className="h-10"
+                                                    value={
+                                                        userFreeProxyLimitInput
+                                                    }
+                                                    onChange={(event) =>
+                                                        setUserFreeProxyLimitInput(
+                                                            event.target.value,
+                                                        )
+                                                    }
+                                                    placeholder="Role/global"
+                                                />
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    className="h-10 shrink-0 px-4"
+                                                    onClick={
+                                                        handleSaveUserFreeProxyLimit
+                                                    }
+                                                >
+                                                    Save
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="border-border/60 bg-card rounded-lg border p-4 sm:p-5">
+                                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                                    <div>
+                                        <p className="text-sm font-semibold">
+                                            Monitor Runtime
+                                        </p>
+                                        <p className="text-muted-foreground text-xs">
+                                            Aggregate monitor-hours for this
+                                            member.
+                                        </p>
+                                    </div>
+                                    <span className="text-muted-foreground text-[10px] uppercase">
+                                        {overviewState?.runtime.trackedSince
+                                            ? `Tracked since ${new Intl.DateTimeFormat("de-DE", { dateStyle: "medium" }).format(new Date(overviewState.runtime.trackedSince))}`
+                                            : "Tracking from feature launch"}
+                                    </span>
+                                </div>
+                                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                                    {[
+                                        [
+                                            "Total",
+                                            selected.metrics
+                                                .totalRuntimeSeconds,
+                                        ],
+                                        [
+                                            "Open sessions",
+                                            selected.metrics
+                                                .currentRuntimeSeconds,
+                                        ],
+                                        [
+                                            "Last 7 days",
+                                            selected.runtimeDetails
+                                                ?.runtimeSeconds7d ?? 0,
+                                        ],
+                                        [
+                                            "Average session",
+                                            selected.runtimeDetails
+                                                ?.averageSessionSeconds ?? 0,
+                                        ],
+                                    ].map(([label, value]) => (
+                                        <div
+                                            key={String(label)}
+                                            className="bg-muted/30 rounded-lg px-4 py-3"
+                                        >
+                                            <p className="text-muted-foreground text-[10px] uppercase">
+                                                {label}
+                                            </p>
+                                            <p className="mt-1 text-xl font-semibold tabular-nums">
+                                                {isLoadingSelectedDetails
+                                                    ? "—"
+                                                    : formatRuntime(
+                                                          Number(value),
+                                                      )}
+                                            </p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
                             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                                 <Card className="py-0">
                                     <CardHeader className="pt-3 pb-2">
@@ -5299,10 +6538,30 @@ export function AdminClient({
                                                                 items
                                                             </span>
                                                             <span>
-                                                                {monitor
-                                                                    .proxy_group
-                                                                    ?.name ??
-                                                                    "Server Proxies"}
+                                                                {monitorProxyLabel(
+                                                                    monitor,
+                                                                )}
+                                                            </span>
+                                                            <span className="inline-flex items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400">
+                                                                <Clock3 className="h-3.5 w-3.5" />
+                                                                Running for{" "}
+                                                                {formatRuntime(
+                                                                    monitor.active_since
+                                                                        ? (nowMs -
+                                                                              new Date(
+                                                                                  monitor.active_since,
+                                                                              ).getTime()) /
+                                                                              1000
+                                                                        : 0,
+                                                                )}{" "}
+                                                                ·{" "}
+                                                                {formatRuntime(
+                                                                    monitorRuntimeSeconds(
+                                                                        monitor,
+                                                                        nowMs,
+                                                                    ),
+                                                                )}{" "}
+                                                                total
                                                             </span>
                                                             {monitor.price_max ? (
                                                                 <span>
@@ -5446,9 +6705,24 @@ export function AdminClient({
                                                             ms delay
                                                         </span>
                                                         <span>
-                                                            {monitor.proxy_group
-                                                                ?.name ??
-                                                                "Server Proxies"}
+                                                            {monitorProxyLabel(
+                                                                monitor,
+                                                            )}
+                                                        </span>
+                                                        <span className="inline-flex items-center gap-1 font-medium">
+                                                            <Clock3 className="h-3.5 w-3.5" />
+                                                            {formatRuntime(
+                                                                monitorRuntimeSeconds(
+                                                                    monitor,
+                                                                    nowMs,
+                                                                ),
+                                                            )}{" "}
+                                                            total
+                                                            {monitor.status ===
+                                                                "active" &&
+                                                            monitor.active_since
+                                                                ? ` · ${formatRuntime((nowMs - new Date(monitor.active_since).getTime()) / 1000)} running`
+                                                                : ""}
                                                         </span>
                                                         {monitor.price_min ||
                                                         monitor.price_max ? (

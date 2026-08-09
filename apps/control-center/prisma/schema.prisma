@@ -50,24 +50,29 @@ model User {
   accounts                  Account[]
   sessions                  Session[]
 
-  monitors               monitors[]
-  proxy_groups           proxy_groups[]
-  seller_bans            seller_bans[]
-  telegram_connections   telegram_connections[]
-  telegram_connect_codes telegram_connect_codes[]
-  vinted_session         vinted_sessions?
-  audit_events           audit_events[]
-  alert_events           alert_events[]
+  monitors                 monitors[]
+  proxy_groups             proxy_groups[]
+  seller_bans              seller_bans[]
+  telegram_connections     telegram_connections[]
+  telegram_connect_codes   telegram_connect_codes[]
+  vinted_session           vinted_sessions?
+  audit_events             audit_events[]
+  alert_events             alert_events[]
+  alert_notifications      alert_notifications[]
+  alert_dedupe_claims      alert_dedupe_claims[]
+  monitor_runtime_sessions monitor_runtime_sessions[]
+  monitor_runtime_total    member_monitor_runtime_totals?
 
   @@index([name])
   @@index([createdAt])
 }
 
 model monitor_limits {
-  scope        String   @id @db.VarChar(255)
-  active_limit Int?
-  created_at   DateTime @default(now()) @db.Timestamp(6)
-  updated_at   DateTime @updatedAt @db.Timestamp(6)
+  scope                   String   @id @db.VarChar(255)
+  active_limit            Int?
+  free_proxy_active_limit Int?
+  created_at              DateTime @default(now()) @db.Timestamp(6)
+  updated_at              DateTime @updatedAt @db.Timestamp(6)
 }
 
 model app_settings {
@@ -117,23 +122,46 @@ model monitors {
   status                   String?   @default("active") @db.VarChar(50)
   created_at               DateTime? @default(now()) @db.Timestamp(6)
   demo_expires_at          DateTime? @db.Timestamp(6)
+  active_since             DateTime? @db.Timestamp(6)
+  runtime_total_seconds    BigInt    @default(0)
   items                    items[]
   discord_webhook          String?
   webhook_active           Boolean   @default(true)
   telegram_active          Boolean   @default(false)
   notifications_enabled    Boolean   @default(true)
 
-  proxy_group_id  Int?
-  proxy_source    String                     @default("server") @db.VarChar(20)
-  proxy_group     proxy_groups?              @relation(fields: [proxy_group_id], references: [id], onDelete: SetNull)
-  monitor_runs    monitor_runs[]
-  hourly_stats    monitor_run_hourly_stats[]
-  monitor_events  monitor_events[]
-  alert_events    alert_events[]
-  item_detections monitor_item_detections[]
+  proxy_group_id      Int?
+  proxy_source        String                     @default("server") @db.VarChar(20)
+  proxy_group         proxy_groups?              @relation(fields: [proxy_group_id], references: [id], onDelete: SetNull)
+  monitor_runs        monitor_runs[]
+  hourly_stats        monitor_run_hourly_stats[]
+  monitor_events      monitor_events[]
+  alert_events        alert_events[]
+  alert_notifications alert_notifications[]
+  proxy_incidents     monitor_proxy_incidents[]
+  item_detections     monitor_item_detections[]
+  runtime_sessions    monitor_runtime_sessions[]
 
   @@index([userId])
   @@index([status, userId])
+}
+
+model monitor_runtime_sessions {
+  id           BigInt    @id @default(autoincrement())
+  monitor_id   Int?
+  monitor      monitors? @relation(fields: [monitor_id], references: [id], onDelete: SetNull)
+  user_id      String
+  user         User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  proxy_source String    @db.VarChar(20)
+  started_at   DateTime  @db.Timestamp(6)
+  ended_at     DateTime? @db.Timestamp(6)
+}
+
+model member_monitor_runtime_totals {
+  user_id                String   @id
+  user                   User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  closed_runtime_seconds BigInt   @default(0)
+  updated_at             DateTime @updatedAt @db.Timestamp(6)
 }
 
 model free_proxies {
@@ -329,22 +357,119 @@ model audit_events {
 }
 
 model alert_events {
-  id             BigInt    @id @default(autoincrement())
-  userId         String?
-  user           User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
-  monitor_id     Int?
-  monitor        monitors? @relation(fields: [monitor_id], references: [id], onDelete: SetNull)
-  item_id        BigInt?
-  channel        String    @db.VarChar(50)
-  status         String    @db.VarChar(50)
-  failure_reason String?   @db.Text
-  metadata       Json?
-  created_at     DateTime  @default(now()) @db.Timestamp(6)
+  id                BigInt               @id @default(autoincrement())
+  userId            String?
+  user              User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
+  monitor_id        Int?
+  monitor           monitors?            @relation(fields: [monitor_id], references: [id], onDelete: SetNull)
+  item_id           BigInt?
+  notification_id   BigInt?
+  notification      alert_notifications? @relation(fields: [notification_id], references: [id], onDelete: SetNull)
+  delivery_id       BigInt?
+  delivery          alert_deliveries?    @relation(fields: [delivery_id], references: [id], onDelete: SetNull)
+  channel           String               @db.VarChar(50)
+  status            String               @db.VarChar(50)
+  notification_kind String               @default("item_match") @db.VarChar(50)
+  reason_code       String?              @db.VarChar(50)
+  attempt_number    Int?
+  failure_reason    String?              @db.Text
+  metadata          Json?
+  created_at        DateTime             @default(now()) @db.Timestamp(6)
 
   @@index([userId, created_at])
   @@index([monitor_id, created_at])
   @@index([item_id])
+  @@index([notification_id])
+  @@index([delivery_id])
   @@index([channel, status])
+  @@index([created_at])
+  @@index([status, created_at])
+}
+
+model alert_dedupe_claims {
+  user_id    String
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  item_id    BigInt
+  claimed_at DateTime @default(now()) @db.Timestamp(6)
+  expires_at DateTime @db.Timestamp(6)
+
+  @@id([user_id, item_id])
+  @@index([expires_at])
+}
+
+model alert_notifications {
+  id              BigInt             @id @default(autoincrement())
+  user_id         String?
+  user            User?              @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  monitor_id      Int?
+  monitor         monitors?          @relation(fields: [monitor_id], references: [id], onDelete: SetNull)
+  item_id         BigInt?
+  kind            String             @db.VarChar(50)
+  payload_version Int                @default(1)
+  payload         Json
+  idempotency_key String             @unique @db.VarChar(255)
+  expires_at      DateTime           @db.Timestamp(6)
+  created_at      DateTime           @default(now()) @db.Timestamp(6)
+  deliveries      alert_deliveries[]
+  events          alert_events[]
+
+  @@index([user_id, created_at])
+  @@index([monitor_id, created_at])
+}
+
+model alert_deliveries {
+  id                      BigInt              @id @default(autoincrement())
+  notification_id         BigInt
+  notification            alert_notifications @relation(fields: [notification_id], references: [id], onDelete: Cascade)
+  channel                 String              @db.VarChar(20)
+  status                  String              @default("pending") @db.VarChar(20)
+  destination_fingerprint String              @db.VarChar(64)
+  attempt_count           Int                 @default(0)
+  next_attempt_at         DateTime            @default(now()) @db.Timestamp(6)
+  lease_until             DateTime?           @db.Timestamp(6)
+  claim_token             String?             @db.VarChar(64)
+  last_reason_code        String?             @db.VarChar(50)
+  last_error_detail       String?             @db.Text
+  completed_at            DateTime?           @db.Timestamp(6)
+  created_at              DateTime            @default(now()) @db.Timestamp(6)
+  updated_at              DateTime            @updatedAt @db.Timestamp(6)
+  events                  alert_events[]
+
+  @@unique([notification_id, channel])
+  @@index([status, next_attempt_at])
+  @@index([destination_fingerprint, status, created_at])
+  @@index([lease_until])
+}
+
+model alert_event_hourly_stats {
+  bucket_hour       DateTime @db.Timestamp(6)
+  channel           String   @db.VarChar(20)
+  notification_kind String   @db.VarChar(50)
+  outcome           String   @db.VarChar(30)
+  reason_code       String   @default("") @db.VarChar(50)
+  event_count       BigInt   @default(0)
+  last_seen_at      DateTime @db.Timestamp(6)
+
+  @@id([bucket_hour, channel, notification_kind, outcome, reason_code])
+  @@index([bucket_hour, outcome])
+}
+
+model monitor_proxy_incidents {
+  id           BigInt    @id @default(autoincrement())
+  monitor_id   Int
+  monitor      monitors  @relation(fields: [monitor_id], references: [id], onDelete: Cascade)
+  domain       String    @db.VarChar(255)
+  proxy_source String    @db.VarChar(20)
+  started_at   DateTime  @default(now()) @db.Timestamp(6)
+  last_wait_at DateTime  @default(now()) @db.Timestamp(6)
+  retry_at     DateTime? @db.Timestamp(6)
+  wait_count   Int       @default(1)
+  recovered_at DateTime? @db.Timestamp(6)
+  end_reason   String?   @db.VarChar(30)
+
+  @@index([monitor_id, started_at])
+  @@index([started_at])
+  @@index([recovered_at])
 }
 
 model telegram_connections {

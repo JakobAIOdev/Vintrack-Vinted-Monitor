@@ -1,6 +1,76 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("admin running monitors", () => {
+    test("shows the cached runtime snapshot without opening insights", async ({
+        page,
+    }) => {
+        await page.goto("/admin?tab=overview");
+
+        await expect(page.getByText("Runtime Snapshot")).toBeVisible();
+        await expect(page.getByText("Total runtime")).toBeVisible();
+        await expect(page.getByText("Active source mix")).toBeVisible();
+    });
+
+    test("shows global and role Free Proxy Pool monitor limits", async ({
+        page,
+    }) => {
+        await page.goto("/admin?tab=roles");
+
+        await expect(page.getByRole("tab", { name: "Roles" })).toHaveAttribute(
+            "aria-selected",
+            "true",
+        );
+        await expect(
+            page.getByText("Running Free Proxy Monitor Limits"),
+        ).toBeVisible();
+        await expect(page.getByLabel("Global default").last()).toHaveValue("");
+        await expect(page.getByLabel("Global default").last()).toHaveAttribute(
+            "placeholder",
+            "Unlimited",
+        );
+        await expect(page.getByLabel("Free").last()).toHaveAttribute(
+            "placeholder",
+            "Global",
+        );
+        await expect(page.getByLabel("Premium").last()).toHaveAttribute(
+            "placeholder",
+            "Global",
+        );
+    });
+
+    test("pauses the newest excess free proxy monitors for a user override", async ({
+        page,
+        isMobile,
+    }) => {
+        test.skip(
+            isMobile,
+            "The shared database mutation runs once on desktop",
+        );
+        await page.goto("/admin?tab=users");
+        const search = page.getByPlaceholder(
+            "Search by name, email or role...",
+        );
+        await search.fill("E2E Limit User");
+        await page.getByRole("row", { name: /E2E Limit User/ }).click();
+
+        const input = page.locator("#user-free-proxy-monitor-limit");
+        await expect(input).toBeVisible();
+        await input.fill("1");
+        await input
+            .locator("xpath=..")
+            .getByRole("button", { name: "Save" })
+            .click();
+
+        await expect(page.getByText("Running Free Pool: 1")).toBeVisible();
+        await expect(page.getByText("Monitor Runtime")).toBeVisible();
+        const runningSection = page
+            .getByRole("dialog", { name: "User Details" })
+            .getByText("Running Monitors", { exact: true })
+            .locator("xpath=../../..");
+        await expect(runningSection).toContainText("E2E Free Limit 1");
+        await expect(runningSection).not.toContainText("E2E Free Limit 3");
+    });
+
     test("groups active monitors by member and filters the list", async ({
         page,
     }) => {
@@ -51,7 +121,15 @@ test.describe("admin running monitors", () => {
         await expect(
             page.getByRole("tab", { name: "Member Insights" }),
         ).toHaveAttribute("aria-selected", "true");
-        await expect(page.getByText("Member growth")).toBeVisible();
+        await expect(
+            page.getByText("Member growth", { exact: true }),
+        ).toBeVisible();
+        await expect(page.getByText("Runtime by proxy source")).toBeVisible();
+        await expect(
+            page.getByRole("img", {
+                name: "Monitor runtime by proxy source over the last 30 days",
+            }),
+        ).toBeVisible();
         await expect(
             page.getByRole("img", {
                 name: "Member signups over the last 90 days",
@@ -61,7 +139,26 @@ test.describe("admin running monitors", () => {
         await expect(page.getByText("Account mix")).toBeVisible();
         await expect(page.getByText("Newest members")).toBeVisible();
         await expect(
-            page.getByRole("main").getByText("E2E User"),
+            page.getByRole("main").getByText("E2E User").last(),
         ).toBeVisible();
+    });
+
+    test("separates delivery health from important operations", async ({
+        page,
+    }) => {
+        await page.goto("/admin?tab=overview");
+        await page.getByRole("tab", { name: "Logs" }).click();
+
+        await expect(page.getByText("Delivered (24h)")).toBeVisible();
+        await expect(page.getByText("Pending / retrying")).toBeVisible();
+        await expect(page.getByText("Deduplicated (24h)")).toBeVisible();
+        await expect(page.getByText("Terminal failures only")).toBeVisible();
+        await expect(
+            page.getByText("Expected duplicate suppression"),
+        ).toBeVisible();
+        await expect(
+            page.getByText("successful-delivery noise", { exact: false }),
+        ).toBeVisible();
+        await expect(page.getByText(/alert issues/i)).toHaveCount(0);
     });
 });

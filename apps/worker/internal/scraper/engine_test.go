@@ -299,6 +299,34 @@ func TestSplitIncomingItems_AfterInitializationOnlyNewItems(t *testing.T) {
 	}
 }
 
+func TestInitialQueryTrackingKeepsFreshStartsMuted(t *testing.T) {
+	initialized, resumeQueries := initialQueryTracking(2, false)
+	for index := range initialized {
+		if initialized[index] || resumeQueries[index] {
+			t.Fatalf("query %d unexpectedly initialized for a fresh start", index)
+		}
+	}
+}
+
+func TestInitialQueryTrackingResumesQuietHoursWithoutInitialMute(t *testing.T) {
+	initialized, resumeQueries := initialQueryTracking(2, true)
+	for index := range initialized {
+		if !initialized[index] || !resumeQueries[index] {
+			t.Fatalf("query %d did not resume in notification mode", index)
+		}
+	}
+
+	items := []model.VintedItem{{ID: 1}, {ID: 2}, {ID: 3}}
+	newMap := map[int64]bool{1: false, 2: true, 3: false}
+	processItems, seedItems := splitIncomingItems(items, newMap, initialized[0])
+	if len(seedItems) != 0 {
+		t.Fatalf("resume scan seeded %d muted items, want 0", len(seedItems))
+	}
+	if len(processItems) != 1 || processItems[0].ID != 2 {
+		t.Fatalf("resume scan items = %#v, want only unseen item 2", processItems)
+	}
+}
+
 func TestFilterAntiKeywordItems_TitleAndDescription(t *testing.T) {
 	raw := "fake, damaged\nreplica"
 	items := []model.VintedItem{

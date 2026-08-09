@@ -89,7 +89,10 @@ export default async function MonitorPage({
     const resumeState =
         monitor.status === "active"
             ? null
-            : await getMonitorActivationState(monitor.userId);
+            : await getMonitorActivationState(
+                  monitor.userId,
+                  monitor.proxy_source,
+              );
     const resumeBlocked = resumeState ? !resumeState.canActivate : false;
     const deleteAction = deleteMonitor.bind(null, monitor.id);
     const categoryLabels = await getCategoryLabelsForRegion(
@@ -401,7 +404,9 @@ export default async function MonitorPage({
                                 disabled={resumeBlocked}
                                 title={
                                     resumeBlocked && resumeState
-                                        ? `Active monitor limit reached (${resumeState.activeCount}/${resumeState.activeLimit})`
+                                        ? resumeState.freeProxyLimitReached
+                                            ? `Free proxy monitor limit reached (${resumeState.freeProxyActiveCount}/${resumeState.freeProxyActiveLimit})`
+                                            : `Active monitor limit reached (${resumeState.activeCount}/${resumeState.activeLimit})`
                                         : undefined
                                 }
                                 className={`h-8 text-xs font-medium ${

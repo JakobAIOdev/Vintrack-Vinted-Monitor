@@ -26,6 +26,13 @@ export type FreeProxyOption = {
     activeCount: number;
     minActivePerRegion: number;
     regions: Record<string, FreeProxyRegionHealth>;
+    usage?: {
+        activeCount: number;
+        activeLimit: number | null;
+        activeSlots: number | null;
+        limitSource: "user" | "role" | "global" | null;
+        limitReached: boolean;
+    };
 };
 
 export function getFreeProxyRegionHealth(
@@ -150,6 +157,19 @@ export function RegionPoolStatus({
                                       ? "Recovering"
                                       : "Disabled"}
                             </Badge>
+                            {freeProxy.usage ? (
+                                <Badge
+                                    variant={
+                                        freeProxy.usage.limitReached
+                                            ? "destructive"
+                                            : "outline"
+                                    }
+                                    className="rounded-md"
+                                >
+                                    {freeProxy.usage.activeCount}/
+                                    {freeProxy.usage.activeLimit ?? "∞"} running
+                                </Badge>
+                            ) : null}
                         </div>
                         <p className="text-muted-foreground mt-1 text-xs">
                             {freeProxy.enabled
@@ -189,6 +209,13 @@ export function RegionPoolStatus({
                     monitor will wait and resume automatically.
                 </p>
             )}
+            {freeProxy.usage?.limitReached ? (
+                <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
+                    Your running Free Proxy Pool monitor limit is reached. You
+                    can still save this monitor, but it will remain paused until
+                    a slot is available.
+                </p>
+            ) : null}
             {poolRegions.length > 0 && (
                 <div className="border-border/60 mt-4 border-t pt-3">
                     <div className="mb-2.5 flex items-center justify-between gap-3">

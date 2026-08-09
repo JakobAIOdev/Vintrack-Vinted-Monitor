@@ -20,6 +20,7 @@ import (
 
 type Store struct {
 	db             *sql.DB
+	connString     string
 	cache          *cache.RedisCache
 	healthErrLog   map[int]time.Time
 	healthErrLogMu sync.Mutex
@@ -271,6 +272,7 @@ func NewStore(connStr string, redisCache *cache.RedisCache) (*Store, error) {
 
 	store := &Store{
 		db:            db,
+		connString:    connStr,
 		cache:         redisCache,
 		healthErrLog:  make(map[int]time.Time),
 		trafficTotals: make(map[int]proxyGroupBandwidthDelta),
@@ -2577,14 +2579,25 @@ func (s *Store) RecordAlertEvent(event model.AlertEvent) {
 	}
 	_, err := s.db.Exec(`
 		INSERT INTO alert_events (
-			"userId", monitor_id, item_id, channel, status, failure_reason, metadata
+			"userId", monitor_id, item_id, notification_id, delivery_id,
+			channel, status, notification_kind, reason_code, attempt_number,
+			failure_reason, metadata
 		)
-		VALUES (NULLIF($1, ''), NULLIF($2, 0), NULLIF($3, 0::bigint), $4, $5, NULLIF($6, ''), $7::jsonb)`,
+		VALUES (
+			NULLIF($1, ''), NULLIF($2, 0), NULLIF($3, 0::bigint),
+			NULLIF($4, 0::bigint), NULLIF($5, 0::bigint), $6, $7, $8,
+			NULLIF($9, ''), NULLIF($10, 0), NULLIF($11, ''), $12::jsonb
+		)`,
 		event.UserID,
 		event.MonitorID,
 		event.ItemID,
+		event.NotificationID,
+		event.DeliveryID,
 		event.Channel,
 		event.Status,
+		defaultAlertKind(event.NotificationKind),
+		event.ReasonCode,
+		event.AttemptNumber,
 		event.FailureReason,
 		metadata,
 	)

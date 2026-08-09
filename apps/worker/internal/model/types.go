@@ -67,6 +67,7 @@ type Monitor struct {
 	ServerProxyVersion    uint64
 	FreeProxyVersion      uint64
 	SuppressStartupNotice bool
+	ResumeAfterQuietHours bool
 	CreatedAt             time.Time
 }
 
@@ -171,13 +172,73 @@ type MonitorEvent struct {
 }
 
 type AlertEvent struct {
-	UserID        string
-	MonitorID     int
-	ItemID        int64
-	Channel       string
-	Status        string
-	FailureReason string
-	Metadata      string
+	UserID           string
+	MonitorID        int
+	ItemID           int64
+	NotificationID   int64
+	DeliveryID       int64
+	Channel          string
+	Status           string
+	NotificationKind string
+	ReasonCode       string
+	AttemptNumber    int
+	FailureReason    string
+	Metadata         string
+}
+
+type AlertNotificationPayload struct {
+	Version       int                      `json:"version"`
+	Kind          string                   `json:"kind"`
+	MonitorName   string                   `json:"monitorName"`
+	ProxySource   string                   `json:"proxySource,omitempty"`
+	DiscordStyle  NotificationMessageStyle `json:"discordStyle,omitempty"`
+	TelegramStyle NotificationMessageStyle `json:"telegramStyle,omitempty"`
+	Title         string                   `json:"title,omitempty"`
+	Message       string                   `json:"message,omitempty"`
+	Item          *Item                    `json:"item,omitempty"`
+}
+
+type AlertNotificationRequest struct {
+	UserID         string
+	MonitorID      int
+	ItemID         int64
+	Kind           string
+	IdempotencyKey string
+	Payload        AlertNotificationPayload
+	ExpiresAt      time.Time
+	DedupeUserItem bool
+	DiscordTarget  string
+	TelegramTarget string
+}
+
+type AlertDelivery struct {
+	ID                     int64
+	NotificationID         int64
+	UserID                 string
+	MonitorID              int
+	ItemID                 int64
+	Kind                   string
+	Payload                AlertNotificationPayload
+	ExpiresAt              time.Time
+	Channel                string
+	Destination            string
+	DestinationFingerprint string
+	CurrentFingerprint     string
+	AttemptCount           int
+	ClaimToken             string
+	NotificationsEnabled   bool
+	ChannelEnabled         bool
+}
+
+type AlertDeliveryResult struct {
+	Success         bool
+	Retryable       bool
+	ReasonCode      string
+	Detail          string
+	RetryAfter      time.Duration
+	HTTPStatus      int
+	RateLimitBucket string
+	GlobalRateLimit bool
 }
 
 // --- Vinted API response types ---

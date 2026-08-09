@@ -14,10 +14,8 @@ import (
 	"time"
 
 	"vintrack-worker/internal/database"
-	"vintrack-worker/internal/discord"
 	"vintrack-worker/internal/model"
 	"vintrack-worker/internal/proxy"
-	"vintrack-worker/internal/telegram"
 )
 
 const (
@@ -52,9 +50,8 @@ type Engine struct {
 	jobsCtx                context.Context
 	jobsCancel             context.CancelFunc
 	alertJobs              chan alertJob
-	discordJobs            chan alertJob
-	telegramJobs           chan alertJob
 	enrichmentJobs         chan enrichmentJob
+	alertDeliveryWake      chan struct{}
 	jobsWG                 sync.WaitGroup
 }
 
@@ -94,9 +91,8 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 		jobsCtx:              jobsCtx,
 		jobsCancel:           jobsCancel,
 		alertJobs:            make(chan alertJob, 4096),
-		discordJobs:          make(chan alertJob, 4096),
-		telegramJobs:         make(chan alertJob, 4096),
 		enrichmentJobs:       make(chan enrichmentJob, 4096),
+		alertDeliveryWake:    make(chan struct{}, 64),
 	}
 	engine.startPipelines()
 	return engine
@@ -294,6 +290,9 @@ func shortProxyHash(raw string) string {
 func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	pm, proxySource, proxyKey, trafficRecorder := e.proxyContext(m)
 	domain := model.RegionDomain(m.Region)
+	if err := e.db.CloseProxyIncident(ctx, m.ID, "worker_restarted"); err != nil {
+		log.Printf("[%d] reconcile stale proxy incident: %v", m.ID, err)
+	}
 	var pool *ClientPool
 	if proxySource == "free" {
 		pool = e.existingPool(domain, proxyKey)
@@ -335,12 +334,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			proxyKey = fmt.Sprintf("free:%s", m.Region)
 			log.Printf("[%d] free proxy pool recovered with %d proxies", m.ID, pm.Count())
 		} else {
-			if m.WebhookActive && m.DiscordWebhook.String != "" {
-				discord.SendAutoStopWebhook(m.DiscordWebhook.String, m.Name, -1)
-			}
-			if m.TelegramActive && m.TelegramChatID.String != "" {
-				telegram.SendAutoStop(m.TelegramChatID.String, m.Name, -1)
-			}
+			e.enqueueStatusNotification(m, "monitor_auto_stopped", "Monitor auto-stopped", "No valid proxies are available for this monitor.", "no-proxies")
 			return
 		}
 	}
@@ -382,7 +376,10 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	timeoutDuration := catalogTimeoutForProxySource(proxySource)
 	consecutiveErrors := 0
 	checks := 0
-	initializedQueries := make([]bool, len(monitorQueries))
+	initializedQueries, resumeQueries := initialQueryTracking(
+		len(monitorQueries),
+		m.ResumeAfterQuietHours,
+	)
 	var totalErrors int64
 	localSeen := make(map[int64]time.Time, 128)
 	waitingForProxy := false
@@ -390,11 +387,12 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 	log.Printf("[%d] started | name=%q | queries=%d | delay=%s | hedge=%dms | url=%s", m.ID, m.Name, len(monitorQueries), interval, getEnvInt("CATALOG_HEDGE_DELAY_MS", 250), queryURLs[0])
 	notificationsEnabled := e.monitorNotificationsEnabled(m)
-	if notificationsEnabled && !m.SuppressStartupNotice && m.WebhookActive && m.DiscordWebhook.Valid && m.DiscordWebhook.String != "" {
-		go discord.SendStartupWebhook(m.DiscordWebhook.String, m.Name)
-	}
-	if notificationsEnabled && !m.SuppressStartupNotice && m.TelegramActive && m.TelegramChatID.Valid && m.TelegramChatID.String != "" {
-		go telegram.SendStartup(m.TelegramChatID.String, m.Name)
+	if notificationsEnabled && !m.SuppressStartupNotice {
+		e.enqueueStatusNotification(
+			m, "monitor_started", "Monitor started",
+			fmt.Sprintf("The monitor %s is initialized. The initial scan is muted.", m.Name),
+			fmt.Sprintf("%d", time.Now().Unix()/60),
+		)
 	}
 
 	reportHealth := func(lastErr string, lastErrorCode string, proxyState string, retryAt time.Time, proxyLabel string) {
@@ -418,6 +416,9 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	}
 
 	defer func() {
+		if waitingForProxy {
+			_ = e.db.CloseProxyIncident(context.Background(), m.ID, "monitor_stopped")
+		}
 		e.db.ClearMonitorHealth(m.ID)
 	}()
 
@@ -446,11 +447,19 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			} else {
 				log.Printf("[%d] free proxy pool became empty; waiting for recovery", m.ID)
 				reportHealth("free proxy pool is waiting for recovery", proxyErrorPoolWaiting, "waiting_for_proxy", time.Time{}, "")
+				waitingForProxy = true
+				if err := e.db.OpenOrUpdateProxyIncident(ctx, m.ID, domain, proxySource, time.Now().Add(15*time.Second)); err != nil {
+					log.Printf("[%d] open proxy incident: %v", m.ID, err)
+				}
 				if !waitForProxyManager(ctx, pm, 15*time.Second) {
 					return
 				}
 				pool = e.GetOrCreatePool(pm, domain, proxyKey, trafficRecorder, proxySource)
 				consecutiveErrors = 0
+				if err := e.db.CloseProxyIncident(ctx, m.ID, "recovered"); err != nil {
+					log.Printf("[%d] close proxy incident: %v", m.ID, err)
+				}
+				waitingForProxy = false
 				log.Printf("[%d] free proxy pool recovered with %d proxies", m.ID, pm.Count())
 			}
 		} else if proxySource == "free" && managerDegraded {
@@ -535,15 +544,12 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 				retryAt = time.Now().Add(time.Second)
 			}
 			reportHealth(waitErr.Error(), waitErr.ErrorCode, "waiting_for_proxy", retryAt, waitErr.ProxyLabel)
+			if err := e.db.OpenOrUpdateProxyIncident(ctx, m.ID, domain, proxySource, retryAt); err != nil {
+				log.Printf("[%d] open proxy incident: %v", m.ID, err)
+			}
 			if !waitingForProxy {
 				waitingForProxy = true
 				log.Printf("[%d] all proxies for %s are temporarily unavailable; retrying at %s", m.ID, domain, retryAt.UTC().Format(time.RFC3339))
-				e.db.RecordMonitorEvent(model.MonitorEvent{
-					MonitorID: m.ID,
-					EventType: "proxy_pool_waiting",
-					Severity:  "warning",
-					Message:   fmt.Sprintf("All proxies for %s are temporarily unavailable; retrying at %s", domain, retryAt.UTC().Format(time.RFC3339)),
-				})
 			}
 			if !waitForProxyRetry(ctx, retryAt) {
 				return
@@ -586,12 +592,11 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 				reportHealth(failureMessage, failureCode, "degraded", time.Time{}, proxyLabel)
 				log.Printf("[%d] %d consecutive failures (%s), backing off...", m.ID, consecutiveErrors, failureMessage)
 				if consecutiveErrors == 15 || consecutiveErrors == 30 {
-					if m.WebhookActive && m.DiscordWebhook.String != "" {
-						discord.SendProxyWarningWebhook(m.DiscordWebhook.String, m.Name, consecutiveErrors)
-					}
-					if m.TelegramActive && m.TelegramChatID.String != "" {
-						telegram.SendProxyWarning(m.TelegramChatID.String, m.Name, consecutiveErrors)
-					}
+					e.enqueueStatusNotification(
+						m, "proxy_warning", "Proxy warning",
+						fmt.Sprintf("Monitor %s has %d consecutive proxy errors.", m.Name, consecutiveErrors),
+						fmt.Sprintf("%d", consecutiveErrors),
+					)
 				}
 			}
 			if shouldAutoStopMonitor(proxySource, consecutiveErrors, maxConsecutiveErrors) {
@@ -603,12 +608,11 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 					Severity:  "error",
 					Message:   fmt.Sprintf("Monitor auto-stopped after %d consecutive fetch errors", consecutiveErrors),
 				})
-				if m.WebhookActive && m.DiscordWebhook.String != "" {
-					discord.SendAutoStopWebhook(m.DiscordWebhook.String, m.Name, consecutiveErrors)
-				}
-				if m.TelegramActive && m.TelegramChatID.String != "" {
-					telegram.SendAutoStop(m.TelegramChatID.String, m.Name, consecutiveErrors)
-				}
+				e.enqueueStatusNotification(
+					m, "monitor_auto_stopped", "Monitor auto-stopped",
+					fmt.Sprintf("Monitor %s was stopped after %d consecutive fetch errors.", m.Name, consecutiveErrors),
+					fmt.Sprintf("%d", consecutiveErrors),
+				)
 				return
 			}
 			var rateLimitBackoff time.Duration
@@ -625,13 +629,10 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		consecutiveErrors = 0
 		recoveredFromProxyWait := waitingForProxy
 		if recoveredFromProxyWait {
+			if err := e.db.CloseProxyIncident(ctx, m.ID, "recovered"); err != nil {
+				log.Printf("[%d] close proxy incident: %v", m.ID, err)
+			}
 			waitingForProxy = false
-			e.db.RecordMonitorEvent(model.MonitorEvent{
-				MonitorID: m.ID,
-				EventType: "proxy_pool_recovered",
-				Severity:  "info",
-				Message:   fmt.Sprintf("Proxy pool for %s recovered", domain),
-			})
 		}
 		if recoveredFromProxyWait || checks%5 == 0 || checks <= 3 {
 			reportHealth("", "", "", time.Time{}, "")
@@ -689,11 +690,31 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		newItems := make([]model.VintedItem, 0)
-		for _, item := range items {
-			if _, exists := localSeen[item.ID]; !exists {
-				newItems = append(newItems, item)
+		if resumeQueries[queryIndex] {
+			itemIDs := make([]int64, len(items))
+			for index, item := range items {
+				itemIDs[index] = item.ID
+				localSeen[item.ID] = now
 			}
-			localSeen[item.ID] = now
+			newItems, _ = splitIncomingItems(
+				items,
+				e.db.BatchIsNew(m.ID, itemIDs),
+				true,
+			)
+			resumeQueries[queryIndex] = false
+			log.Printf(
+				"[%d] quiet-hours resume scan found %d unseen items out of %d",
+				m.ID,
+				len(newItems),
+				len(items),
+			)
+		} else {
+			for _, item := range items {
+				if _, exists := localSeen[item.ID]; !exists {
+					newItems = append(newItems, item)
+				}
+				localSeen[item.ID] = now
+			}
 		}
 		if checks%100 == 0 {
 			cutoff := now.Add(-10 * time.Minute)
@@ -923,6 +944,18 @@ func splitIncomingItems(items []model.VintedItem, newMap map[int64]bool, initial
 	}
 
 	return newItems, nil
+}
+
+func initialQueryTracking(queryCount int, resumeAfterQuietHours bool) ([]bool, []bool) {
+	initialized := make([]bool, queryCount)
+	resumeQueries := make([]bool, queryCount)
+	if resumeAfterQuietHours {
+		for index := range initialized {
+			initialized[index] = true
+			resumeQueries[index] = true
+		}
+	}
+	return initialized, resumeQueries
 }
 
 func filterAntiKeywordItems(items []model.VintedItem, rawKeywords *string) ([]model.VintedItem, int) {

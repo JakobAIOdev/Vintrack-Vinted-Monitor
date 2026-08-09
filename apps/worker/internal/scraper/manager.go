@@ -73,7 +73,7 @@ func (m *Manager) Sync(ctx context.Context) {
 			continue
 		}
 		if m.scheduledPaused[mon.ID] {
-			mon.SuppressStartupNotice = true
+			prepareQuietHoursResume(mon)
 			delete(m.scheduledPaused, mon.ID)
 		}
 		activeIDs[mon.ID] = true
@@ -131,6 +131,11 @@ func (m *Manager) Sync(ctx context.Context) {
 			delete(m.discoveryCfg, key)
 		}
 	}
+}
+
+func prepareQuietHoursResume(monitor *model.Monitor) {
+	monitor.SuppressStartupNotice = true
+	monitor.ResumeAfterQuietHours = true
 }
 
 func (m *Manager) StopAll() {
