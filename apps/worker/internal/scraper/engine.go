@@ -376,7 +376,10 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	timeoutDuration := catalogTimeoutForProxySource(proxySource)
 	consecutiveErrors := 0
 	checks := 0
-	initializedQueries := make([]bool, len(monitorQueries))
+	initializedQueries, resumeQueries := initialQueryTracking(
+		len(monitorQueries),
+		m.ResumeAfterQuietHours,
+	)
 	var totalErrors int64
 	localSeen := make(map[int64]time.Time, 128)
 	waitingForProxy := false
@@ -687,11 +690,31 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		newItems := make([]model.VintedItem, 0)
-		for _, item := range items {
-			if _, exists := localSeen[item.ID]; !exists {
-				newItems = append(newItems, item)
+		if resumeQueries[queryIndex] {
+			itemIDs := make([]int64, len(items))
+			for index, item := range items {
+				itemIDs[index] = item.ID
+				localSeen[item.ID] = now
 			}
-			localSeen[item.ID] = now
+			newItems, _ = splitIncomingItems(
+				items,
+				e.db.BatchIsNew(m.ID, itemIDs),
+				true,
+			)
+			resumeQueries[queryIndex] = false
+			log.Printf(
+				"[%d] quiet-hours resume scan found %d unseen items out of %d",
+				m.ID,
+				len(newItems),
+				len(items),
+			)
+		} else {
+			for _, item := range items {
+				if _, exists := localSeen[item.ID]; !exists {
+					newItems = append(newItems, item)
+				}
+				localSeen[item.ID] = now
+			}
 		}
 		if checks%100 == 0 {
 			cutoff := now.Add(-10 * time.Minute)
@@ -921,6 +944,18 @@ func splitIncomingItems(items []model.VintedItem, newMap map[int64]bool, initial
 	}
 
 	return newItems, nil
+}
+
+func initialQueryTracking(queryCount int, resumeAfterQuietHours bool) ([]bool, []bool) {
+	initialized := make([]bool, queryCount)
+	resumeQueries := make([]bool, queryCount)
+	if resumeAfterQuietHours {
+		for index := range initialized {
+			initialized[index] = true
+			resumeQueries[index] = true
+		}
+	}
+	return initialized, resumeQueries
 }
 
 func filterAntiKeywordItems(items []model.VintedItem, rawKeywords *string) ([]model.VintedItem, int) {

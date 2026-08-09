@@ -162,3 +162,14 @@ func TestMonitorQuietHoursInvalidConfigurationIsInactive(t *testing.T) {
 		t.Fatal("invalid timezone unexpectedly activated quiet hours")
 	}
 }
+
+func TestPrepareQuietHoursResumeSkipsOnlyStartupBehavior(t *testing.T) {
+	monitor := model.Monitor{}
+	prepareQuietHoursResume(&monitor)
+	if !monitor.SuppressStartupNotice {
+		t.Fatal("quiet-hours resume did not suppress the duplicate startup notice")
+	}
+	if !monitor.ResumeAfterQuietHours {
+		t.Fatal("quiet-hours resume did not enable immediate item notifications")
+	}
+}
