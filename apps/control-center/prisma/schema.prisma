@@ -50,14 +50,16 @@ model User {
   accounts                  Account[]
   sessions                  Session[]
 
-  monitors               monitors[]
-  proxy_groups           proxy_groups[]
-  seller_bans            seller_bans[]
-  telegram_connections   telegram_connections[]
-  telegram_connect_codes telegram_connect_codes[]
-  vinted_session         vinted_sessions?
-  audit_events           audit_events[]
-  alert_events           alert_events[]
+  monitors                 monitors[]
+  proxy_groups             proxy_groups[]
+  seller_bans              seller_bans[]
+  telegram_connections     telegram_connections[]
+  telegram_connect_codes   telegram_connect_codes[]
+  vinted_session           vinted_sessions?
+  audit_events             audit_events[]
+  alert_events             alert_events[]
+  monitor_runtime_sessions monitor_runtime_sessions[]
+  monitor_runtime_total    member_monitor_runtime_totals?
 
   @@index([name])
   @@index([createdAt])
@@ -118,23 +120,44 @@ model monitors {
   status                   String?   @default("active") @db.VarChar(50)
   created_at               DateTime? @default(now()) @db.Timestamp(6)
   demo_expires_at          DateTime? @db.Timestamp(6)
+  active_since             DateTime? @db.Timestamp(6)
+  runtime_total_seconds    BigInt    @default(0)
   items                    items[]
   discord_webhook          String?
   webhook_active           Boolean   @default(true)
   telegram_active          Boolean   @default(false)
   notifications_enabled    Boolean   @default(true)
 
-  proxy_group_id  Int?
-  proxy_source    String                     @default("server") @db.VarChar(20)
-  proxy_group     proxy_groups?              @relation(fields: [proxy_group_id], references: [id], onDelete: SetNull)
-  monitor_runs    monitor_runs[]
-  hourly_stats    monitor_run_hourly_stats[]
-  monitor_events  monitor_events[]
-  alert_events    alert_events[]
-  item_detections monitor_item_detections[]
+  proxy_group_id   Int?
+  proxy_source     String                     @default("server") @db.VarChar(20)
+  proxy_group      proxy_groups?              @relation(fields: [proxy_group_id], references: [id], onDelete: SetNull)
+  monitor_runs     monitor_runs[]
+  hourly_stats     monitor_run_hourly_stats[]
+  monitor_events   monitor_events[]
+  alert_events     alert_events[]
+  item_detections  monitor_item_detections[]
+  runtime_sessions monitor_runtime_sessions[]
 
   @@index([userId])
   @@index([status, userId])
+}
+
+model monitor_runtime_sessions {
+  id           BigInt    @id @default(autoincrement())
+  monitor_id   Int?
+  monitor      monitors? @relation(fields: [monitor_id], references: [id], onDelete: SetNull)
+  user_id      String
+  user         User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  proxy_source String    @db.VarChar(20)
+  started_at   DateTime  @db.Timestamp(6)
+  ended_at     DateTime? @db.Timestamp(6)
+}
+
+model member_monitor_runtime_totals {
+  user_id                String   @id
+  user                   User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  closed_runtime_seconds BigInt   @default(0)
+  updated_at             DateTime @updatedAt @db.Timestamp(6)
 }
 
 model free_proxies {

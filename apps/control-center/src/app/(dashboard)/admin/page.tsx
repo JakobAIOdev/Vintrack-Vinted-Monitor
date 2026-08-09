@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { AdminClient } from "./client";
 import { getFreeProxyAdminState } from "@/actions/admin";
 import {
+    DEFAULT_FREE_PROXY_ACTIVE_LIMIT,
     GLOBAL_MONITOR_LIMIT_SCOPE,
     getMonitorLimits,
     roleLimitScope,
@@ -60,7 +61,8 @@ export default async function AdminPage({
                 users: {},
                 freeProxyGlobal:
                     limits.get(GLOBAL_MONITOR_LIMIT_SCOPE)
-                        ?.free_proxy_active_limit ?? 5,
+                        ?.free_proxy_active_limit ??
+                    DEFAULT_FREE_PROXY_ACTIVE_LIMIT,
                 freeProxyRoles: Object.fromEntries(
                     roles.map((role) => [
                         role,

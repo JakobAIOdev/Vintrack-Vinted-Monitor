@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 export const GLOBAL_MONITOR_LIMIT_SCOPE = "global";
 export const ROLE_MONITOR_LIMIT_PREFIX = "role:";
 export const USER_MONITOR_LIMIT_PREFIX = "user:";
+export const DEFAULT_FREE_PROXY_ACTIVE_LIMIT: number | null = null;
 
 export type MonitorLimitRow = {
     scope: string;
