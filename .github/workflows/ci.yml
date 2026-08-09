@@ -14,9 +14,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      control_center: ${{ steps.filter.outputs.control_center }}
+      openapi: ${{ steps.filter.outputs.openapi }}
+      vinted_service: ${{ steps.filter.outputs.vinted_service }}
+      worker: ${{ steps.filter.outputs.worker }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 100
+
+      - name: Detect changed components
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          base: ${{ github.ref }}
+          filters: |
+            control_center:
+              - 'apps/control-center/**'
+              - '.github/workflows/ci.yml'
+            openapi:
+              - 'docs/openapi/**'
+              - '.github/workflows/ci.yml'
+            vinted_service:
+              - 'apps/vinted-service/**'
+              - '.github/workflows/ci.yml'
+            worker:
+              - 'apps/worker/**'
+              - '.github/workflows/ci.yml'
+
   openapi:
     name: OpenAPI
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.openapi == 'true'
 
     steps:
       - name: Checkout repository
@@ -30,9 +69,76 @@ jobs:
       - name: Lint OpenAPI specs
         run: npx --yes @redocly/cli@1.25.15 lint docs/openapi/vinted-service.yaml
 
-  control-center:
-    name: Control Center
+  control-center-build:
+    name: Control Center Build
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.control_center == 'true'
+
+    defaults:
+      run:
+        working-directory: apps/control-center
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/vintrack?schema=public
+      AUTH_SECRET: ci-test-secret
+      AUTH_DISCORD_ID: ci-discord-id
+      AUTH_DISCORD_SECRET: ci-discord-secret
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/control-center/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Build dashboard
+        run: npm run build
+
+      - name: Assemble standalone runtime
+        run: |
+          find .next/standalone -type f -name '.env*' -delete
+          cp -R .next/static .next/standalone/.next/
+          cp -R public .next/standalone/
+
+      - name: Upload standalone runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-center-runtime-${{ github.sha }}
+          path: apps/control-center/.next/standalone
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  control-center-e2e:
+    name: Control Center E2E (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+      - control-center-build
+    if: needs.changes.outputs.control_center == 'true'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: public
+            script: test:e2e
+          - suite: dashboard
+            script: test:e2e:dashboard
 
     services:
       postgres:
@@ -58,7 +164,9 @@ jobs:
       AUTH_SECRET: ci-test-secret
       AUTH_DISCORD_ID: ci-discord-id
       AUTH_DISCORD_SECRET: ci-discord-secret
+      AUTH_TRUST_HOST: true
       PLAYWRIGHT_CHANNEL: bundled
+      PLAYWRIGHT_USE_PRODUCTION_BUILD: true
 
     steps:
       - name: Checkout repository
@@ -80,35 +188,79 @@ jobs:
       - name: Apply database migrations
         run: npx prisma migrate deploy
 
-      - name: Run lint
-        run: npm run lint
+      - name: Download standalone runtime
+        uses: actions/download-artifact@v5
+        with:
+          name: control-center-runtime-${{ github.sha }}
+          path: apps/control-center/ci-runtime
 
-      - name: Build dashboard
-        run: npm run build
+      - name: Verify standalone runtime
+        run: |
+          test -f ci-runtime/server.js
+          test -d ci-runtime/.next/static
+          test -d ci-runtime/public
+          test -z "$(find ci-runtime -type f -name '.env*' -print -quit)"
 
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
 
-      - name: Run public e2e tests
-        run: npm run test:e2e
+      - name: Run ${{ matrix.suite }} e2e tests
+        run: npm run ${{ matrix.script }}
 
-      - name: Run dashboard feed e2e tests
-        run: npm run test:e2e:dashboard
+      - name: Upload Playwright diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-${{ matrix.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            apps/control-center/playwright-report
+            apps/control-center/test-results
+          if-no-files-found: ignore
+          retention-days: 7
 
-  go-tests:
-    name: Go Tests (${{ matrix.app }})
+  control-center:
+    name: Control Center
     runs-on: ubuntu-latest
+    needs:
+      - changes
+      - control-center-build
+      - control-center-e2e
+    if: always()
 
-    strategy:
-      fail-fast: false
-      matrix:
-        app:
-          - apps/worker
-          - apps/vinted-service
+    steps:
+      - name: Verify Control Center checks
+        env:
+          BUILD_RESULT: ${{ needs.control-center-build.result }}
+          CHANGED: ${{ needs.changes.outputs.control_center }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          E2E_RESULT: ${{ needs.control-center-e2e.result }}
+        run: |
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "Change detection failed with result: $CHANGES_RESULT"
+            exit 1
+          fi
+
+          if [ "$CHANGED" != "true" ]; then
+            echo "No Control Center changes detected."
+            exit 0
+          fi
+
+          if [ "$BUILD_RESULT" != "success" ] || [ "$E2E_RESULT" != "success" ]; then
+            echo "Control Center checks failed: build=$BUILD_RESULT e2e=$E2E_RESULT"
+            exit 1
+          fi
+
+          echo "Control Center build and e2e checks passed."
+
+  worker-tests:
+    name: Go Tests (apps/worker)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.worker == 'true'
 
     defaults:
       run:
-        working-directory: ${{ matrix.app }}
+        working-directory: apps/worker
 
     steps:
       - name: Checkout repository
@@ -117,9 +269,33 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: ${{ matrix.app }}/go.mod
+          go-version-file: apps/worker/go.mod
           cache: true
-          cache-dependency-path: ${{ matrix.app }}/go.sum
+          cache-dependency-path: apps/worker/go.sum
+
+      - name: Run tests
+        run: go test ./...
+
+  vinted-service-tests:
+    name: Go Tests (apps/vinted-service)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.vinted_service == 'true'
+
+    defaults:
+      run:
+        working-directory: apps/vinted-service
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/vinted-service/go.mod
+          cache: true
+          cache-dependency-path: apps/vinted-service/go.sum
 
       - name: Run tests
         run: go test ./...

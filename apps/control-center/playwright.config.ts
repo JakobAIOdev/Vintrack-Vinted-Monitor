@@ -5,6 +5,11 @@ const port = Number(process.env.PLAYWRIGHT_PORT ?? 3100);
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${port}`;
 const browserChannel =
     process.env.PLAYWRIGHT_CHANNEL === "bundled" ? undefined : "chrome";
+const useProductionBuild =
+    process.env.PLAYWRIGHT_USE_PRODUCTION_BUILD === "true";
+const webServerCommand = useProductionBuild
+    ? "node ci-runtime/server.js"
+    : `env -u FORCE_COLOR ./node_modules/.bin/next dev --hostname 127.0.0.1 --port ${port}`;
 
 if (process.env.E2E_SEED_DB === "true") {
     execFileSync("node", ["scripts/seed-e2e.mjs"], {
@@ -33,17 +38,23 @@ export default defineConfig({
     webServer: process.env.PLAYWRIGHT_BASE_URL
         ? undefined
         : {
-              command: `env -u FORCE_COLOR ./node_modules/.bin/next dev --hostname 127.0.0.1 --port ${port}`,
+              command: webServerCommand,
               url: baseURL,
               env: {
                   ...process.env,
-                  NEXT_DIST_DIR: `.next-e2e-${port}`,
+                  ...(useProductionBuild
+                      ? {
+                            HOSTNAME: "127.0.0.1",
+                            PORT: String(port),
+                        }
+                      : { NEXT_DIST_DIR: `.next-e2e-${port}` }),
                   E2E_TEST_MODE: process.env.E2E_TEST_MODE ?? "",
-                  E2E_TEST_USER_ID:
-                      process.env.E2E_TEST_USER_ID ?? "e2e-user",
+                  E2E_TEST_USER_ID: process.env.E2E_TEST_USER_ID ?? "e2e-user",
               },
               reuseExistingServer:
-                  !process.env.CI && process.env.E2E_TEST_MODE !== "true",
+                  !useProductionBuild &&
+                  !process.env.CI &&
+                  process.env.E2E_TEST_MODE !== "true",
               timeout: 120_000,
           },
     projects: [

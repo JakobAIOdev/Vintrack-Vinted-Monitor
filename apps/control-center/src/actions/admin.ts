@@ -862,7 +862,7 @@ async function loadAdminRuntimeInsights() {
                     ON totals.user_id = member.id
                 LEFT JOIN activity_7d activity ON activity.user_id = member.id
                 ORDER BY runtime.runtime_seconds_7d DESC, member.id ASC
-                LIMIT 10
+                LIMIT 5
             `,
             db.$queryRaw<{ median_seconds: number | null }[]>`
                 SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (
