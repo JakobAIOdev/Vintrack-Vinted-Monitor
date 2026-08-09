@@ -128,6 +128,49 @@ async function main() {
         },
     });
 
+    const limitUserId = "e2e-limit-user";
+    await db.user.upsert({
+        where: { id: limitUserId },
+        create: {
+            id: limitUserId,
+            name: "E2E Limit User",
+            email: "e2e-limit@vintrack.test",
+            role: "free",
+            monitor_onboarding_status: "completed",
+        },
+        update: {
+            name: "E2E Limit User",
+            email: "e2e-limit@vintrack.test",
+            role: "free",
+            monitor_onboarding_status: "completed",
+        },
+    });
+    await db.monitor_limits.deleteMany({
+        where: { scope: `user:${limitUserId}` },
+    });
+    for (const offset of [1, 2, 3]) {
+        const data = {
+            userId: limitUserId,
+            name: `E2E Free Limit ${offset}`,
+            query: `limit-${offset}`,
+            region: "de",
+            status: "active",
+            proxy_source: "free",
+            notifications_enabled: false,
+            webhook_active: false,
+            telegram_active: false,
+            created_at: new Date(`2026-01-0${offset}T12:00:00.000Z`),
+        };
+        await db.monitors.upsert({
+            where: { id: 990100 + offset },
+            create: {
+                id: 990100 + offset,
+                ...data,
+            },
+            update: data,
+        });
+    }
+
     for (const item of items) {
         await db.items.upsert({
             where: {

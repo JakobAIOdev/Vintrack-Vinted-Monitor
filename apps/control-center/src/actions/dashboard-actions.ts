@@ -6,7 +6,11 @@ import { revalidatePath } from "next/cache";
 import { isValidDiscordWebhook } from "@/lib/validation";
 import { monitorStatusTelegramText, sendTelegramMessage } from "@/lib/telegram";
 import { getTelegramConnection } from "@/lib/telegram-connection";
-import { getMonitorActivationState } from "@/lib/monitor-limits";
+import {
+    getMonitorActivationState,
+    monitorActivationErrorMessage,
+    withMonitorActivationLock,
+} from "@/lib/monitor-limits";
 import { getNextDemoMonitorExpiry } from "@/lib/demo-monitor";
 import { normalizeQueryDelayMs } from "@/lib/monitor-delay";
 import { normalizeQuietHours } from "@/lib/monitor-schedule";
@@ -56,7 +60,6 @@ async function sendTelegramStatusIfConfigured(
 export async function stopAllMonitors() {
     const session = await auth();
     if (!session?.user) throw new Error("Unauthorized");
-
     const monitorsToStop = await db.monitors.findMany({
         where: { userId: session.user.id, status: "active" },
     });
@@ -119,82 +122,95 @@ export async function startAllMonitors() {
     if (!session?.user?.id) throw new Error("Unauthorized");
     const userId = session.user.id;
 
-    const activationState = await getMonitorActivationState(userId);
-    const availableSlots =
-        activationState.activeLimit === null
-            ? null
-            : Math.max(
-                  activationState.activeLimit - activationState.activeCount,
-                  0,
-              );
+    const { activationState, monitorsToStart, demoExpirations, skippedCount } =
+        await withMonitorActivationLock(userId, async (tx) => {
+            const activationState = await getMonitorActivationState(
+                userId,
+                undefined,
+                tx,
+            );
+            const pausedMonitors = await tx.monitors.findMany({
+                where: { userId, status: "paused" },
+                orderBy: [{ created_at: "desc" }, { id: "desc" }],
+            });
 
-    if (availableSlots === 0) {
-        return {
-            success: true,
-            startedCount: 0,
-            skippedCount: await db.monitors.count({
-                where: { userId: session.user.id, status: "paused" },
-            }),
-            startedMonitorIds: [] as number[],
-            demoExpirations: {} as Record<number, string>,
-            activeLimit: activationState.activeLimit,
-            activeCount: activationState.activeCount,
-            message: `Active monitor limit reached (${activationState.activeCount}/${activationState.activeLimit}).`,
-        };
-    }
+            let activeSlots = activationState.activeSlots;
+            let freeProxySlots = activationState.freeProxyActiveSlots;
+            const monitorsToStart = pausedMonitors.filter((monitor) => {
+                if (activeSlots !== null && activeSlots <= 0) return false;
+                if (
+                    monitor.proxy_source === "free" &&
+                    freeProxySlots !== null &&
+                    freeProxySlots <= 0
+                ) {
+                    return false;
+                }
 
-    const monitorsToStart = await db.monitors.findMany({
-        where: { userId: session.user.id, status: "paused" },
-        orderBy: { created_at: "desc" },
-        ...(availableSlots === null ? {} : { take: availableSlots }),
-    });
+                if (activeSlots !== null) activeSlots -= 1;
+                if (
+                    monitor.proxy_source === "free" &&
+                    freeProxySlots !== null
+                ) {
+                    freeProxySlots -= 1;
+                }
+                return true;
+            });
+
+            const startedAt = new Date();
+            const demoExpirations = Object.fromEntries(
+                monitorsToStart
+                    .filter((monitor) => monitor.demo_expires_at)
+                    .map((monitor) => [
+                        monitor.id,
+                        getNextDemoMonitorExpiry(startedAt).toISOString(),
+                    ]),
+            );
+
+            for (const monitor of monitorsToStart) {
+                await tx.monitors.update({
+                    where: { id: monitor.id, userId },
+                    data: {
+                        status: "active",
+                        ...(monitor.demo_expires_at
+                            ? {
+                                  demo_expires_at: new Date(
+                                      demoExpirations[monitor.id],
+                                  ),
+                              }
+                            : {}),
+                    },
+                });
+            }
+
+            return {
+                activationState,
+                monitorsToStart,
+                demoExpirations,
+                skippedCount: pausedMonitors.length - monitorsToStart.length,
+            };
+        });
 
     if (monitorsToStart.length === 0) {
+        const freeLimitOnly =
+            !activationState.activeLimitReached &&
+            activationState.freeProxyActiveSlots === 0 &&
+            skippedCount > 0;
         return {
             success: true,
             startedCount: 0,
-            skippedCount: 0,
+            skippedCount,
             startedMonitorIds: [] as number[],
-            demoExpirations: {} as Record<number, string>,
+            demoExpirations,
             activeLimit: activationState.activeLimit,
             activeCount: activationState.activeCount,
-            message: "No paused monitors to start.",
+            message:
+                skippedCount === 0
+                    ? "No paused monitors to start."
+                    : freeLimitOnly
+                      ? `Free proxy monitor limit reached (${activationState.freeProxyActiveCount}/${activationState.freeProxyActiveLimit}).`
+                      : `Active monitor limit reached (${activationState.activeCount}/${activationState.activeLimit}).`,
         };
     }
-
-    const startedAt = new Date();
-    const demoExpirations = Object.fromEntries(
-        monitorsToStart
-            .filter((monitor) => monitor.demo_expires_at)
-            .map((monitor) => [
-                monitor.id,
-                getNextDemoMonitorExpiry(startedAt).toISOString(),
-            ]),
-    );
-    await db.$transaction(
-        monitorsToStart.map((monitor) =>
-            db.monitors.update({
-                where: { id: monitor.id, userId },
-                data: {
-                    status: "active",
-                    ...(monitor.demo_expires_at
-                        ? {
-                              demo_expires_at: new Date(
-                                  demoExpirations[monitor.id],
-                              ),
-                          }
-                        : {}),
-                },
-            }),
-        ),
-    );
-
-    const skippedCount =
-        availableSlots === null
-            ? 0
-            : await db.monitors.count({
-                  where: { userId: session.user.id, status: "paused" },
-              });
 
     Promise.all(
         monitorsToStart.map(async (monitor) => {
@@ -251,7 +267,7 @@ export async function startAllMonitors() {
         activeCount: activationState.activeCount + monitorsToStart.length,
         message:
             skippedCount > 0
-                ? `Started ${monitorsToStart.length} monitor${monitorsToStart.length === 1 ? "" : "s"}. ${skippedCount} skipped because of the active monitor limit.`
+                ? `Started ${monitorsToStart.length} monitor${monitorsToStart.length === 1 ? "" : "s"}. ${skippedCount} skipped because of monitor limits.`
                 : `Started ${monitorsToStart.length} monitor${monitorsToStart.length === 1 ? "" : "s"}.`,
     };
 }
@@ -259,33 +275,41 @@ export async function startAllMonitors() {
 export async function toggleMonitor(id: number, currentStatus: string) {
     const session = await auth();
     if (!session?.user) throw new Error("Unauthorized");
+    const userId = session.user.id;
 
     const newStatus = currentStatus === "active" ? "paused" : "active";
-    const existing = await db.monitors.findFirst({
-        where: { id, userId: session.user.id },
-        select: { demo_expires_at: true },
-    });
-    if (!existing) throw new Error("Monitor not found");
+    const monitor = await withMonitorActivationLock(userId, async (tx) => {
+        const existing = await tx.monitors.findFirst({
+            where: { id, userId },
+            select: { demo_expires_at: true, proxy_source: true },
+        });
+        if (!existing) throw new Error("Monitor not found");
 
-    if (newStatus === "active") {
-        const activationState = await getMonitorActivationState(
-            session.user.id,
-        );
-        if (!activationState.canActivate) {
-            throw new Error(
-                `Active monitor limit reached (${activationState.activeCount}/${activationState.activeLimit}). Pause another monitor before resuming this one.`,
+        if (newStatus === "active") {
+            const activationState = await getMonitorActivationState(
+                userId,
+                existing.proxy_source,
+                tx,
             );
+            if (!activationState.canActivate) {
+                throw new Error(
+                    monitorActivationErrorMessage(
+                        activationState,
+                        existing.proxy_source,
+                    ),
+                );
+            }
         }
-    }
 
-    const monitor = await db.monitors.update({
-        where: { id: id, userId: session.user.id },
-        data: {
-            status: newStatus,
-            ...(newStatus === "active" && existing.demo_expires_at
-                ? { demo_expires_at: getNextDemoMonitorExpiry() }
-                : {}),
-        },
+        return tx.monitors.update({
+            where: { id: id, userId },
+            data: {
+                status: newStatus,
+                ...(newStatus === "active" && existing.demo_expires_at
+                    ? { demo_expires_at: getNextDemoMonitorExpiry() }
+                    : {}),
+            },
+        });
     });
 
     if (

@@ -48,14 +48,27 @@ export default async function AdminPage({
             serverProxies={serverProxyRows[0]?.value ?? ""}
             freeProxyState={freeProxyState}
             monitorLimits={{
-                global: limits.get(GLOBAL_MONITOR_LIMIT_SCOPE) ?? null,
+                global:
+                    limits.get(GLOBAL_MONITOR_LIMIT_SCOPE)?.active_limit ??
+                    null,
                 roles: Object.fromEntries(
                     roles.map((role) => [
                         role,
-                        limits.get(roleLimitScope(role)) ?? null,
+                        limits.get(roleLimitScope(role))?.active_limit ?? null,
                     ]),
                 ),
                 users: {},
+                freeProxyGlobal:
+                    limits.get(GLOBAL_MONITOR_LIMIT_SCOPE)
+                        ?.free_proxy_active_limit ?? 5,
+                freeProxyRoles: Object.fromEntries(
+                    roles.map((role) => [
+                        role,
+                        limits.get(roleLimitScope(role))
+                            ?.free_proxy_active_limit ?? null,
+                    ]),
+                ),
+                freeProxyUsers: {},
             }}
         />
     );

@@ -64,10 +64,11 @@ model User {
 }
 
 model monitor_limits {
-  scope        String   @id @db.VarChar(255)
-  active_limit Int?
-  created_at   DateTime @default(now()) @db.Timestamp(6)
-  updated_at   DateTime @updatedAt @db.Timestamp(6)
+  scope                   String   @id @db.VarChar(255)
+  active_limit            Int?
+  free_proxy_active_limit Int?
+  created_at              DateTime @default(now()) @db.Timestamp(6)
+  updated_at              DateTime @updatedAt @db.Timestamp(6)
 }
 
 model app_settings {

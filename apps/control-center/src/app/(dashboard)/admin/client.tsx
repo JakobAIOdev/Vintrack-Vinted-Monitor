@@ -54,9 +54,12 @@ import {
 import { Separator } from "@/components/ui/separator";
 import {
     setGlobalActiveMonitorLimit,
+    setGlobalFreeProxyMonitorLimit,
     setRoleActiveMonitorLimit,
+    setRoleFreeProxyMonitorLimit,
     setUserRole,
     setUserActiveMonitorLimit,
+    setUserFreeProxyMonitorLimit,
     getAdminActiveMonitors,
     getAdminMemberInsights,
     getAdminUserMetricsState,
@@ -89,6 +92,7 @@ type UserMonitor = {
     discord_webhook: string | null;
     webhook_active: boolean;
     telegram_active: boolean;
+    proxy_source: string;
     proxy_group: { name: string } | null;
     _count: { items: number };
 };
@@ -99,6 +103,7 @@ type ActiveMonitor = Omit<UserMonitor, "discord_webhook"> & {
 
 type AdminUserMetrics = {
     runningMonitors: number;
+    runningFreeProxyMonitors: number;
     pausedMonitors: number;
     totalItems: number;
     newItems24h: number;
@@ -181,6 +186,9 @@ type MonitorLimits = {
     global: number | null;
     roles: Record<string, number | null>;
     users: Record<string, number | null>;
+    freeProxyGlobal: number | null;
+    freeProxyRoles: Record<string, number | null>;
+    freeProxyUsers: Record<string, number | null>;
 };
 
 type FreeProxyRow = {
@@ -795,6 +803,14 @@ function formatLimit(value: number | null) {
     return value === null ? "Unlimited" : `${value} active`;
 }
 
+function monitorProxyLabel(monitor: {
+    proxy_source: string;
+    proxy_group: { name: string } | null;
+}) {
+    if (monitor.proxy_source === "free") return "Free Proxy Pool";
+    return monitor.proxy_group?.name ?? "Server Proxies";
+}
+
 function normalizeTab(value: string | null | undefined): AdminTab {
     return ADMIN_TABS.some((tab) => tab.value === value)
         ? (value as AdminTab)
@@ -900,6 +916,22 @@ export function AdminClient({
         ),
     );
     const [userLimitInput, setUserLimitInput] = useState("");
+    const [globalFreeProxyLimitInput, setGlobalFreeProxyLimitInput] = useState(
+        limitInputValue(initialMonitorLimits.freeProxyGlobal),
+    );
+    const [roleFreeProxyLimitInputs, setRoleFreeProxyLimitInputs] = useState<
+        Record<string, string>
+    >(
+        Object.fromEntries(
+            LIMIT_ROLES.map((role) => [
+                role.value,
+                limitInputValue(
+                    initialMonitorLimits.freeProxyRoles[role.value],
+                ),
+            ]),
+        ),
+    );
+    const [userFreeProxyLimitInput, setUserFreeProxyLimitInput] = useState("");
     const [serverProxies, setServerProxies] = useState(initialServerProxies);
     const [isSavingServerProxies, setIsSavingServerProxies] = useState(false);
     const [freeProxyState, setFreeProxyState] = useState(initialFreeProxyState);
@@ -1101,6 +1133,7 @@ export function AdminClient({
                 setMonitorLimits((current) => ({
                     ...current,
                     users: state.userLimits,
+                    freeProxyUsers: state.userFreeProxyLimits,
                 }));
                 usersLoadedRef.current = true;
                 setUsersLoaded(true);
@@ -1238,7 +1271,7 @@ export function AdminClient({
                           monitor.query,
                           monitor.region,
                           getRegionLabel(monitor.region),
-                          monitor.proxy_group?.name ?? "Server Proxies",
+                          monitorProxyLabel(monitor),
                       ]
                           .join(" ")
                           .toLowerCase()
@@ -1354,6 +1387,27 @@ export function AdminClient({
 
         return { value: null, source: "Unlimited" };
     };
+    const getEffectiveFreeProxyLimit = (user: UserRow) => {
+        if (user.role === "admin") {
+            return { value: null, source: "Admin" };
+        }
+
+        const userLimit = monitorLimits.freeProxyUsers[user.id];
+        if (userLimit !== null && userLimit !== undefined) {
+            return { value: userLimit, source: "User" };
+        }
+
+        const roleLimit = monitorLimits.freeProxyRoles[user.role];
+        if (roleLimit !== null && roleLimit !== undefined) {
+            return { value: roleLimit, source: "Role" };
+        }
+
+        if (monitorLimits.freeProxyGlobal !== null) {
+            return { value: monitorLimits.freeProxyGlobal, source: "Global" };
+        }
+
+        return { value: null, source: "Unlimited" };
+    };
     const limitedUsers = users.filter((user) => {
         const limit = getEffectiveLimit(user);
         return (
@@ -1405,6 +1459,9 @@ export function AdminClient({
         setSelected(user);
         setPendingRole(user.role);
         setUserLimitInput(limitInputValue(monitorLimits.users[user.id]));
+        setUserFreeProxyLimitInput(
+            limitInputValue(monitorLimits.freeProxyUsers[user.id]),
+        );
         setIsDetailsOpen(true);
 
         hydrateUserDetails(user)
@@ -1445,6 +1502,18 @@ export function AdminClient({
 
         if (stoppedCount === 0) return user;
 
+        const stoppedFreeProxyCount =
+            monitorId === null
+                ? user.metrics.runningFreeProxyMonitors
+                : [...user.activeMonitors, ...user.monitors].some(
+                        (monitor) =>
+                            monitor.id === monitorId &&
+                            monitor.status === "active" &&
+                            monitor.proxy_source === "free",
+                    )
+                  ? 1
+                  : 0;
+
         return {
             ...user,
             monitors: user.monitors.map((monitor) =>
@@ -1461,6 +1530,11 @@ export function AdminClient({
                 runningMonitors: Math.max(
                     0,
                     user.metrics.runningMonitors - stoppedCount,
+                ),
+                runningFreeProxyMonitors: Math.max(
+                    0,
+                    user.metrics.runningFreeProxyMonitors -
+                        stoppedFreeProxyCount,
                 ),
                 pausedMonitors: user.metrics.pausedMonitors + stoppedCount,
             },
@@ -1484,23 +1558,32 @@ export function AdminClient({
         );
         setIsOpen(false);
 
-        toast.promise(setUserRole(selected.id, pendingRole), {
-            loading: "Updating role...",
-            success: `${selected.name ?? "User"} is now ${pendingRole}`,
-            error: () => {
-                setUsers((prev) =>
-                    prev.map((u) =>
-                        u.id === selected.id ? { ...u, role: prevRole } : u,
-                    ),
-                );
-                setSelected((prev) =>
-                    prev?.id === selected.id
-                        ? { ...prev, role: prevRole }
-                        : prev,
-                );
-                return "Failed to update role";
+        toast.promise(
+            setUserRole(selected.id, pendingRole).then((result) => {
+                applyAutomaticallyPausedMonitors(result.pausedMonitorIds);
+                return result;
+            }),
+            {
+                loading: "Updating role...",
+                success: (result) =>
+                    result.pausedCount > 0
+                        ? `${selected.name ?? "User"} is now ${pendingRole} · ${result.pausedCount} paused`
+                        : `${selected.name ?? "User"} is now ${pendingRole}`,
+                error: () => {
+                    setUsers((prev) =>
+                        prev.map((u) =>
+                            u.id === selected.id ? { ...u, role: prevRole } : u,
+                        ),
+                    );
+                    setSelected((prev) =>
+                        prev?.id === selected.id
+                            ? { ...prev, role: prevRole }
+                            : prev,
+                    );
+                    return "Failed to update role";
+                },
             },
-        });
+        );
     };
 
     const handleSaveGlobalLimit = async () => {
@@ -1520,6 +1603,161 @@ export function AdminClient({
                 error instanceof Error
                     ? error.message
                     : "Failed to save global monitor limit",
+            );
+        }
+    };
+
+    const applyAutomaticallyPausedMonitors = (monitorIds: number[]) => {
+        if (monitorIds.length === 0) return;
+        const pausedIds = new Set(monitorIds);
+        const updateUser = (user: UserRow) => {
+            const knownMonitors = [...user.monitors, ...user.activeMonitors];
+            const pausedForUser = new Map(
+                knownMonitors
+                    .filter((monitor) => pausedIds.has(monitor.id))
+                    .map((monitor) => [monitor.id, monitor]),
+            );
+            if (pausedForUser.size === 0) return user;
+
+            const pausedFreeCount = Array.from(pausedForUser.values()).filter(
+                (monitor) => monitor.proxy_source === "free",
+            ).length;
+            return {
+                ...user,
+                monitors: user.monitors.map((monitor) =>
+                    pausedIds.has(monitor.id)
+                        ? { ...monitor, status: "paused" }
+                        : monitor,
+                ),
+                activeMonitors: user.activeMonitors.filter(
+                    (monitor) => !pausedIds.has(monitor.id),
+                ),
+                metrics: {
+                    ...user.metrics,
+                    runningMonitors: Math.max(
+                        user.metrics.runningMonitors - pausedForUser.size,
+                        0,
+                    ),
+                    runningFreeProxyMonitors: Math.max(
+                        user.metrics.runningFreeProxyMonitors - pausedFreeCount,
+                        0,
+                    ),
+                    pausedMonitors:
+                        user.metrics.pausedMonitors + pausedForUser.size,
+                },
+            };
+        };
+
+        setUsers((current) => current.map(updateUser));
+        setSelected((current) => (current ? updateUser(current) : current));
+    };
+
+    const handleSaveGlobalFreeProxyLimit = async () => {
+        const previous = monitorLimits.freeProxyGlobal;
+        const next = globalFreeProxyLimitInput.trim()
+            ? Number(globalFreeProxyLimitInput.trim())
+            : null;
+        setMonitorLimits((current) => ({
+            ...current,
+            freeProxyGlobal: next,
+        }));
+        try {
+            const result = await setGlobalFreeProxyMonitorLimit(
+                globalFreeProxyLimitInput,
+            );
+            applyAutomaticallyPausedMonitors(result.pausedMonitorIds);
+            toast.success(
+                result.pausedCount > 0
+                    ? `Free proxy limit saved · ${result.pausedCount} monitor${result.pausedCount === 1 ? "" : "s"} paused`
+                    : "Global free proxy monitor limit saved",
+            );
+        } catch (error) {
+            setMonitorLimits((current) => ({
+                ...current,
+                freeProxyGlobal: previous,
+            }));
+            setGlobalFreeProxyLimitInput(limitInputValue(previous));
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save global free proxy limit",
+            );
+        }
+    };
+
+    const handleSaveRoleFreeProxyLimit = async (role: string) => {
+        const previous = monitorLimits.freeProxyRoles[role] ?? null;
+        const input = roleFreeProxyLimitInputs[role] ?? "";
+        const next = input.trim() ? Number(input.trim()) : null;
+        setMonitorLimits((current) => ({
+            ...current,
+            freeProxyRoles: { ...current.freeProxyRoles, [role]: next },
+        }));
+        try {
+            const result = await setRoleFreeProxyMonitorLimit(role, input);
+            applyAutomaticallyPausedMonitors(result.pausedMonitorIds);
+            toast.success(
+                result.pausedCount > 0
+                    ? `${role} free proxy limit saved · ${result.pausedCount} paused`
+                    : `${role} free proxy monitor limit saved`,
+            );
+        } catch (error) {
+            setMonitorLimits((current) => ({
+                ...current,
+                freeProxyRoles: {
+                    ...current.freeProxyRoles,
+                    [role]: previous,
+                },
+            }));
+            setRoleFreeProxyLimitInputs((current) => ({
+                ...current,
+                [role]: limitInputValue(previous),
+            }));
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save role free proxy limit",
+            );
+        }
+    };
+
+    const handleSaveUserFreeProxyLimit = async () => {
+        if (!selected) return;
+        const previous = monitorLimits.freeProxyUsers[selected.id] ?? null;
+        const next = userFreeProxyLimitInput.trim()
+            ? Number(userFreeProxyLimitInput.trim())
+            : null;
+        setMonitorLimits((current) => ({
+            ...current,
+            freeProxyUsers: {
+                ...current.freeProxyUsers,
+                [selected.id]: next,
+            },
+        }));
+        try {
+            const result = await setUserFreeProxyMonitorLimit(
+                selected.id,
+                userFreeProxyLimitInput,
+            );
+            applyAutomaticallyPausedMonitors(result.pausedMonitorIds);
+            toast.success(
+                result.pausedCount > 0
+                    ? `Free proxy limit saved · ${result.pausedCount} paused`
+                    : "User free proxy monitor limit saved",
+            );
+        } catch (error) {
+            setMonitorLimits((current) => ({
+                ...current,
+                freeProxyUsers: {
+                    ...current.freeProxyUsers,
+                    [selected.id]: previous,
+                },
+            }));
+            setUserFreeProxyLimitInput(limitInputValue(previous));
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save user free proxy limit",
             );
         }
     };
@@ -1867,9 +2105,18 @@ export function AdminClient({
         selected && selected.monitors.length > 0
             ? selectedActiveMonitors.length
             : (selected?.metrics.runningMonitors ?? 0);
+    const selectedRunningFreeProxyMonitors =
+        selected && selected.monitors.length > 0
+            ? selectedActiveMonitors.filter(
+                  (monitor) => monitor.proxy_source === "free",
+              ).length
+            : (selected?.metrics.runningFreeProxyMonitors ?? 0);
     const selectedItems = selected?.metrics.totalItems ?? 0;
     const selectedEffectiveLimit = selected
         ? getEffectiveLimit(selected)
+        : { value: null, source: "Unlimited" };
+    const selectedEffectiveFreeProxyLimit = selected
+        ? getEffectiveFreeProxyLimit(selected)
         : { value: null, source: "Unlimited" };
     const isLoadingSelectedDetails =
         selected !== null && loadingUserDetailsId === selected.id;
@@ -3078,10 +3325,9 @@ export function AdminClient({
                                                                                 )}
                                                                             </p>
                                                                             <p className="truncate">
-                                                                                {monitor
-                                                                                    .proxy_group
-                                                                                    ?.name ??
-                                                                                    "Server Proxies"}
+                                                                                {monitorProxyLabel(
+                                                                                    monitor,
+                                                                                )}
                                                                             </p>
                                                                         </div>
 
@@ -3609,6 +3855,97 @@ export function AdminClient({
                                             variant="outline"
                                             onClick={() =>
                                                 handleSaveRoleLimit(role.value)
+                                            }
+                                        >
+                                            Save
+                                        </Button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="border-border/60 bg-card rounded-lg border p-5">
+                        <div className="mb-4 flex items-center justify-between gap-3">
+                            <div>
+                                <p className="text-foreground text-sm font-semibold">
+                                    Running Free Proxy Monitor Limits
+                                </p>
+                                <p className="text-muted-foreground text-xs">
+                                    Empty role values inherit the global
+                                    default. Lowering a limit pauses the newest
+                                    excess Free Proxy Pool monitors
+                                    automatically.
+                                </p>
+                            </div>
+                            <div className="bg-primary/10 text-primary rounded-lg p-2">
+                                <Gauge className="h-4 w-4" />
+                            </div>
+                        </div>
+
+                        <div className="grid gap-3 lg:grid-cols-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="global-free-proxy-monitor-limit">
+                                    Global default
+                                </Label>
+                                <div className="flex gap-2">
+                                    <Input
+                                        id="global-free-proxy-monitor-limit"
+                                        type="number"
+                                        min={0}
+                                        value={globalFreeProxyLimitInput}
+                                        onChange={(event) =>
+                                            setGlobalFreeProxyLimitInput(
+                                                event.target.value,
+                                            )
+                                        }
+                                        placeholder="Unlimited"
+                                    />
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={handleSaveGlobalFreeProxyLimit}
+                                    >
+                                        Save
+                                    </Button>
+                                </div>
+                            </div>
+
+                            {LIMIT_ROLES.map((role) => (
+                                <div key={role.value} className="space-y-2">
+                                    <Label
+                                        htmlFor={`role-free-proxy-monitor-limit-${role.value}`}
+                                    >
+                                        {role.label}
+                                    </Label>
+                                    <div className="flex gap-2">
+                                        <Input
+                                            id={`role-free-proxy-monitor-limit-${role.value}`}
+                                            type="number"
+                                            min={0}
+                                            value={
+                                                roleFreeProxyLimitInputs[
+                                                    role.value
+                                                ] ?? ""
+                                            }
+                                            onChange={(event) =>
+                                                setRoleFreeProxyLimitInputs(
+                                                    (current) => ({
+                                                        ...current,
+                                                        [role.value]:
+                                                            event.target.value,
+                                                    }),
+                                                )
+                                            }
+                                            placeholder="Global"
+                                        />
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={() =>
+                                                handleSaveRoleFreeProxyLimit(
+                                                    role.value,
+                                                )
                                             }
                                         >
                                             Save
@@ -5095,6 +5432,94 @@ export function AdminClient({
                                 </div>
                             </div>
 
+                            <div className="border-border/60 bg-card rounded-lg border px-4 py-4 sm:px-5">
+                                <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(260px,320px)] md:items-center">
+                                    <div className="min-w-0 space-y-3">
+                                        <div>
+                                            <p className="text-foreground text-sm font-semibold">
+                                                Running Free Proxy Monitor Limit
+                                            </p>
+                                            <p className="text-muted-foreground mt-1 text-xs">
+                                                Empty override uses the role or
+                                                global fallback. Lower limits
+                                                pause the newest excess
+                                                monitors.
+                                            </p>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2">
+                                            <Badge
+                                                variant="outline"
+                                                className="rounded-md px-2 py-1 text-[11px]"
+                                            >
+                                                Effective:{" "}
+                                                {formatLimit(
+                                                    selectedEffectiveFreeProxyLimit.value,
+                                                )}
+                                            </Badge>
+                                            <Badge
+                                                variant="secondary"
+                                                className="rounded-md px-2 py-1 text-[11px]"
+                                            >
+                                                Source:{" "}
+                                                {
+                                                    selectedEffectiveFreeProxyLimit.source
+                                                }
+                                            </Badge>
+                                            <Badge
+                                                variant="secondary"
+                                                className="rounded-md px-2 py-1 text-[11px]"
+                                            >
+                                                Running Free Pool:{" "}
+                                                {
+                                                    selectedRunningFreeProxyMonitors
+                                                }
+                                            </Badge>
+                                        </div>
+                                    </div>
+                                    {selected.role === "admin" ? (
+                                        <div className="border-border/60 bg-muted/30 text-muted-foreground rounded-lg border px-3 py-2 text-xs">
+                                            Admin accounts are always unlimited.
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-2">
+                                            <Label
+                                                htmlFor="user-free-proxy-monitor-limit"
+                                                className="text-xs"
+                                            >
+                                                User override
+                                            </Label>
+                                            <div className="flex gap-2">
+                                                <Input
+                                                    id="user-free-proxy-monitor-limit"
+                                                    type="number"
+                                                    min={0}
+                                                    className="h-10"
+                                                    value={
+                                                        userFreeProxyLimitInput
+                                                    }
+                                                    onChange={(event) =>
+                                                        setUserFreeProxyLimitInput(
+                                                            event.target.value,
+                                                        )
+                                                    }
+                                                    placeholder="Role/global"
+                                                />
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    className="h-10 shrink-0 px-4"
+                                                    onClick={
+                                                        handleSaveUserFreeProxyLimit
+                                                    }
+                                                >
+                                                    Save
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
                             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                                 <Card className="py-0">
                                     <CardHeader className="pt-3 pb-2">
@@ -5299,10 +5724,9 @@ export function AdminClient({
                                                                 items
                                                             </span>
                                                             <span>
-                                                                {monitor
-                                                                    .proxy_group
-                                                                    ?.name ??
-                                                                    "Server Proxies"}
+                                                                {monitorProxyLabel(
+                                                                    monitor,
+                                                                )}
                                                             </span>
                                                             {monitor.price_max ? (
                                                                 <span>
@@ -5446,9 +5870,9 @@ export function AdminClient({
                                                             ms delay
                                                         </span>
                                                         <span>
-                                                            {monitor.proxy_group
-                                                                ?.name ??
-                                                                "Server Proxies"}
+                                                            {monitorProxyLabel(
+                                                                monitor,
+                                                            )}
                                                         </span>
                                                         {monitor.price_min ||
                                                         monitor.price_max ? (

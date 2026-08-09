@@ -399,7 +399,10 @@ export default function EditMonitorPage() {
 
         await toast.promise(savePromise, {
             loading: "Saving changes...",
-            success: "Saved successfully",
+            success: (result) =>
+                result.pausedByFreeProxyLimit
+                    ? "Saved and paused because your Free Proxy Pool monitor limit is reached"
+                    : "Saved successfully",
             error: (error) =>
                 error instanceof Error
                     ? error.message

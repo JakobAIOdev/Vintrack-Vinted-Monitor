@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { getFreeProxyPoolHealth } from "@/lib/free-proxy-health";
+import { getMonitorActivationState } from "@/lib/monitor-limits";
 
 export async function GET() {
     const session = await auth();
@@ -9,7 +10,7 @@ export async function GET() {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const [groups, user, freeProxy] = await Promise.all([
+    const [groups, user, freeProxy, freeProxyUsage] = await Promise.all([
         db.proxy_groups.findMany({
             where: { userId: session.user.id },
             select: {
@@ -24,6 +25,7 @@ export async function GET() {
             select: { role: true },
         }),
         getFreeProxyPoolHealth(),
+        getMonitorActivationState(session.user.id, "free"),
     ]);
 
     return NextResponse.json({
@@ -33,6 +35,15 @@ export async function GET() {
             name: g.name,
             proxyCount: g.proxies.split("\n").filter((l) => l.trim()).length,
         })),
-        freeProxy,
+        freeProxy: {
+            ...freeProxy,
+            usage: {
+                activeCount: freeProxyUsage.freeProxyActiveCount,
+                activeLimit: freeProxyUsage.freeProxyActiveLimit,
+                activeSlots: freeProxyUsage.freeProxyActiveSlots,
+                limitSource: freeProxyUsage.freeProxyLimitSource,
+                limitReached: freeProxyUsage.freeProxyLimitReached,
+            },
+        },
     });
 }

@@ -1,6 +1,61 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("admin running monitors", () => {
+    test("shows global and role Free Proxy Pool monitor limits", async ({
+        page,
+    }) => {
+        await page.goto("/admin?tab=roles");
+
+        await expect(page.getByRole("tab", { name: "Roles" })).toHaveAttribute(
+            "aria-selected",
+            "true",
+        );
+        await expect(
+            page.getByText("Running Free Proxy Monitor Limits"),
+        ).toBeVisible();
+        await expect(page.getByLabel("Global default").last()).toHaveValue("5");
+        await expect(page.getByLabel("Free").last()).toHaveAttribute(
+            "placeholder",
+            "Global",
+        );
+        await expect(page.getByLabel("Premium").last()).toHaveAttribute(
+            "placeholder",
+            "Global",
+        );
+    });
+
+    test("pauses the newest excess free proxy monitors for a user override", async ({
+        page,
+        isMobile,
+    }) => {
+        test.skip(
+            isMobile,
+            "The shared database mutation runs once on desktop",
+        );
+        await page.goto("/admin?tab=users");
+        const search = page.getByPlaceholder(
+            "Search by name, email or role...",
+        );
+        await search.fill("E2E Limit User");
+        await page.getByRole("row", { name: /E2E Limit User/ }).click();
+
+        const input = page.locator("#user-free-proxy-monitor-limit");
+        await expect(input).toBeVisible();
+        await input.fill("1");
+        await input
+            .locator("xpath=..")
+            .getByRole("button", { name: "Save" })
+            .click();
+
+        await expect(page.getByText("Running Free Pool: 1")).toBeVisible();
+        const runningSection = page
+            .getByRole("dialog", { name: "User Details" })
+            .getByText("Running Monitors", { exact: true })
+            .locator("xpath=../../..");
+        await expect(runningSection).toContainText("E2E Free Limit 1");
+        await expect(runningSection).not.toContainText("E2E Free Limit 3");
+    });
+
     test("groups active monitors by member and filters the list", async ({
         page,
     }) => {

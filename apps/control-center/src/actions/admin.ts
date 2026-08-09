@@ -7,13 +7,17 @@ import { revalidatePath, unstable_cache } from "next/cache";
 import { monitorStatusTelegramText, sendTelegramMessage } from "@/lib/telegram";
 import { getTelegramConnection } from "@/lib/telegram-connection";
 import {
+    getMonitorActivationState,
     GLOBAL_MONITOR_LIMIT_SCOPE,
     normalizeMonitorLimitInput,
     roleLimitScope,
+    setFreeProxyMonitorLimit,
     setMonitorLimit,
     USER_MONITOR_LIMIT_PREFIX,
     userLimitScope,
+    withMonitorActivationLock,
 } from "@/lib/monitor-limits";
+import { logAuditEvent } from "@/lib/audit";
 
 const SERVER_PROXIES_SETTING_KEY = "server_proxies";
 const FREE_PROXY_ENABLED_KEY = "free_proxy_enabled";
@@ -244,6 +248,7 @@ type ParsedProxy = {
 type AdminMetricCountRow = {
     userId: string;
     running_monitors?: bigint;
+    running_free_proxy_monitors?: bigint;
     paused_monitors?: bigint;
     new_items_24h?: bigint;
     checks_24h?: bigint;
@@ -256,6 +261,7 @@ type AdminMetricCountRow = {
 
 type AdminUserMetrics = {
     runningMonitors: number;
+    runningFreeProxyMonitors: number;
     pausedMonitors: number;
     totalItems: number;
     newItems24h: number;
@@ -302,6 +308,7 @@ type AdminDemoInsightsRow = {
 function emptyAdminUserMetrics(): AdminUserMetrics {
     return {
         runningMonitors: 0,
+        runningFreeProxyMonitors: 0,
         pausedMonitors: 0,
         totalItems: 0,
         newItems24h: 0,
@@ -322,6 +329,9 @@ async function loadAdminUserMetrics() {
             SELECT
                 "userId",
                 COUNT(*) FILTER (WHERE status = 'active')::bigint AS running_monitors,
+                COUNT(*) FILTER (
+                    WHERE status = 'active' AND proxy_source = 'free'
+                )::bigint AS running_free_proxy_monitors,
                 COUNT(*) FILTER (WHERE status IS DISTINCT FROM 'active')::bigint AS paused_monitors
             FROM monitors
             GROUP BY "userId"
@@ -354,6 +364,7 @@ async function loadAdminUserMetrics() {
         SELECT
             monitor_totals."userId",
             monitor_totals.running_monitors,
+            monitor_totals.running_free_proxy_monitors,
             monitor_totals.paused_monitors,
             COALESCE(run_totals.checks_24h, 0)::bigint AS checks_24h,
             COALESCE(run_totals.successful_checks_24h, 0)::bigint
@@ -375,6 +386,9 @@ async function loadAdminUserMetrics() {
     for (const row of rows) {
         const current = metrics.get(row.userId) ?? emptyAdminUserMetrics();
         current.runningMonitors = Number(row.running_monitors ?? 0);
+        current.runningFreeProxyMonitors = Number(
+            row.running_free_proxy_monitors ?? 0,
+        );
         current.pausedMonitors = Number(row.paused_monitors ?? 0);
         const checks = Number(row.checks_24h ?? 0);
         const successful = Number(row.successful_checks_24h ?? 0);
@@ -408,7 +422,7 @@ async function loadAdminUserMetrics() {
 
 const getCachedAdminUserMetrics = unstable_cache(
     loadAdminUserMetrics,
-    ["admin-user-metrics-v5"],
+    ["admin-user-metrics-v6"],
     { revalidate: 30 },
 );
 
@@ -1827,7 +1841,11 @@ export async function getAdminUsersState() {
         }),
         db.monitor_limits.findMany({
             where: { scope: { startsWith: USER_MONITOR_LIMIT_PREFIX } },
-            select: { scope: true, active_limit: true },
+            select: {
+                scope: true,
+                active_limit: true,
+                free_proxy_active_limit: true,
+            },
         }),
     ]);
 
@@ -1842,6 +1860,12 @@ export async function getAdminUsersState() {
             userLimitRows.map((row) => [
                 row.scope.slice(USER_MONITOR_LIMIT_PREFIX.length),
                 row.active_limit,
+            ]),
+        ),
+        userFreeProxyLimits: Object.fromEntries(
+            userLimitRows.map((row) => [
+                row.scope.slice(USER_MONITOR_LIMIT_PREFIX.length),
+                row.free_proxy_active_limit,
             ]),
         ),
     };
@@ -1890,6 +1914,7 @@ export async function getAdminActiveMonitors() {
             discord_webhook: true,
             webhook_active: true,
             telegram_active: true,
+            proxy_source: true,
             proxy_group: {
                 select: {
                     name: true,
@@ -1931,6 +1956,7 @@ export async function getAdminUserDetails(userId: string) {
                     discord_webhook: true,
                     webhook_active: true,
                     telegram_active: true,
+                    proxy_source: true,
                     proxy_group: {
                         select: {
                             name: true,
@@ -2133,8 +2159,180 @@ async function sendPausedTelegram(
     }
 }
 
+type FreeProxyLimitPausedMonitor = {
+    id: number;
+    name: string;
+    userId: string;
+    discord_webhook: string | null;
+    webhook_active: boolean;
+    telegram_active: boolean;
+    notifications_enabled: boolean;
+};
+
+async function sendFreeProxyLimitPausedWebhook(
+    monitor: FreeProxyLimitPausedMonitor,
+    limit: number,
+) {
+    if (!monitor.discord_webhook) return;
+    try {
+        await fetch(monitor.discord_webhook, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                username: "Vintrack Monitor",
+                avatar_url:
+                    "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
+                embeds: [
+                    {
+                        title: "⏸️ Monitor Paused",
+                        description: `The monitor **${monitor.name}** was automatically paused because your running Free Proxy Pool monitor limit is **${limit}**.`,
+                        color: 16753920,
+                        footer: { text: "Vintrack • Free Proxy Limit" },
+                        timestamp: new Date().toISOString(),
+                    },
+                ],
+            }),
+        });
+    } catch (error) {
+        console.error(
+            "Failed to send free proxy limit webhook for",
+            monitor.id,
+            error,
+        );
+    }
+}
+
+async function sendFreeProxyLimitPausedTelegram(
+    monitor: FreeProxyLimitPausedMonitor,
+    limit: number,
+) {
+    const connection = await getTelegramConnection(monitor.userId);
+    if (!connection) return;
+    const result = await sendTelegramMessage(
+        connection.chat_id,
+        `⏸️ Monitor paused\n\n${monitor.name} was automatically paused because your running Free Proxy Pool monitor limit is ${limit}.`,
+    );
+    if ("error" in result) {
+        console.error(
+            "Failed to send free proxy limit Telegram message for",
+            monitor.id,
+            result.error,
+        );
+    }
+}
+
+async function reconcileUserFreeProxyMonitorLimit(
+    userId: string,
+    scope: string,
+    adminUserId: string,
+) {
+    const result = await withMonitorActivationLock(userId, async (tx) => {
+        const state = await getMonitorActivationState(userId, "free", tx);
+        if (state.freeProxyActiveLimit === null) {
+            return {
+                limit: null,
+                monitors: [] as FreeProxyLimitPausedMonitor[],
+            };
+        }
+
+        const excess = Math.max(
+            state.freeProxyActiveCount - state.freeProxyActiveLimit,
+            0,
+        );
+        if (excess === 0) {
+            return {
+                limit: state.freeProxyActiveLimit,
+                monitors: [] as FreeProxyLimitPausedMonitor[],
+            };
+        }
+
+        const monitors = await tx.monitors.findMany({
+            where: { userId, status: "active", proxy_source: "free" },
+            orderBy: [
+                { created_at: { sort: "desc", nulls: "last" } },
+                { id: "desc" },
+            ],
+            take: excess,
+            select: {
+                id: true,
+                name: true,
+                userId: true,
+                discord_webhook: true,
+                webhook_active: true,
+                telegram_active: true,
+                notifications_enabled: true,
+            },
+        });
+
+        if (monitors.length > 0) {
+            await tx.monitors.updateMany({
+                where: { id: { in: monitors.map((monitor) => monitor.id) } },
+                data: { status: "paused" },
+            });
+        }
+
+        return { limit: state.freeProxyActiveLimit, monitors };
+    });
+
+    if (result.limit === null || result.monitors.length === 0) {
+        return result.monitors;
+    }
+
+    await Promise.all(
+        result.monitors.map(async (monitor) => {
+            await logAuditEvent({
+                userId: adminUserId,
+                action: "monitor.free_proxy_limit_paused",
+                targetType: "monitor",
+                targetId: monitor.id,
+                metadata: {
+                    memberUserId: userId,
+                    scope,
+                    limit: result.limit,
+                    reason: "free_proxy_active_limit",
+                },
+            });
+
+            if (!monitor.notifications_enabled) return;
+            const notifications: Promise<unknown>[] = [];
+            if (monitor.discord_webhook && monitor.webhook_active) {
+                notifications.push(
+                    sendFreeProxyLimitPausedWebhook(monitor, result.limit!),
+                );
+            }
+            if (monitor.telegram_active) {
+                notifications.push(
+                    sendFreeProxyLimitPausedTelegram(monitor, result.limit!),
+                );
+            }
+            await Promise.all(notifications);
+        }),
+    );
+
+    return result.monitors;
+}
+
+async function reconcileFreeProxyLimitsForUsers(
+    userIds: string[],
+    scope: string,
+    adminUserId: string,
+) {
+    let pausedCount = 0;
+    const pausedMonitorIds: number[] = [];
+    for (const userId of userIds) {
+        const paused = await reconcileUserFreeProxyMonitorLimit(
+            userId,
+            scope,
+            adminUserId,
+        );
+        pausedCount += paused.length;
+        pausedMonitorIds.push(...paused.map((monitor) => monitor.id));
+    }
+    return { pausedCount, pausedMonitorIds };
+}
+
 export async function setUserRole(userId: string, role: string) {
-    await requireAdmin();
+    const adminUserId = await requireAdmin();
 
     const validRoles = ["free", "premium", "admin"];
     if (!validRoles.includes(role)) throw new Error("Invalid role");
@@ -2144,7 +2342,15 @@ export async function setUserRole(userId: string, role: string) {
         data: { role },
     });
 
+    const reconciliation = await reconcileFreeProxyLimitsForUsers(
+        [userId],
+        `role-change:${role}`,
+        adminUserId,
+    );
+
     revalidatePath("/admin");
+    revalidatePath("/dashboard");
+    return reconciliation;
 }
 
 export async function setGlobalActiveMonitorLimit(value: string) {
@@ -2190,6 +2396,106 @@ export async function setUserActiveMonitorLimit(userId: string, value: string) {
     );
 
     revalidatePath("/admin");
+}
+
+export async function setGlobalFreeProxyMonitorLimit(value: string) {
+    const adminUserId = await requireAdmin();
+    const limit = normalizeMonitorLimitInput(value);
+    await setFreeProxyMonitorLimit(GLOBAL_MONITOR_LIMIT_SCOPE, limit);
+
+    const users = await db.user.findMany({
+        where: { role: { not: "admin" } },
+        select: { id: true },
+    });
+    const reconciliation = await reconcileFreeProxyLimitsForUsers(
+        users.map((user) => user.id),
+        GLOBAL_MONITOR_LIMIT_SCOPE,
+        adminUserId,
+    );
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.free_proxy_monitor_limit_updated",
+        targetType: "monitor_limit",
+        targetId: GLOBAL_MONITOR_LIMIT_SCOPE,
+        metadata: { limit, pausedCount: reconciliation.pausedCount },
+    });
+
+    revalidatePath("/admin");
+    revalidatePath("/dashboard");
+    return reconciliation;
+}
+
+export async function setRoleFreeProxyMonitorLimit(
+    role: string,
+    value: string,
+) {
+    const adminUserId = await requireAdmin();
+    const validRoles = ["free", "premium"];
+    if (!validRoles.includes(role)) throw new Error("Invalid role");
+
+    const limit = normalizeMonitorLimitInput(value);
+    const scope = roleLimitScope(role);
+    await setFreeProxyMonitorLimit(scope, limit);
+
+    const users = await db.user.findMany({
+        where: { role },
+        select: { id: true },
+    });
+    const reconciliation = await reconcileFreeProxyLimitsForUsers(
+        users.map((user) => user.id),
+        scope,
+        adminUserId,
+    );
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.free_proxy_monitor_limit_updated",
+        targetType: "monitor_limit",
+        targetId: scope,
+        metadata: { limit, pausedCount: reconciliation.pausedCount },
+    });
+
+    revalidatePath("/admin");
+    revalidatePath("/dashboard");
+    return reconciliation;
+}
+
+export async function setUserFreeProxyMonitorLimit(
+    userId: string,
+    value: string,
+) {
+    const adminUserId = await requireAdmin();
+    const user = await db.user.findUnique({
+        where: { id: userId },
+        select: { id: true, role: true },
+    });
+    if (!user) throw new Error("User not found");
+    if (user.role === "admin") {
+        throw new Error("Admins are always unlimited");
+    }
+
+    const limit = normalizeMonitorLimitInput(value);
+    const scope = userLimitScope(userId);
+    await setFreeProxyMonitorLimit(scope, limit);
+    const reconciliation = await reconcileFreeProxyLimitsForUsers(
+        [userId],
+        scope,
+        adminUserId,
+    );
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.free_proxy_monitor_limit_updated",
+        targetType: "monitor_limit",
+        targetId: scope,
+        metadata: {
+            memberUserId: userId,
+            limit,
+            pausedCount: reconciliation.pausedCount,
+        },
+    });
+
+    revalidatePath("/admin");
+    revalidatePath("/dashboard");
+    return reconciliation;
 }
 
 export async function stopUserActiveMonitors(userId: string) {
