@@ -4,8 +4,7 @@ import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import { revalidatePath, unstable_cache } from "next/cache";
-import { monitorStatusTelegramText, sendTelegramMessage } from "@/lib/telegram";
-import { getTelegramConnection } from "@/lib/telegram-connection";
+import { enqueueMonitorStatusNotification } from "@/lib/alert-outbox";
 import {
     getMonitorActivationState,
     GLOBAL_MONITOR_LIMIT_SCOPE,
@@ -121,14 +120,6 @@ const IPLocateSupportedCountryRegions = new Set([
 ]);
 const IPLocateCountryAliases: Record<string, string> = {
     uk: "gb",
-};
-
-type AlertIssueSummaryRow = {
-    channel: string;
-    status: string;
-    failure_reason: string | null;
-    event_count: bigint;
-    last_seen_at: Date;
 };
 
 type FreeProxyStatusCountRow = {
@@ -889,7 +880,12 @@ async function loadAdminRuntimeInsights() {
 
     const dailyByDate = new Map<
         string,
-        { date: string; freeSeconds: number; serverSeconds: number; groupSeconds: number }
+        {
+            date: string;
+            freeSeconds: number;
+            serverSeconds: number;
+            groupSeconds: number;
+        }
     >();
     for (let offset = 29; offset >= 0; offset -= 1) {
         const date = new Date();
@@ -938,9 +934,7 @@ async function loadAdminRuntimeInsights() {
                 checksPerRuntimeHour:
                     runtimeHours > 0 ? checks7d / runtimeHours : null,
                 newItemsPer100RuntimeHours:
-                    runtimeHours > 0
-                        ? (newItems7d / runtimeHours) * 100
-                        : null,
+                    runtimeHours > 0 ? (newItems7d / runtimeHours) * 100 : null,
             };
         }),
     };
@@ -2362,7 +2356,9 @@ export async function getAdminUsersPage(input?: {
 }) {
     await requireAdmin();
 
-    const query = String(input?.query ?? "").trim().slice(0, 100);
+    const query = String(input?.query ?? "")
+        .trim()
+        .slice(0, 100);
     const pageSizeOptions = [25, 50, 100];
     const requestedPageSize = Number(input?.pageSize ?? 25);
     const pageSize = pageSizeOptions.includes(requestedPageSize)
@@ -2732,62 +2728,236 @@ export async function getAdminUserDetails(userId: string) {
     };
 }
 
-export async function getAdminLogs() {
-    await requireAdmin();
+type AdminOperationFilter = "all" | "delivery" | "proxy" | "monitor" | "audit";
 
-    const logs: {
-        id: string;
-        type: "audit" | "monitor" | "alert";
-        title: string;
-        detail: string | null;
-        status: string;
-        subject: string | null;
-        actor: string | null;
-        createdAt: Date;
-    }[] = [];
+type AdminOperationRow = {
+    id: string;
+    type: "audit" | "monitor" | "delivery" | "proxy";
+    title: string;
+    detail: string | null;
+    status: string;
+    subject: string | null;
+    actor: string | null;
+    createdAt: Date;
+};
 
-    try {
-        const auditRows = await db.audit_events.findMany({
-            orderBy: { created_at: "desc" },
-            take: 60,
-            select: {
-                id: true,
-                action: true,
-                target_type: true,
-                target_id: true,
-                status: true,
-                created_at: true,
-                user: { select: { name: true, email: true } },
-            },
-        });
+const getCachedAdminOperationsSummary = unstable_cache(
+    async () => {
+        type StatRow = {
+            channel: string;
+            outcome: string;
+            event_count: bigint;
+        };
+        type FailureRow = {
+            channel: string;
+            reason_code: string;
+            event_count: bigint;
+            last_seen_at: Date;
+        };
+        const [stats, queue, failures, incidents, briefIncidents, settings] =
+            await Promise.all([
+                db.$queryRaw<StatRow[]>`
+                    SELECT channel, outcome, SUM(event_count)::bigint AS event_count
+                    FROM alert_event_hourly_stats
+                    WHERE bucket_hour >= DATE_TRUNC('hour', NOW() - INTERVAL '24 hours')
+                    GROUP BY channel, outcome
+                `,
+                db.$queryRaw<
+                    {
+                        status: string;
+                        event_count: bigint;
+                        oldest_at: Date | null;
+                    }[]
+                >`
+                    SELECT status, COUNT(*)::bigint AS event_count,
+                        MIN(created_at) AS oldest_at
+                    FROM alert_deliveries
+                    WHERE status IN ('pending', 'processing', 'retrying')
+                    GROUP BY status
+                `,
+                db.$queryRaw<FailureRow[]>`
+                    SELECT channel, reason_code, SUM(event_count)::bigint AS event_count,
+                        MAX(last_seen_at) AS last_seen_at
+                    FROM alert_event_hourly_stats
+                    WHERE bucket_hour >= DATE_TRUNC('hour', NOW() - INTERVAL '24 hours')
+                      AND outcome = 'failed'
+                    GROUP BY channel, reason_code
+                    ORDER BY event_count DESC, last_seen_at DESC
+                    LIMIT 8
+                `,
+                db.$queryRaw<
+                    {
+                        open_count: bigint;
+                        relevant_recovered_count: bigint;
+                        brief_recovered_count: bigint;
+                    }[]
+                >`
+                    SELECT
+                        COUNT(*) FILTER (WHERE recovered_at IS NULL)::bigint AS open_count,
+                        COUNT(*) FILTER (
+                            WHERE recovered_at >= NOW() - INTERVAL '24 hours'
+                              AND recovered_at - started_at >= INTERVAL '30 seconds'
+                        )::bigint AS relevant_recovered_count,
+                        COUNT(*) FILTER (
+                            WHERE recovered_at >= NOW() - INTERVAL '24 hours'
+                              AND recovered_at - started_at < INTERVAL '30 seconds'
+                        )::bigint AS brief_recovered_count
+                    FROM monitor_proxy_incidents
+                    WHERE recovered_at IS NULL OR recovered_at >= NOW() - INTERVAL '24 hours'
+                `,
+                db.$queryRaw<
+                    {
+                        domain: string;
+                        proxy_source: string;
+                        incident_count: bigint;
+                        wait_count: bigint;
+                    }[]
+                >`
+                    SELECT domain, proxy_source,
+                        COUNT(*)::bigint AS incident_count,
+                        SUM(wait_count)::bigint AS wait_count
+                    FROM monitor_proxy_incidents
+                    WHERE recovered_at >= NOW() - INTERVAL '24 hours'
+                      AND recovered_at - started_at < INTERVAL '30 seconds'
+                    GROUP BY domain, proxy_source
+                    ORDER BY incident_count DESC, wait_count DESC
+                    LIMIT 8
+                `,
+                db.app_settings.findMany({
+                    where: {
+                        key: {
+                            in: [
+                                "alert_telemetry_tracked_since",
+                                "alert_dispatcher_heartbeat",
+                            ],
+                        },
+                    },
+                    select: { key: true, value: true },
+                }),
+            ]);
 
-        logs.push(
-            ...auditRows.map((row) => ({
-                id: `audit-${row.id.toString()}`,
-                type: "audit" as const,
-                title: row.action,
-                detail: row.target_type
-                    ? `${row.target_type}${row.target_id ? ` #${row.target_id}` : ""}`
-                    : null,
-                status: row.status,
-                subject: row.target_id,
-                actor: row.user?.name ?? row.user?.email ?? null,
-                createdAt: row.created_at,
-            })),
+        const outcomeTotals = new Map<string, number>();
+        const byChannel: Record<
+            string,
+            { sent: number; failed: number; deduplicated: number }
+        > = {};
+        for (const row of stats) {
+            const count = Number(row.event_count);
+            outcomeTotals.set(
+                row.outcome,
+                (outcomeTotals.get(row.outcome) ?? 0) + count,
+            );
+            const channel = (byChannel[row.channel] ??= {
+                sent: 0,
+                failed: 0,
+                deduplicated: 0,
+            });
+            if (row.outcome === "sent") channel.sent += count;
+            if (row.outcome === "failed") channel.failed += count;
+            if (row.outcome === "deduplicated") channel.deduplicated += count;
+        }
+        const sent = outcomeTotals.get("sent") ?? 0;
+        const failed = outcomeTotals.get("failed") ?? 0;
+        const queueTotals = Object.fromEntries(
+            queue.map((row) => [row.status, Number(row.event_count)]),
         );
-    } catch (error) {
-        console.error("[admin] failed to load audit logs", error);
-    }
+        const oldestPendingAt = queue
+            .map((row) => row.oldest_at)
+            .filter((value): value is Date => Boolean(value))
+            .sort((a, b) => a.getTime() - b.getTime())[0];
+        const settingMap = new Map(
+            settings.map((setting) => [setting.key, setting.value]),
+        );
 
-    try {
-        const monitorRows = await db.monitor_events.findMany({
-            orderBy: { created_at: "desc" },
-            take: 60,
+        return {
+            windowHours: 24,
+            sent,
+            failed,
+            deduplicated: outcomeTotals.get("deduplicated") ?? 0,
+            queued: outcomeTotals.get("queued") ?? 0,
+            retryScheduled: outcomeTotals.get("retry_scheduled") ?? 0,
+            pending:
+                (queueTotals.pending ?? 0) +
+                (queueTotals.processing ?? 0) +
+                (queueTotals.retrying ?? 0),
+            retrying: queueTotals.retrying ?? 0,
+            successRate:
+                sent + failed > 0 ? (sent / (sent + failed)) * 100 : null,
+            oldestPendingAt: oldestPendingAt ?? null,
+            byChannel,
+            topFailures: failures.map((row) => ({
+                channel: row.channel,
+                reasonCode: row.reason_code || "unknown",
+                count: Number(row.event_count),
+                lastSeenAt: row.last_seen_at,
+            })),
+            proxyIncidents: {
+                open: Number(incidents[0]?.open_count ?? 0),
+                recovered: Number(incidents[0]?.relevant_recovered_count ?? 0),
+                brief: Number(incidents[0]?.brief_recovered_count ?? 0),
+                briefGroups: briefIncidents.map((row) => ({
+                    domain: row.domain,
+                    proxySource: row.proxy_source,
+                    incidents: Number(row.incident_count),
+                    waits: Number(row.wait_count),
+                })),
+            },
+            trackedSince:
+                settingMap.get("alert_telemetry_tracked_since") ?? null,
+            dispatcherHeartbeat:
+                settingMap.get("alert_dispatcher_heartbeat") ?? null,
+        };
+    },
+    ["admin-operations-summary-v1"],
+    { revalidate: 30 },
+);
+
+export async function getAdminOperationsSummary() {
+    await requireAdmin();
+    return getCachedAdminOperationsSummary();
+}
+
+export async function getAdminOperationsPage(input?: {
+    filter?: AdminOperationFilter;
+    cursor?: string | null;
+    pageSize?: number;
+}) {
+    await requireAdmin();
+    const filter = input?.filter ?? "all";
+    const pageSize = Math.min(Math.max(input?.pageSize ?? 50, 1), 50);
+    const parsedCursor = input?.cursor ? new Date(input.cursor) : null;
+    const cursor =
+        parsedCursor && !Number.isNaN(parsedCursor.getTime())
+            ? parsedCursor
+            : null;
+    const rows: AdminOperationRow[] = [];
+    const queryLimit = pageSize + 1;
+
+    if (filter === "all" || filter === "delivery") {
+        const deliveryRows = await db.alert_events.findMany({
+            where: {
+                status:
+                    filter === "all"
+                        ? "failed"
+                        : {
+                              in: [
+                                  "failed",
+                                  "retry_scheduled",
+                                  "cancelled",
+                              ],
+                          },
+                ...(cursor ? { created_at: { lt: cursor } } : {}),
+            },
+            orderBy: [{ created_at: "desc" }, { id: "desc" }],
+            take: queryLimit,
             select: {
                 id: true,
-                event_type: true,
-                severity: true,
-                message: true,
+                channel: true,
+                status: true,
+                notification_kind: true,
+                reason_code: true,
+                failure_reason: true,
+                attempt_number: true,
                 created_at: true,
                 monitor: {
                     select: {
@@ -2797,8 +2967,103 @@ export async function getAdminLogs() {
                 },
             },
         });
+        rows.push(
+            ...deliveryRows.map((row) => ({
+                id: `delivery-${row.id.toString()}`,
+                type: "delivery" as const,
+                title: `${row.channel} ${row.notification_kind}`,
+                detail: [
+                    row.reason_code ?? row.status,
+                    row.attempt_number ? `attempt ${row.attempt_number}` : null,
+                    row.failure_reason,
+                ]
+                    .filter(Boolean)
+                    .join(" · "),
+                status: row.status,
+                subject: row.monitor?.name ?? null,
+                actor:
+                    row.monitor?.user.name ?? row.monitor?.user.email ?? null,
+                createdAt: row.created_at,
+            })),
+        );
+    }
 
-        logs.push(
+    if (filter === "all" || filter === "proxy") {
+        const proxyRows = await db.monitor_proxy_incidents.findMany({
+            where: {
+                OR: [
+                    { recovered_at: null },
+                    {
+                        recovered_at: {
+                            not: null,
+                            ...(cursor ? { lt: cursor } : {}),
+                        },
+                        AND: {
+                            recovered_at: {
+                                gte: new Date(Date.now() - 30 * 86400_000),
+                            },
+                        },
+                    },
+                ],
+                ...(cursor ? { started_at: { lt: cursor } } : {}),
+            },
+            orderBy: [{ started_at: "desc" }, { id: "desc" }],
+            take: queryLimit,
+            include: {
+                monitor: {
+                    select: {
+                        name: true,
+                        user: { select: { name: true, email: true } },
+                    },
+                },
+            },
+        });
+        rows.push(
+            ...proxyRows
+                .filter(
+                    (row) =>
+                        !row.recovered_at ||
+                        row.recovered_at.getTime() - row.started_at.getTime() >=
+                            30_000,
+                )
+                .map((row) => ({
+                    id: `proxy-${row.id.toString()}`,
+                    type: "proxy" as const,
+                    title: row.recovered_at
+                        ? "Proxy pool recovered"
+                        : "Proxy pool waiting",
+                    detail: `${row.domain} · ${row.proxy_source} · ${row.wait_count} wait${row.wait_count === 1 ? "" : "s"}${row.recovered_at ? ` · ${Math.max(1, Math.round((row.recovered_at.getTime() - row.started_at.getTime()) / 1000))}s` : ""}`,
+                    status: row.recovered_at ? "recovered" : "warning",
+                    subject: row.monitor.name,
+                    actor:
+                        row.monitor.user.name ?? row.monitor.user.email ?? null,
+                    createdAt: row.started_at,
+                })),
+        );
+    }
+
+    if (filter === "all" || filter === "monitor") {
+        const monitorRows = await db.monitor_events.findMany({
+            where: {
+                severity:
+                    filter === "all" ? "error" : { in: ["warning", "error"] },
+                event_type: {
+                    notIn: ["proxy_pool_waiting", "proxy_pool_recovered"],
+                },
+                ...(cursor ? { created_at: { lt: cursor } } : {}),
+            },
+            orderBy: [{ created_at: "desc" }, { id: "desc" }],
+            take: queryLimit,
+            include: {
+                monitor: {
+                    select: {
+                        name: true,
+                        user: { select: { name: true, email: true } },
+                    },
+                },
+            },
+        });
+        rows.push(
             ...monitorRows.map((row) => ({
                 id: `monitor-${row.id.toString()}`,
                 type: "monitor" as const,
@@ -2810,108 +3075,42 @@ export async function getAdminLogs() {
                 createdAt: row.created_at,
             })),
         );
-    } catch (error) {
-        console.error("[admin] failed to load monitor logs", error);
     }
 
-    try {
-        const alertRows = await db.$queryRaw<AlertIssueSummaryRow[]>`
-            SELECT
-                channel,
-                status,
-                failure_reason,
-                COUNT(*)::bigint AS event_count,
-                MAX(created_at) AS last_seen_at
-            FROM alert_events
-            WHERE created_at >= NOW() - INTERVAL '24 hours'
-              AND (
-                status <> 'success'
-                OR failure_reason IS NOT NULL
-              )
-            GROUP BY channel, status, failure_reason
-            ORDER BY event_count DESC, last_seen_at DESC
-            LIMIT 20
-        `;
-
-        logs.push(
-            ...alertRows.map((row) => ({
-                id: `alert-${row.channel}-${row.status}-${row.failure_reason ?? "unknown"}`,
-                type: "alert" as const,
-                title: `${row.channel} alert issues`,
-                detail: `${Number(row.event_count)} event${Number(row.event_count) === 1 ? "" : "s"} in 24h${row.failure_reason ? ` · ${row.failure_reason}` : ""}`,
+    if (filter === "all" || filter === "audit") {
+        const auditRows = await db.audit_events.findMany({
+            where: {
+                ...(filter === "all" ? { status: { not: "success" } } : {}),
+                ...(cursor ? { created_at: { lt: cursor } } : {}),
+            },
+            orderBy: [{ created_at: "desc" }, { id: "desc" }],
+            take: queryLimit,
+            include: { user: { select: { name: true, email: true } } },
+        });
+        rows.push(
+            ...auditRows.map((row) => ({
+                id: `audit-${row.id.toString()}`,
+                type: "audit" as const,
+                title: row.action,
+                detail: row.target_type,
                 status: row.status,
-                subject: "24h summary",
-                actor: null,
-                createdAt: row.last_seen_at,
+                subject: row.target_id,
+                actor: row.user?.name ?? row.user?.email ?? null,
+                createdAt: row.created_at,
             })),
         );
-    } catch (error) {
-        console.error("[admin] failed to load alert logs", error);
     }
 
-    return logs
+    const page = rows
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-        .slice(0, 100);
-}
-
-async function sendPausedWebhook(
-    name: string,
-    monitorId: number,
-    webhookUrl: string,
-) {
-    try {
-        const payload = {
-            username: "Vintrack Monitor",
-            avatar_url:
-                "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-            embeds: [
-                {
-                    title: "⏸️ Monitor Paused",
-                    description: `The monitor **${name}** has been paused via User Management.`,
-                    color: 16753920,
-                    footer: {
-                        text: "Vintrack • Status Update",
-                        icon_url:
-                            "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                    },
-                    timestamp: new Date().toISOString(),
-                },
-            ],
-        };
-
-        await fetch(webhookUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-        });
-    } catch (error) {
-        console.error(
-            "Failed to send admin pause webhook for",
-            monitorId,
-            error,
-        );
-    }
-}
-
-async function sendPausedTelegram(
-    name: string,
-    monitorId: number,
-    userId: string,
-) {
-    const connection = await getTelegramConnection(userId);
-    if (!connection) return;
-
-    const result = await sendTelegramMessage(
-        connection.chat_id,
-        monitorStatusTelegramText(name, "paused"),
-    );
-    if ("error" in result) {
-        console.error(
-            "Failed to send admin pause Telegram message for",
-            monitorId,
-            result.error,
-        );
-    }
+        .slice(0, pageSize);
+    return {
+        rows: page,
+        nextCursor:
+            rows.length > pageSize
+                ? (page.at(-1)?.createdAt.toISOString() ?? null)
+                : null,
+    };
 }
 
 type FreeProxyLimitPausedMonitor = {
@@ -2924,63 +3123,12 @@ type FreeProxyLimitPausedMonitor = {
     notifications_enabled: boolean;
 };
 
-async function sendFreeProxyLimitPausedWebhook(
-    monitor: FreeProxyLimitPausedMonitor,
-    limit: number,
-) {
-    if (!monitor.discord_webhook) return;
-    try {
-        await fetch(monitor.discord_webhook, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                username: "Vintrack Monitor",
-                avatar_url:
-                    "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                embeds: [
-                    {
-                        title: "⏸️ Monitor Paused",
-                        description: `The monitor **${monitor.name}** was automatically paused because your running Free Proxy Pool monitor limit is **${limit}**.`,
-                        color: 16753920,
-                        footer: { text: "Vintrack • Free Proxy Limit" },
-                        timestamp: new Date().toISOString(),
-                    },
-                ],
-            }),
-        });
-    } catch (error) {
-        console.error(
-            "Failed to send free proxy limit webhook for",
-            monitor.id,
-            error,
-        );
-    }
-}
-
-async function sendFreeProxyLimitPausedTelegram(
-    monitor: FreeProxyLimitPausedMonitor,
-    limit: number,
-) {
-    const connection = await getTelegramConnection(monitor.userId);
-    if (!connection) return;
-    const result = await sendTelegramMessage(
-        connection.chat_id,
-        `⏸️ Monitor paused\n\n${monitor.name} was automatically paused because your running Free Proxy Pool monitor limit is ${limit}.`,
-    );
-    if ("error" in result) {
-        console.error(
-            "Failed to send free proxy limit Telegram message for",
-            monitor.id,
-            result.error,
-        );
-    }
-}
-
 async function reconcileUserFreeProxyMonitorLimit(
     userId: string,
     scope: string,
     adminUserId: string,
 ) {
+    const transitionKey = Date.now().toString();
     const result = await withMonitorActivationLock(userId, async (tx) => {
         const state = await getMonitorActivationState(userId, "free", tx);
         if (state.freeProxyActiveLimit === null) {
@@ -3024,6 +3172,14 @@ async function reconcileUserFreeProxyMonitorLimit(
                 where: { id: { in: monitors.map((monitor) => monitor.id) } },
                 data: { status: "paused" },
             });
+            for (const monitor of monitors) {
+                await enqueueMonitorStatusNotification(tx, monitor, {
+                    kind: "free_proxy_limit_pause",
+                    title: "Monitor paused",
+                    message: `The monitor ${monitor.name} was automatically paused because the running Free Proxy Pool monitor limit is ${state.freeProxyActiveLimit}.`,
+                    idempotencyKey: `free-proxy-limit:${monitor.id}:${scope}:${state.freeProxyActiveLimit}:${transitionKey}`,
+                });
+            }
         }
 
         return { limit: state.freeProxyActiveLimit, monitors };
@@ -3047,20 +3203,6 @@ async function reconcileUserFreeProxyMonitorLimit(
                     reason: "free_proxy_active_limit",
                 },
             });
-
-            if (!monitor.notifications_enabled) return;
-            const notifications: Promise<unknown>[] = [];
-            if (monitor.discord_webhook && monitor.webhook_active) {
-                notifications.push(
-                    sendFreeProxyLimitPausedWebhook(monitor, result.limit!),
-                );
-            }
-            if (monitor.telegram_active) {
-                notifications.push(
-                    sendFreeProxyLimitPausedTelegram(monitor, result.limit!),
-                );
-            }
-            await Promise.all(notifications);
         }),
     );
 
@@ -3273,33 +3415,21 @@ export async function stopUserActiveMonitors(userId: string) {
         return { success: true, stoppedCount: 0 };
     }
 
-    await db.monitors.updateMany({
-        where: { userId, status: "active" },
-        data: { status: "paused" },
+    const transitionKey = Date.now().toString();
+    await db.$transaction(async (tx) => {
+        await tx.monitors.updateMany({
+            where: { userId, status: "active" },
+            data: { status: "paused" },
+        });
+        for (const monitor of monitorsToStop) {
+            await enqueueMonitorStatusNotification(tx, monitor, {
+                kind: "monitor_paused",
+                title: "Monitor paused",
+                message: `The monitor ${monitor.name} was paused via User Management.`,
+                idempotencyKey: `admin-pause:${monitor.id}:${transitionKey}`,
+            });
+        }
     });
-
-    Promise.all(
-        monitorsToStop.map(async (monitor) => {
-            if (
-                monitor.notifications_enabled &&
-                monitor.discord_webhook &&
-                monitor.webhook_active
-            ) {
-                await sendPausedWebhook(
-                    monitor.name,
-                    monitor.id,
-                    monitor.discord_webhook,
-                );
-            }
-            if (monitor.notifications_enabled && monitor.telegram_active) {
-                await sendPausedTelegram(
-                    monitor.name,
-                    monitor.id,
-                    monitor.userId,
-                );
-            }
-        }),
-    ).catch(console.error);
 
     revalidatePath("/admin");
 
@@ -3333,27 +3463,18 @@ export async function stopSingleUserMonitor(userId: string, monitorId: number) {
         return { success: true, stopped: false };
     }
 
-    await db.monitors.update({
-        where: { id: monitorId, userId },
-        data: { status: "paused" },
+    await db.$transaction(async (tx) => {
+        await tx.monitors.update({
+            where: { id: monitorId, userId },
+            data: { status: "paused" },
+        });
+        await enqueueMonitorStatusNotification(tx, monitor, {
+            kind: "monitor_paused",
+            title: "Monitor paused",
+            message: `The monitor ${monitor.name} was paused via User Management.`,
+            idempotencyKey: `admin-pause:${monitor.id}:${Date.now()}`,
+        });
     });
-
-    if (
-        monitor.notifications_enabled &&
-        monitor.discord_webhook &&
-        monitor.webhook_active
-    ) {
-        sendPausedWebhook(
-            monitor.name,
-            monitor.id,
-            monitor.discord_webhook,
-        ).catch(console.error);
-    }
-    if (monitor.notifications_enabled && monitor.telegram_active) {
-        sendPausedTelegram(monitor.name, monitor.id, monitor.userId).catch(
-            console.error,
-        );
-    }
 
     revalidatePath("/admin");
 

@@ -13,6 +13,10 @@ type AlertEventRow = {
     status: string;
     failure_reason: string | null;
     created_at: Date;
+    notification_kind: string;
+    attempt_count: number;
+    reason_code: string | null;
+    completed_at: Date | null;
 };
 
 export async function GET() {
@@ -23,18 +27,24 @@ export async function GET() {
 
     const rows = await db.$queryRaw<AlertEventRow[]>`
         SELECT
-            ae.id,
-            ae.monitor_id,
+            delivery.id,
+            notification.monitor_id,
             m.name AS monitor_name,
-            ae.item_id,
-            ae.channel,
-            ae.status,
-            ae.failure_reason,
-            ae.created_at
-        FROM alert_events ae
-        LEFT JOIN monitors m ON m.id = ae.monitor_id
-        WHERE ae."userId" = ${session.user.id}
-        ORDER BY ae.created_at DESC
+            notification.item_id,
+            delivery.channel,
+            delivery.status,
+            delivery.last_error_detail AS failure_reason,
+            delivery.created_at,
+            notification.kind AS notification_kind,
+            delivery.attempt_count,
+            delivery.last_reason_code AS reason_code,
+            delivery.completed_at
+        FROM alert_deliveries delivery
+        JOIN alert_notifications notification
+          ON notification.id = delivery.notification_id
+        LEFT JOIN monitors m ON m.id = notification.monitor_id
+        WHERE notification.user_id = ${session.user.id}
+        ORDER BY delivery.created_at DESC, delivery.id DESC
         LIMIT 100
     `;
 
@@ -48,6 +58,10 @@ export async function GET() {
             status: row.status,
             failureReason: row.failure_reason,
             createdAt: row.created_at.toISOString(),
+            kind: row.notification_kind,
+            attempts: row.attempt_count,
+            reasonCode: row.reason_code,
+            completedAt: row.completed_at?.toISOString() ?? null,
         })),
     });
 }

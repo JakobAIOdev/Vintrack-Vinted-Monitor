@@ -5,8 +5,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { isValidDiscordWebhook } from "@/lib/validation";
-import { monitorStatusTelegramText, sendTelegramMessage } from "@/lib/telegram";
 import { getTelegramConnection } from "@/lib/telegram-connection";
+import { enqueueMonitorStatusNotification } from "@/lib/alert-outbox";
 import {
     DEFAULT_QUERY_DELAY_MS,
     normalizeQueryDelayMs,
@@ -74,28 +74,6 @@ function normalizeSellerQualityFilter(formData: FormData) {
     }
 
     return { minSellerRating, minSellerRatingCount };
-}
-
-async function sendTelegramStatusIfConfigured(
-    monitor: {
-        name: string;
-        userId: string;
-        telegram_active: boolean;
-        notifications_enabled: boolean;
-    },
-    status: "created" | "started" | "paused",
-) {
-    if (!monitor.notifications_enabled || !monitor.telegram_active) return;
-
-    const connection = await getTelegramConnection(monitor.userId);
-    if (!connection) return;
-    const result = await sendTelegramMessage(
-        connection.chat_id,
-        monitorStatusTelegramText(monitor.name, status),
-    );
-    if ("error" in result) {
-        console.error("Failed to send Telegram status message", result.error);
-    }
 }
 
 async function isFreeProxyPoolAvailable(region: string) {
@@ -282,6 +260,15 @@ export async function createMonitor(
                 data: { monitor_onboarding_status: "completed" },
             });
 
+            if (initialStatus === "active") {
+                await enqueueMonitorStatusNotification(tx, createdMonitor, {
+                    kind: "monitor_created",
+                    title: "Monitor created and started",
+                    message: `The monitor ${createdMonitor.name} was created and is now active.`,
+                    idempotencyKey: `monitor-created:${createdMonitor.id}`,
+                });
+            }
+
             return { monitor: createdMonitor, activationState, initialStatus };
         });
 
@@ -299,46 +286,6 @@ export async function createMonitor(
                 started: initialStatus === "active",
             },
         });
-    }
-
-    if (
-        initialStatus === "active" &&
-        monitor.notifications_enabled &&
-        monitor.discord_webhook &&
-        monitor.webhook_active
-    ) {
-        try {
-            const payload = {
-                username: "Vintrack Monitor",
-                avatar_url:
-                    "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                embeds: [
-                    {
-                        title: "🚀 New Monitor Created & Started",
-                        description: `The monitor **${monitor.name}** has been successfully created and is now active.`,
-                        color: 3066993, // Green
-                        footer: {
-                            text: "Vintrack • Status Update",
-                            icon_url:
-                                "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                        },
-                        timestamp: new Date().toISOString(),
-                    },
-                ],
-            };
-
-            await fetch(monitor.discord_webhook, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-            });
-        } catch (error) {
-            console.error("Failed to send status webhook", error);
-        }
-    }
-
-    if (initialStatus === "active") {
-        await sendTelegramStatusIfConfigured(monitor, "created");
     }
 
     revalidatePath("/dashboard");
@@ -986,7 +933,7 @@ export async function toggleMonitorStatus(id: number, currentStatus: string) {
     const userId = session.user.id;
 
     const newStatus = currentStatus === "active" ? "paused" : "active";
-    const monitor = await withMonitorActivationLock(userId, async (tx) => {
+    await withMonitorActivationLock(userId, async (tx) => {
         const existing = await tx.monitors.findFirst({
             where: { id, userId },
             select: { demo_expires_at: true, proxy_source: true },
@@ -1009,7 +956,7 @@ export async function toggleMonitorStatus(id: number, currentStatus: string) {
             }
         }
 
-        return tx.monitors.update({
+        const monitor = await tx.monitors.update({
             where: { id, userId },
             data: {
                 status: newStatus,
@@ -1018,50 +965,15 @@ export async function toggleMonitorStatus(id: number, currentStatus: string) {
                     : {}),
             },
         });
+        await enqueueMonitorStatusNotification(tx, monitor, {
+            kind: newStatus === "active" ? "monitor_started" : "monitor_paused",
+            title:
+                newStatus === "active" ? "Monitor started" : "Monitor paused",
+            message: `The monitor ${monitor.name} was ${newStatus === "active" ? "started" : "paused"}.`,
+            idempotencyKey: `monitor-${newStatus}:${monitor.id}:${Date.now()}`,
+        });
+        return monitor;
     });
-
-    if (
-        monitor.notifications_enabled &&
-        monitor.discord_webhook &&
-        monitor.webhook_active
-    ) {
-        try {
-            const isStarting = newStatus === "active";
-            const payload = {
-                username: "Vintrack Monitor",
-                avatar_url:
-                    "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                embeds: [
-                    {
-                        title: isStarting
-                            ? "▶️ Monitor Started"
-                            : "⏸️ Monitor Paused",
-                        description: `The monitor **${monitor.name}** has been ${isStarting ? "started" : "paused"}.`,
-                        color: isStarting ? 3066993 : 16753920, // Green for start, Orange for pause
-                        footer: {
-                            text: "Vintrack • Status Update",
-                            icon_url:
-                                "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                        },
-                        timestamp: new Date().toISOString(),
-                    },
-                ],
-            };
-
-            await fetch(monitor.discord_webhook, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-            });
-        } catch (error) {
-            console.error("Failed to send status webhook", error);
-        }
-    }
-
-    await sendTelegramStatusIfConfigured(
-        monitor,
-        newStatus === "active" ? "started" : "paused",
-    );
 
     revalidatePath(`/monitors/${id}`);
     revalidatePath("/dashboard");

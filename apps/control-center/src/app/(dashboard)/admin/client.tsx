@@ -65,7 +65,8 @@ import {
     getAdminRuntimeInsights,
     getAdminUsersPage,
     getAdminMemberInsights,
-    getAdminLogs,
+    getAdminOperationsPage,
+    getAdminOperationsSummary,
     getFreeProxyAdminState,
     getFreeProxySourceDiagnostics,
     getAdminUserDetails,
@@ -165,7 +166,7 @@ type AdminTab =
 
 type AdminLogRow = {
     id: string;
-    type: "audit" | "monitor" | "alert";
+    type: "audit" | "monitor" | "delivery" | "proxy";
     title: string;
     detail: string | null;
     status: string;
@@ -173,6 +174,44 @@ type AdminLogRow = {
     actor: string | null;
     createdAt: Date;
 };
+
+type AdminOperationsSummary = {
+    windowHours: number;
+    sent: number;
+    failed: number;
+    deduplicated: number;
+    queued: number;
+    retryScheduled: number;
+    pending: number;
+    retrying: number;
+    successRate: number | null;
+    oldestPendingAt: Date | null;
+    byChannel: Record<
+        string,
+        { sent: number; failed: number; deduplicated: number }
+    >;
+    topFailures: {
+        channel: string;
+        reasonCode: string;
+        count: number;
+        lastSeenAt: Date;
+    }[];
+    proxyIncidents: {
+        open: number;
+        recovered: number;
+        brief: number;
+        briefGroups: {
+            domain: string;
+            proxySource: string;
+            incidents: number;
+            waits: number;
+        }[];
+    };
+    trackedSince: string | null;
+    dispatcherHeartbeat: string | null;
+};
+
+type AdminOperationFilter = "all" | "delivery" | "proxy" | "monitor" | "audit";
 
 type MemberInsights = {
     summary: {
@@ -875,7 +914,10 @@ function RuntimeStackedChart({ data }: { data: RuntimeInsights["daily"] }) {
             >
                 {data.map((day, index) => {
                     const total = totals[index];
-                    const height = Math.max(total > 0 ? 2 : 0, (total / maximum) * 100);
+                    const height = Math.max(
+                        total > 0 ? 2 : 0,
+                        (total / maximum) * 100,
+                    );
                     const date = new Intl.DateTimeFormat("de-DE", {
                         day: "2-digit",
                         month: "short",
@@ -986,9 +1028,9 @@ export function AdminClient({
     const [runtimeInsightsLoadFailed, setRuntimeInsightsLoadFailed] =
         useState(false);
     const runtimeInsightsRequestRef = useRef<Promise<void> | null>(null);
-    const [activeMonitorRows, setActiveMonitorRows] = useState<
-        ActiveMonitor[]
-    >([]);
+    const [activeMonitorRows, setActiveMonitorRows] = useState<ActiveMonitor[]>(
+        [],
+    );
     const [userPagination, setUserPagination] = useState({
         page: 1,
         pageSize: 25,
@@ -998,6 +1040,13 @@ export function AdminClient({
     const usersRequestSequenceRef = useRef(0);
     const [nowMs, setNowMs] = useState(() => Date.now());
     const [adminLogs, setAdminLogs] = useState<AdminLogRow[]>(logs);
+    const [operationsSummary, setOperationsSummary] =
+        useState<AdminOperationsSummary | null>(null);
+    const [operationFilter, setOperationFilter] =
+        useState<AdminOperationFilter>("all");
+    const [operationNextCursor, setOperationNextCursor] = useState<
+        string | null
+    >(null);
     const [logsLoaded, setLogsLoaded] = useState(logs.length > 0);
     const [isLoadingLogs, setIsLoadingLogs] = useState(false);
     const [memberInsights, setMemberInsights] = useState<MemberInsights | null>(
@@ -1178,13 +1227,34 @@ export function AdminClient({
         });
     };
 
-    const loadAdminLogs = () => {
-        if (logsLoaded || isLoadingLogs) return;
+    const loadAdminLogs = (
+        filter: AdminOperationFilter = operationFilter,
+        append = false,
+    ) => {
+        if (
+            (!append && logsLoaded && filter === operationFilter) ||
+            isLoadingLogs
+        )
+            return;
 
         setIsLoadingLogs(true);
-        getAdminLogs()
-            .then((nextLogs) => {
-                setAdminLogs(nextLogs);
+        Promise.all([
+            operationsSummary
+                ? Promise.resolve(operationsSummary)
+                : getAdminOperationsSummary(),
+            getAdminOperationsPage({
+                filter,
+                cursor: append ? operationNextCursor : null,
+                pageSize: 50,
+            }),
+        ])
+            .then(([summary, page]) => {
+                setOperationsSummary(summary);
+                setAdminLogs((current) =>
+                    append ? [...current, ...page.rows] : page.rows,
+                );
+                setOperationNextCursor(page.nextCursor);
+                setOperationFilter(filter);
                 setLogsLoaded(true);
             })
             .catch(() => {
@@ -1219,8 +1289,16 @@ export function AdminClient({
         if (overviewState || overviewRequestRef.current) return;
         setIsLoadingOverview(true);
         setOverviewLoadFailed(false);
-        const request = getAdminOverviewState()
-            .then(setOverviewState)
+        const request = Promise.all([
+            getAdminOverviewState(),
+            getAdminOperationsSummary(),
+            getAdminOperationsPage({ filter: "all", pageSize: 6 }),
+        ])
+            .then(([overview, summary, operations]) => {
+                setOverviewState(overview);
+                setOperationsSummary(summary);
+                setAdminLogs(operations.rows);
+            })
             .catch(() => {
                 setOverviewLoadFailed(true);
                 toast.error("Failed to load admin overview");
@@ -2467,10 +2545,14 @@ export function AdminClient({
                                     Runtime Snapshot
                                 </p>
                                 <p className="text-muted-foreground text-xs">
-                                    Aggregate monitor-hours without scanning runtime history.
+                                    Aggregate monitor-hours without scanning
+                                    runtime history.
                                 </p>
                             </div>
-                            <Badge variant="outline" className="rounded-md text-[10px] uppercase">
+                            <Badge
+                                variant="outline"
+                                className="rounded-md text-[10px] uppercase"
+                            >
                                 {overviewState?.runtime.trackedSince
                                     ? `Tracked since ${new Intl.DateTimeFormat("de-DE", { dateStyle: "medium" }).format(new Date(overviewState.runtime.trackedSince))}`
                                     : "Tracking starts with migration"}
@@ -2478,29 +2560,42 @@ export function AdminClient({
                         </div>
                         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                             <div className="bg-muted/30 rounded-lg px-4 py-3">
-                                <p className="text-muted-foreground text-[11px] uppercase">Total runtime</p>
+                                <p className="text-muted-foreground text-[11px] uppercase">
+                                    Total runtime
+                                </p>
                                 <p className="mt-1 text-2xl font-semibold tabular-nums">
                                     {overviewState
-                                        ? formatRuntime(overviewState.runtime.totalSeconds)
+                                        ? formatRuntime(
+                                              overviewState.runtime
+                                                  .totalSeconds,
+                                          )
                                         : "—"}
                                 </p>
                             </div>
                             <div className="bg-muted/30 rounded-lg px-4 py-3">
-                                <p className="text-muted-foreground text-[11px] uppercase">Open sessions</p>
+                                <p className="text-muted-foreground text-[11px] uppercase">
+                                    Open sessions
+                                </p>
                                 <p className="mt-1 text-2xl font-semibold tabular-nums">
                                     {overviewState
-                                        ? formatRuntime(overviewState.runtime.currentSeconds)
+                                        ? formatRuntime(
+                                              overviewState.runtime
+                                                  .currentSeconds,
+                                          )
                                         : "—"}
                                 </p>
                             </div>
                             <div className="bg-muted/30 rounded-lg px-4 py-3">
-                                <p className="text-muted-foreground text-[11px] uppercase">Oldest running</p>
+                                <p className="text-muted-foreground text-[11px] uppercase">
+                                    Oldest running
+                                </p>
                                 <p className="mt-1 text-2xl font-semibold tabular-nums">
                                     {overviewState?.runtime.oldestActiveSince
                                         ? formatRuntime(
                                               (nowMs -
                                                   new Date(
-                                                      overviewState.runtime.oldestActiveSince,
+                                                      overviewState.runtime
+                                                          .oldestActiveSince,
                                                   ).getTime()) /
                                                   1000,
                                           )
@@ -2508,8 +2603,10 @@ export function AdminClient({
                                 </p>
                             </div>
                             <div className="bg-muted/30 rounded-lg px-4 py-3">
-                                <p className="text-muted-foreground text-[11px] uppercase">Active source mix</p>
-                                <div className="mt-3 flex h-3 overflow-hidden rounded-full bg-muted">
+                                <p className="text-muted-foreground text-[11px] uppercase">
+                                    Active source mix
+                                </p>
+                                <div className="bg-muted mt-3 flex h-3 overflow-hidden rounded-full">
                                     {(["free", "server", "group"] as const).map(
                                         (source) => (
                                             <span
@@ -2529,7 +2626,13 @@ export function AdminClient({
                                     )}
                                 </div>
                                 <p className="text-muted-foreground mt-2 text-[10px]">
-                                    {overviewState?.monitors.sources.free ?? 0} free · {overviewState?.monitors.sources.server ?? 0} server · {overviewState?.monitors.sources.group ?? 0} own
+                                    {overviewState?.monitors.sources.free ?? 0}{" "}
+                                    free ·{" "}
+                                    {overviewState?.monitors.sources.server ??
+                                        0}{" "}
+                                    server ·{" "}
+                                    {overviewState?.monitors.sources.group ?? 0}{" "}
+                                    own
                                 </p>
                             </div>
                         </div>
@@ -2709,10 +2812,8 @@ export function AdminClient({
                                 <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-500/20 dark:bg-amber-500/10">
                                     <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
                                         {usersAtLimit} user
-                                        {usersAtLimit === 1
-                                            ? ""
-                                            : "s"}{" "}
-                                        at active monitor capacity
+                                        {usersAtLimit === 1 ? "" : "s"} at
+                                        active monitor capacity
                                     </p>
                                     <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
                                         Review role or user overrides in the
@@ -2763,7 +2864,12 @@ export function AdminClient({
                                             </p>
                                             <p className="text-muted-foreground">
                                                 {user.metrics.runningMonitors}{" "}
-                                                running · {formatRuntime(user.metrics.currentRuntimeSeconds)} open
+                                                running ·{" "}
+                                                {formatRuntime(
+                                                    user.metrics
+                                                        .currentRuntimeSeconds,
+                                                )}{" "}
+                                                open
                                             </p>
                                         </div>
                                     </button>
@@ -2829,8 +2935,15 @@ export function AdminClient({
                     ) : runtimeInsightsLoadFailed && !runtimeInsights ? (
                         <div className="border-border/60 bg-card flex min-h-48 flex-col items-center justify-center gap-3 rounded-lg border text-center">
                             <AlertTriangle className="h-6 w-6 text-amber-500" />
-                            <p className="text-sm font-medium">Runtime analytics could not be loaded</p>
-                            <Button type="button" variant="outline" size="sm" onClick={loadRuntimeInsights}>
+                            <p className="text-sm font-medium">
+                                Runtime analytics could not be loaded
+                            </p>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={loadRuntimeInsights}
+                            >
                                 Retry runtime analytics
                             </Button>
                         </div>
@@ -2875,45 +2988,102 @@ export function AdminClient({
                             <div className="grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(340px,1fr)]">
                                 <div className="border-border/60 bg-card rounded-xl border p-5 shadow-sm sm:p-6">
                                     <div className="mb-5">
-                                        <p className="text-sm font-semibold">Runtime by proxy source</p>
+                                        <p className="text-sm font-semibold">
+                                            Runtime by proxy source
+                                        </p>
                                         <p className="text-muted-foreground text-xs">
-                                            UTC day buckets · tracked since {runtimeInsights.trackedSince
-                                                ? new Intl.DateTimeFormat("de-DE", { dateStyle: "medium" }).format(new Date(runtimeInsights.trackedSince))
+                                            UTC day buckets · tracked since{" "}
+                                            {runtimeInsights.trackedSince
+                                                ? new Intl.DateTimeFormat(
+                                                      "de-DE",
+                                                      { dateStyle: "medium" },
+                                                  ).format(
+                                                      new Date(
+                                                          runtimeInsights.trackedSince,
+                                                      ),
+                                                  )
                                                 : "feature launch"}
                                         </p>
                                     </div>
-                                    <RuntimeStackedChart data={runtimeInsights.daily} />
+                                    <RuntimeStackedChart
+                                        data={runtimeInsights.daily}
+                                    />
                                 </div>
                                 <div className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm">
                                     <div className="border-border/50 border-b px-5 py-4">
-                                        <p className="text-sm font-semibold">7-day runtime leaderboard</p>
-                                        <p className="text-muted-foreground text-xs">Efficiency uses existing hourly worker stats.</p>
+                                        <p className="text-sm font-semibold">
+                                            7-day runtime leaderboard
+                                        </p>
+                                        <p className="text-muted-foreground text-xs">
+                                            Efficiency uses existing hourly
+                                            worker stats.
+                                        </p>
                                     </div>
                                     <div className="divide-border/50 divide-y">
-                                        {runtimeInsights.leaderboard.map((member, index) => {
-                                            const maximum = runtimeInsights.leaderboard[0]?.runtimeSeconds7d || 1;
-                                            return (
-                                                <div key={member.userId} className="px-5 py-3">
-                                                    <div className="flex items-center gap-3">
-                                                        <span className="text-muted-foreground w-5 text-xs tabular-nums">#{index + 1}</span>
-                                                        <div className="min-w-0 flex-1">
-                                                            <div className="flex items-center justify-between gap-3">
-                                                                <p className="truncate text-sm font-medium">{member.name ?? member.email ?? "Unknown"}</p>
-                                                                <span className="text-xs font-semibold tabular-nums">{formatRuntime(member.runtimeSeconds7d)}</span>
+                                        {runtimeInsights.leaderboard.map(
+                                            (member, index) => {
+                                                const maximum =
+                                                    runtimeInsights
+                                                        .leaderboard[0]
+                                                        ?.runtimeSeconds7d || 1;
+                                                return (
+                                                    <div
+                                                        key={member.userId}
+                                                        className="px-5 py-3"
+                                                    >
+                                                        <div className="flex items-center gap-3">
+                                                            <span className="text-muted-foreground w-5 text-xs tabular-nums">
+                                                                #{index + 1}
+                                                            </span>
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="flex items-center justify-between gap-3">
+                                                                    <p className="truncate text-sm font-medium">
+                                                                        {member.name ??
+                                                                            member.email ??
+                                                                            "Unknown"}
+                                                                    </p>
+                                                                    <span className="text-xs font-semibold tabular-nums">
+                                                                        {formatRuntime(
+                                                                            member.runtimeSeconds7d,
+                                                                        )}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="bg-muted mt-2 h-1.5 overflow-hidden rounded-full">
+                                                                    <div
+                                                                        className="h-full rounded-full bg-violet-500"
+                                                                        style={{
+                                                                            width: `${(member.runtimeSeconds7d / maximum) * 100}%`,
+                                                                        }}
+                                                                    />
+                                                                </div>
+                                                                <p className="text-muted-foreground mt-1 text-[10px]">
+                                                                    {member.checksPerRuntimeHour ===
+                                                                    null
+                                                                        ? "—"
+                                                                        : member.checksPerRuntimeHour.toFixed(
+                                                                              1,
+                                                                          )}{" "}
+                                                                    checks/h ·{" "}
+                                                                    {member.newItemsPer100RuntimeHours ===
+                                                                    null
+                                                                        ? "—"
+                                                                        : member.newItemsPer100RuntimeHours.toFixed(
+                                                                              1,
+                                                                          )}{" "}
+                                                                    items/100h
+                                                                </p>
                                                             </div>
-                                                            <div className="bg-muted mt-2 h-1.5 overflow-hidden rounded-full">
-                                                                <div className="h-full rounded-full bg-violet-500" style={{ width: `${(member.runtimeSeconds7d / maximum) * 100}%` }} />
-                                                            </div>
-                                                            <p className="text-muted-foreground mt-1 text-[10px]">
-                                                                {member.checksPerRuntimeHour === null ? "—" : member.checksPerRuntimeHour.toFixed(1)} checks/h · {member.newItemsPer100RuntimeHours === null ? "—" : member.newItemsPer100RuntimeHours.toFixed(1)} items/100h
-                                                            </p>
                                                         </div>
                                                     </div>
-                                                </div>
-                                            );
-                                        })}
-                                        {runtimeInsights.leaderboard.length === 0 ? (
-                                            <p className="text-muted-foreground px-5 py-8 text-center text-sm">Runtime tracking has just started.</p>
+                                                );
+                                            },
+                                        )}
+                                        {runtimeInsights.leaderboard.length ===
+                                        0 ? (
+                                            <p className="text-muted-foreground px-5 py-8 text-center text-sm">
+                                                Runtime tracking has just
+                                                started.
+                                            </p>
                                         ) : null}
                                     </div>
                                 </div>
@@ -4318,93 +4488,319 @@ export function AdminClient({
             ) : null}
 
             {activeTab === "logs" ? (
-                <div className="border-border/60 bg-card overflow-hidden rounded-lg border">
-                    <div className="border-border/60 flex flex-col gap-1 border-b px-5 py-4">
-                        <p className="text-foreground text-sm font-semibold">
-                            Admin Logs
-                        </p>
-                        <p className="text-muted-foreground text-xs">
-                            Latest audit, monitor, and alert events.
-                        </p>
-                    </div>
-                    {isLoadingLogs ? (
-                        <div className="text-muted-foreground px-5 py-12 text-center text-sm">
-                            Loading admin logs...
-                        </div>
-                    ) : adminLogs.length > 0 ? (
-                        <div className="overflow-x-auto">
-                            <table className="w-full">
-                                <thead className="bg-muted/30">
-                                    <tr className="border-border border-b">
-                                        <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
-                                            Event
-                                        </th>
-                                        <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
-                                            Subject
-                                        </th>
-                                        <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
-                                            Actor
-                                        </th>
-                                        <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
-                                            Status
-                                        </th>
-                                        <th className="text-muted-foreground px-5 py-3 text-right text-[11px] font-medium tracking-wider uppercase">
-                                            Time
-                                        </th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-border/50 divide-y">
-                                    {adminLogs.map((log) => (
-                                        <tr key={log.id}>
-                                            <td className="px-5 py-3.5">
-                                                <div className="space-y-1">
-                                                    <div className="flex flex-wrap items-center gap-2">
-                                                        <Badge
-                                                            variant="outline"
-                                                            className="rounded-md text-[10px] uppercase"
-                                                        >
-                                                            {log.type}
-                                                        </Badge>
-                                                        <p className="text-foreground text-sm font-medium">
-                                                            {log.title}
-                                                        </p>
+                <div className="space-y-4">
+                    {operationsSummary ? (
+                        <>
+                            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                                {[
+                                    {
+                                        label: "Delivered (24h)",
+                                        value: operationsSummary.sent,
+                                        detail:
+                                            operationsSummary.successRate ===
+                                            null
+                                                ? "No terminal deliveries"
+                                                : `${operationsSummary.successRate.toFixed(2)}% success`,
+                                    },
+                                    {
+                                        label: "Pending / retrying",
+                                        value: operationsSummary.pending,
+                                        detail: operationsSummary.oldestPendingAt
+                                            ? `${operationsSummary.retrying} retrying · oldest ${formatMetricDate(operationsSummary.oldestPendingAt)}`
+                                            : `${operationsSummary.retrying} waiting for retry`,
+                                    },
+                                    {
+                                        label: "Failed (24h)",
+                                        value: operationsSummary.failed,
+                                        detail: "Terminal failures only",
+                                    },
+                                    {
+                                        label: "Deduplicated (24h)",
+                                        value: operationsSummary.deduplicated,
+                                        detail: "Expected duplicate suppression",
+                                    },
+                                    {
+                                        label: "Open proxy incidents",
+                                        value: operationsSummary.proxyIncidents
+                                            .open,
+                                        detail: `${operationsSummary.proxyIncidents.brief} brief recoveries`,
+                                    },
+                                ].map((metric) => (
+                                    <div
+                                        key={metric.label}
+                                        className="border-border/60 bg-card rounded-lg border px-4 py-3"
+                                    >
+                                        <p className="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
+                                            {metric.label}
+                                        </p>
+                                        <p className="text-foreground mt-1 text-2xl font-semibold">
+                                            {metric.value.toLocaleString()}
+                                        </p>
+                                        <p className="text-muted-foreground mt-1 text-xs">
+                                            {metric.detail}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="border-border/60 bg-card grid gap-4 rounded-lg border p-4 lg:grid-cols-3">
+                                <div>
+                                    <p className="text-foreground text-sm font-semibold">
+                                        Channel health
+                                    </p>
+                                    <div className="mt-3 space-y-2">
+                                        {["discord", "telegram"].map(
+                                            (channel) => {
+                                                const health = operationsSummary
+                                                    .byChannel[channel] ?? {
+                                                    sent: 0,
+                                                    failed: 0,
+                                                    deduplicated: 0,
+                                                };
+                                                return (
+                                                    <div
+                                                        key={channel}
+                                                        className="bg-muted/30 flex items-center justify-between rounded-md px-3 py-2 text-xs"
+                                                    >
+                                                        <span className="font-medium capitalize">
+                                                            {channel}
+                                                        </span>
+                                                        <span className="text-muted-foreground">
+                                                            {health.sent.toLocaleString()}{" "}
+                                                            sent ·{" "}
+                                                            {health.failed.toLocaleString()}{" "}
+                                                            failed
+                                                        </span>
                                                     </div>
-                                                    {log.detail ? (
-                                                        <p className="text-muted-foreground max-w-xl truncate text-xs">
-                                                            {log.detail}
-                                                        </p>
-                                                    ) : null}
-                                                </div>
-                                            </td>
-                                            <td className="text-muted-foreground px-5 py-3.5 text-sm">
-                                                {log.subject ?? "-"}
-                                            </td>
-                                            <td className="text-muted-foreground px-5 py-3.5 text-sm">
-                                                {log.actor ?? "-"}
-                                            </td>
-                                            <td className="px-5 py-3.5">
-                                                <Badge
-                                                    variant="secondary"
-                                                    className="rounded-md text-[10px] uppercase"
-                                                >
-                                                    {log.status}
-                                                </Badge>
-                                            </td>
-                                            <td className="text-muted-foreground px-5 py-3.5 text-right text-xs">
-                                                {formatMetricDate(
-                                                    log.createdAt,
-                                                )}
-                                            </td>
-                                        </tr>
+                                                );
+                                            },
+                                        )}
+                                    </div>
+                                </div>
+                                <div>
+                                    <p className="text-foreground text-sm font-semibold">
+                                        Top failure reasons
+                                    </p>
+                                    <div className="mt-3 space-y-2">
+                                        {operationsSummary.topFailures.length >
+                                        0 ? (
+                                            operationsSummary.topFailures
+                                                .slice(0, 4)
+                                                .map((failure) => (
+                                                    <div
+                                                        key={`${failure.channel}-${failure.reasonCode}`}
+                                                        className="bg-muted/30 flex items-center justify-between rounded-md px-3 py-2 text-xs"
+                                                    >
+                                                        <span>
+                                                            {failure.channel} ·{" "}
+                                                            {failure.reasonCode}
+                                                        </span>
+                                                        <span className="font-semibold">
+                                                            {failure.count.toLocaleString()}
+                                                        </span>
+                                                    </div>
+                                                ))
+                                        ) : (
+                                            <p className="text-muted-foreground text-xs">
+                                                No terminal delivery failures in
+                                                this window.
+                                            </p>
+                                        )}
+                                    </div>
+                                </div>
+                                <div>
+                                    <p className="text-foreground text-sm font-semibold">
+                                        Brief proxy recoveries
+                                    </p>
+                                    <div className="mt-3 space-y-2">
+                                        {operationsSummary.proxyIncidents
+                                            .briefGroups.length > 0 ? (
+                                            operationsSummary.proxyIncidents.briefGroups
+                                                .slice(0, 4)
+                                                .map((group) => (
+                                                    <div
+                                                        key={`${group.domain}-${group.proxySource}`}
+                                                        className="bg-muted/30 flex items-center justify-between rounded-md px-3 py-2 text-xs"
+                                                    >
+                                                        <span>
+                                                            {group.domain} ·{" "}
+                                                            {group.proxySource}
+                                                        </span>
+                                                        <span className="font-semibold">
+                                                            {group.incidents.toLocaleString()}{" "}
+                                                            ·{" "}
+                                                            {group.waits.toLocaleString()}{" "}
+                                                            waits
+                                                        </span>
+                                                    </div>
+                                                ))
+                                        ) : (
+                                            <p className="text-muted-foreground text-xs">
+                                                No brief proxy recoveries in
+                                                this window.
+                                            </p>
+                                        )}
+                                    </div>
+                                </div>
+                                <p className="text-muted-foreground text-[11px] lg:col-span-3">
+                                    Tracked since{" "}
+                                    {operationsSummary.trackedSince
+                                        ? formatMetricDate(
+                                              new Date(
+                                                  operationsSummary.trackedSince,
+                                              ),
+                                          )
+                                        : "deployment"}
+                                    . Dispatcher heartbeat{" "}
+                                    {operationsSummary.dispatcherHeartbeat
+                                        ? formatMetricDate(
+                                              new Date(
+                                                  operationsSummary.dispatcherHeartbeat,
+                                              ),
+                                          )
+                                        : "not reported yet"}
+                                    .
+                                </p>
+                            </div>
+                        </>
+                    ) : null}
+
+                    <div className="border-border/60 bg-card overflow-hidden rounded-lg border">
+                        <div className="border-border/60 flex flex-col gap-1 border-b px-5 py-4">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                    <p className="text-foreground text-sm font-semibold">
+                                        Operations
+                                    </p>
+                                    <p className="text-muted-foreground text-xs">
+                                        Actual failures, relevant incidents and
+                                        audit activity without
+                                        successful-delivery noise.
+                                    </p>
+                                </div>
+                                <div className="flex flex-wrap gap-1">
+                                    {(
+                                        [
+                                            "all",
+                                            "delivery",
+                                            "proxy",
+                                            "monitor",
+                                            "audit",
+                                        ] as AdminOperationFilter[]
+                                    ).map((filter) => (
+                                        <Button
+                                            key={filter}
+                                            type="button"
+                                            size="sm"
+                                            variant={
+                                                operationFilter === filter
+                                                    ? "secondary"
+                                                    : "ghost"
+                                            }
+                                            className="h-7 capitalize"
+                                            onClick={() => {
+                                                setLogsLoaded(false);
+                                                loadAdminLogs(filter);
+                                            }}
+                                        >
+                                            {filter}
+                                        </Button>
                                     ))}
-                                </tbody>
-                            </table>
+                                </div>
+                            </div>
                         </div>
-                    ) : (
-                        <div className="text-muted-foreground px-5 py-12 text-center text-sm">
-                            No admin logs found yet.
-                        </div>
-                    )}
+                        {isLoadingLogs ? (
+                            <div className="text-muted-foreground px-5 py-12 text-center text-sm">
+                                Loading admin logs...
+                            </div>
+                        ) : adminLogs.length > 0 ? (
+                            <div className="overflow-x-auto">
+                                <table className="w-full">
+                                    <thead className="bg-muted/30">
+                                        <tr className="border-border border-b">
+                                            <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
+                                                Event
+                                            </th>
+                                            <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
+                                                Subject
+                                            </th>
+                                            <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
+                                                Actor
+                                            </th>
+                                            <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
+                                                Status
+                                            </th>
+                                            <th className="text-muted-foreground px-5 py-3 text-right text-[11px] font-medium tracking-wider uppercase">
+                                                Time
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-border/50 divide-y">
+                                        {adminLogs.map((log) => (
+                                            <tr key={log.id}>
+                                                <td className="px-5 py-3.5">
+                                                    <div className="space-y-1">
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <Badge
+                                                                variant="outline"
+                                                                className="rounded-md text-[10px] uppercase"
+                                                            >
+                                                                {log.type}
+                                                            </Badge>
+                                                            <p className="text-foreground text-sm font-medium">
+                                                                {log.title}
+                                                            </p>
+                                                        </div>
+                                                        {log.detail ? (
+                                                            <p className="text-muted-foreground max-w-xl truncate text-xs">
+                                                                {log.detail}
+                                                            </p>
+                                                        ) : null}
+                                                    </div>
+                                                </td>
+                                                <td className="text-muted-foreground px-5 py-3.5 text-sm">
+                                                    {log.subject ?? "-"}
+                                                </td>
+                                                <td className="text-muted-foreground px-5 py-3.5 text-sm">
+                                                    {log.actor ?? "-"}
+                                                </td>
+                                                <td className="px-5 py-3.5">
+                                                    <Badge
+                                                        variant="secondary"
+                                                        className="rounded-md text-[10px] uppercase"
+                                                    >
+                                                        {log.status}
+                                                    </Badge>
+                                                </td>
+                                                <td className="text-muted-foreground px-5 py-3.5 text-right text-xs">
+                                                    {formatMetricDate(
+                                                        log.createdAt,
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ) : (
+                            <div className="text-muted-foreground px-5 py-12 text-center text-sm">
+                                No admin logs found yet.
+                            </div>
+                        )}
+                        {operationNextCursor && !isLoadingLogs ? (
+                            <div className="border-border/60 border-t p-3 text-center">
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() =>
+                                        loadAdminLogs(operationFilter, true)
+                                    }
+                                >
+                                    Load more
+                                </Button>
+                            </div>
+                        ) : null}
+                    </div>
                 </div>
             ) : null}
 
@@ -5886,7 +6282,8 @@ export function AdminClient({
                                             Monitor Runtime
                                         </p>
                                         <p className="text-muted-foreground text-xs">
-                                            Aggregate monitor-hours for this member.
+                                            Aggregate monitor-hours for this
+                                            member.
                                         </p>
                                     </div>
                                     <span className="text-muted-foreground text-[10px] uppercase">
@@ -5897,10 +6294,26 @@ export function AdminClient({
                                 </div>
                                 <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                                     {[
-                                        ["Total", selected.metrics.totalRuntimeSeconds],
-                                        ["Open sessions", selected.metrics.currentRuntimeSeconds],
-                                        ["Last 7 days", selected.runtimeDetails?.runtimeSeconds7d ?? 0],
-                                        ["Average session", selected.runtimeDetails?.averageSessionSeconds ?? 0],
+                                        [
+                                            "Total",
+                                            selected.metrics
+                                                .totalRuntimeSeconds,
+                                        ],
+                                        [
+                                            "Open sessions",
+                                            selected.metrics
+                                                .currentRuntimeSeconds,
+                                        ],
+                                        [
+                                            "Last 7 days",
+                                            selected.runtimeDetails
+                                                ?.runtimeSeconds7d ?? 0,
+                                        ],
+                                        [
+                                            "Average session",
+                                            selected.runtimeDetails
+                                                ?.averageSessionSeconds ?? 0,
+                                        ],
                                     ].map(([label, value]) => (
                                         <div
                                             key={String(label)}
@@ -5912,7 +6325,9 @@ export function AdminClient({
                                             <p className="mt-1 text-xl font-semibold tabular-nums">
                                                 {isLoadingSelectedDetails
                                                     ? "—"
-                                                    : formatRuntime(Number(value))}
+                                                    : formatRuntime(
+                                                          Number(value),
+                                                      )}
                                             </p>
                                         </div>
                                     ))}
@@ -6129,11 +6544,24 @@ export function AdminClient({
                                                             </span>
                                                             <span className="inline-flex items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400">
                                                                 <Clock3 className="h-3.5 w-3.5" />
-                                                                Running for {formatRuntime(
+                                                                Running for{" "}
+                                                                {formatRuntime(
                                                                     monitor.active_since
-                                                                        ? (nowMs - new Date(monitor.active_since).getTime()) / 1000
+                                                                        ? (nowMs -
+                                                                              new Date(
+                                                                                  monitor.active_since,
+                                                                              ).getTime()) /
+                                                                              1000
                                                                         : 0,
-                                                                )} · {formatRuntime(monitorRuntimeSeconds(monitor, nowMs))} total
+                                                                )}{" "}
+                                                                ·{" "}
+                                                                {formatRuntime(
+                                                                    monitorRuntimeSeconds(
+                                                                        monitor,
+                                                                        nowMs,
+                                                                    ),
+                                                                )}{" "}
+                                                                total
                                                             </span>
                                                             {monitor.price_max ? (
                                                                 <span>
@@ -6283,8 +6711,16 @@ export function AdminClient({
                                                         </span>
                                                         <span className="inline-flex items-center gap-1 font-medium">
                                                             <Clock3 className="h-3.5 w-3.5" />
-                                                            {formatRuntime(monitorRuntimeSeconds(monitor, nowMs))} total
-                                                            {monitor.status === "active" && monitor.active_since
+                                                            {formatRuntime(
+                                                                monitorRuntimeSeconds(
+                                                                    monitor,
+                                                                    nowMs,
+                                                                ),
+                                                            )}{" "}
+                                                            total
+                                                            {monitor.status ===
+                                                                "active" &&
+                                                            monitor.active_since
                                                                 ? ` · ${formatRuntime((nowMs - new Date(monitor.active_since).getTime()) / 1000)} running`
                                                                 : ""}
                                                         </span>

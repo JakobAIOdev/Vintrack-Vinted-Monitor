@@ -4,7 +4,10 @@ import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { revalidatePath } from "next/cache";
 import { isValidDiscordWebhook } from "@/lib/validation";
-import { monitorStatusTelegramText, sendTelegramMessage } from "@/lib/telegram";
+import {
+    cancelPendingMonitorNotifications,
+    enqueueMonitorStatusNotification,
+} from "@/lib/alert-outbox";
 import { getTelegramConnection } from "@/lib/telegram-connection";
 import {
     getMonitorActivationState,
@@ -35,83 +38,28 @@ export type BulkMonitorUpdateInput = {
     notifications?: "enable" | "disable";
 };
 
-async function sendTelegramStatusIfConfigured(
-    monitor: {
-        name: string;
-        userId: string;
-        telegram_active: boolean;
-        notifications_enabled: boolean;
-    },
-    status: "started" | "paused",
-) {
-    if (!monitor.notifications_enabled || !monitor.telegram_active) return;
-
-    const connection = await getTelegramConnection(monitor.userId);
-    if (!connection) return;
-    const result = await sendTelegramMessage(
-        connection.chat_id,
-        monitorStatusTelegramText(monitor.name, status),
-    );
-    if ("error" in result) {
-        console.error("Failed to send Telegram status message", result.error);
-    }
-}
-
 export async function stopAllMonitors() {
     const session = await auth();
-    if (!session?.user) throw new Error("Unauthorized");
-    const monitorsToStop = await db.monitors.findMany({
-        where: { userId: session.user.id, status: "active" },
+    if (!session?.user?.id) throw new Error("Unauthorized");
+    const userId = session.user.id;
+    const transitionKey = Date.now().toString();
+    await db.$transaction(async (tx) => {
+        const monitorsToStop = await tx.monitors.findMany({
+            where: { userId, status: "active" },
+        });
+        await tx.monitors.updateMany({
+            where: { userId, status: "active" },
+            data: { status: "paused" },
+        });
+        for (const monitor of monitorsToStop) {
+            await enqueueMonitorStatusNotification(tx, monitor, {
+                kind: "monitor_paused",
+                title: "Monitor paused",
+                message: `The monitor ${monitor.name} was paused via Stop All.`,
+                idempotencyKey: `monitor-paused:${monitor.id}:${transitionKey}`,
+            });
+        }
     });
-
-    await db.monitors.updateMany({
-        where: { userId: session.user.id, status: "active" },
-        data: { status: "paused" },
-    });
-
-    Promise.all(
-        monitorsToStop.map(async (monitor) => {
-            if (
-                monitor.notifications_enabled &&
-                monitor.discord_webhook &&
-                monitor.webhook_active
-            ) {
-                try {
-                    const payload = {
-                        username: "Vintrack Monitor",
-                        avatar_url:
-                            "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                        embeds: [
-                            {
-                                title: "⏸️ Monitor Paused",
-                                description: `The monitor **${monitor.name}** has been paused via Stop All.`,
-                                color: 16753920,
-                                footer: {
-                                    text: "Vintrack • Status Update",
-                                    icon_url:
-                                        "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                                },
-                                timestamp: new Date().toISOString(),
-                            },
-                        ],
-                    };
-
-                    await fetch(monitor.discord_webhook, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(payload),
-                    });
-                } catch (error) {
-                    console.error(
-                        "Failed to send status webhook for",
-                        monitor.id,
-                        error,
-                    );
-                }
-            }
-            await sendTelegramStatusIfConfigured(monitor, "paused");
-        }),
-    ).catch(console.error);
 
     revalidatePath("/dashboard");
     return { success: true, message: "All monitors stopped successfully." };
@@ -121,6 +69,7 @@ export async function startAllMonitors() {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Unauthorized");
     const userId = session.user.id;
+    const transitionKey = Date.now().toString();
 
     const { activationState, monitorsToStart, demoExpirations, skippedCount } =
         await withMonitorActivationLock(userId, async (tx) => {
@@ -167,7 +116,7 @@ export async function startAllMonitors() {
             );
 
             for (const monitor of monitorsToStart) {
-                await tx.monitors.update({
+                const startedMonitor = await tx.monitors.update({
                     where: { id: monitor.id, userId },
                     data: {
                         status: "active",
@@ -179,6 +128,12 @@ export async function startAllMonitors() {
                               }
                             : {}),
                     },
+                });
+                await enqueueMonitorStatusNotification(tx, startedMonitor, {
+                    kind: "monitor_started",
+                    title: "Monitor started",
+                    message: `The monitor ${startedMonitor.name} was started via Start All.`,
+                    idempotencyKey: `monitor-started:${startedMonitor.id}:${transitionKey}`,
                 });
             }
 
@@ -212,50 +167,6 @@ export async function startAllMonitors() {
         };
     }
 
-    Promise.all(
-        monitorsToStart.map(async (monitor) => {
-            if (
-                monitor.notifications_enabled &&
-                monitor.discord_webhook &&
-                monitor.webhook_active
-            ) {
-                try {
-                    const payload = {
-                        username: "Vintrack Monitor",
-                        avatar_url:
-                            "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                        embeds: [
-                            {
-                                title: "▶️ Monitor Started",
-                                description: `The monitor **${monitor.name}** has been started via Start All.`,
-                                color: 3066993,
-                                footer: {
-                                    text: "Vintrack • Status Update",
-                                    icon_url:
-                                        "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                                },
-                                timestamp: new Date().toISOString(),
-                            },
-                        ],
-                    };
-
-                    await fetch(monitor.discord_webhook, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(payload),
-                    });
-                } catch (error) {
-                    console.error(
-                        "Failed to send status webhook for",
-                        monitor.id,
-                        error,
-                    );
-                }
-            }
-            await sendTelegramStatusIfConfigured(monitor, "started");
-        }),
-    ).catch(console.error);
-
     revalidatePath("/dashboard");
     return {
         success: true,
@@ -274,7 +185,7 @@ export async function startAllMonitors() {
 
 export async function toggleMonitor(id: number, currentStatus: string) {
     const session = await auth();
-    if (!session?.user) throw new Error("Unauthorized");
+    if (!session?.user?.id) throw new Error("Unauthorized");
     const userId = session.user.id;
 
     const newStatus = currentStatus === "active" ? "paused" : "active";
@@ -301,7 +212,7 @@ export async function toggleMonitor(id: number, currentStatus: string) {
             }
         }
 
-        return tx.monitors.update({
+        const monitor = await tx.monitors.update({
             where: { id: id, userId },
             data: {
                 status: newStatus,
@@ -310,50 +221,15 @@ export async function toggleMonitor(id: number, currentStatus: string) {
                     : {}),
             },
         });
+        await enqueueMonitorStatusNotification(tx, monitor, {
+            kind: newStatus === "active" ? "monitor_started" : "monitor_paused",
+            title:
+                newStatus === "active" ? "Monitor started" : "Monitor paused",
+            message: `The monitor ${monitor.name} was ${newStatus === "active" ? "started" : "paused"}.`,
+            idempotencyKey: `monitor-${newStatus}:${monitor.id}:${Date.now()}`,
+        });
+        return monitor;
     });
-
-    if (
-        monitor.notifications_enabled &&
-        monitor.discord_webhook &&
-        monitor.webhook_active
-    ) {
-        try {
-            const isStarting = newStatus === "active";
-            const payload = {
-                username: "Vintrack Monitor",
-                avatar_url:
-                    "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                embeds: [
-                    {
-                        title: isStarting
-                            ? "▶️ Monitor Started"
-                            : "⏸️ Monitor Paused",
-                        description: `The monitor **${monitor.name}** has been ${isStarting ? "started" : "paused"}.`,
-                        color: isStarting ? 3066993 : 16753920,
-                        footer: {
-                            text: "Vintrack • Status Update",
-                            icon_url:
-                                "https://cdn-icons-png.flaticon.com/512/8266/8266540.png",
-                        },
-                        timestamp: new Date().toISOString(),
-                    },
-                ],
-            };
-
-            await fetch(monitor.discord_webhook, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-            });
-        } catch (error) {
-            console.error("Failed to send status webhook", error);
-        }
-    }
-
-    await sendTelegramStatusIfConfigured(
-        monitor,
-        newStatus === "active" ? "started" : "paused",
-    );
 
     revalidatePath("/dashboard");
     return {
@@ -369,7 +245,8 @@ export async function updateMonitorWebhook(
     webhookActive: boolean,
 ) {
     const session = await auth();
-    if (!session?.user) throw new Error("Unauthorized");
+    if (!session?.user?.id) throw new Error("Unauthorized");
+    const userId = session.user.id;
 
     const urlToSave = webhookUrl.trim() === "" ? null : webhookUrl.trim();
 
@@ -377,12 +254,15 @@ export async function updateMonitorWebhook(
         throw new Error("Invalid Discord Webhook URL");
     }
 
-    await db.monitors.update({
-        where: { id: monitorId, userId: session.user.id },
-        data: {
-            discord_webhook: urlToSave,
-            webhook_active: Boolean(urlToSave && webhookActive),
-        },
+    await db.$transaction(async (tx) => {
+        await cancelPendingMonitorNotifications(tx, monitorId, "discord");
+        await tx.monitors.update({
+            where: { id: monitorId, userId },
+            data: {
+                discord_webhook: urlToSave,
+                webhook_active: Boolean(urlToSave && webhookActive),
+            },
+        });
     });
 
     revalidatePath("/dashboard");
@@ -394,11 +274,17 @@ export async function setMonitorWebhookStatus(
     enabled: boolean,
 ) {
     const session = await auth();
-    if (!session?.user) throw new Error("Unauthorized");
+    if (!session?.user?.id) throw new Error("Unauthorized");
+    const userId = session.user.id;
 
-    await db.monitors.update({
-        where: { id: monitorId, userId: session.user.id },
-        data: { webhook_active: enabled },
+    await db.$transaction(async (tx) => {
+        if (!enabled) {
+            await cancelPendingMonitorNotifications(tx, monitorId, "discord");
+        }
+        await tx.monitors.update({
+            where: { id: monitorId, userId },
+            data: { webhook_active: enabled },
+        });
     });
 
     revalidatePath("/dashboard");
@@ -426,6 +312,9 @@ export async function setMonitorNotificationsEnabled(
         data: { notifications_enabled: enabled },
         select: { id: true, notifications_enabled: true },
     });
+    if (!enabled) {
+        await cancelPendingMonitorNotifications(db, monitorId);
+    }
 
     await logAuditEvent({
         userId: session.user.id,
@@ -461,6 +350,9 @@ export async function toggleTelegramStatus(
         where: { id: monitorId, userId: session.user.id },
         data: { telegram_active: !currentStatus },
     });
+    if (currentStatus) {
+        await cancelPendingMonitorNotifications(db, monitorId, "telegram");
+    }
 
     revalidatePath("/dashboard");
     return {

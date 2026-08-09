@@ -2,13 +2,12 @@ package scraper
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"time"
 
-	"vintrack-worker/internal/discord"
 	"vintrack-worker/internal/model"
-	"vintrack-worker/internal/telegram"
 )
 
 type alertJob struct {
@@ -37,13 +36,12 @@ func (e *Engine) startPipelines() {
 	if alertWorkers < 1 {
 		alertWorkers = 1
 	}
-	discordWorkers := getEnvInt("DISCORD_ALERT_WORKERS", 8)
-	if discordWorkers < 1 {
-		discordWorkers = 1
+	deliveryWorkers := getEnvInt("ALERT_DELIVERY_WORKERS", 16)
+	if deliveryWorkers < 1 {
+		deliveryWorkers = 1
 	}
-	telegramWorkers := getEnvInt("TELEGRAM_ALERT_WORKERS", 16)
-	if telegramWorkers < 1 {
-		telegramWorkers = 1
+	if deliveryWorkers > 64 {
+		deliveryWorkers = 64
 	}
 	enrichmentWorkers := getEnvInt("ENRICHMENT_WORKERS", 8)
 	if enrichmentWorkers < 1 {
@@ -54,14 +52,14 @@ func (e *Engine) startPipelines() {
 		e.jobsWG.Add(1)
 		go e.alertWorker()
 	}
-	for i := 0; i < discordWorkers; i++ {
+	for i := 0; i < deliveryWorkers; i++ {
 		e.jobsWG.Add(1)
-		go e.discordAlertWorker()
+		go e.alertDeliveryWorker()
 	}
-	for i := 0; i < telegramWorkers; i++ {
-		e.jobsWG.Add(1)
-		go e.telegramAlertWorker()
-	}
+	e.jobsWG.Add(1)
+	go e.alertDeliveryListener()
+	e.jobsWG.Add(1)
+	go e.alertDeliveryMaintenance()
 	for i := 0; i < enrichmentWorkers; i++ {
 		e.jobsWG.Add(1)
 		go e.enrichmentWorker()
@@ -93,9 +91,7 @@ func (e *Engine) enqueueItem(job enrichmentJob, publishNow bool) {
 
 func (e *Engine) enqueueAlert(job alertJob, recordQueued bool) {
 	job.ctx = e.jobsCtx
-	if recordQueued {
-		e.db.RecordDetectionAlertQueued(job.monitor.ID, job.item.ID, time.Now())
-	}
+	_ = recordQueued
 	select {
 	case e.alertJobs <- job:
 	case <-job.ctx.Done():
@@ -143,94 +139,72 @@ func (e *Engine) deliverAlert(job alertJob) {
 		return
 	}
 
-	if (hasDiscord || hasTelegram) && job.monitor.DedupeMonitorAlerts && !e.db.ClaimUserItemAlert(job.monitor.UserID, job.item.ID) {
-		e.db.RecordAlertEvent(model.AlertEvent{
-			UserID: job.monitor.UserID, MonitorID: job.monitor.ID, ItemID: job.item.ID,
-			Channel: "all", Status: "skipped", FailureReason: "duplicate_user_item_alert",
-		})
+	if !hasDiscord && !hasTelegram {
 		return
 	}
 
+	telegramStyle, discordStyle := e.monitorNotificationMessageStyles(job.monitor)
+	request := model.AlertNotificationRequest{
+		UserID: job.monitor.UserID, MonitorID: job.monitor.ID, ItemID: job.item.ID,
+		Kind: "item_match", IdempotencyKey: fmt.Sprintf("item:%d:%d", job.monitor.ID, job.item.ID),
+		ExpiresAt: time.Now().Add(15 * time.Minute), DedupeUserItem: job.monitor.DedupeMonitorAlerts,
+		Payload: model.AlertNotificationPayload{
+			Version: 1, Kind: "item_match", MonitorName: job.monitor.Name,
+			ProxySource: job.proxySource, TelegramStyle: telegramStyle,
+			DiscordStyle: discordStyle, Item: &job.item,
+		},
+	}
 	if hasDiscord {
-		select {
-		case e.discordJobs <- job:
-		case <-job.ctx.Done():
-		case <-e.jobsCtx.Done():
-		}
+		request.DiscordTarget = job.monitor.DiscordWebhook.String
 	}
 	if hasTelegram {
-		select {
-		case e.telegramJobs <- job:
-		case <-job.ctx.Done():
-		case <-e.jobsCtx.Done():
-		}
+		request.TelegramTarget = job.monitor.TelegramChatID.String
+	}
+	queueCtx, cancel := context.WithTimeout(job.ctx, 5*time.Second)
+	created, err := e.db.EnqueueAlertNotification(queueCtx, request)
+	cancel()
+	if err != nil {
+		log.Printf("[%d] enqueue item alert %d: %v", job.monitor.ID, job.item.ID, err)
+		return
+	}
+	if created {
+		e.db.RecordDetectionAlertQueued(job.monitor.ID, job.item.ID, time.Now())
 	}
 }
 
-func (e *Engine) discordAlertWorker() {
-	defer e.jobsWG.Done()
-	for {
-		select {
-		case job := <-e.discordJobs:
-			e.deliverDiscordAlert(job)
-		case <-e.jobsCtx.Done():
-			return
-		}
-	}
-}
-
-func (e *Engine) deliverDiscordAlert(job alertJob) {
-	select {
-	case <-job.ctx.Done():
-		return
-	default:
-	}
-	_, style := e.monitorNotificationMessageStyles(job.monitor)
-	if err := discord.SendWebhook(job.monitor.DiscordWebhook.String, job.item, job.monitor.Name, job.proxySource, style); err != nil {
-		e.db.RecordAlertEvent(model.AlertEvent{
-			UserID: job.monitor.UserID, MonitorID: job.monitor.ID, ItemID: job.item.ID,
-			Channel: "discord", Status: "failed", FailureReason: err.Error(),
-		})
+func (e *Engine) enqueueStatusNotification(
+	monitor model.Monitor,
+	kind string,
+	title string,
+	message string,
+	idempotencySuffix string,
+) {
+	if !e.monitorNotificationsEnabled(monitor) {
 		return
 	}
-	e.db.RecordDetectionAlertSent(job.monitor.ID, job.item.ID, time.Now())
-	e.db.RecordAlertEvent(model.AlertEvent{
-		UserID: job.monitor.UserID, MonitorID: job.monitor.ID, ItemID: job.item.ID,
-		Channel: "discord", Status: "sent",
-	})
-}
-
-func (e *Engine) telegramAlertWorker() {
-	defer e.jobsWG.Done()
-	for {
-		select {
-		case job := <-e.telegramJobs:
-			e.deliverTelegramAlert(job)
-		case <-e.jobsCtx.Done():
-			return
-		}
-	}
-}
-
-func (e *Engine) deliverTelegramAlert(job alertJob) {
-	select {
-	case <-job.ctx.Done():
-		return
-	default:
-	}
-	style, _ := e.monitorNotificationMessageStyles(job.monitor)
-	if err := telegram.SendItem(job.monitor.TelegramChatID.String, job.item, job.monitor.Name, job.proxySource, style); err != nil {
-		e.db.RecordAlertEvent(model.AlertEvent{
-			UserID: job.monitor.UserID, MonitorID: job.monitor.ID, ItemID: job.item.ID,
-			Channel: "telegram", Status: "failed", FailureReason: err.Error(),
-		})
+	discordEnabled, telegramEnabled := effectiveExternalAlerts(monitor, true)
+	if !discordEnabled && !telegramEnabled {
 		return
 	}
-	e.db.RecordDetectionAlertSent(job.monitor.ID, job.item.ID, time.Now())
-	e.db.RecordAlertEvent(model.AlertEvent{
-		UserID: job.monitor.UserID, MonitorID: job.monitor.ID, ItemID: job.item.ID,
-		Channel: "telegram", Status: "sent",
-	})
+	request := model.AlertNotificationRequest{
+		UserID: monitor.UserID, MonitorID: monitor.ID, Kind: kind,
+		IdempotencyKey: fmt.Sprintf("status:%s:%d:%s", kind, monitor.ID, idempotencySuffix),
+		ExpiresAt:      time.Now().Add(time.Hour),
+		Payload: model.AlertNotificationPayload{
+			Version: 1, Kind: kind, MonitorName: monitor.Name, Title: title, Message: message,
+		},
+	}
+	if discordEnabled {
+		request.DiscordTarget = monitor.DiscordWebhook.String
+	}
+	if telegramEnabled {
+		request.TelegramTarget = monitor.TelegramChatID.String
+	}
+	ctx, cancel := context.WithTimeout(e.jobsCtx, 5*time.Second)
+	defer cancel()
+	if _, err := e.db.EnqueueAlertNotification(ctx, request); err != nil {
+		log.Printf("[%d] enqueue %s notification: %v", monitor.ID, kind, err)
+	}
 }
 
 func (e *Engine) enrichmentWorker() {

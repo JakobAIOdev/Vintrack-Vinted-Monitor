@@ -142,4 +142,23 @@ test.describe("admin running monitors", () => {
             page.getByRole("main").getByText("E2E User").last(),
         ).toBeVisible();
     });
+
+    test("separates delivery health from important operations", async ({
+        page,
+    }) => {
+        await page.goto("/admin?tab=overview");
+        await page.getByRole("tab", { name: "Logs" }).click();
+
+        await expect(page.getByText("Delivered (24h)")).toBeVisible();
+        await expect(page.getByText("Pending / retrying")).toBeVisible();
+        await expect(page.getByText("Deduplicated (24h)")).toBeVisible();
+        await expect(page.getByText("Terminal failures only")).toBeVisible();
+        await expect(
+            page.getByText("Expected duplicate suppression"),
+        ).toBeVisible();
+        await expect(
+            page.getByText("successful-delivery noise", { exact: false }),
+        ).toBeVisible();
+        await expect(page.getByText(/alert issues/i)).toHaveCount(0);
+    });
 });

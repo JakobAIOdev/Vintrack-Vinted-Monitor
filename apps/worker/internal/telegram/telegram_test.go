@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,37 @@ import (
 
 	"vintrack-worker/internal/model"
 )
+
+func TestSendAttemptReturnsTelegramRetryAfterWithoutSleeping(t *testing.T) {
+	withTelegramServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"ok":false,"parameters":{"retry_after":17}}`))
+	})
+	result := sendAttempt(context.Background(), "sendMessage", map[string]interface{}{
+		"chat_id": "1", "text": "test",
+	})
+	if !result.Retryable || result.ReasonCode != "rate_limited" || result.RetryAfter != 17*time.Second {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestSendAttemptClassifiesTelegramProviderFailures(t *testing.T) {
+	withTelegramServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "unavailable") {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+	})
+	transient := sendAttempt(context.Background(), "unavailable", map[string]interface{}{"chat_id": "1"})
+	if !transient.Retryable || transient.ReasonCode != "provider_5xx" {
+		t.Fatalf("transient result: %#v", transient)
+	}
+	terminal := sendAttempt(context.Background(), "forbidden", map[string]interface{}{"chat_id": "1"})
+	if terminal.Retryable || terminal.ReasonCode != "invalid_destination" {
+		t.Fatalf("terminal result: %#v", terminal)
+	}
+}
 
 func withTelegramServer(t *testing.T, handler http.HandlerFunc) {
 	t.Helper()

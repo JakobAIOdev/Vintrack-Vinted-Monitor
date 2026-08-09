@@ -114,6 +114,125 @@ func SendItem(chatID string, item model.Item, monitorName string, proxySource st
 	return nil
 }
 
+func SendItemAttempt(
+	ctx context.Context,
+	chatID string,
+	item model.Item,
+	monitorName string,
+	proxySource string,
+	style model.NotificationMessageStyle,
+) model.AlertDeliveryResult {
+	if strings.TrimSpace(chatID) == "" {
+		return model.AlertDeliveryResult{ReasonCode: "invalid_destination", Detail: "telegram chat is not configured"}
+	}
+	style = model.NormalizeNotificationMessageStyle(style)
+	if style == model.NotificationMessageStyleCompact {
+		payload := map[string]interface{}{
+			"chat_id": chatID, "text": compactItemText(item, monitorName), "parse_mode": "HTML",
+		}
+		previewURL := absoluteDashboardURL(item.ImageURL)
+		if isTelegramButtonURL(previewURL) {
+			payload["link_preview_options"] = map[string]interface{}{
+				"url": previewURL, "prefer_small_media": true, "show_above_text": false,
+			}
+		} else {
+			payload["disable_web_page_preview"] = true
+		}
+		if keyboard := compactItemKeyboard(item); keyboard != nil {
+			payload["reply_markup"] = keyboard
+		}
+		return sendAttempt(ctx, "sendMessage", payload)
+	}
+
+	if item.ImageURL != "" {
+		photoPayload := map[string]interface{}{
+			"chat_id": chatID, "photo": absoluteDashboardURL(item.ImageURL),
+			"caption": itemCaption(item, monitorName, proxySource), "parse_mode": "HTML",
+		}
+		if keyboard := itemKeyboard(item); keyboard != nil {
+			photoPayload["reply_markup"] = keyboard
+		}
+		result := sendAttempt(ctx, "sendPhoto", photoPayload)
+		if result.Success || result.Retryable || result.ReasonCode == "invalid_destination" {
+			return result
+		}
+	}
+
+	messagePayload := map[string]interface{}{
+		"chat_id": chatID, "text": itemCaption(item, monitorName, proxySource),
+		"parse_mode": "HTML", "disable_web_page_preview": false,
+	}
+	if keyboard := itemKeyboard(item); keyboard != nil {
+		messagePayload["reply_markup"] = keyboard
+	}
+	return sendAttempt(ctx, "sendMessage", messagePayload)
+}
+
+func SendStatusAttempt(ctx context.Context, chatID string, title string, message string) model.AlertDeliveryResult {
+	text := fmt.Sprintf("<b>%s</b>\n%s", escape(title), escape(message))
+	return sendAttempt(ctx, "sendMessage", map[string]interface{}{
+		"chat_id": chatID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": true,
+	})
+}
+
+func sendAttempt(ctx context.Context, method string, payload map[string]interface{}) model.AlertDeliveryResult {
+	token := os.Getenv("TELEGRAM_BOT_TOKEN")
+	if token == "" {
+		return model.AlertDeliveryResult{ReasonCode: "provider_rejected", Detail: "telegram bot token is not configured"}
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return model.AlertDeliveryResult{ReasonCode: "provider_rejected", Detail: "telegram payload could not be encoded"}
+	}
+	endpoint := fmt.Sprintf("%s/bot%s/%s", strings.TrimRight(apiBaseURL, "/"), token, method)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return model.AlertDeliveryResult{ReasonCode: "provider_rejected", Detail: "telegram request could not be created"}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		reason := "network_error"
+		var netErr net.Error
+		if ctx.Err() != nil || (errors.As(err, &netErr) && netErr.Timeout()) {
+			reason = "network_timeout"
+		}
+		return model.AlertDeliveryResult{Retryable: true, ReasonCode: reason, Detail: "telegram request failed"}
+	}
+	defer resp.Body.Close()
+	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	result := model.AlertDeliveryResult{HTTPStatus: resp.StatusCode}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		result.Success = true
+		return result
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		var retry retryResponse
+		_ = json.Unmarshal(responseBody, &retry)
+		result.Retryable = true
+		result.ReasonCode = "rate_limited"
+		result.Detail = "telegram rate limit reached"
+		if retry.Parameters.RetryAfter > 0 {
+			result.RetryAfter = time.Duration(retry.Parameters.RetryAfter) * time.Second
+		} else {
+			result.RetryAfter = 2 * time.Second
+		}
+		return result
+	}
+	if resp.StatusCode >= 500 {
+		result.Retryable = true
+		result.ReasonCode = "provider_5xx"
+		result.Detail = fmt.Sprintf("telegram returned %d", resp.StatusCode)
+		return result
+	}
+	result.ReasonCode = "provider_rejected"
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+		result.ReasonCode = "invalid_destination"
+	}
+	result.Detail = fmt.Sprintf("telegram returned %d", resp.StatusCode)
+	return result
+}
+
 func SendStartup(chatID string, monitorName string) {
 	sendStatus(chatID, fmt.Sprintf("Vintrack: Monitor <b>%s</b> is starting. Initial scan is muted.", escape(monitorName)))
 }

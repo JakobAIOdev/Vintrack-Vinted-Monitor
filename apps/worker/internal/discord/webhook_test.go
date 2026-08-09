@@ -1,12 +1,101 @@
 package discord
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"vintrack-worker/internal/model"
 )
+
+func withDiscordServer(t *testing.T, handler http.HandlerFunc) string {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	oldClient := httpClient
+	httpClient = server.Client()
+	httpClient.Timeout = 2 * time.Second
+	t.Cleanup(func() {
+		httpClient = oldClient
+		server.Close()
+	})
+	return server.URL
+}
+
+func TestSendPayloadAttemptUsesFullDiscordRetryWindow(t *testing.T) {
+	url := withDiscordServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-RateLimit-Bucket", "bucket-1")
+		w.Header().Set("X-RateLimit-Scope", "global")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"retry_after":12.5,"global":true}`))
+	})
+	result := SendPayloadAttempt(context.Background(), url, map[string]string{"content": "test"})
+	if !result.Retryable || result.ReasonCode != "rate_limited" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if result.RetryAfter != 12*time.Second+500*time.Millisecond {
+		t.Fatalf("retry after = %s", result.RetryAfter)
+	}
+	if !result.GlobalRateLimit || result.RateLimitBucket != "bucket-1" {
+		t.Fatalf("rate limit metadata = %#v", result)
+	}
+}
+
+func TestSendPayloadAttemptReportsExhaustedSuccessfulBucket(t *testing.T) {
+	url := withDiscordServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Reset-After", "1.25")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	result := SendPayloadAttempt(context.Background(), url, map[string]string{"content": "test"})
+	if !result.Success || result.RetryAfter != 1250*time.Millisecond {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestSendPayloadAttemptUsesFractionalRetryAfterHeader(t *testing.T) {
+	url := withDiscordServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "3.75")
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	result := SendPayloadAttempt(context.Background(), url, map[string]string{"content": "test"})
+	if !result.Retryable || result.RetryAfter != 3750*time.Millisecond {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestSendPayloadAttemptClassifiesTimeoutAndProviderFailure(t *testing.T) {
+	url := withDiscordServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/timeout" {
+			time.Sleep(50 * time.Millisecond)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	timedOut := SendPayloadAttempt(ctx, url+"/timeout", map[string]string{"content": "test"})
+	if !timedOut.Retryable || timedOut.ReasonCode != "network_timeout" {
+		t.Fatalf("timeout result: %#v", timedOut)
+	}
+	providerFailure := SendPayloadAttempt(context.Background(), url+"/failure", map[string]string{"content": "test"})
+	if !providerFailure.Retryable || providerFailure.ReasonCode != "provider_5xx" {
+		t.Fatalf("provider failure result: %#v", providerFailure)
+	}
+}
+
+func TestSendPayloadAttemptClassifiesMissingWebhookAsTerminal(t *testing.T) {
+	url := withDiscordServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	result := SendPayloadAttempt(context.Background(), url, map[string]string{"content": "test"})
+	if result.Success || result.Retryable || result.ReasonCode != "invalid_destination" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
 
 func TestBuildItemWebhookPayloadUsesStructuredEmbedAndGallery(t *testing.T) {
 	foundAt := time.Unix(1_720_000_000, 0).UTC()

@@ -180,6 +180,12 @@ func runProxyMaintainer(ctx context.Context, cancel context.CancelFunc, sigChan 
 		store.PruneMonitorRuns(settingInt(store, "MONITOR_RUN_RETENTION_HOURS", 24))
 		store.PruneMonitorRunStats(settingInt(store, "MONITOR_RUN_STATS_RETENTION_DAYS", 90))
 		store.PruneDetectionTelemetry(settingInt(store, "DETECTION_RETENTION_DAYS", 14))
+		store.PruneAlertTelemetry(
+			settingInt(store, "ALERT_SUCCESS_RETENTION_DAYS", 7),
+			settingInt(store, "ALERT_FAILURE_RETENTION_DAYS", 30),
+			settingInt(store, "ALERT_STATS_RETENTION_DAYS", 90),
+		)
+		store.PruneOperationalEvents(settingInt(store, "OPERATIONAL_EVENT_RETENTION_DAYS", 30))
 		store.PrunePreindexTelemetry(
 			settingInt(store, "PREINDEX_PROBE_RETENTION_HOURS", 48),
 			settingInt(store, "PREINDEX_SAMPLE_RETENTION_DAYS", 14),
