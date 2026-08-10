@@ -137,19 +137,30 @@ func (s *Store) EnqueueAlertNotification(ctx context.Context, request model.Aler
 }
 
 func (s *Store) ClaimAlertDelivery(ctx context.Context, claimToken string) (*model.AlertDelivery, error) {
+	deliveries, err := s.ClaimAlertDeliveries(ctx, claimToken, 1)
+	if err != nil || len(deliveries) == 0 {
+		return nil, err
+	}
+	return &deliveries[0], nil
+}
+
+func (s *Store) ClaimAlertDeliveries(ctx context.Context, claimToken string, limit int) ([]model.AlertDelivery, error) {
 	if claimToken == "" {
 		return nil, errors.New("empty alert delivery claim token")
 	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 100 {
+		limit = 100
+	}
 
-	row := s.db.QueryRowContext(ctx, `
+	rows, err := s.db.QueryContext(ctx, `
 		WITH candidate AS (
 			SELECT d.id
 			FROM alert_deliveries d
 			JOIN alert_notifications n ON n.id = d.notification_id
-			WHERE (
-				d.status IN ('pending', 'retrying')
-				OR (d.status = 'processing' AND d.lease_until <= NOW())
-			)
+			WHERE d.status IN ('pending', 'retrying')
 			  AND d.next_attempt_at <= NOW()
 			  AND n.expires_at > NOW()
 			  AND NOT EXISTS (
@@ -168,7 +179,7 @@ func (s *Store) ClaimAlertDelivery(ctx context.Context, claimToken string) (*mod
 				  AND older.status IN ('pending', 'processing', 'retrying')
 			  )
 			ORDER BY d.next_attempt_at, d.created_at, d.id
-			LIMIT 1
+			LIMIT $3
 			FOR UPDATE OF d SKIP LOCKED
 		), claimed AS (
 			UPDATE alert_deliveries d
@@ -201,28 +212,57 @@ func (s *Store) ClaimAlertDelivery(ctx context.Context, claimToken string) (*mod
 		JOIN alert_notifications n ON n.id = claimed.notification_id
 		LEFT JOIN monitors m ON m.id = n.monitor_id
 		LEFT JOIN telegram_connections tc ON tc."userId" = n.user_id`,
-		claimToken, fmt.Sprintf("%d seconds", int(alertDeliveryLeaseDuration.Seconds())),
+		claimToken, fmt.Sprintf("%d seconds", int(alertDeliveryLeaseDuration.Seconds())), limit,
 	)
-
-	var delivery model.AlertDelivery
-	var payload []byte
-	if err := row.Scan(
-		&delivery.ID, &delivery.NotificationID, &delivery.UserID,
-		&delivery.MonitorID, &delivery.ItemID, &delivery.Kind,
-		&payload, &delivery.ExpiresAt, &delivery.Channel, &delivery.Destination,
-		&delivery.DestinationFingerprint, &delivery.AttemptCount, &delivery.ClaimToken,
-		&delivery.NotificationsEnabled, &delivery.ChannelEnabled,
-	); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
+	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(payload, &delivery.Payload); err != nil {
-		return nil, fmt.Errorf("decode alert notification %d: %w", delivery.NotificationID, err)
+	defer rows.Close()
+
+	deliveries := make([]model.AlertDelivery, 0, limit)
+	for rows.Next() {
+		var delivery model.AlertDelivery
+		var payload []byte
+		if err := rows.Scan(
+			&delivery.ID, &delivery.NotificationID, &delivery.UserID,
+			&delivery.MonitorID, &delivery.ItemID, &delivery.Kind,
+			&payload, &delivery.ExpiresAt, &delivery.Channel, &delivery.Destination,
+			&delivery.DestinationFingerprint, &delivery.AttemptCount, &delivery.ClaimToken,
+			&delivery.NotificationsEnabled, &delivery.ChannelEnabled,
+		); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(payload, &delivery.Payload); err != nil {
+			return nil, fmt.Errorf("decode alert notification %d: %w", delivery.NotificationID, err)
+		}
+		delivery.CurrentFingerprint = AlertDestinationFingerprint(delivery.Channel, delivery.Destination)
+		deliveries = append(deliveries, delivery)
 	}
-	delivery.CurrentFingerprint = AlertDestinationFingerprint(delivery.Channel, delivery.Destination)
-	return &delivery, nil
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return deliveries, nil
+}
+
+func (s *Store) RecoverExpiredAlertDeliveryLeases(ctx context.Context) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `
+		WITH expired AS (
+			SELECT id
+			FROM alert_deliveries
+			WHERE status = 'processing' AND lease_until <= NOW()
+			ORDER BY lease_until, id
+			LIMIT 1000
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE alert_deliveries d
+		SET status = 'retrying', claim_token = NULL, lease_until = NULL,
+			next_attempt_at = LEAST(next_attempt_at, NOW()), updated_at = NOW()
+		FROM expired
+		WHERE d.id = expired.id`)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (s *Store) CompleteAlertDelivery(ctx context.Context, delivery model.AlertDelivery) (bool, error) {
@@ -445,7 +485,7 @@ func (s *Store) PruneAlertTelemetry(successDays int, failureDays int, statsDays 
 			WITH expired AS (
 				SELECT id FROM alert_events
 				WHERE (status IN ('sent', 'deduplicated', 'queued') AND created_at < NOW() - ($1::text || ' days')::interval)
-				   OR (status IN ('failed', 'retry_scheduled', 'cancelled') AND created_at < NOW() - ($2::text || ' days')::interval)
+				   OR (status IN ('failed', 'retry_scheduled', 'cancelled', 'stale') AND created_at < NOW() - ($2::text || ' days')::interval)
 				ORDER BY created_at, id LIMIT $3
 			)
 			DELETE FROM alert_events e USING expired WHERE e.id = expired.id`,

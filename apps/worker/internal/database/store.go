@@ -504,8 +504,12 @@ func (s *Store) PrunePreindexTelemetry(probeRetentionHours int, sampleRetentionD
 }
 
 func (s *Store) GetUserRegion(userID int64) (string, bool) {
+	return s.GetUserRegionContext(context.Background(), userID)
+}
+
+func (s *Store) GetUserRegionContext(ctx context.Context, userID int64) (string, bool) {
 	if s.cache != nil {
-		return s.cache.GetUserRegion(userID)
+		return s.cache.GetUserRegionContext(ctx, userID)
 	}
 	return "", false
 }
@@ -514,6 +518,20 @@ func (s *Store) SetUserRegion(userID int64, region string) {
 	if s.cache != nil {
 		s.cache.SetUserRegion(userID, region)
 	}
+}
+
+func (s *Store) GetSellerInfoCache(ctx context.Context, domain string, userID int64) (cache.SellerInfo, bool) {
+	if s.cache == nil {
+		return cache.SellerInfo{}, false
+	}
+	return s.cache.GetSellerInfo(ctx, domain, userID)
+}
+
+func (s *Store) SetSellerInfoCache(ctx context.Context, domain string, userID int64, info cache.SellerInfo, ttl time.Duration) error {
+	if s.cache == nil {
+		return nil
+	}
+	return s.cache.SetSellerInfo(ctx, domain, userID, info, ttl)
 }
 
 func (s *Store) GetSettingValue(key string) (string, bool, error) {

@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -15,8 +16,8 @@ type alertJob struct {
 	item            model.Item
 	monitor         model.Monitor
 	proxySource     string
-	publish         bool
 	deliverExternal bool
+	enqueueAttempt  int
 }
 
 type enrichmentJob struct {
@@ -29,6 +30,12 @@ type enrichmentJob struct {
 	publishUpdate      bool
 	requireSellerMatch bool
 	alertAfterEnrich   bool
+	cachedInfo         *SellerInfo
+	backgroundOnly     bool
+	strictAttempt      int
+	enqueuedAt         time.Time
+	readyAt            time.Time
+	notificationTimer  *time.Timer
 }
 
 func (e *Engine) startPipelines() {
@@ -43,7 +50,7 @@ func (e *Engine) startPipelines() {
 	if deliveryWorkers > 64 {
 		deliveryWorkers = 64
 	}
-	enrichmentWorkers := getEnvInt("ENRICHMENT_WORKERS", 8)
+	enrichmentWorkers := getEnvInt("ENRICHMENT_WORKERS", 24)
 	if enrichmentWorkers < 1 {
 		enrichmentWorkers = 1
 	}
@@ -52,17 +59,33 @@ func (e *Engine) startPipelines() {
 		e.jobsWG.Add(1)
 		go e.alertWorker()
 	}
+	e.jobsWG.Add(1)
+	go func() {
+		defer e.jobsWG.Done()
+		e.enrichmentScheduler.Run(e.jobsCtx)
+	}()
 	for i := 0; i < deliveryWorkers; i++ {
 		e.jobsWG.Add(1)
 		go e.alertDeliveryWorker()
 	}
 	e.jobsWG.Add(1)
-	go e.alertDeliveryListener()
+	go e.alertDeliveryCoordinator()
 	e.jobsWG.Add(1)
-	go e.alertDeliveryMaintenance()
+	go e.alertDeliveryListener()
+	for _, task := range []func(){e.alertDeliveryLeaseRecovery, e.alertDeliveryExpiry, e.alertDeliveryHeartbeat} {
+		e.jobsWG.Add(1)
+		go task()
+	}
+	e.jobsWG.Add(1)
+	go e.enrichmentMetricsHeartbeat()
 	for i := 0; i < enrichmentWorkers; i++ {
 		e.jobsWG.Add(1)
 		go e.enrichmentWorker()
+	}
+	fastWorkers := min(4, enrichmentWorkers)
+	for i := 0; i < fastWorkers; i++ {
+		e.jobsWG.Add(1)
+		go e.enrichmentFastWorker()
 	}
 }
 
@@ -76,22 +99,57 @@ func (e *Engine) enqueueItem(job enrichmentJob, publishNow bool) {
 	// a monitor config refresh that cancels the polling task context.
 	job.ctx = e.jobsCtx
 	if publishNow {
-		e.enqueueAlert(alertJob{
-			ctx: job.ctx, item: job.item, monitor: job.monitor, proxySource: job.proxySource,
-			publish: true,
-		}, true)
+		// The browser live feed deliberately has no dependency on Postgres or the
+		// durable external-delivery outbox.
+		if err := e.db.PublishItem(job.item); err != nil {
+			log.Printf("[%d] immediate live-feed publish error: %v", job.monitor.ID, err)
+		} else {
+			e.db.RecordDetectionAlertSent(job.monitor.ID, job.item.ID, time.Now())
+		}
 	}
 
-	select {
-	case e.enrichmentJobs <- job:
-	case <-job.ctx.Done():
-	case <-e.jobsCtx.Done():
+	if job.enricher != nil && job.vintedItem.User.ID > 0 {
+		cacheCtx, cancel := context.WithTimeout(job.ctx, 90*time.Millisecond)
+		if info, ok := LookupCachedSellerInfo(cacheCtx, e.db, job.enricher.domain, job.vintedItem.User.ID, job.enricher.cacheTTL); ok && isSellerInfoComplete(info) {
+			job.cachedInfo = &info
+		}
+		cancel()
+		if e.enrichmentMetrics != nil {
+			e.enrichmentMetrics.recordCache(job.cachedInfo != nil)
+		}
 	}
+	if job.cachedInfo != nil {
+		e.armNormalAlertDeadline(&job)
+		select {
+		case e.enrichmentFastJobs <- job:
+		case <-job.ctx.Done():
+		}
+		return
+	}
+	e.armNormalAlertDeadline(&job)
+	e.enrichmentScheduler.Submit(job.ctx, job)
 }
 
-func (e *Engine) enqueueAlert(job alertJob, recordQueued bool) {
+func (e *Engine) armNormalAlertDeadline(job *enrichmentJob) {
+	if job == nil || job.requireSellerMatch || !job.alertAfterEnrich || job.backgroundOnly || job.notificationTimer != nil {
+		return
+	}
+	deadline := itemEnrichmentDeadline(job.item)
+	delay := time.Until(deadline)
+	if delay < 0 {
+		delay = 0
+	}
+	fallback := alertJob{
+		ctx: e.jobsCtx, item: job.item, monitor: job.monitor,
+		proxySource: job.proxySource, deliverExternal: true,
+	}
+	job.notificationTimer = time.AfterFunc(delay, func() {
+		e.enqueueAlert(fallback)
+	})
+}
+
+func (e *Engine) enqueueAlert(job alertJob) {
 	job.ctx = e.jobsCtx
-	_ = recordQueued
 	select {
 	case e.alertJobs <- job:
 	case <-job.ctx.Done():
@@ -126,15 +184,6 @@ func (e *Engine) deliverAlert(job alertJob) {
 	hasDiscord := job.deliverExternal && configuredDiscord
 	hasTelegram := job.deliverExternal && configuredTelegram
 
-	if job.publish {
-		// Dashboard/SSE stays on the immediate path. Discord and Telegram can
-		// wait for seller enrichment without delaying the live feed.
-		if err := e.db.PublishItem(job.item); err != nil {
-			log.Printf("[%d] publish error: %v", job.monitor.ID, err)
-		} else if !hasDiscord && !hasTelegram {
-			e.db.RecordDetectionAlertSent(job.monitor.ID, job.item.ID, time.Now())
-		}
-	}
 	if !job.deliverExternal {
 		return
 	}
@@ -144,10 +193,15 @@ func (e *Engine) deliverAlert(job alertJob) {
 	}
 
 	telegramStyle, discordStyle := e.monitorNotificationMessageStyles(job.monitor)
+	deadline := itemAlertDeadline(job.item)
+	if !deadline.After(time.Now()) {
+		e.recordStaleItemAlert(job, "notification_enqueue_expired")
+		return
+	}
 	request := model.AlertNotificationRequest{
 		UserID: job.monitor.UserID, MonitorID: job.monitor.ID, ItemID: job.item.ID,
 		Kind: "item_match", IdempotencyKey: fmt.Sprintf("item:%d:%d", job.monitor.ID, job.item.ID),
-		ExpiresAt: time.Now().Add(15 * time.Minute), DedupeUserItem: job.monitor.DedupeMonitorAlerts,
+		ExpiresAt: deadline, DedupeUserItem: job.monitor.DedupeMonitorAlerts,
 		Payload: model.AlertNotificationPayload{
 			Version: 1, Kind: "item_match", MonitorName: job.monitor.Name,
 			ProxySource: job.proxySource, TelegramStyle: telegramStyle,
@@ -160,16 +214,38 @@ func (e *Engine) deliverAlert(job alertJob) {
 	if hasTelegram {
 		request.TelegramTarget = job.monitor.TelegramChatID.String
 	}
-	queueCtx, cancel := context.WithTimeout(job.ctx, 5*time.Second)
+	queueTimeout := min(225*time.Millisecond, time.Until(deadline))
+	queueCtx, cancel := context.WithTimeout(job.ctx, queueTimeout)
 	created, err := e.db.EnqueueAlertNotification(queueCtx, request)
 	cancel()
 	if err != nil {
 		log.Printf("[%d] enqueue item alert %d: %v", job.monitor.ID, job.item.ID, err)
+		e.scheduleAlertEnqueueRetry(job)
 		return
 	}
 	if created {
 		e.db.RecordDetectionAlertQueued(job.monitor.ID, job.item.ID, time.Now())
 	}
+}
+
+func (e *Engine) scheduleAlertEnqueueRetry(job alertJob) {
+	deadline := itemAlertDeadline(job.item)
+	if !deadline.After(time.Now()) {
+		e.recordStaleItemAlert(job, "notification_enqueue_expired")
+		return
+	}
+	attempt := job.enqueueAttempt
+	if attempt > 4 {
+		attempt = 4
+	}
+	delay := time.Duration(1<<attempt) * 250 * time.Millisecond
+	if remaining := time.Until(deadline); delay > remaining {
+		delay = remaining
+	}
+	job.enqueueAttempt++
+	time.AfterFunc(delay, func() {
+		e.enqueueAlert(job)
+	})
 }
 
 func (e *Engine) enqueueStatusNotification(
@@ -211,7 +287,22 @@ func (e *Engine) enrichmentWorker() {
 	defer e.jobsWG.Done()
 	for {
 		select {
-		case job := <-e.enrichmentJobs:
+		case job, ok := <-e.enrichmentScheduler.Work():
+			if !ok {
+				return
+			}
+			e.enrichAndPersist(job)
+		case <-e.jobsCtx.Done():
+			return
+		}
+	}
+}
+
+func (e *Engine) enrichmentFastWorker() {
+	defer e.jobsWG.Done()
+	for {
+		select {
+		case job := <-e.enrichmentFastJobs:
 			e.enrichAndPersist(job)
 		case <-e.jobsCtx.Done():
 			return
@@ -220,12 +311,12 @@ func (e *Engine) enrichmentWorker() {
 }
 
 func (e *Engine) enrichAndPersist(job enrichmentJob) {
-	if !job.requireSellerMatch {
-		if err := e.db.SaveItem(job.item); err != nil {
-			log.Printf("[%d] save item %d: %v", job.monitor.ID, job.item.ID, err)
+	if !itemAlertDeadline(job.item).After(time.Now()) {
+		if job.alertAfterEnrich {
+			e.recordStaleItemAlert(alertJob{item: job.item, monitor: job.monitor}, "seller_enrichment_stale")
 		}
+		return
 	}
-
 	info := SellerInfo{
 		Region:          job.item.Location,
 		Rating:          job.item.Rating,
@@ -233,17 +324,38 @@ func (e *Engine) enrichAndPersist(job enrichmentJob) {
 		RatingCount:     job.item.SellerRatingCount,
 		RatingAvailable: job.item.SellerRatingAvailable,
 	}
-	enriched := info.Region != "" || info.RatingAvailable
-	if (e.enrichSeller || job.requireSellerMatch) && job.enricher != nil && job.vintedItem.User.ID > 0 {
-		info := job.enricher.FetchSellerInfo(job.vintedItem.User.ID)
-		if info.Region != "" && info.Region != "NaN" {
-			job.item.Location = info.Region
-			job.item.Rating = info.Rating
-			job.item.SellerRating = info.RatingStars
-			job.item.SellerRatingCount = info.RatingCount
-			job.item.SellerRatingAvailable = info.RatingAvailable
-			enriched = true
+	var fetchErr error
+	if job.cachedInfo != nil {
+		info = *job.cachedInfo
+	} else if (e.enrichSeller || job.requireSellerMatch) && job.enricher != nil && job.vintedItem.User.ID > 0 {
+		enrichmentDeadline := itemEnrichmentDeadline(job.item)
+		if job.strictAttempt > 0 || job.backgroundOnly {
+			enrichmentDeadline = time.Now().Add(sellerEnrichmentTimeout())
 		}
+		if staleDeadline := itemAlertDeadline(job.item); enrichmentDeadline.After(staleDeadline) {
+			enrichmentDeadline = staleDeadline
+		}
+		fetchCtx, cancel := context.WithDeadline(job.ctx, enrichmentDeadline)
+		remoteStarted := time.Now()
+		info, fetchErr = e.fetchSellerInfo(fetchCtx, job.enricher, job.vintedItem.User.ID)
+		if e.enrichmentMetrics != nil {
+			e.enrichmentMetrics.recordRemote(time.Since(remoteStarted), errors.Is(fetchErr, context.DeadlineExceeded))
+		}
+		cancel()
+	}
+	if info.Region != "" && info.Region != "NaN" {
+		job.item.Location = info.Region
+		job.item.Rating = info.Rating
+		job.item.SellerRating = info.RatingStars
+		job.item.SellerRatingCount = info.RatingCount
+		job.item.SellerRatingAvailable = info.RatingAvailable
+	}
+
+	strictDataAvailable := (!hasCountryFilter(job.monitor.AllowedCountries) || strings.TrimSpace(job.item.Location) != "") &&
+		(!hasSellerQualityFilter(job.monitor) || job.item.SellerRatingAvailable)
+	if job.requireSellerMatch && !strictDataAvailable {
+		e.scheduleStrictSellerRetry(job, fetchErr)
+		return
 	}
 	if hasCountryFilter(job.monitor.AllowedCountries) && !sellerCountryAllowed(job.item.Location, job.monitor.AllowedCountries) {
 		reason := "seller location unavailable"
@@ -262,23 +374,117 @@ func (e *Engine) enrichAndPersist(job enrichmentJob) {
 		return
 	}
 
-	if job.requireSellerMatch || enriched {
-		if err := e.db.SaveItem(job.item); err != nil {
-			log.Printf("[%d] save enriched item %d: %v", job.monitor.ID, job.item.ID, err)
+	if job.requireSellerMatch {
+		if err := e.db.PublishItem(job.item); err != nil {
+			log.Printf("[%d] strict live-feed publish error: %v", job.monitor.ID, err)
+		} else {
+			e.db.RecordDetectionAlertSent(job.monitor.ID, job.item.ID, time.Now())
 		}
 	}
 
 	if job.alertAfterEnrich {
+		if job.notificationTimer != nil {
+			job.notificationTimer.Stop()
+		}
 		e.enqueueAlert(alertJob{
 			ctx: job.ctx, item: job.item, monitor: job.monitor, proxySource: job.proxySource,
-			publish: job.requireSellerMatch, deliverExternal: true,
-		}, job.requireSellerMatch)
+			deliverExternal: true,
+		})
 	}
-	if job.publishUpdate && (job.item.Location != "" || job.item.Rating != "") {
+	if err := e.db.SaveItem(job.item); err != nil {
+		log.Printf("[%d] save item %d: %v", job.monitor.ID, job.item.ID, err)
+	}
+	if fetchErr != nil && !job.requireSellerMatch && !job.backgroundOnly {
+		background := job
+		background.alertAfterEnrich = false
+		background.backgroundOnly = true
+		background.publishUpdate = true
+		background.readyAt = time.Now().Add(5 * time.Second)
+		background.enqueuedAt = time.Now()
+		e.enrichmentScheduler.Submit(job.ctx, background)
+	}
+	if job.publishUpdate && !job.requireSellerMatch && (job.item.Location != "" || job.item.Rating != "") {
 		if err := e.db.PublishItem(job.item); err != nil {
 			log.Printf("[%d] publish enrichment update: %v", job.monitor.ID, err)
 		}
 	}
+}
+
+func (e *Engine) fetchSellerInfo(ctx context.Context, enricher *SellerEnricher, sellerID int64) (SellerInfo, error) {
+	key := fmt.Sprintf("%s:%d", enricher.domain, sellerID)
+	e.sellerFlightsMu.Lock()
+	if e.sellerFlights == nil {
+		e.sellerFlights = make(map[string]*sellerFetchFlight)
+	}
+	if flight, ok := e.sellerFlights[key]; ok {
+		e.sellerFlightsMu.Unlock()
+		select {
+		case <-flight.done:
+			return flight.info, flight.err
+		case <-ctx.Done():
+			return SellerInfo{}, ctx.Err()
+		}
+	}
+	flight := &sellerFetchFlight{done: make(chan struct{})}
+	e.sellerFlights[key] = flight
+	e.sellerFlightsMu.Unlock()
+
+	info, err := enricher.FetchSellerInfo(ctx, sellerID)
+	e.sellerFlightsMu.Lock()
+	flight.info, flight.err = info, err
+	delete(e.sellerFlights, key)
+	close(flight.done)
+	e.sellerFlightsMu.Unlock()
+	return info, err
+}
+
+func itemAlertDeadline(item model.Item) time.Time {
+	foundAt := item.FoundAt
+	if foundAt.IsZero() {
+		foundAt = time.Now()
+	}
+	return foundAt.Add(2 * time.Minute)
+}
+
+func itemEnrichmentDeadline(item model.Item) time.Time {
+	foundAt := item.FoundAt
+	if foundAt.IsZero() {
+		foundAt = time.Now()
+	}
+	return foundAt.Add(sellerEnrichmentTimeout())
+}
+
+func (e *Engine) scheduleStrictSellerRetry(job enrichmentJob, fetchErr error) {
+	delays := [...]time.Duration{5 * time.Second, 20 * time.Second, 60 * time.Second}
+	if job.strictAttempt >= len(delays) {
+		job.strictAttempt++
+		job.readyAt = itemAlertDeadline(job.item)
+		job.enqueuedAt = time.Now()
+		e.enrichmentScheduler.Submit(job.ctx, job)
+		return
+	}
+	next := time.Now().Add(delays[job.strictAttempt])
+	if !next.Before(itemAlertDeadline(job.item)) {
+		if job.alertAfterEnrich {
+			e.recordStaleItemAlert(alertJob{item: job.item, monitor: job.monitor}, "seller_enrichment_stale")
+		}
+		return
+	}
+	job.strictAttempt++
+	job.readyAt = next
+	job.enqueuedAt = time.Now()
+	if fetchErr != nil {
+		log.Printf("[%d] strict seller retry %d for item %d scheduled after enrichment error: %v", job.monitor.ID, job.strictAttempt, job.item.ID, fetchErr)
+	}
+	e.enrichmentScheduler.Submit(job.ctx, job)
+}
+
+func (e *Engine) recordStaleItemAlert(job alertJob, reason string) {
+	e.db.RecordAlertEvent(model.AlertEvent{
+		UserID: job.monitor.UserID, MonitorID: job.monitor.ID, ItemID: job.item.ID,
+		Channel: "internal", Status: "stale", NotificationKind: "item_match",
+		ReasonCode: reason,
+	})
 }
 
 func configuredExternalAlerts(monitor model.Monitor) (bool, bool) {

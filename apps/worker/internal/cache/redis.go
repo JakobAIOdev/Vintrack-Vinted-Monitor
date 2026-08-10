@@ -20,6 +20,15 @@ type RedisCache struct {
 	readonly bool
 }
 
+type SellerInfo struct {
+	Region          string    `json:"region"`
+	Rating          string    `json:"rating"`
+	RatingStars     float64   `json:"rating_stars"`
+	RatingCount     int       `json:"rating_count"`
+	RatingAvailable bool      `json:"rating_available"`
+	FetchedAt       time.Time `json:"fetched_at"`
+}
+
 func NewRedisCache(addr, password string, db int) (*RedisCache, error) {
 	opts := &redis.Options{
 		Addr:         addr,
@@ -159,7 +168,11 @@ func (r *RedisCache) ClaimUserItemAlert(userID string, itemID int64) (bool, erro
 }
 
 func (r *RedisCache) GetUserRegion(userID int64) (string, bool) {
-	val, err := r.client.Get(r.ctx, fmt.Sprintf("user:region:%d", userID)).Result()
+	return r.GetUserRegionContext(r.ctx, userID)
+}
+
+func (r *RedisCache) GetUserRegionContext(ctx context.Context, userID int64) (string, bool) {
+	val, err := r.client.Get(ctx, fmt.Sprintf("user:region:%d", userID)).Result()
 	if err != nil {
 		return "", false
 	}
@@ -169,6 +182,43 @@ func (r *RedisCache) GetUserRegion(userID int64) (string, bool) {
 func (r *RedisCache) SetUserRegion(userID int64, region string) {
 	_ = r.writeWithRetry(func() error {
 		return r.client.Set(r.ctx, fmt.Sprintf("user:region:%d", userID), region, 7*24*time.Hour).Err()
+	})
+}
+
+func sellerInfoKey(domain string, userID int64) string {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	domain = strings.ReplaceAll(domain, ":", "_")
+	return fmt.Sprintf("seller:info:%s:%d", domain, userID)
+}
+
+func (r *RedisCache) GetSellerInfo(ctx context.Context, domain string, userID int64) (SellerInfo, bool) {
+	if userID <= 0 {
+		return SellerInfo{}, false
+	}
+	payload, err := r.client.Get(ctx, sellerInfoKey(domain, userID)).Bytes()
+	if err != nil {
+		return SellerInfo{}, false
+	}
+	var info SellerInfo
+	if err := json.Unmarshal(payload, &info); err != nil {
+		return SellerInfo{}, false
+	}
+	return info, true
+}
+
+func (r *RedisCache) SetSellerInfo(ctx context.Context, domain string, userID int64, info SellerInfo, ttl time.Duration) error {
+	if userID <= 0 {
+		return nil
+	}
+	if ttl <= 0 {
+		ttl = 30 * time.Minute
+	}
+	payload, err := json.Marshal(info)
+	if err != nil {
+		return err
+	}
+	return r.writeWithRetry(func() error {
+		return r.client.Set(ctx, sellerInfoKey(domain, userID), payload, ttl).Err()
 	})
 }
 
