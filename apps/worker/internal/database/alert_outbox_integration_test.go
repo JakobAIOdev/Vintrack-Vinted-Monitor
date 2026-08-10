@@ -26,6 +26,7 @@ func TestAlertOutboxAgainstPostgres(t *testing.T) {
 
 	suffix := time.Now().UnixNano()
 	userID := fmt.Sprintf("alert-test-%d", suffix)
+	initialTarget := fmt.Sprintf("https://discord.test/api/webhooks/%d/initial", suffix)
 	if _, err := store.db.ExecContext(ctx, `
 		INSERT INTO "User" (id, email, role) VALUES ($1, $2, 'free')`,
 		userID, fmt.Sprintf("%s@example.test", userID)); err != nil {
@@ -37,7 +38,7 @@ func TestAlertOutboxAgainstPostgres(t *testing.T) {
 			"userId", name, query, status, region, discord_webhook,
 			webhook_active, notifications_enabled
 		) VALUES ($1, 'Alert test', 'shoes', 'active', 'de', $2, TRUE, TRUE)
-		RETURNING id`, userID, "https://discord.test/api/webhooks/id/token").Scan(&monitorID); err != nil {
+		RETURNING id`, userID, initialTarget).Scan(&monitorID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -51,7 +52,7 @@ func TestAlertOutboxAgainstPostgres(t *testing.T) {
 		Kind: "item_match", DedupeUserItem: true,
 		IdempotencyKey: fmt.Sprintf("alert-test:%d:first", suffix),
 		ExpiresAt:      time.Now().Add(time.Hour),
-		DiscordTarget:  "https://discord.test/api/webhooks/id/token",
+		DiscordTarget:  initialTarget,
 		Payload:        model.AlertNotificationPayload{Version: 1, Kind: "item_match", MonitorName: "Alert test", Item: &model.Item{ID: 991, MonitorID: monitorID}},
 	}
 
@@ -90,7 +91,40 @@ func TestAlertOutboxAgainstPostgres(t *testing.T) {
 
 	delivery, err := store.ClaimAlertDelivery(ctx, "test-claim-1")
 	if err != nil || delivery == nil {
-		t.Fatalf("claim = %#v, %v", delivery, err)
+		var status string
+		var due, unexpired, processingBlocked, orderedBlocked bool
+		diagnosticErr := store.db.QueryRowContext(ctx, `
+			SELECT d.status, d.next_attempt_at <= NOW(), n.expires_at > NOW(),
+				EXISTS (
+					SELECT 1 FROM alert_deliveries active
+					WHERE active.destination_fingerprint = d.destination_fingerprint
+					  AND active.id <> d.id AND active.status = 'processing'
+					  AND active.lease_until > NOW()
+				),
+				EXISTS (
+					SELECT 1
+					FROM alert_deliveries older
+					JOIN alert_notifications older_n ON older_n.id = older.notification_id
+					WHERE older.destination_fingerprint = d.destination_fingerprint
+					  AND older_n.expires_at > NOW()
+					  AND (
+						CASE WHEN older_n.kind = 'item_match' THEN 0 ELSE 1 END,
+						older.created_at, older.id
+					  ) < (
+						CASE WHEN n.kind = 'item_match' THEN 0 ELSE 1 END,
+						d.created_at, d.id
+					  )
+					  AND older.status IN ('pending', 'processing', 'retrying')
+				)
+			FROM alert_deliveries d
+			JOIN alert_notifications n ON n.id = d.notification_id
+			WHERE n.user_id = $1 AND n.item_id = $2`, userID, request.ItemID).Scan(
+			&status, &due, &unexpired, &processingBlocked, &orderedBlocked,
+		)
+		t.Fatalf(
+			"claim = %#v, %v; diagnostic status=%q due=%v unexpired=%v processingBlocked=%v orderedBlocked=%v err=%v",
+			delivery, err, status, due, unexpired, processingBlocked, orderedBlocked, diagnosticErr,
+		)
 	}
 	if delivery.AttemptCount != 1 || delivery.CurrentFingerprint != delivery.DestinationFingerprint {
 		t.Fatalf("unexpected delivery: %#v", delivery)
@@ -130,8 +164,8 @@ func TestAlertOutboxAgainstPostgres(t *testing.T) {
 			t.Fatalf("enqueue %s = %v, %v", key, created, err)
 		}
 	}
-	targetA := "https://discord.test/api/webhooks/a/token"
-	targetB := "https://discord.test/api/webhooks/b/token"
+	targetA := fmt.Sprintf("https://discord.test/api/webhooks/%d/a", suffix)
+	targetB := fmt.Sprintf("https://discord.test/api/webhooks/%d/b", suffix)
 	queue("fifo-a-1", 992, targetA)
 	queue("fifo-a-2", 993, targetA)
 	queue("parallel-b", 994, targetB)
@@ -170,8 +204,8 @@ func TestAlertOutboxAgainstPostgres(t *testing.T) {
 		t.Fatalf("complete second FIFO delivery = %v, %v", completed, err)
 	}
 
-	targetC := "https://discord.test/api/webhooks/c/token"
-	targetD := "https://discord.test/api/webhooks/d/token"
+	targetC := fmt.Sprintf("https://discord.test/api/webhooks/%d/c", suffix)
+	targetD := fmt.Sprintf("https://discord.test/api/webhooks/%d/d", suffix)
 	queue("batch-c-1", 995, targetC)
 	queue("batch-c-2", 996, targetC)
 	queue("batch-d", 997, targetD)
@@ -198,6 +232,40 @@ func TestAlertOutboxAgainstPostgres(t *testing.T) {
 	}
 	if completed, err := store.CompleteAlertDelivery(ctx, *nextC); err != nil || !completed {
 		t.Fatalf("complete next C delivery = %v, %v", completed, err)
+	}
+
+	// Operational status notices must never hold a fresh item alert behind them
+	// for the same destination. FIFO still applies within item alerts and within
+	// status notices, but item_match is the latency-sensitive class.
+	targetE := fmt.Sprintf("https://discord.test/api/webhooks/%d/e", suffix)
+	statusRequest := request
+	statusRequest.ItemID = 0
+	statusRequest.Kind = "monitor_started"
+	statusRequest.DedupeUserItem = false
+	statusRequest.IdempotencyKey = fmt.Sprintf("alert-test:%d:status-before-item", suffix)
+	statusRequest.DiscordTarget = targetE
+	statusRequest.Payload = model.AlertNotificationPayload{
+		Version: 1,
+		Kind:    "monitor_started",
+	}
+	if created, err := store.EnqueueAlertNotification(ctx, statusRequest); err != nil || !created {
+		t.Fatalf("enqueue status before item = %v, %v", created, err)
+	}
+	queue("priority-item", 998, targetE)
+
+	priorityItem, err := store.ClaimAlertDelivery(ctx, "priority-item")
+	if err != nil || priorityItem == nil || priorityItem.ItemID != 998 || priorityItem.Kind != "item_match" {
+		t.Fatalf("priority item claim = %#v, %v", priorityItem, err)
+	}
+	if completed, err := store.CompleteAlertDelivery(ctx, *priorityItem); err != nil || !completed {
+		t.Fatalf("complete priority item = %v, %v", completed, err)
+	}
+	deferredStatus, err := store.ClaimAlertDelivery(ctx, "deferred-status")
+	if err != nil || deferredStatus == nil || deferredStatus.Kind != "monitor_started" {
+		t.Fatalf("deferred status claim = %#v, %v", deferredStatus, err)
+	}
+	if completed, err := store.CompleteAlertDelivery(ctx, *deferredStatus); err != nil || !completed {
+		t.Fatalf("complete deferred status = %v, %v", completed, err)
 	}
 
 	// Terminal history must not participate in the due-claim plan. This models

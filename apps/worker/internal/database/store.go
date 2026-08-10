@@ -372,6 +372,39 @@ func (s *Store) BatchIsNew(monitorID int, itemIDs []int64) map[int64]bool {
 	return result
 }
 
+// BatchExistingItemIDs reads durable item state directly from PostgreSQL. It is
+// intentionally separate from BatchIsNew: the Redis seen-set is useful for the
+// hot detection path, but it must not make every worker restart re-enrich the
+// complete initial catalog snapshot when those items are already persisted.
+func (s *Store) BatchExistingItemIDs(monitorID int, itemIDs []int64) (map[int64]bool, error) {
+	existing := make(map[int64]bool, len(itemIDs))
+	if len(itemIDs) == 0 {
+		return existing, nil
+	}
+
+	rows, err := s.db.Query(
+		`SELECT id FROM items WHERE monitor_id = $1 AND id = ANY($2)`,
+		monitorID,
+		pq.Array(itemIDs),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		existing[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return existing, nil
+}
+
 func (s *Store) ClaimMonitorItem(monitorID int, itemID int64, source string) bool {
 	if monitorID <= 0 || itemID <= 0 {
 		return false

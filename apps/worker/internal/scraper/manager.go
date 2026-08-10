@@ -18,6 +18,7 @@ type Manager struct {
 	discoveryRunning map[string]context.CancelFunc
 	discoveryCfg     map[string]string
 	scheduledPaused  map[int]bool
+	initialSyncDone  bool
 	mu               sync.Mutex
 }
 
@@ -50,6 +51,8 @@ func (m *Manager) Sync(ctx context.Context) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	initialWorkerSync := !m.initialSyncDone
+	m.initialSyncDone = true
 
 	activeIDs := make(map[int]bool, len(monitors))
 	returnedIDs := make(map[int]bool, len(monitors))
@@ -72,8 +75,8 @@ func (m *Manager) Sync(ctx context.Context) {
 			m.scheduledPaused[mon.ID] = true
 			continue
 		}
-		if m.scheduledPaused[mon.ID] {
-			prepareQuietHoursResume(mon)
+		if initialWorkerSync || m.scheduledPaused[mon.ID] {
+			prepareMonitorResume(mon)
 			delete(m.scheduledPaused, mon.ID)
 		}
 		activeIDs[mon.ID] = true
@@ -84,6 +87,10 @@ func (m *Manager) Sync(ctx context.Context) {
 				log.Printf("Config changed for monitor [%d], restarting...", mon.ID)
 				cancelFn()
 				delete(m.running, mon.ID)
+				// A config refresh is a continuation of an existing monitor. Treat
+				// its first catalog response as a resume so items published during
+				// the restart window are checked instead of silently seeded.
+				prepareMonitorResume(mon)
 			} else {
 				continue
 			}
@@ -133,7 +140,7 @@ func (m *Manager) Sync(ctx context.Context) {
 	}
 }
 
-func prepareQuietHoursResume(monitor *model.Monitor) {
+func prepareMonitorResume(monitor *model.Monitor) {
 	monitor.SuppressStartupNotice = true
 	monitor.ResumeAfterQuietHours = true
 }

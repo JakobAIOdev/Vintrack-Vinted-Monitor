@@ -10,9 +10,10 @@ import (
 // SellerEnrichmentScheduler keeps independent FIFO lanes per domain and proxy
 // source. A noisy monitor/source can therefore consume at most every Nth slot.
 type SellerEnrichmentScheduler struct {
-	input       chan enrichmentJob
-	work        chan enrichmentJob
-	oldestNanos atomic.Int64
+	input           chan enrichmentJob
+	backgroundInput chan enrichmentJob
+	work            chan enrichmentJob
+	oldestNanos     atomic.Int64
 }
 
 func NewSellerEnrichmentScheduler(capacity int, workers int) *SellerEnrichmentScheduler {
@@ -23,8 +24,11 @@ func NewSellerEnrichmentScheduler(capacity int, workers int) *SellerEnrichmentSc
 		workers = 24
 	}
 	return &SellerEnrichmentScheduler{
-		input: make(chan enrichmentJob, capacity),
-		work:  make(chan enrichmentJob, workers),
+		input:           make(chan enrichmentJob, capacity),
+		backgroundInput: make(chan enrichmentJob, capacity),
+		// Keep dispatch unbuffered so queued background work cannot be prefetched
+		// into a hidden worker-sized buffer ahead of a newly detected alert.
+		work: make(chan enrichmentJob),
 	}
 }
 
@@ -32,8 +36,12 @@ func (s *SellerEnrichmentScheduler) Submit(ctx context.Context, job enrichmentJo
 	if job.enqueuedAt.IsZero() {
 		job.enqueuedAt = time.Now()
 	}
+	input := s.input
+	if job.backgroundOnly {
+		input = s.backgroundInput
+	}
 	select {
-	case s.input <- job:
+	case input <- job:
 		return true
 	case <-ctx.Done():
 		return false
@@ -92,10 +100,10 @@ func (s *SellerEnrichmentScheduler) Run(ctx context.Context) {
 		if job.enricher != nil {
 			key = job.enricher.domain + ":" + key
 		}
-		if job.strictAttempt > 0 {
-			key = "strict-retry:" + key
-		} else if job.backgroundOnly {
+		if job.backgroundOnly {
 			key = "background:" + key
+		} else if job.strictAttempt > 0 {
+			key = "strict-retry:" + key
 		}
 		if index, ok := laneIndex[key]; ok {
 			insertAt := len(lanes[index].jobs)
@@ -131,9 +139,20 @@ func (s *SellerEnrichmentScheduler) Run(ctx context.Context) {
 	}
 
 	for {
+		// Always ingest an already-waiting foreground job before choosing the
+		// next worker assignment. Background producers use a separate bounded
+		// input, so a restart seed burst cannot sit in front of a fresh alert.
+		select {
+		case job := <-s.input:
+			add(job)
+			continue
+		default:
+		}
+
 		var next enrichmentJob
 		var output chan enrichmentJob
 		selectedLane := -1
+		selectedPriority := 3
 		now := time.Now()
 		for offset := 0; offset < len(lanes); offset++ {
 			index := (nextLane + offset) % len(lanes)
@@ -144,16 +163,25 @@ func (s *SellerEnrichmentScheduler) Run(ctx context.Context) {
 			if !candidate.readyAt.IsZero() && candidate.readyAt.After(now) {
 				continue
 			}
+			priority := enrichmentPriority(candidate)
+			if priority >= selectedPriority {
+				continue
+			}
 			next = candidate
 			selectedLane = index
+			selectedPriority = priority
 			output = s.work
-			break
+			if priority == 0 {
+				break
+			}
 		}
 
 		select {
 		case <-ctx.Done():
 			return
 		case job := <-s.input:
+			add(job)
+		case job := <-s.backgroundInput:
 			add(job)
 		case output <- next:
 			lanes[selectedLane].jobs = lanes[selectedLane].jobs[1:]
@@ -165,4 +193,14 @@ func (s *SellerEnrichmentScheduler) Run(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func enrichmentPriority(job enrichmentJob) int {
+	if job.backgroundOnly {
+		return 2
+	}
+	if job.strictAttempt > 0 {
+		return 1
+	}
+	return 0
 }

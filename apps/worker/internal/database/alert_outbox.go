@@ -174,11 +174,25 @@ func (s *Store) ClaimAlertDeliveries(ctx context.Context, claimToken string, lim
 			  AND NOT EXISTS (
 				SELECT 1
 				FROM alert_deliveries older
+				JOIN alert_notifications older_n ON older_n.id = older.notification_id
 				WHERE older.destination_fingerprint = d.destination_fingerprint
-				  AND (older.created_at, older.id) < (d.created_at, d.id)
+				  AND older_n.expires_at > NOW()
+				  AND (
+					CASE WHEN older_n.kind = 'item_match' THEN 0 ELSE 1 END,
+					older.created_at,
+					older.id
+				  ) < (
+					CASE WHEN n.kind = 'item_match' THEN 0 ELSE 1 END,
+					d.created_at,
+					d.id
+				  )
 				  AND older.status IN ('pending', 'processing', 'retrying')
 			  )
-			ORDER BY d.next_attempt_at, d.created_at, d.id
+			ORDER BY
+				CASE WHEN n.kind = 'item_match' THEN 0 ELSE 1 END,
+				d.next_attempt_at,
+				d.created_at,
+				d.id
 			LIMIT $3
 			FOR UPDATE OF d SKIP LOCKED
 		), claimed AS (
