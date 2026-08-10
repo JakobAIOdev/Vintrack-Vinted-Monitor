@@ -42,6 +42,8 @@ type Engine struct {
 	poolsMu                sync.RWMutex
 	enrichers              map[string]*SellerEnricher
 	enrichersMu            sync.RWMutex
+	sellerFlightsMu        sync.Mutex
+	sellerFlights          map[string]*sellerFetchFlight
 	notificationPolicies   map[int]notificationPolicy
 	notificationPoliciesMu sync.RWMutex
 	freeProxySuccessSeen   map[string]time.Time
@@ -50,8 +52,11 @@ type Engine struct {
 	jobsCtx                context.Context
 	jobsCancel             context.CancelFunc
 	alertJobs              chan alertJob
-	enrichmentJobs         chan enrichmentJob
+	enrichmentScheduler    *SellerEnrichmentScheduler
+	enrichmentFastJobs     chan enrichmentJob
 	alertDeliveryWake      chan struct{}
+	claimedAlertDeliveries chan model.AlertDelivery
+	enrichmentMetrics      *sellerEnrichmentMetrics
 	jobsWG                 sync.WaitGroup
 }
 
@@ -74,25 +79,33 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 		discoveryMode = "off"
 	}
 	jobsCtx, jobsCancel := context.WithCancel(context.Background())
+	enrichmentWorkers := getEnvInt("ENRICHMENT_WORKERS", 24)
+	if enrichmentWorkers < 1 {
+		enrichmentWorkers = 1
+	}
 	log.Printf("Catalog fetch mode: %s, seller enrichment (region/rating): %v, client pool size: %d, free proxy pool size: %d, TLS profile: %s, discovery: %s", fetcher.Name(), enrich, poolSize, freePoolSize, configuredClientFingerprint().name, discoveryMode)
 	engine := &Engine{
-		db:                   db,
-		serverProxy:          pm,
-		freeProxy:            freePM,
-		fetcher:              fetcher,
-		enrichSeller:         enrich,
-		poolSize:             poolSize,
-		freePoolSize:         freePoolSize,
-		pools:                make(map[string]*ClientPool),
-		enrichers:            make(map[string]*SellerEnricher),
-		notificationPolicies: make(map[int]notificationPolicy),
-		freeProxySuccessSeen: make(map[string]time.Time),
-		discoveryMode:        discoveryMode,
-		jobsCtx:              jobsCtx,
-		jobsCancel:           jobsCancel,
-		alertJobs:            make(chan alertJob, 4096),
-		enrichmentJobs:       make(chan enrichmentJob, 4096),
-		alertDeliveryWake:    make(chan struct{}, 64),
+		db:                     db,
+		serverProxy:            pm,
+		freeProxy:              freePM,
+		fetcher:                fetcher,
+		enrichSeller:           enrich,
+		poolSize:               poolSize,
+		freePoolSize:           freePoolSize,
+		pools:                  make(map[string]*ClientPool),
+		enrichers:              make(map[string]*SellerEnricher),
+		sellerFlights:          make(map[string]*sellerFetchFlight),
+		notificationPolicies:   make(map[int]notificationPolicy),
+		freeProxySuccessSeen:   make(map[string]time.Time),
+		discoveryMode:          discoveryMode,
+		jobsCtx:                jobsCtx,
+		jobsCancel:             jobsCancel,
+		alertJobs:              make(chan alertJob, 4096),
+		enrichmentScheduler:    NewSellerEnrichmentScheduler(4096, enrichmentWorkers),
+		enrichmentFastJobs:     make(chan enrichmentJob, 4096),
+		alertDeliveryWake:      make(chan struct{}, 64),
+		claimedAlertDeliveries: make(chan model.AlertDelivery, 64),
+		enrichmentMetrics:      &sellerEnrichmentMetrics{},
 	}
 	engine.startPipelines()
 	return engine
@@ -164,7 +177,11 @@ func (e *Engine) GetOrCreateEnricher(pm *proxy.Manager, domain string, proxyKey 
 	}
 
 	log.Printf("Creating new seller enricher for %s (source: %s)", domain, proxyLabel)
-	s = NewSellerEnricher(pm, e.db, domain, e.poolSize, trafficRecorder)
+	sellerPoolSize := getEnvInt("SELLER_CLIENT_POOL_SIZE", 16)
+	if sellerPoolSize < 1 {
+		sellerPoolSize = 1
+	}
+	s = NewSellerEnricher(pm, e.db, domain, sellerPoolSize, trafficRecorder)
 	e.enrichers[key] = s
 	return s
 }

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import {
@@ -9,6 +9,31 @@ import {
 } from "@/lib/telegram-connection";
 
 export const dynamic = "force-dynamic";
+
+export async function GET(req: NextRequest) {
+    const session = await auth();
+    if (!session?.user?.id) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const code = req.nextUrl.searchParams.get("code")?.trim().toUpperCase();
+    if (!code) {
+        return NextResponse.json({ error: "Missing code" }, { status: 400 });
+    }
+    const pending = await db.telegram_connect_codes.findFirst({
+        where: { userId: session.user.id, code },
+        select: { used_at: true, expires_at: true },
+    });
+    if (!pending) {
+        return NextResponse.json(
+            { error: "Connect code not found" },
+            { status: 404 },
+        );
+    }
+    return NextResponse.json({
+        used: Boolean(pending.used_at),
+        expired: pending.expires_at <= new Date(),
+    });
+}
 
 export async function POST() {
     const session = await auth();

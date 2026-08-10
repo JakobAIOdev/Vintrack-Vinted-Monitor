@@ -209,6 +209,20 @@ type AdminOperationsSummary = {
     };
     trackedSince: string | null;
     dispatcherHeartbeat: string | null;
+    enrichment: {
+        queueAgeMs: number;
+        cacheHitRate: number;
+        cacheHits: number;
+        cacheMisses: number;
+        remoteP95Ms: number;
+        timeouts: number;
+        updatedAt: string | null;
+    } | null;
+    notificationLatency: {
+        p50Ms: number | null;
+        p95Ms: number | null;
+        p99Ms: number | null;
+    };
 };
 
 type AdminOperationFilter = "all" | "delivery" | "proxy" | "monitor" | "audit";
@@ -2378,7 +2392,19 @@ export function AdminClient({
     const userMetricsLoadFailed = overviewLoadFailed;
     const isLoadingUserMetrics = isLoadingOverview;
     const areUserMetricsPending = !overviewState && !overviewLoadFailed;
-    const hasOperationalIssues = successRate24h !== null && successRate24h < 90;
+    const dispatcherHeartbeatAge = operationsSummary?.dispatcherHeartbeat
+        ? Date.now() - new Date(operationsSummary.dispatcherHeartbeat).getTime()
+        : null;
+    const pendingAge = operationsSummary?.oldestPendingAt
+        ? Date.now() - new Date(operationsSummary.oldestPendingAt).getTime()
+        : 0;
+    const hasOperationalIssues =
+        (successRate24h !== null && successRate24h < 90) ||
+        (operationsSummary !== null && dispatcherHeartbeatAge === null) ||
+        (dispatcherHeartbeatAge !== null && dispatcherHeartbeatAge > 30_000) ||
+        (operationsSummary?.enrichment?.queueAgeMs ?? 0) > 2_000 ||
+        (operationsSummary?.notificationLatency.p95Ms ?? 0) > 1_000 ||
+        pendingAge > 120_000;
     const membersWithoutMonitors = memberInsights
         ? Math.max(
               0,
@@ -4491,7 +4517,7 @@ export function AdminClient({
                 <div className="space-y-4">
                     {operationsSummary ? (
                         <>
-                            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                                 {[
                                     {
                                         label: "Delivered (24h)",
@@ -4525,6 +4551,34 @@ export function AdminClient({
                                             .open,
                                         detail: `${operationsSummary.proxyIncidents.brief} brief recoveries`,
                                     },
+                                    {
+                                        label: "Enrichment queue",
+                                        value:
+                                            operationsSummary.enrichment
+                                                ?.queueAgeMs ?? 0,
+                                        detail: operationsSummary.enrichment
+                                            ? `${operationsSummary.enrichment.remoteP95Ms}ms remote p95 · ${operationsSummary.enrichment.timeouts} timeouts`
+                                            : "Worker metrics not reported",
+                                        suffix: "ms",
+                                    },
+                                    {
+                                        label: "Enrichment cache",
+                                        value:
+                                            operationsSummary.enrichment
+                                                ?.cacheHitRate ?? 0,
+                                        detail: operationsSummary.enrichment
+                                            ? `${operationsSummary.enrichment.cacheHits.toLocaleString()} hits · ${operationsSummary.enrichment.cacheMisses.toLocaleString()} misses`
+                                            : "Worker metrics not reported",
+                                        suffix: "%",
+                                    },
+                                    {
+                                        label: "Notification latency",
+                                        value:
+                                            operationsSummary
+                                                .notificationLatency.p95Ms ?? 0,
+                                        detail: `p50 ${Math.round(operationsSummary.notificationLatency.p50Ms ?? 0)}ms · p99 ${Math.round(operationsSummary.notificationLatency.p99Ms ?? 0)}ms`,
+                                        suffix: "ms p95",
+                                    },
                                 ].map((metric) => (
                                     <div
                                         key={metric.label}
@@ -4535,6 +4589,9 @@ export function AdminClient({
                                         </p>
                                         <p className="text-foreground mt-1 text-2xl font-semibold">
                                             {metric.value.toLocaleString()}
+                                            {"suffix" in metric && metric.suffix
+                                                ? ` ${metric.suffix}`
+                                                : ""}
                                         </p>
                                         <p className="text-muted-foreground mt-1 text-xs">
                                             {metric.detail}

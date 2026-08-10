@@ -1,16 +1,22 @@
 package scraper
 
-import "testing"
+import (
+	"context"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
 
 func TestSellerInfoCache_SetAndGet(t *testing.T) {
 	cache := &sellerInfoCache{
-		cache: make(map[int64]sellerCacheEntry, 16),
+		cache: make(map[string]sellerCacheEntry, 16),
 	}
 
 	info := SellerInfo{Region: "🇩🇪 DE", Rating: "⭐ 4.5 (10)", RatingStars: 4.5, RatingCount: 10, RatingAvailable: true}
-	cache.Set(123, info)
+	cache.Set("www.vinted.de", 123, info, time.Now())
 
-	got, ok := cache.Get(123)
+	got, ok := cache.Get("www.vinted.de", 123, time.Minute)
 	if !ok {
 		t.Fatal("Expected cache hit for user 123")
 	}
@@ -22,12 +28,57 @@ func TestSellerInfoCache_SetAndGet(t *testing.T) {
 	}
 }
 
+func TestSellerInfoCache_IsolatedByDomainAndExpires(t *testing.T) {
+	cache := &sellerInfoCache{cache: make(map[string]sellerCacheEntry, 4)}
+	cache.Set("www.vinted.de", 7, SellerInfo{Region: "🇩🇪 DE"}, time.Now())
+	cache.Set("www.vinted.fr", 7, SellerInfo{Region: "🇫🇷 FR"}, time.Now())
+	if got, _ := cache.Get("www.vinted.de", 7, time.Minute); got.Region != "🇩🇪 DE" {
+		t.Fatalf("DE cache leaked across domains: %#v", got)
+	}
+	cache.Set("www.vinted.de", 8, SellerInfo{Region: "old"}, time.Now().Add(-time.Hour))
+	if _, ok := cache.Get("www.vinted.de", 8, time.Minute); ok {
+		t.Fatal("expired seller cache entry was returned")
+	}
+}
+
+func TestConcurrentItemsForSellerUseOneRemoteFetch(t *testing.T) {
+	var fetches atomic.Int32
+	sellerID := time.Now().UnixNano()
+	enricher := &SellerEnricher{
+		domain: "www.vinted.de", cacheTTL: time.Minute,
+		remoteFetch: func(ctx context.Context, sellerID int64) (SellerInfo, error) {
+			fetches.Add(1)
+			select {
+			case <-time.After(25 * time.Millisecond):
+				return SellerInfo{Region: "🇩🇪 DE", RatingAvailable: true}, nil
+			case <-ctx.Done():
+				return SellerInfo{}, ctx.Err()
+			}
+		},
+	}
+	engine := &Engine{sellerFlights: make(map[string]*sellerFetchFlight)}
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := engine.fetchSellerInfo(context.Background(), enricher, sellerID); err != nil {
+				t.Errorf("fetch seller: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := fetches.Load(); got != 1 {
+		t.Fatalf("remote fetches = %d, want 1", got)
+	}
+}
+
 func TestSellerInfoCache_Miss(t *testing.T) {
 	cache := &sellerInfoCache{
-		cache: make(map[int64]sellerCacheEntry, 16),
+		cache: make(map[string]sellerCacheEntry, 16),
 	}
 
-	_, ok := cache.Get(999)
+	_, ok := cache.Get("www.vinted.de", 999, time.Minute)
 	if ok {
 		t.Error("Expected cache miss for non-existent user")
 	}
@@ -35,13 +86,13 @@ func TestSellerInfoCache_Miss(t *testing.T) {
 
 func TestSellerInfoCache_Overwrite(t *testing.T) {
 	cache := &sellerInfoCache{
-		cache: make(map[int64]sellerCacheEntry, 16),
+		cache: make(map[string]sellerCacheEntry, 16),
 	}
 
-	cache.Set(1, SellerInfo{Region: "🇩🇪 DE"})
-	cache.Set(1, SellerInfo{Region: "🇫🇷 FR"})
+	cache.Set("www.vinted.de", 1, SellerInfo{Region: "🇩🇪 DE"}, time.Now())
+	cache.Set("www.vinted.de", 1, SellerInfo{Region: "🇫🇷 FR"}, time.Now())
 
-	got, _ := cache.Get(1)
+	got, _ := cache.Get("www.vinted.de", 1, time.Minute)
 	if got.Region != "🇫🇷 FR" {
 		t.Errorf("Overwritten region = %q, want '🇫🇷 FR'", got.Region)
 	}

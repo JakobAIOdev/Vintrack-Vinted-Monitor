@@ -21,7 +21,7 @@ func TestAlertOutboxAgainstPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	suffix := time.Now().UnixNano()
@@ -152,6 +152,9 @@ func TestAlertOutboxAgainstPostgres(t *testing.T) {
 		WHERE id = $1`, firstA.ID); err != nil {
 		t.Fatal(err)
 	}
+	if recovered, err := store.RecoverExpiredAlertDeliveryLeases(ctx); err != nil || recovered != 1 {
+		t.Fatalf("recover expired leases = %d, %v", recovered, err)
+	}
 	recoveredA, err := store.ClaimAlertDelivery(ctx, "lease-a-2")
 	if err != nil || recoveredA == nil || recoveredA.ID != firstA.ID || recoveredA.AttemptCount != 2 {
 		t.Fatalf("recovered lease = %#v, %v", recoveredA, err)
@@ -165,6 +168,93 @@ func TestAlertOutboxAgainstPostgres(t *testing.T) {
 	}
 	if completed, err := store.CompleteAlertDelivery(ctx, *secondA); err != nil || !completed {
 		t.Fatalf("complete second FIFO delivery = %v, %v", completed, err)
+	}
+
+	targetC := "https://discord.test/api/webhooks/c/token"
+	targetD := "https://discord.test/api/webhooks/d/token"
+	queue("batch-c-1", 995, targetC)
+	queue("batch-c-2", 996, targetC)
+	queue("batch-d", 997, targetD)
+	batch, err := store.ClaimAlertDeliveries(ctx, "batch-claim", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch) != 2 {
+		t.Fatalf("batch claims = %d, want one oldest delivery per destination", len(batch))
+	}
+	claimedItems := map[int64]bool{}
+	for _, delivery := range batch {
+		claimedItems[delivery.ItemID] = true
+		if completed, err := store.CompleteAlertDelivery(ctx, delivery); err != nil || !completed {
+			t.Fatalf("complete batch delivery = %v, %v", completed, err)
+		}
+	}
+	if !claimedItems[995] || !claimedItems[997] || claimedItems[996] {
+		t.Fatalf("batch broke destination FIFO: %v", claimedItems)
+	}
+	nextC, err := store.ClaimAlertDelivery(ctx, "batch-c-next")
+	if err != nil || nextC == nil || nextC.ItemID != 996 {
+		t.Fatalf("next destination C claim = %#v, %v", nextC, err)
+	}
+	if completed, err := store.CompleteAlertDelivery(ctx, *nextC); err != nil || !completed {
+		t.Fatalf("complete next C delivery = %v, %v", completed, err)
+	}
+
+	// Terminal history must not participate in the due-claim plan. This models
+	// the production shape that exposed connection starvation after ~50k rows.
+	perfPrefix := fmt.Sprintf("alert-test:%d:perf:", suffix)
+	if _, err := store.db.ExecContext(ctx, `
+		WITH notifications AS (
+			INSERT INTO alert_notifications (
+				user_id, monitor_id, item_id, kind, payload_version, payload,
+				idempotency_key, expires_at
+			)
+			SELECT $1, $2, 1000000 + value, 'item_match', 1,
+				jsonb_build_object('version', 1, 'kind', 'item_match'),
+				$3 || 'terminal:' || value, NOW() + INTERVAL '1 hour'
+			FROM generate_series(1, 50000) AS value
+			RETURNING id
+		)
+		INSERT INTO alert_deliveries (
+			notification_id, channel, status, destination_fingerprint,
+			completed_at
+		)
+		SELECT id, 'discord', 'sent', LPAD(id::text, 64, '0'), NOW()
+		FROM notifications`, userID, monitorID, perfPrefix); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		WITH notifications AS (
+			INSERT INTO alert_notifications (
+				user_id, monitor_id, item_id, kind, payload_version, payload,
+				idempotency_key, expires_at
+			)
+			SELECT $1, $2, 2000000 + value, 'item_match', 1,
+				jsonb_build_object('version', 1, 'kind', 'item_match'),
+				$3 || 'burst:' || value, NOW() + INTERVAL '1 hour'
+			FROM generate_series(1, 32) AS value
+			RETURNING id
+		)
+		INSERT INTO alert_deliveries (
+			notification_id, channel, destination_fingerprint
+		)
+		SELECT id, 'discord', LPAD((id + 50000)::text, 64, '0')
+		FROM notifications`, userID, monitorID, perfPrefix); err != nil {
+		t.Fatal(err)
+	}
+	claimStarted := time.Now()
+	perfBatch, err := store.ClaimAlertDeliveries(ctx, "perf-batch", 32)
+	claimDuration := time.Since(claimStarted)
+	if err != nil || len(perfBatch) != 32 {
+		t.Fatalf("performance batch = %d, %v", len(perfBatch), err)
+	}
+	if claimDuration >= 250*time.Millisecond {
+		t.Fatalf("batch claim with terminal history took %s, want <250ms", claimDuration)
+	}
+	for _, delivery := range perfBatch {
+		if completed, err := store.CompleteAlertDelivery(ctx, delivery); err != nil || !completed {
+			t.Fatalf("complete performance delivery = %v, %v", completed, err)
+		}
 	}
 
 	if err := store.OpenOrUpdateProxyIncident(ctx, monitorID, "www.vinted.de", "free", time.Now().Add(time.Second)); err != nil {

@@ -24,7 +24,8 @@ var apiBaseURL = "https://api.telegram.org"
 var retryBackoff = 750 * time.Millisecond
 
 type retryResponse struct {
-	Parameters struct {
+	Description string `json:"description"`
+	Parameters  struct {
 		RetryAfter int `json:"retry_after"`
 	} `json:"parameters"`
 }
@@ -225,11 +226,25 @@ func sendAttempt(ctx context.Context, method string, payload map[string]interfac
 		result.Detail = fmt.Sprintf("telegram returned %d", resp.StatusCode)
 		return result
 	}
+	var apiError retryResponse
+	_ = json.Unmarshal(responseBody, &apiError)
+	description := strings.ToLower(apiError.Description)
 	result.ReasonCode = "provider_rejected"
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
-		result.ReasonCode = "invalid_destination"
-	}
 	result.Detail = fmt.Sprintf("telegram returned %d", resp.StatusCode)
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusNotFound {
+		result.Retryable = true
+		result.ReasonCode = "provider_authentication"
+		result.Detail = "telegram bot authentication failed"
+		return result
+	}
+	if resp.StatusCode == http.StatusForbidden ||
+		(resp.StatusCode == http.StatusBadRequest &&
+			(strings.Contains(description, "chat not found") ||
+				strings.Contains(description, "bot was blocked") ||
+				strings.Contains(description, "user is deactivated"))) {
+		result.ReasonCode = "invalid_destination"
+		result.Detail = "telegram chat is no longer reachable"
+	}
 	return result
 }
 

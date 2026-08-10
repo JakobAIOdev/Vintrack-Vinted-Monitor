@@ -2754,7 +2754,12 @@ const getCachedAdminOperationsSummary = unstable_cache(
             event_count: bigint;
             last_seen_at: Date;
         };
-        const [stats, queue, failures, incidents, briefIncidents, settings] =
+        type LatencyRow = {
+            p50_ms: number | null;
+            p95_ms: number | null;
+            p99_ms: number | null;
+        };
+        const [stats, queue, failures, incidents, briefIncidents, settings, latency] =
             await Promise.all([
                 db.$queryRaw<StatRow[]>`
                     SELECT channel, outcome, SUM(event_count)::bigint AS event_count
@@ -2829,11 +2834,29 @@ const getCachedAdminOperationsSummary = unstable_cache(
                             in: [
                                 "alert_telemetry_tracked_since",
                                 "alert_dispatcher_heartbeat",
+                                "seller_enrichment_metrics",
                             ],
                         },
                     },
                     select: { key: true, value: true },
                 }),
+                db.$queryRaw<LatencyRow[]>`
+                    SELECT
+                        PERCENTILE_CONT(0.50) WITHIN GROUP (
+                            ORDER BY EXTRACT(EPOCH FROM (d.completed_at - d.created_at)) * 1000
+                        )::double precision AS p50_ms,
+                        PERCENTILE_CONT(0.95) WITHIN GROUP (
+                            ORDER BY EXTRACT(EPOCH FROM (d.completed_at - d.created_at)) * 1000
+                        )::double precision AS p95_ms,
+                        PERCENTILE_CONT(0.99) WITHIN GROUP (
+                            ORDER BY EXTRACT(EPOCH FROM (d.completed_at - d.created_at)) * 1000
+                        )::double precision AS p99_ms
+                    FROM alert_deliveries d
+                    JOIN alert_notifications n ON n.id = d.notification_id
+                    WHERE d.status = 'sent'
+                      AND d.completed_at >= NOW() - INTERVAL '24 hours'
+                      AND n.kind = 'item_match'
+                `,
             ]);
 
         const outcomeTotals = new Map<string, number>();
@@ -2868,6 +2891,35 @@ const getCachedAdminOperationsSummary = unstable_cache(
         const settingMap = new Map(
             settings.map((setting) => [setting.key, setting.value]),
         );
+        const enrichmentRaw = settingMap.get("seller_enrichment_metrics");
+        let enrichment: {
+            queueAgeMs: number;
+            cacheHitRate: number;
+            cacheHits: number;
+            cacheMisses: number;
+            remoteP95Ms: number;
+            timeouts: number;
+            updatedAt: string | null;
+        } | null = null;
+        if (enrichmentRaw) {
+            try {
+                const value = JSON.parse(enrichmentRaw) as Record<string, unknown>;
+                enrichment = {
+                    queueAgeMs: Number(value.queueAgeMs ?? 0),
+                    cacheHitRate: Number(value.cacheHitRate ?? 0),
+                    cacheHits: Number(value.cacheHits ?? 0),
+                    cacheMisses: Number(value.cacheMisses ?? 0),
+                    remoteP95Ms: Number(value.remoteP95Ms ?? 0),
+                    timeouts: Number(value.timeouts ?? 0),
+                    updatedAt:
+                        typeof value.updatedAt === "string"
+                            ? value.updatedAt
+                            : null,
+                };
+            } catch {
+                enrichment = null;
+            }
+        }
 
         return {
             windowHours: 24,
@@ -2906,9 +2958,15 @@ const getCachedAdminOperationsSummary = unstable_cache(
                 settingMap.get("alert_telemetry_tracked_since") ?? null,
             dispatcherHeartbeat:
                 settingMap.get("alert_dispatcher_heartbeat") ?? null,
+            enrichment,
+            notificationLatency: {
+                p50Ms: latency[0]?.p50_ms ?? null,
+                p95Ms: latency[0]?.p95_ms ?? null,
+                p99Ms: latency[0]?.p99_ms ?? null,
+            },
         };
     },
-    ["admin-operations-summary-v1"],
+    ["admin-operations-summary-v2"],
     { revalidate: 30 },
 );
 

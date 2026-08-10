@@ -2,6 +2,7 @@ import { isValidTelegramChatId } from "@/lib/validation";
 
 type TelegramResult = { success: true } | { error: string };
 type TelegramRateLimit = { parameters?: { retry_after?: number } };
+type TelegramError = { description?: string };
 
 function telegramEndpoint(method: string) {
     const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -37,7 +38,7 @@ export async function sendTelegramMessage(
         const res = await postTelegram(endpoint, payload);
 
         if (!res.ok) {
-            return { error: `Telegram API returned ${res.status}` };
+            return { error: await telegramErrorMessage(res) };
         }
 
         return { success: true };
@@ -49,6 +50,27 @@ export async function sendTelegramMessage(
                     : "Failed to send Telegram message",
         };
     }
+}
+
+async function telegramErrorMessage(res: Response) {
+    let description = "";
+    try {
+        const data = (await res.json()) as TelegramError;
+        description = data.description?.toLowerCase() || "";
+    } catch {}
+
+    if (res.status === 401 || res.status === 404) {
+        return "Telegram bot configuration is invalid. Please contact support.";
+    }
+    if (
+        res.status === 403 ||
+        description.includes("chat not found") ||
+        description.includes("bot was blocked") ||
+        description.includes("user is deactivated")
+    ) {
+        return "This Telegram chat is no longer reachable. Use Reconnect Telegram in the dashboard.";
+    }
+    return `Telegram API returned ${res.status}`;
 }
 
 async function postTelegram(

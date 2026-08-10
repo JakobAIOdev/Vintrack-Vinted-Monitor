@@ -36,6 +36,16 @@ func TestSendAttemptClassifiesTelegramProviderFailures(t *testing.T) {
 			w.WriteHeader(http.StatusBadGateway)
 			return
 		}
+		if strings.Contains(r.URL.Path, "not-found") {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"ok":false,"description":"Not Found"}`))
+			return
+		}
+		if strings.Contains(r.URL.Path, "missing-chat") {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"ok":false,"description":"Bad Request: chat not found"}`))
+			return
+		}
 		w.WriteHeader(http.StatusForbidden)
 	})
 	transient := sendAttempt(context.Background(), "unavailable", map[string]interface{}{"chat_id": "1"})
@@ -45,6 +55,14 @@ func TestSendAttemptClassifiesTelegramProviderFailures(t *testing.T) {
 	terminal := sendAttempt(context.Background(), "forbidden", map[string]interface{}{"chat_id": "1"})
 	if terminal.Retryable || terminal.ReasonCode != "invalid_destination" {
 		t.Fatalf("terminal result: %#v", terminal)
+	}
+	authentication := sendAttempt(context.Background(), "not-found", map[string]interface{}{"chat_id": "1"})
+	if !authentication.Retryable || authentication.ReasonCode != "provider_authentication" {
+		t.Fatalf("authentication result: %#v", authentication)
+	}
+	missingChat := sendAttempt(context.Background(), "missing-chat", map[string]interface{}{"chat_id": "1"})
+	if missingChat.Retryable || missingChat.ReasonCode != "invalid_destination" {
+		t.Fatalf("missing chat result: %#v", missingChat)
 	}
 }
 

@@ -483,6 +483,38 @@ func TestDetectedItemAlertPlanSkipsExternalEnrichmentWhenMuted(t *testing.T) {
 	}
 }
 
+func TestNormalAlertDeadlineIsArmedOnceAndStrictAlertsDoNotFallback(t *testing.T) {
+	engine := &Engine{
+		jobsCtx:   context.Background(),
+		alertJobs: make(chan alertJob, 2),
+	}
+	job := enrichmentJob{
+		item:             model.Item{ID: 123, FoundAt: time.Now().Add(-3 * time.Second)},
+		alertAfterEnrich: true,
+	}
+	engine.armNormalAlertDeadline(&job)
+	engine.armNormalAlertDeadline(&job)
+	select {
+	case alert := <-engine.alertJobs:
+		if !alert.deliverExternal || alert.item.ID != job.item.ID {
+			t.Fatalf("unexpected fallback alert: %#v", alert)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("normal alert did not fall back at its enrichment deadline")
+	}
+	select {
+	case <-engine.alertJobs:
+		t.Fatal("normal alert deadline was armed more than once")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	strict := enrichmentJob{item: model.Item{FoundAt: time.Now()}, alertAfterEnrich: true, requireSellerMatch: true}
+	engine.armNormalAlertDeadline(&strict)
+	if strict.notificationTimer != nil {
+		t.Fatal("strict seller filter received a non-strict fallback timer")
+	}
+}
+
 func TestDiscoveryFailureBackoffOnlyAfterRepeatedFreeFailures(t *testing.T) {
 	if got := discoveryFailureBackoff("server", 5); got != 0 {
 		t.Fatalf("server backoff = %s, want 0", got)

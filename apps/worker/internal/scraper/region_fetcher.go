@@ -1,7 +1,9 @@
 package scraper
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -10,7 +12,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"vintrack-worker/internal/cache"
 	"vintrack-worker/internal/database"
 	"vintrack-worker/internal/model"
 	"vintrack-worker/internal/proxy"
@@ -55,37 +59,53 @@ var countryMap = map[string]string{
 }
 
 type sellerCacheEntry struct {
-	info    SellerInfo
-	counter uint64
+	info      SellerInfo
+	counter   uint64
+	fetchedAt time.Time
 }
 
 type sellerInfoCache struct {
 	mu      sync.RWMutex
-	cache   map[int64]sellerCacheEntry
+	cache   map[string]sellerCacheEntry
 	counter uint64
 }
 
 var sellerCache = &sellerInfoCache{
-	cache: make(map[int64]sellerCacheEntry, 4096),
+	cache: make(map[string]sellerCacheEntry, 4096),
 }
 
-func (c *sellerInfoCache) Get(userID int64) (SellerInfo, bool) {
+func sellerCacheKey(domain string, userID int64) string {
+	return fmt.Sprintf("%s:%d", strings.ToLower(strings.TrimSpace(domain)), userID)
+}
+
+func (c *sellerInfoCache) Get(domain string, userID int64, ttl time.Duration) (SellerInfo, bool) {
+	key := sellerCacheKey(domain, userID)
 	c.mu.RLock()
-	entry, ok := c.cache[userID]
+	entry, ok := c.cache[key]
 	c.mu.RUnlock()
+	if ok && ttl > 0 && time.Since(entry.fetchedAt) > ttl {
+		c.mu.Lock()
+		delete(c.cache, key)
+		c.mu.Unlock()
+		return SellerInfo{}, false
+	}
 	if ok {
 		n := atomic.AddUint64(&c.counter, 1)
 		c.mu.Lock()
-		if e, exists := c.cache[userID]; exists {
+		if e, exists := c.cache[key]; exists {
 			e.counter = n
-			c.cache[userID] = e
+			c.cache[key] = e
 		}
 		c.mu.Unlock()
 	}
 	return entry.info, ok
 }
 
-func (c *sellerInfoCache) Set(userID int64, info SellerInfo) {
+func (c *sellerInfoCache) Set(domain string, userID int64, info SellerInfo, fetchedAt time.Time) {
+	key := sellerCacheKey(domain, userID)
+	if fetchedAt.IsZero() {
+		fetchedAt = time.Now()
+	}
 	n := atomic.AddUint64(&c.counter, 1)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -103,7 +123,7 @@ func (c *sellerInfoCache) Set(userID int64, info SellerInfo) {
 			}
 		}
 	}
-	c.cache[userID] = sellerCacheEntry{info: info, counter: n}
+	c.cache[key] = sellerCacheEntry{info: info, counter: n, fetchedAt: fetchedAt}
 }
 
 var isoCountryMap = map[string]string{
@@ -145,75 +165,61 @@ func normalizeSellerRating(feedbackCount int, feedbackReputation float64) (strin
 }
 
 type SellerEnricher struct {
-	clients         []*Client
+	pool            *ClientPool
 	pm              *proxy.Manager
 	db              *database.Store
 	domain          string
 	trafficRecorder func(txBytes int64, rxBytes int64)
-	mu              sync.Mutex
-	idx             int
+	flightMu        sync.Mutex
+	inflight        map[int64]*sellerFetchFlight
+	cacheTTL        time.Duration
+	hedgeDelay      time.Duration
+	remoteFetch     func(context.Context, int64) (SellerInfo, error)
+}
+
+type sellerFetchFlight struct {
+	done chan struct{}
+	info SellerInfo
+	err  error
 }
 
 func NewSellerEnricher(pm *proxy.Manager, db *database.Store, domain string, poolSize int, trafficRecorder func(txBytes int64, rxBytes int64)) *SellerEnricher {
-	if pm.Count() < poolSize {
-		poolSize = pm.Count()
-	}
 	if poolSize < 1 {
 		poolSize = 1
 	}
-	s := &SellerEnricher{pm: pm, db: db, domain: domain, trafficRecorder: trafficRecorder, clients: make([]*Client, 0, poolSize)}
-	for i := 0; i < poolSize; i++ {
-		s.addClient()
+	requestTimeout := sellerEnrichmentTimeout()
+	cacheTTL := time.Duration(getEnvInt("SELLER_CACHE_TTL_MINUTES", 30)) * time.Minute
+	if cacheTTL <= 0 {
+		cacheTTL = 30 * time.Minute
+	}
+	hedgeDelay := time.Duration(getEnvInt("SELLER_HEDGE_DELAY_MS", 350)) * time.Millisecond
+	if hedgeDelay < 0 {
+		hedgeDelay = 350 * time.Millisecond
+	}
+	pool := NewClientPoolWithTimeout(pm, domain, poolSize, trafficRecorder, requestTimeout)
+	pool.SetMaxInFlightPerClient(1)
+	s := &SellerEnricher{
+		pool: pool, pm: pm, db: db, domain: domain, trafficRecorder: trafficRecorder,
+		inflight:   make(map[int64]*sellerFetchFlight),
+		cacheTTL:   cacheTTL,
+		hedgeDelay: hedgeDelay,
 	}
 	return s
 }
 
-func (s *SellerEnricher) addClient() {
-	client, err := NewSellerClient(s.pm.Next(), s.trafficRecorder)
-	if err != nil {
-		log.Printf("seller enricher client creation: %v", err)
-		return
+func sellerEnrichmentTimeout() time.Duration {
+	timeout := time.Duration(getEnvInt("SELLER_ENRICHMENT_TIMEOUT_MS", 2000)) * time.Millisecond
+	if timeout <= 0 {
+		return 2 * time.Second
 	}
-	s.clients = append(s.clients, client)
+	return timeout
 }
 
-func (s *SellerEnricher) nextClient() *Client {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.clients) == 0 {
-		return nil
-	}
-	c := s.clients[s.idx%len(s.clients)]
-	s.idx++
-	return c
-}
-
-func (s *SellerEnricher) replaceClient(bad *Client) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i, c := range s.clients {
-		if c == bad {
-			go func(idx int) {
-				nc, err := NewSellerClient(s.pm.Next(), s.trafficRecorder)
-				if err != nil {
-					return
-				}
-				s.mu.Lock()
-				if idx < len(s.clients) {
-					s.clients[idx] = nc
-				}
-				s.mu.Unlock()
-			}(i)
-			return
-		}
-	}
-}
-
-func LookupCachedSellerInfo(db *database.Store, userID int64) (SellerInfo, bool) {
+func LookupCachedSellerInfo(ctx context.Context, db *database.Store, domain string, userID int64, ttl time.Duration) (SellerInfo, bool) {
 	if userID <= 0 {
 		return SellerInfo{}, false
 	}
-	if info, ok := sellerCache.Get(userID); ok {
+	if info, ok := sellerCache.Get(domain, userID, ttl); ok {
 		if isSellerInfoComplete(info) {
 			logSellerEnrichmentSuccess("memory-cache", userID, info)
 		} else {
@@ -221,7 +227,21 @@ func LookupCachedSellerInfo(db *database.Store, userID int64) (SellerInfo, bool)
 		}
 		return info, true
 	}
-	if region, ok := db.GetUserRegion(userID); ok && region != "" {
+	cacheCtx, cancel := context.WithTimeout(ctx, 40*time.Millisecond)
+	cached, ok := db.GetSellerInfoCache(cacheCtx, domain, userID)
+	cancel()
+	if ok && (cached.FetchedAt.IsZero() || time.Since(cached.FetchedAt) <= ttl) {
+		info := sellerInfoFromCache(cached)
+		sellerCache.Set(domain, userID, info, cached.FetchedAt)
+		logSellerEnrichmentSuccess("redis-cache", userID, info)
+		return info, true
+	}
+	// The old region-only cache remains readable during rollout. It is partial
+	// data, so callers may use it as their best effort while a remote fetch runs.
+	regionCtx, cancel := context.WithTimeout(ctx, 40*time.Millisecond)
+	region, ok := db.GetUserRegionContext(regionCtx, userID)
+	cancel()
+	if ok && region != "" {
 		info := SellerInfo{Region: region}
 		log.Printf("[seller-enrich] user=%d source=db-cache partial region=%q rating=%q", userID, info.Region, info.Rating)
 		return info, true
@@ -229,71 +249,166 @@ func LookupCachedSellerInfo(db *database.Store, userID int64) (SellerInfo, bool)
 	return SellerInfo{}, false
 }
 
-func (s *SellerEnricher) FetchSellerInfo(userID int64) SellerInfo {
-	if userID > 0 {
-		if info, ok := sellerCache.Get(userID); ok {
-			if isSellerInfoComplete(info) {
-				logSellerEnrichmentSuccess("memory-cache", userID, info)
-				return info
+func (s *SellerEnricher) FetchSellerInfo(ctx context.Context, userID int64) (SellerInfo, error) {
+	if userID <= 0 {
+		return SellerInfo{}, errors.New("invalid seller id")
+	}
+	if info, ok := sellerCache.Get(s.domain, userID, s.cacheTTL); ok && isSellerInfoComplete(info) {
+		return info, nil
+	}
+	if s.db != nil {
+		if info, ok := LookupCachedSellerInfo(ctx, s.db, s.domain, userID, s.cacheTTL); ok && isSellerInfoComplete(info) {
+			return info, nil
+		}
+	}
+
+	s.flightMu.Lock()
+	if s.inflight == nil {
+		s.inflight = make(map[int64]*sellerFetchFlight)
+	}
+	if flight, ok := s.inflight[userID]; ok {
+		s.flightMu.Unlock()
+		select {
+		case <-flight.done:
+			return flight.info, flight.err
+		case <-ctx.Done():
+			return SellerInfo{}, ctx.Err()
+		}
+	}
+	flight := &sellerFetchFlight{done: make(chan struct{})}
+	s.inflight[userID] = flight
+	s.flightMu.Unlock()
+
+	var info SellerInfo
+	var err error
+	if s.remoteFetch != nil {
+		info, err = s.remoteFetch(ctx, userID)
+	} else {
+		info, err = s.fetchHedged(ctx, userID)
+	}
+	if info.Region != "" && info.Region != "NaN" {
+		fetchedAt := time.Now()
+		sellerCache.Set(s.domain, userID, info, fetchedAt)
+		if s.db != nil {
+			s.db.SetUserRegion(userID, info.Region)
+			cacheCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			cacheErr := s.db.SetSellerInfoCache(cacheCtx, s.domain, userID, sellerInfoToCache(info, fetchedAt), s.cacheTTL)
+			cancel()
+			if cacheErr != nil {
+				log.Printf("[seller-enrich] user=%d full cache write failed: %v", userID, cacheErr)
 			}
-			log.Printf("[seller-enrich] user=%d source=memory-cache partial region=%q rating=%q continuing remote fetch", userID, info.Region, info.Rating)
 		}
 	}
 
-	if userID > 0 {
-		if region, ok := s.db.GetUserRegion(userID); ok && region != "" {
-			log.Printf("[seller-enrich] user=%d source=db-cache partial region=%q rating=%q continuing remote fetch", userID, region, "")
-		}
-	}
-
-	info := s.fetchWithRetry(userID)
-	if userID > 0 && info.Region != "" && info.Region != "NaN" {
-		sellerCache.Set(userID, info)
-		s.db.SetUserRegion(userID, info.Region)
-	}
-
-	return info
+	s.flightMu.Lock()
+	flight.info, flight.err = info, err
+	delete(s.inflight, userID)
+	close(flight.done)
+	s.flightMu.Unlock()
+	return info, err
 }
 
-func (s *SellerEnricher) fetchWithRetry(userID int64) SellerInfo {
-	client := s.nextClient()
+func sellerInfoFromCache(info cache.SellerInfo) SellerInfo {
+	return SellerInfo{Region: info.Region, Rating: info.Rating, RatingStars: info.RatingStars, RatingCount: info.RatingCount, RatingAvailable: info.RatingAvailable}
+}
+
+func sellerInfoToCache(info SellerInfo, fetchedAt time.Time) cache.SellerInfo {
+	return cache.SellerInfo{Region: info.Region, Rating: info.Rating, RatingStars: info.RatingStars, RatingCount: info.RatingCount, RatingAvailable: info.RatingAvailable, FetchedAt: fetchedAt}
+}
+
+type sellerFetchResult struct {
+	info   SellerInfo
+	status int
+	err    error
+}
+
+func (s *SellerEnricher) acquireSellerClient(ctx context.Context, excluded map[*Client]bool, wait bool) *Client {
+	for {
+		if client := s.pool.AcquireExcluding(excluded); client != nil {
+			return client
+		}
+		if !wait {
+			return nil
+		}
+		timer := time.NewTimer(5 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil
+		case <-timer.C:
+		}
+	}
+}
+
+func (s *SellerEnricher) startSellerFetch(ctx context.Context, userID int64, excluded map[*Client]bool, results chan<- sellerFetchResult, waitForLease bool) (*Client, bool) {
+	client := s.acquireSellerClient(ctx, excluded, waitForLease)
 	if client == nil {
-		logSellerEnrichmentFailure("seller-client", userID, "no client available")
-		return SellerInfo{Region: "NaN"}
+		return nil, false
 	}
-
-	info, status := s.fetchFromAPI(client, userID)
-	if info.Region != "" {
-		return info
-	}
-
-	if status != 200 {
-		s.replaceClient(client)
-	}
-
-	client2 := s.nextClient()
-	if client2 != nil && client2 != client {
-		logSellerEnrichmentFailure("retry", userID, "retrying with a replacement client after status=%d", status)
-		info, status2 := s.fetchFromAPI(client2, userID)
-		if info.Region != "" {
-			return info
-		}
-		if status2 != 200 {
-			s.replaceClient(client2)
-		}
-	}
-
-	logSellerEnrichmentFailure("seller-api", userID, "no region resolved after retries")
-	return SellerInfo{Region: "NaN"}
+	go func() {
+		started := time.Now()
+		info, status, err := s.fetchFromAPI(ctx, client, userID)
+		s.pool.Report(client, status, time.Since(started), err)
+		results <- sellerFetchResult{info: info, status: status, err: err}
+	}()
+	return client, true
 }
 
-func (s *SellerEnricher) fetchFromAPI(client *Client, userID int64) (SellerInfo, int) {
+func (s *SellerEnricher) fetchHedged(ctx context.Context, userID int64) (SellerInfo, error) {
+	results := make(chan sellerFetchResult, 2)
+	primary, ok := s.startSellerFetch(ctx, userID, nil, results, true)
+	if !ok {
+		if err := ctx.Err(); err != nil {
+			return SellerInfo{Region: "NaN"}, err
+		}
+		return SellerInfo{Region: "NaN"}, errors.New("no healthy seller client available")
+	}
+	timer := time.NewTimer(s.hedgeDelay)
+	defer timer.Stop()
+	requests := 1
+	completed := 0
+	hedged := false
+	var lastErr error
+	for completed < requests || (!hedged && requests == 1) {
+		select {
+		case result := <-results:
+			completed++
+			if result.info.Region != "" {
+				return result.info, nil
+			}
+			lastErr = result.err
+			if !hedged {
+				_, started := s.startSellerFetch(ctx, userID, map[*Client]bool{primary: true}, results, false)
+				hedged = true
+				if started {
+					requests++
+				}
+			}
+		case <-timer.C:
+			if !hedged {
+				_, started := s.startSellerFetch(ctx, userID, map[*Client]bool{primary: true}, results, false)
+				hedged = true
+				if started {
+					requests++
+				}
+			}
+		case <-ctx.Done():
+			return SellerInfo{Region: "NaN"}, ctx.Err()
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("seller info unavailable")
+	}
+	return SellerInfo{Region: "NaN"}, lastErr
+}
+
+func (s *SellerEnricher) fetchFromAPI(ctx context.Context, client *Client, userID int64) (SellerInfo, int, error) {
 	if client == nil || userID <= 0 {
-		return SellerInfo{}, 0
+		return SellerInfo{}, 0, errors.New("invalid seller request")
 	}
 
 	apiURL := fmt.Sprintf("https://%s/api/v2/users/%d", s.domain, userID)
-	body, status := s.fetchAPIBody(client, apiURL, userID)
+	body, status, fetchErr := s.fetchAPIBody(ctx, client, apiURL, userID)
 	if status == 200 && len(body) > 0 {
 		var resp model.VintedUserDetailResponse
 		if err := json.Unmarshal(body, &resp); err == nil && resp.User.ID > 0 {
@@ -311,7 +426,7 @@ func (s *SellerEnricher) fetchFromAPI(client *Client, userID int64) (SellerInfo,
 
 			if info.Region != "" {
 				logSellerEnrichmentSuccess("seller-api", userID, info)
-				return info, 200
+				return info, 200, nil
 			}
 
 			logSellerEnrichmentFailure(
@@ -333,32 +448,35 @@ func (s *SellerEnricher) fetchFromAPI(client *Client, userID int64) (SellerInfo,
 		logSellerEnrichmentFailure("seller-api", userID, "http status=%d", status)
 	}
 
-	return SellerInfo{}, status
+	if fetchErr == nil {
+		fetchErr = fmt.Errorf("seller api status %d", status)
+	}
+	return SellerInfo{}, status, fetchErr
 }
 
-func (s *SellerEnricher) fetchAPIBody(client *Client, targetURL string, userID int64) ([]byte, int) {
+func (s *SellerEnricher) fetchAPIBody(ctx context.Context, client *Client, targetURL string, userID int64) ([]byte, int, error) {
 	currentURL := targetURL
 	domain := s.domain
 	if parsed, err := url.Parse(targetURL); err == nil && parsed.Host != "" {
 		domain = parsed.Host
 	}
 
-	if err := client.EnsureWarm(domain); err != nil {
+	if err := client.EnsureWarmContext(ctx, domain); err != nil {
 		logSellerEnrichmentFailure("warmup", userID, "domain=%s via=%s error=%v", domain, client.ProxyLabel(), err)
-		return nil, 0
+		return nil, 0, err
 	}
 
 	for redirects := 0; redirects < 3; redirects++ {
-		req, err := http.NewRequest("GET", currentURL, nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", currentURL, nil)
 		if err != nil {
-			return nil, 0
+			return nil, 0, err
 		}
 		req.Header = newAPIHeaders(domain)
 
 		resp, err := client.HttpClient.Do(req)
 		if err != nil {
 			client.FlushTrackedTraffic()
-			return nil, 0
+			return nil, 0, err
 		}
 
 		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
@@ -367,7 +485,7 @@ func (s *SellerEnricher) fetchAPIBody(client *Client, targetURL string, userID i
 			resp.Body.Close()
 			client.FlushTrackedTraffic()
 			if location == "" {
-				return nil, resp.StatusCode
+				return nil, resp.StatusCode, errors.New("redirect without location")
 			}
 			if strings.HasPrefix(location, "/") {
 				location = "https://" + domain + location
@@ -380,14 +498,14 @@ func (s *SellerEnricher) fetchAPIBody(client *Client, targetURL string, userID i
 			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 			client.FlushTrackedTraffic()
-			return nil, resp.StatusCode
+			return nil, resp.StatusCode, fmt.Errorf("seller api status %d", resp.StatusCode)
 		}
 
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
 		resp.Body.Close()
 		client.FlushTrackedTraffic()
-		return body, 200
+		return body, 200, nil
 	}
 
-	return nil, 0
+	return nil, 0, errors.New("too many seller api redirects")
 }
