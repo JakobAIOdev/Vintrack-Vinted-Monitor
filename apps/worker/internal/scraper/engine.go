@@ -683,19 +683,35 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 				seedIDs[i] = item.ID
 				localSeen[item.ID] = now
 			}
+			existingSeedIDs, err := e.db.BatchExistingItemIDs(m.ID, seedIDs)
+			if err != nil {
+				// A failed durable-state lookup must not turn a transient database
+				// problem into thousands of foreground seller requests. The next
+				// successful monitor start can seed any genuinely missing items.
+				log.Printf("[%d] initial seed lookup failed; skipping seed enrichment: %v", m.ID, err)
+				existingSeedIDs = make(map[int64]bool, len(seedIDs))
+				for _, id := range seedIDs {
+					existingSeedIDs[id] = true
+				}
+			}
 			e.db.MarkItemsSeen(m.ID, seedIDs)
 			filteredSeeds, _ := filterAntiKeywordItems(items, m.AntiKeywords)
 			filteredSeeds, _ = filterBannedSellerItems(filteredSeeds, m.BannedSellerIDs)
+			seeded := 0
 			for _, seed := range filteredSeeds {
+				if existingSeedIDs[seed.ID] {
+					continue
+				}
 				built := e.buildItems(m, []model.VintedItem{seed})[0]
 				requireSellerMatch := requiresSellerEnrichment(m)
 				e.enqueueItem(enrichmentJob{
 					ctx: ctx, item: built, vintedItem: seed, monitor: m, proxySource: proxySource,
-					enricher: enricher, publishUpdate: false,
+					enricher: enricher, publishUpdate: false, backgroundOnly: true,
 					requireSellerMatch: requireSellerMatch,
 				}, false)
+				seeded++
 			}
-			log.Printf("[%d] initial scan seeded %d items without notifications", m.ID, len(items))
+			log.Printf("[%d] initial scan saw %d items; queued %d unpersisted seeds in background without notifications", m.ID, len(items), seeded)
 			initializedQueries[queryIndex] = true
 			e.db.RecordMonitorRun(model.MonitorRun{
 				MonitorID: m.ID, Status: "success", StatusCode: 200,

@@ -163,9 +163,9 @@ func TestMonitorQuietHoursInvalidConfigurationIsInactive(t *testing.T) {
 	}
 }
 
-func TestPrepareQuietHoursResumeSkipsOnlyStartupBehavior(t *testing.T) {
+func TestPrepareMonitorResumeSkipsOnlyStartupBehavior(t *testing.T) {
 	monitor := model.Monitor{}
-	prepareQuietHoursResume(&monitor)
+	prepareMonitorResume(&monitor)
 	if !monitor.SuppressStartupNotice {
 		t.Fatal("quiet-hours resume did not suppress the duplicate startup notice")
 	}
