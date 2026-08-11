@@ -308,6 +308,20 @@ test.describe("dashboard overview", () => {
             page.getByRole("link", { name: "Sponsor Vintrack" }),
         ).toHaveAttribute("href", "https://github.com/sponsors/JakobAIOdev");
 
+        const serverUpgradeBanner = page
+            .getByRole("status")
+            .filter({ hasText: "Help keep the free demo fast" });
+        await expect(serverUpgradeBanner).toBeVisible();
+        await expect(
+            serverUpgradeBanner.getByRole("link", {
+                name: "Sponsor on GitHub",
+            }),
+        ).toHaveAttribute("href", "https://github.com/sponsors/JakobAIOdev");
+        await serverUpgradeBanner
+            .getByRole("button", { name: "Dismiss server upgrade notice" })
+            .click();
+        await expect(serverUpgradeBanner).toBeHidden();
+
         const monitorCard = page
             .getByTestId("monitor-card")
             .filter({ hasText: "E2E Mock Feed" })

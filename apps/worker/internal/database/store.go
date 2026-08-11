@@ -89,6 +89,20 @@ type FreeProxyInventoryRecord struct {
 	LastChecked  *time.Time
 }
 
+type freeProxyCandidateWindowCounts struct {
+	total    int
+	eligible int
+}
+
+func freeProxyCandidateWindowWork(
+	counts freeProxyCandidateWindowCounts,
+	limit int,
+) (fill bool, trim bool) {
+	fill = counts.eligible < limit
+	trim = counts.total > limit || (fill && counts.total > counts.eligible)
+	return fill, trim
+}
+
 type ProxyGroupCheckJob struct {
 	ID      int
 	Proxies string
@@ -1019,12 +1033,49 @@ func (s *Store) EnsureFreeProxyHealthRowsWithLimitsContext(ctx context.Context, 
 		WHERE NOT (region = ANY($1))`, pq.Array(regions)); err != nil {
 		return err
 	}
+
+	currentWindowCounts := make(map[string]freeProxyCandidateWindowCounts, len(regions))
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			fph.region,
+			COUNT(*) AS total_rows,
+			COUNT(*) FILTER (WHERE fp.status <> 'disabled') AS eligible_rows
+		FROM free_proxy_health fph
+		JOIN free_proxies fp ON fp.id = fph.proxy_id
+		WHERE fph.region = ANY($1)
+		  AND fph.candidate_window_token =
+			FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint
+		GROUP BY fph.region`, pq.Array(regions))
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var region string
+		var counts freeProxyCandidateWindowCounts
+		if err := rows.Scan(&region, &counts.total, &counts.eligible); err != nil {
+			rows.Close()
+			return err
+		}
+		currentWindowCounts[region] = counts
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
 	for _, region := range regions {
 		limit := limits[region]
 		if limit <= 0 {
 			limit = 1000
 		}
-		if _, err := s.db.ExecContext(ctx, `
+		fillWindow, trimWindow := freeProxyCandidateWindowWork(
+			currentWindowCounts[region],
+			limit,
+		)
+		if fillWindow {
+			if _, err := s.db.ExecContext(ctx, `
 			WITH desired AS (
 				SELECT fp.id
 				FROM free_proxies fp
@@ -1084,9 +1135,11 @@ func (s *Store) EnsureFreeProxyHealthRowsWithLimitsContext(ctx context.Context, 
 			SET candidate_window_token = EXCLUDED.candidate_window_token
 			WHERE free_proxy_health.candidate_window_token IS DISTINCT FROM
 				EXCLUDED.candidate_window_token`, region, limit); err != nil {
-			return err
+				return err
+			}
 		}
-		if _, err := s.db.ExecContext(ctx, `
+		if trimWindow {
+			if _, err := s.db.ExecContext(ctx, `
 			WITH excess AS (
 				SELECT fph.id
 				FROM free_proxy_health fph
@@ -1112,7 +1165,8 @@ func (s *Store) EnsureFreeProxyHealthRowsWithLimitsContext(ctx context.Context, 
 			SET candidate_window_token = NULL
 			FROM excess
 			WHERE fph.id = excess.id`, region, limit); err != nil {
-			return err
+				return err
+			}
 		}
 	}
 	return nil

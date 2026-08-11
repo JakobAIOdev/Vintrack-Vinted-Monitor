@@ -11,6 +11,7 @@ import {
 } from "@/lib/categories";
 
 const regionCache = new Map<string, Promise<CategoryNode[]>>();
+const regionLabelMapCache = new Map<string, Promise<Record<string, string>>>();
 
 const DATASET_FALLBACK_REGION_BY_REGION: Record<string, string> = {
     ie: "uk",
@@ -79,7 +80,15 @@ export async function getCategoryLabelsForRegion(
 ): Promise<string[]> {
     if (!catalogIds) return [];
 
-    const tree = await getCategoryTreeForRegion(region);
-    const labelMap = buildCategoryLabelMap(tree);
+    const normalizedRegion = region.toLowerCase();
+    let labelMapPromise = regionLabelMapCache.get(normalizedRegion);
+    if (!labelMapPromise) {
+        labelMapPromise = getCategoryTreeForRegion(normalizedRegion).then(
+            buildCategoryLabelMap,
+        );
+        regionLabelMapCache.set(normalizedRegion, labelMapPromise);
+    }
+
+    const labelMap = await labelMapPromise;
     return getCategoryLabelsFromMap(catalogIds, labelMap);
 }
