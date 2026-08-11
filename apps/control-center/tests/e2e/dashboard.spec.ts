@@ -1,6 +1,293 @@
 import { expect, test } from "@playwright/test";
+import { PrismaClient } from "@prisma/client";
+import {
+    MemberBrandLimitError,
+    upsertVerifiedMemberBrand,
+} from "../../src/lib/member-brands.server";
+
+const db = new PrismaClient();
+
+test.afterAll(async () => {
+    await db.$disconnect();
+});
 
 test.describe("dashboard overview", () => {
+    test("personal brand persistence upserts, reactivates, and enforces its active limit", async () => {
+        const userId = "e2e-member-brand-persistence";
+        await db.user.upsert({
+            where: { id: userId },
+            create: {
+                id: userId,
+                email: "e2e-member-brands@vintrack.test",
+                name: "E2E Member Brands",
+            },
+            update: {},
+        });
+
+        try {
+            const first = await upsertVerifiedMemberBrand(
+                db,
+                userId,
+                {
+                    id: "9988101",
+                    label: "Initial Label",
+                    canonical_url:
+                        "https://www.vinted.cz/brand/9988101-initial-label",
+                },
+                "cz",
+            );
+            expect(first.active).toBe(true);
+
+            await db.member_brands.update({
+                where: {
+                    userId_brand_id: {
+                        userId,
+                        brand_id: BigInt(9988101),
+                    },
+                },
+                data: { active: false },
+            });
+            const reactivated = await upsertVerifiedMemberBrand(
+                db,
+                userId,
+                {
+                    id: "9988101",
+                    label: "Canonical Label",
+                    canonical_url:
+                        "https://www.vinted.cz/brand/9988101-canonical-label",
+                },
+                "cz",
+            );
+            expect(reactivated).toMatchObject({
+                active: true,
+                label: "Canonical Label",
+                source_region: "cz",
+            });
+
+            await expect(
+                upsertVerifiedMemberBrand(
+                    db,
+                    userId,
+                    {
+                        id: "9988102",
+                        label: "Over Limit",
+                        canonical_url:
+                            "https://www.vinted.cz/brand/9988102-over-limit",
+                    },
+                    "cz",
+                    1,
+                ),
+            ).rejects.toThrow(MemberBrandLimitError);
+        } finally {
+            await db.user.delete({ where: { id: userId } });
+        }
+    });
+
+    test("personal brand API isolates accounts and keeps soft-deleted labels", async ({
+        request,
+    }) => {
+        const ownBrandId = BigInt(9988001);
+        const inactiveBrandId = BigInt(9988002);
+        const otherBrandId = BigInt(9988003);
+        const ownBrand = {
+            label: "E2E Personal Brand",
+            canonical_url:
+                "https://www.vinted.de/brand/9988001-e2e-personal-brand",
+            source_region: "de",
+            active: true,
+        };
+
+        await db.member_brands.upsert({
+            where: {
+                userId_brand_id: {
+                    userId: "e2e-user",
+                    brand_id: ownBrandId,
+                },
+            },
+            create: {
+                userId: "e2e-user",
+                brand_id: ownBrandId,
+                ...ownBrand,
+            },
+            update: ownBrand,
+        });
+        await db.member_brands.upsert({
+            where: {
+                userId_brand_id: {
+                    userId: "e2e-user",
+                    brand_id: inactiveBrandId,
+                },
+            },
+            create: {
+                userId: "e2e-user",
+                brand_id: inactiveBrandId,
+                ...ownBrand,
+                label: "E2E Removed Brand",
+                active: false,
+            },
+            update: { ...ownBrand, label: "E2E Removed Brand", active: false },
+        });
+        await db.member_brands.upsert({
+            where: {
+                userId_brand_id: {
+                    userId: "e2e-limit-user",
+                    brand_id: otherBrandId,
+                },
+            },
+            create: {
+                userId: "e2e-limit-user",
+                brand_id: otherBrandId,
+                ...ownBrand,
+                label: "Other Account Brand",
+            },
+            update: { ...ownBrand, label: "Other Account Brand" },
+        });
+
+        try {
+            const activeResponse = await request.get(
+                "/api/catalog/member-brands",
+            );
+            expect(activeResponse.ok()).toBe(true);
+            const activePayload = (await activeResponse.json()) as {
+                brands: Array<{ id: string; active: boolean }>;
+            };
+            expect(activePayload.brands).toContainEqual(
+                expect.objectContaining({ id: ownBrandId.toString() }),
+            );
+            expect(activePayload.brands).not.toContainEqual(
+                expect.objectContaining({ id: inactiveBrandId.toString() }),
+            );
+            expect(activePayload.brands).not.toContainEqual(
+                expect.objectContaining({ id: otherBrandId.toString() }),
+            );
+
+            const selectedResponse = await request.get(
+                `/api/catalog/member-brands?ids=${inactiveBrandId}`,
+            );
+            const selectedPayload = (await selectedResponse.json()) as {
+                brands: Array<{ id: string; active: boolean }>;
+            };
+            expect(selectedPayload.brands).toContainEqual(
+                expect.objectContaining({
+                    id: inactiveBrandId.toString(),
+                    active: false,
+                }),
+            );
+
+            expect(
+                (
+                    await request.delete(
+                        `/api/catalog/member-brands/${otherBrandId}`,
+                    )
+                ).ok(),
+            ).toBe(true);
+            await expect(
+                db.member_brands.findUniqueOrThrow({
+                    where: {
+                        userId_brand_id: {
+                            userId: "e2e-limit-user",
+                            brand_id: otherBrandId,
+                        },
+                    },
+                    select: { active: true },
+                }),
+            ).resolves.toEqual({ active: true });
+
+            expect(
+                (
+                    await request.delete(
+                        `/api/catalog/member-brands/${ownBrandId}`,
+                    )
+                ).ok(),
+            ).toBe(true);
+            await expect(
+                db.member_brands.findUniqueOrThrow({
+                    where: {
+                        userId_brand_id: {
+                            userId: "e2e-user",
+                            brand_id: ownBrandId,
+                        },
+                    },
+                    select: { active: true },
+                }),
+            ).resolves.toEqual({ active: false });
+        } finally {
+            await db.member_brands.deleteMany({
+                where: {
+                    brand_id: {
+                        in: [ownBrandId, inactiveBrandId, otherBrandId],
+                    },
+                },
+            });
+        }
+    });
+
+    test("adds and removes a verified personal Vinted brand", async ({
+        page,
+    }) => {
+        await page.route("**/api/catalog/brands?**", async (route) => {
+            await route.fulfill({ json: { brands: [] } });
+        });
+        await page.route("**/api/catalog/member-brands**", async (route) => {
+            const method = route.request().method();
+            if (method === "POST") {
+                await route.fulfill({
+                    json: {
+                        brand: {
+                            id: "7654321",
+                            label: "Under Native",
+                            canonical_url:
+                                "https://www.vinted.de/brand/7654321-under-native",
+                            source: "personal",
+                            active: true,
+                        },
+                    },
+                });
+                return;
+            }
+            if (method === "DELETE") {
+                await route.fulfill({ json: { success: true } });
+                return;
+            }
+            await route.fulfill({ json: { brands: [] } });
+        });
+
+        await page.goto("/monitors/new");
+        await page.getByText("Filters", { exact: true }).click();
+        await page.getByLabel("Search brand").fill("Under Native");
+        await page.getByTestId("add-verified-brand").click();
+        await expect(page.getByText("How to find it:")).toBeVisible();
+        await expect(
+            page.getByText(/A valid link contains \/brand\//),
+        ).toBeVisible();
+        await page
+            .getByTestId("personal-brand-url")
+            .fill("https://www.vinted.de/brand/7654321-under-native");
+        await page.getByTestId("verify-personal-brand").click();
+
+        await expect(page.locator('input[name="brand_ids"]')).toHaveValue(
+            "7654321",
+        );
+        await expect(
+            page.locator(
+                '[data-testid="selected-brand"][data-brand-id="7654321"]',
+            ),
+        ).toContainText("Under Native");
+        await expect(
+            page.getByText(
+                "Only listings assigned to one of these Vinted brands are included. Listings without a brand are excluded.",
+            ),
+        ).toBeVisible();
+
+        await page.getByLabel("Search brand").fill("Under Native");
+        await page
+            .getByRole("button", {
+                name: "Remove Under Native from personal brands",
+            })
+            .click();
+        await expect(page.locator('input[name="brand_ids"]')).toHaveValue("");
+    });
+
     test("renders seeded monitor summary and monitor card", async ({
         page,
     }) => {

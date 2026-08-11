@@ -55,6 +55,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/items/favorites", s.handleFavorites)
 	mux.HandleFunc("GET /api/items/wardrobe", s.handleWardrobe)
 	mux.HandleFunc("GET /api/catalog/brands", s.handleBrandSearch)
+	mux.HandleFunc("POST /api/catalog/brands/resolve", s.handleBrandResolve)
 	mux.HandleFunc("GET /api/catalog/platforms", s.handlePlatformSearch)
 
 	mux.HandleFunc("GET /api/messages/inbox", s.handleInbox)
@@ -1501,6 +1502,56 @@ func (s *Server) handleBrandSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"brands": brands})
+}
+
+func (s *Server) handleBrandResolve(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.Header.Get("X-User-ID")) == "" {
+		writeError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+	var request struct {
+		BrandURL string `json:"brand_url"`
+		Region   string `json:"region"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	request.BrandURL = strings.TrimSpace(request.BrandURL)
+	if request.BrandURL == "" {
+		writeError(w, "brand_url is required", http.StatusBadRequest)
+		return
+	}
+	region := strings.ToLower(strings.TrimSpace(request.Region))
+	if region == "" {
+		region = "de"
+	}
+	domain, known := vinted.DomainForRegion(region)
+	if !known {
+		writeError(w, "unsupported Vinted region", http.StatusBadRequest)
+		return
+	}
+	if _, _, err := vinted.ParseVintedBrandURL(request.BrandURL); err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	client, err := vinted.NewClient(&session.VintedSession{Domain: domain})
+	if err != nil {
+		writeError(w, "failed to create regional Vinted client", http.StatusInternalServerError)
+		return
+	}
+	brand, err := client.ResolveBrandPage(request.BrandURL)
+	if err != nil {
+		log.Printf("[vinted] brand page validation failed for domain=%s: %v", domain, err)
+		writeError(w, "Vinted brand page could not be validated", http.StatusUnprocessableEntity)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, brand)
 }
 
 func (s *Server) handlePlatformSearch(w http.ResponseWriter, r *http.Request) {

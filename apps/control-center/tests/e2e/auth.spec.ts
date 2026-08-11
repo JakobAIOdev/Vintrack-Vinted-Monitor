@@ -22,4 +22,26 @@ test.describe("auth boundaries", () => {
             error: "Unauthorized",
         });
     });
+
+    test("personal brand APIs reject unauthenticated users", async ({
+        request,
+    }) => {
+        const responses = await Promise.all([
+            request.get("/api/catalog/member-brands"),
+            request.post("/api/catalog/member-brands", {
+                data: {
+                    brand_url: "https://www.vinted.cz/brand/23065-lip",
+                    region: "cz",
+                },
+            }),
+            request.delete("/api/catalog/member-brands/23065"),
+        ]);
+
+        for (const response of responses) {
+            expect(response.status()).toBe(401);
+            await expect(response.json()).resolves.toMatchObject({
+                error: "Unauthorized",
+            });
+        }
+    });
 });

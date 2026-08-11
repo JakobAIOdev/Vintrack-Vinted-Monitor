@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -77,6 +78,39 @@ func TestBrandSearchRejectsUnknownRegionBeforeUpstreamRequest(t *testing.T) {
 	response := httptest.NewRecorder()
 
 	server.handleBrandSearch(response, request)
+
+	if response.Code != 400 {
+		t.Fatalf("status = %d, want 400", response.Code)
+	}
+}
+
+func TestBrandResolveRequiresVintrackUser(t *testing.T) {
+	server := NewServer(nil, "")
+	request := httptest.NewRequest(
+		"POST",
+		"/api/catalog/brands/resolve",
+		strings.NewReader(`{"brand_url":"https://www.vinted.cz/brand/194976-adidas-originals","region":"cz"}`),
+	)
+	response := httptest.NewRecorder()
+
+	server.handleBrandResolve(response, request)
+
+	if response.Code != 401 {
+		t.Fatalf("status = %d, want 401", response.Code)
+	}
+}
+
+func TestBrandResolveRejectsInvalidBrandURLBeforeUpstreamRequest(t *testing.T) {
+	server := NewServer(nil, "")
+	request := httptest.NewRequest(
+		"POST",
+		"/api/catalog/brands/resolve",
+		strings.NewReader(`{"brand_url":"https://example.com/brand/194976-adidas-originals","region":"cz"}`),
+	)
+	request.Header.Set("X-User-ID", "test-user")
+	response := httptest.NewRecorder()
+
+	server.handleBrandResolve(response, request)
 
 	if response.Code != 400 {
 		t.Fatalf("status = %d, want 400", response.Code)

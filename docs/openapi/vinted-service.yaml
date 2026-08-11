@@ -450,6 +450,12 @@ paths:
               type: string
           style: form
           explode: false
+        - name: region
+          in: query
+          description: Supported Vinted region code used for the search.
+          schema:
+            type: string
+            default: de
       responses:
         "200":
           description: Brand search result.
@@ -461,6 +467,31 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+  /api/catalog/brands/resolve:
+    post:
+      tags: [Catalog]
+      summary: Validate and resolve an official Vinted brand page
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BrandResolveRequest"
+      responses:
+        "200":
+          description: Canonical brand identity verified against Vinted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrandResolution"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: The Vinted page could not be verified as the requested brand.
         "502":
           $ref: "#/components/responses/UpstreamError"
   /api/messages/inbox:
@@ -1147,6 +1178,32 @@ components:
           items:
             type: object
             additionalProperties: true
+    BrandResolveRequest:
+      type: object
+      required: [brand_url, region]
+      properties:
+        brand_url:
+          type: string
+          format: uri
+          example: https://www.vinted.cz/brand/194976-adidas-originals
+        region:
+          type: string
+          example: cz
+    BrandResolution:
+      type: object
+      additionalProperties: false
+      required: [id, label, canonical_url]
+      properties:
+        id:
+          type: string
+          example: "194976"
+        label:
+          type: string
+          example: adidas Originals
+        canonical_url:
+          type: string
+          format: uri
+          example: https://www.vinted.cz/brand/194976-adidas-originals
     VintedPassthroughResponse:
       type: object
       additionalProperties: true

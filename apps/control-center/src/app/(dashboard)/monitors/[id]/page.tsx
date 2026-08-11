@@ -72,6 +72,21 @@ export default async function MonitorPage({
 
     if (!monitor) return notFound();
 
+    const usedBrandIds = (monitor.brand_ids || "")
+        .split(",")
+        .filter((id) => /^\d+$/.test(id))
+        .map((id) => BigInt(id));
+    const memberBrands = await db.member_brands.findMany({
+        where: {
+            userId: session.user.id,
+            brand_id: { in: usedBrandIds },
+        },
+        select: { brand_id: true, label: true },
+    });
+    const memberBrandLabels = Object.fromEntries(
+        memberBrands.map((brand) => [brand.brand_id.toString(), brand.label]),
+    );
+
     const bannedSellerIds = await getBannedSellerIds(session.user.id);
     const visibleItemWhere = {
         monitor_id: monitor.id,
@@ -322,16 +337,17 @@ export default async function MonitorPage({
                                         </span>
                                     ))}
                                     {monitor.brand_ids &&
-                                        getBrandLabels(monitor.brand_ids).map(
-                                            (label) => (
-                                                <span
-                                                    key={`brand-${label}`}
-                                                    className="inline-flex items-center rounded-md border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-400"
-                                                >
-                                                    {label}
-                                                </span>
-                                            ),
-                                        )}
+                                        getBrandLabels(
+                                            monitor.brand_ids,
+                                            memberBrandLabels,
+                                        ).map((label) => (
+                                            <span
+                                                key={`brand-${label}`}
+                                                className="inline-flex items-center rounded-md border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-400"
+                                            >
+                                                {label}
+                                            </span>
+                                        ))}
                                     {monitor.color_ids &&
                                         getColorLabels(monitor.color_ids).map(
                                             (label) => (

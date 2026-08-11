@@ -797,7 +797,9 @@ export default function EditMonitorPage() {
                                         value={selectedBrands.join(",")}
                                     />
                                     <p className="text-muted-foreground text-[12px]">
-                                        Limit results to specific brands.
+                                        Only listings assigned to one of these
+                                        Vinted brands are included. Listings
+                                        without a brand are excluded.
                                     </p>
                                 </div>
                             </ActiveFilterField>

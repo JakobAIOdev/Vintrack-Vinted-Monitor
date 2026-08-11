@@ -2,7 +2,10 @@ package vinted
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +13,62 @@ import (
 
 	http "github.com/bogdanfinn/fhttp"
 )
+
+type fakeHTTPResult struct {
+	status  int
+	body    string
+	headers http.Header
+	err     error
+}
+
+type fakeVintedHTTPClient struct {
+	results        []fakeHTTPResult
+	requests       []*http.Request
+	cookies        []*http.Cookie
+	followRedirect bool
+}
+
+func (f *fakeVintedHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	f.requests = append(f.requests, req)
+	if len(f.results) == 0 {
+		return nil, errors.New("unexpected HTTP request")
+	}
+	result := f.results[0]
+	f.results = f.results[1:]
+	if result.err != nil {
+		return nil, result.err
+	}
+	return &http.Response{
+		StatusCode: result.status,
+		Header:     result.headers,
+		Body:       io.NopCloser(strings.NewReader(result.body)),
+		Request:    req,
+	}, nil
+}
+
+func (f *fakeVintedHTTPClient) GetCookies(_ *url.URL) []*http.Cookie {
+	return f.cookies
+}
+
+func (f *fakeVintedHTTPClient) SetCookies(_ *url.URL, cookies []*http.Cookie) {
+	f.cookies = append(f.cookies, cookies...)
+}
+
+func (f *fakeVintedHTTPClient) GetFollowRedirect() bool {
+	return f.followRedirect
+}
+
+func (f *fakeVintedHTTPClient) SetFollowRedirect(follow bool) {
+	f.followRedirect = follow
+}
+
+func testClient(results ...fakeHTTPResult) (*Client, *fakeVintedHTTPClient) {
+	httpClient := &fakeVintedHTTPClient{results: results, followRedirect: true}
+	return &Client{
+		httpClient: httpClient,
+		session:    &session.VintedSession{Domain: "www.vinted.cz"},
+	}, httpClient
+}
 
 func TestParseUserIDFromJWT_Valid(t *testing.T) {
 	// JWT with payload: {"sub": "12345"}
@@ -221,6 +280,282 @@ func TestBuildGatewayFilterSearchURL(t *testing.T) {
 	}
 	if unscoped.Query().Has("attribute_ids[catalog]") {
 		t.Error("unscoped search unexpectedly contains a catalog attribute")
+	}
+}
+
+func TestBuildCatalogFilterSearchURL(t *testing.T) {
+	rawURL := buildCatalogFilterSearchURL(
+		"www.vinted.cz",
+		[]string{"97", "97", " 5 "},
+		"adidas Originals",
+		"brand",
+	)
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse catalog filter URL: %v", err)
+	}
+	if parsed.Path != "/api/v2/catalog/filters/search" {
+		t.Errorf("path = %q", parsed.Path)
+	}
+	if got := parsed.Query().Get("filter_search_code"); got != "brand" {
+		t.Errorf("filter_search_code = %q", got)
+	}
+	if got := parsed.Query().Get("filter_search_text"); got != "adidas Originals" {
+		t.Errorf("filter_search_text = %q", got)
+	}
+	if got := parsed.Query().Get("catalog_ids"); got != "97,5" {
+		t.Errorf("catalog_ids = %q", got)
+	}
+	for _, key := range []string{"size_ids", "brand_ids", "status_ids", "color_ids", "material_ids"} {
+		if !parsed.Query().Has(key) || parsed.Query().Get(key) != "" {
+			t.Errorf("%s should be present and empty", key)
+		}
+	}
+}
+
+func TestParseVintedBrandURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		rawURL   string
+		wantID   int64
+		wantSlug string
+		wantErr  bool
+	}{
+		{name: "brand page", rawURL: "https://www.vinted.cz/brand/194976-adidas-originals", wantID: 194976, wantSlug: "adidas-originals"},
+		{name: "catalog brand page", rawURL: "https://www.vinted.cz/catalog/97-watches/brand/23065-lip?order=newest_first", wantID: 23065, wantSlug: "lip"},
+		{name: "foreign host", rawURL: "https://example.com/brand/194976-adidas-originals", wantErr: true},
+		{name: "http", rawURL: "http://www.vinted.cz/brand/194976-adidas-originals", wantErr: true},
+		{name: "userinfo", rawURL: "https://user@www.vinted.cz/brand/194976-adidas-originals", wantErr: true},
+		{name: "missing slug", rawURL: "https://www.vinted.cz/brand/194976", wantErr: true},
+		{name: "item page", rawURL: "https://www.vinted.cz/items/194976-adidas-originals", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id, slug, err := ParseVintedBrandURL(tt.rawURL)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got id=%d slug=%q", id, slug)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseVintedBrandURL() error = %v", err)
+			}
+			if id != tt.wantID || slug != tt.wantSlug {
+				t.Fatalf("got id=%d slug=%q, want id=%d slug=%q", id, slug, tt.wantID, tt.wantSlug)
+			}
+		})
+	}
+}
+
+func TestValidateBrandPageHTML(t *testing.T) {
+	body := []byte(`<!doctype html><html><head><title>adidas Originals | Vinted</title><link href="https://www.vinted.cz/brand/194976-adidas-originals" rel="canonical"></head><body><h1>adidas Originals</h1></body></html>`)
+	brand, err := validateBrandPageHTML(body, "www.vinted.cz", 194976)
+	if err != nil {
+		t.Fatalf("validateBrandPageHTML() error = %v", err)
+	}
+	if brand.ID != "194976" || brand.Label != "adidas Originals" {
+		t.Fatalf("brand = %#v", brand)
+	}
+}
+
+func TestValidateBrandPageHTMLRejectsInvalidEvidence(t *testing.T) {
+	valid := `<!doctype html><html><head><title>LIP | Vinted</title><link rel="canonical" href="https://www.vinted.cz/brand/23065-lip"></head><body><h1>LIP</h1></body></html>`
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "canonical ID mismatch", body: strings.Replace(valid, "23065-lip", "999-lip", 1)},
+		{name: "cross domain canonical", body: strings.Replace(valid, "www.vinted.cz", "example.com", 1)},
+		{name: "missing title", body: strings.Replace(valid, "<title>LIP | Vinted</title>", "", 1)},
+		{name: "label mismatch", body: strings.Replace(valid, "<h1>LIP</h1>", "<h1>Other</h1>", 1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := validateBrandPageHTML([]byte(tt.body), "www.vinted.cz", 23065); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestSearchBrandsUsesCatalogWarmupAndPrimaryEndpoint(t *testing.T) {
+	client, transport := testClient(
+		fakeHTTPResult{status: 200, body: `<meta name="csrf-token" content="csrf">`},
+		fakeHTTPResult{status: 200, body: `{"options":[{"id":194976,"title":"adidas Originals"}]}`},
+	)
+
+	brands, err := client.SearchBrands([]string{"97"}, "adidas")
+	if err != nil {
+		t.Fatalf("SearchBrands() error = %v", err)
+	}
+	if len(brands) != 1 || brands[0].ID != "194976" || brands[0].Label != "adidas Originals" {
+		t.Fatalf("SearchBrands() = %#v", brands)
+	}
+	if len(transport.requests) != 2 {
+		t.Fatalf("request count = %d, want 2", len(transport.requests))
+	}
+	if transport.requests[0].URL.Path != "/catalog" {
+		t.Errorf("warmup path = %q, want /catalog", transport.requests[0].URL.Path)
+	}
+	if transport.requests[1].URL.Path != "/api/v2/catalog/filters/search" {
+		t.Errorf("search path = %q", transport.requests[1].URL.Path)
+	}
+	if got := transport.requests[1].Header.Get("X-Csrf-Token"); got != "csrf" {
+		t.Errorf("X-Csrf-Token = %q, want csrf", got)
+	}
+}
+
+func TestSearchBrandsRetriesOnceAfterUnauthorized(t *testing.T) {
+	client, transport := testClient(
+		fakeHTTPResult{status: 200, body: "warmup"},
+		fakeHTTPResult{status: 401, body: `{}`},
+		fakeHTTPResult{status: 200, body: "retry warmup"},
+		fakeHTTPResult{status: 200, body: `{"options":[{"id":"23065","label":"LIP"}]}`},
+	)
+
+	brands, err := client.SearchBrands(nil, "lip")
+	if err != nil {
+		t.Fatalf("SearchBrands() error = %v", err)
+	}
+	if len(brands) != 1 || brands[0].ID != "23065" {
+		t.Fatalf("SearchBrands() = %#v", brands)
+	}
+	if len(transport.requests) != 4 {
+		t.Fatalf("request count = %d, want 4", len(transport.requests))
+	}
+	if transport.requests[2].URL.Path != "/catalog" || transport.requests[3].URL.Path != "/api/v2/catalog/filters/search" {
+		t.Fatalf("retry paths = %q, %q", transport.requests[2].URL.Path, transport.requests[3].URL.Path)
+	}
+}
+
+func TestSearchBrandsFallsBackOnTransportAndSchemaErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		primary fakeHTTPResult
+	}{
+		{name: "transport", primary: fakeHTTPResult{err: errors.New("connection reset")}},
+		{name: "schema", primary: fakeHTTPResult{status: 200, body: `{"unexpected":true}`}},
+		{name: "server status", primary: fakeHTTPResult{status: 503, body: `{"error":"unavailable"}`}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client, transport := testClient(
+				fakeHTTPResult{status: 200, body: "warmup"},
+				test.primary,
+				fakeHTTPResult{status: 200, body: `{"options":[{"id":"77","title":"Fallback Brand"}]}`},
+			)
+
+			brands, err := client.SearchBrands(nil, "fallback")
+			if err != nil {
+				t.Fatalf("SearchBrands() error = %v", err)
+			}
+			if len(brands) != 1 || brands[0].Label != "Fallback Brand" {
+				t.Fatalf("SearchBrands() = %#v", brands)
+			}
+			if got := transport.requests[len(transport.requests)-1].URL.Path; got != "/web/gateway/svc-filters/filters/search" {
+				t.Errorf("fallback path = %q", got)
+			}
+		})
+	}
+}
+
+func TestSearchBrandsDoesNotFallbackForSuccessfulEmptyResponse(t *testing.T) {
+	client, transport := testClient(
+		fakeHTTPResult{status: 200, body: "warmup"},
+		fakeHTTPResult{status: 200, body: `{"options":[]}`},
+	)
+
+	brands, err := client.SearchBrands(nil, "no-match")
+	if err != nil {
+		t.Fatalf("SearchBrands() error = %v", err)
+	}
+	if len(brands) != 0 {
+		t.Fatalf("SearchBrands() = %#v, want empty", brands)
+	}
+	if len(transport.requests) != 2 {
+		t.Fatalf("request count = %d, want 2", len(transport.requests))
+	}
+}
+
+func TestCatalogFilterSearchRejectsOversizedResponse(t *testing.T) {
+	client, _ := testClient(fakeHTTPResult{
+		status: 200,
+		body:   strings.Repeat("x", maxFilterSearchResponseBytes+1),
+	})
+	client.warmedUp = true
+	client.catalogWarmedUp = true
+
+	_, err := client.searchCatalogFilterOptions(nil, "large", "brand")
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("error = %v, want response size error", err)
+	}
+}
+
+func TestResolveBrandPageRejectsInvalidUpstreamEvidence(t *testing.T) {
+	validHTML := `<html><head><title>LIP | Vinted</title><link rel="canonical" href="https://www.vinted.cz/brand/23065-lip"></head><body><h1>LIP</h1></body></html>`
+	tests := []struct {
+		name       string
+		pageResult fakeHTTPResult
+		wantError  string
+	}{
+		{
+			name:       "not found",
+			pageResult: fakeHTTPResult{status: 404, body: "not found"},
+			wantError:  "HTTP 404",
+		},
+		{
+			name: "cross domain redirect",
+			pageResult: fakeHTTPResult{
+				status:  302,
+				headers: http.Header{"Location": {"https://www.vinted.fr/brand/23065-lip"}},
+			},
+			wantError: "outside the selected region",
+		},
+		{
+			name:       "evidence beyond inspection limit",
+			pageResult: fakeHTTPResult{status: 200, body: strings.Repeat("x", maxBrandPageInspectionBytes) + validHTML},
+			wantError:  "official title",
+		},
+		{
+			name:       "canonical mismatch",
+			pageResult: fakeHTTPResult{status: 200, body: strings.Replace(validHTML, "23065-lip", "99-wrong", 1)},
+			wantError:  "canonical ID",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client, _ := testClient(
+				fakeHTTPResult{status: 200, body: "warmup"},
+				test.pageResult,
+			)
+			_, err := client.ResolveBrandPage("https://www.vinted.cz/brand/23065-lip")
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error = %v, want %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestResolveBrandPageAcceptsLargePageWhenEvidenceIsInBoundedPrefix(t *testing.T) {
+	validHTML := `<html><head><title>Under Armour | Vinted</title><link rel="canonical" href="https://www.vinted.cz/brand/52035-under-armour"></head><body><h1>Under Armour</h1>`
+	client, _ := testClient(
+		fakeHTTPResult{status: 200, body: "warmup"},
+		fakeHTTPResult{
+			status: 200,
+			body:   validHTML + strings.Repeat("x", maxBrandPageInspectionBytes),
+		},
+	)
+
+	brand, err := client.ResolveBrandPage("https://www.vinted.cz/brand/52035-under-armour")
+	if err != nil {
+		t.Fatalf("ResolveBrandPage() error = %v", err)
+	}
+	if brand.ID != "52035" || brand.Label != "Under Armour" {
+		t.Fatalf("ResolveBrandPage() = %#v", brand)
 	}
 }
 
