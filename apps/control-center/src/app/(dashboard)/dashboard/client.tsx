@@ -39,6 +39,8 @@ import {
     ListChecks,
     Loader2,
     RefreshCw,
+    X,
+    Github,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -102,6 +104,10 @@ import {
     type QuickStartPool,
 } from "@/components/monitors/first-monitor-quick-start";
 import { DEMO_MONITOR_DURATION_MS } from "@/lib/demo-monitor";
+
+const DEMO_PRESSURE_BANNER_DISMISSED_KEY =
+    "vintrack:demo-server-upgrade-banner-dismissed:v1";
+const GITHUB_SPONSORS_URL = "https://github.com/sponsors/JakobAIOdev";
 
 type MonitorHealth = {
     monitor_id: number;
@@ -384,6 +390,7 @@ export function DashboardClient({
     const [isQuickStartOpen, setIsQuickStartOpen] = useState(
         initialQuickStartOpen,
     );
+    const [showDemoPressureBanner, setShowDemoPressureBanner] = useState(true);
     const [demoNow, setDemoNow] = useState(() =>
         new Date(initialNow).getTime(),
     );
@@ -391,6 +398,37 @@ export function DashboardClient({
         () => monitors.some((monitor) => monitor.demo_expires_at),
         [monitors],
     );
+
+    useEffect(() => {
+        let active = true;
+
+        queueMicrotask(() => {
+            if (!active) return;
+            try {
+                if (
+                    window.localStorage.getItem(
+                        DEMO_PRESSURE_BANNER_DISMISSED_KEY,
+                    ) === "1"
+                ) {
+                    setShowDemoPressureBanner(false);
+                }
+            } catch {}
+        });
+
+        return () => {
+            active = false;
+        };
+    }, []);
+
+    const dismissDemoPressureBanner = () => {
+        setShowDemoPressureBanner(false);
+        try {
+            window.localStorage.setItem(
+                DEMO_PRESSURE_BANNER_DISMISSED_KEY,
+                "1",
+            );
+        } catch {}
+    };
 
     useEffect(() => {
         if (!hasDemoMonitors) return;
@@ -1061,6 +1099,50 @@ export function DashboardClient({
                     onOpenChange={setIsQuickStartOpen}
                     initialPool={quickStartPool}
                 />
+            )}
+
+            {showDemoPressureBanner && (
+                <div
+                    role="status"
+                    className="flex flex-col gap-3 rounded-xl border border-pink-200/80 bg-gradient-to-r from-pink-50 via-amber-50/80 to-orange-50/70 px-3.5 py-3 text-slate-900 shadow-sm sm:flex-row sm:items-center dark:border-pink-500/20 dark:from-pink-500/10 dark:via-amber-500/8 dark:to-orange-500/6 dark:text-slate-100"
+                >
+                    <div className="flex min-w-0 flex-1 items-start gap-3">
+                        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-pink-500 text-white shadow-sm shadow-pink-500/20">
+                            <Rocket className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0">
+                            <p className="text-sm font-semibold">
+                                Help keep the free demo fast
+                            </p>
+                            <p className="mt-0.5 text-xs leading-5 text-slate-600 sm:text-sm dark:text-slate-300">
+                                The public demo is running at capacity on a 2
+                                vCPU / 2 GB server. Help us upgrade to 4 vCPU /
+                                4 GB — or reach our 8 GB stretch goal — for
+                                faster, more reliable monitoring.
+                            </p>
+                        </div>
+                    </div>
+                    <div className="flex shrink-0 items-start gap-2 pl-11 sm:pl-0">
+                        <a
+                            href={GITHUB_SPONSORS_URL}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-slate-950 px-3 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200"
+                        >
+                            <Github className="h-3.5 w-3.5" />
+                            Sponsor on GitHub
+                        </a>
+                        <button
+                            type="button"
+                            onClick={dismissDemoPressureBanner}
+                            className="text-slate-500 transition-colors hover:text-slate-950 dark:text-slate-400 dark:hover:text-white"
+                            aria-label="Dismiss server upgrade notice"
+                            title="Dismiss"
+                        >
+                            <X className="h-4 w-4" />
+                        </button>
+                    </div>
+                </div>
             )}
 
             <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">

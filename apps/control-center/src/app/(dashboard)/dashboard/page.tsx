@@ -14,23 +14,25 @@ export default async function DashboardPage() {
     const session = await auth();
     if (!session?.user) redirect("/login");
 
-    const rawMonitors = await db.monitors.findMany({
-        where: { userId: session.user.id },
-        orderBy: { created_at: "desc" },
-        include: {
-            _count: { select: { items: true } },
-            proxy_group: { select: { name: true } },
-        },
-    });
-    const userSettings = await db.user.findUnique({
-        where: { id: session.user.id },
-        select: {
-            dedupe_monitor_alerts: true,
-            telegram_message_style: true,
-            discord_message_style: true,
-            monitor_onboarding_status: true,
-        },
-    });
+    const [rawMonitors, userSettings, bannedSellerIds] = await Promise.all([
+        db.monitors.findMany({
+            where: { userId: session.user.id },
+            orderBy: { created_at: "desc" },
+            include: {
+                proxy_group: { select: { name: true } },
+            },
+        }),
+        db.user.findUnique({
+            where: { id: session.user.id },
+            select: {
+                dedupe_monitor_alerts: true,
+                telegram_message_style: true,
+                discord_message_style: true,
+                monitor_onboarding_status: true,
+            },
+        }),
+        getBannedSellerIds(session.user.id),
+    ]);
     const usedBrandIds = [
         ...new Set(
             rawMonitors.flatMap((monitor) =>
@@ -40,25 +42,26 @@ export default async function DashboardPage() {
             ),
         ),
     ].map((id) => BigInt(id));
-    const memberBrands = await db.member_brands.findMany({
-        where: {
-            userId: session.user.id,
-            brand_id: { in: usedBrandIds },
-        },
-        select: { brand_id: true, label: true },
-    });
+    const [memberBrands, visibleCounts] = await Promise.all([
+        db.member_brands.findMany({
+            where: {
+                userId: session.user.id,
+                brand_id: { in: usedBrandIds },
+            },
+            select: { brand_id: true, label: true },
+        }),
+        db.items.groupBy({
+            by: ["monitor_id"],
+            where: {
+                monitor_id: { in: rawMonitors.map((monitor) => monitor.id) },
+                ...visibleSellerWhere(bannedSellerIds),
+            },
+            _count: { _all: true },
+        }),
+    ]);
     const memberBrandLabels = Object.fromEntries(
         memberBrands.map((brand) => [brand.brand_id.toString(), brand.label]),
     );
-    const bannedSellerIds = await getBannedSellerIds(session.user.id);
-    const visibleCounts = await db.items.groupBy({
-        by: ["monitor_id"],
-        where: {
-            monitor_id: { in: rawMonitors.map((monitor) => monitor.id) },
-            ...visibleSellerWhere(bannedSellerIds),
-        },
-        _count: { _all: true },
-    });
     const visibleCountByMonitor = new Map(
         visibleCounts.map((row) => [row.monitor_id, row._count._all]),
     );
