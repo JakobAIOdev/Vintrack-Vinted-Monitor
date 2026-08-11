@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/url"
@@ -24,14 +25,26 @@ import (
 const defaultUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
 const defaultSecChUA = `"Google Chrome";v="146", "Chromium";v="146", "Not_A Brand";v="99"`
 const warmupReuseWindow = 10 * time.Minute
+const maxWarmupResponseBytes = 2 * 1024 * 1024
 const maxFilterSearchResponseBytes = 512 * 1024
+const maxBrandPageInspectionBytes = 512 * 1024
+const maxBrandPageRedirects = 3
 
 type Client struct {
-	httpClient tls_client.HttpClient
-	session    *session.VintedSession
-	csrfToken  string
-	anonID     string
-	warmedUp   bool
+	httpClient      vintedHTTPClient
+	session         *session.VintedSession
+	csrfToken       string
+	anonID          string
+	warmedUp        bool
+	catalogWarmedUp bool
+}
+
+type vintedHTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+	GetCookies(u *url.URL) []*http.Cookie
+	SetCookies(u *url.URL, cookies []*http.Cookie)
+	GetFollowRedirect() bool
+	SetFollowRedirect(followRedirect bool)
 }
 
 func NewClient(sess *session.VintedSession) (*Client, error) {
@@ -85,6 +98,9 @@ func (c *Client) injectCachedSessionContext() {
 }
 
 func (c *Client) injectAuthCookie() {
+	if strings.TrimSpace(c.session.AccessToken) == "" && strings.TrimSpace(c.session.RefreshToken) == "" {
+		return
+	}
 	domainURL, _ := url.Parse(fmt.Sprintf("https://%s/", c.session.Domain))
 	cookies := []*http.Cookie{{Name: "access_token_web", Value: c.session.AccessToken, Path: "/"}}
 	if c.session.RefreshToken != "" {
@@ -185,46 +201,68 @@ func (c *Client) locale() string {
 }
 
 func (c *Client) WarmUp() error {
-	return c.warmUp(false)
+	return c.warmUpPage("/", false)
 }
 
 func (c *Client) ForceWarmUp() error {
-	return c.warmUp(true)
+	return c.warmUpPage("/", true)
 }
 
-func (c *Client) warmUp(force bool) error {
-	if c.warmedUp && !force {
+func (c *Client) CatalogWarmUp() error {
+	return c.warmUpPage("/catalog", false)
+}
+
+func (c *Client) ForceCatalogWarmUp() error {
+	return c.warmUpPage("/catalog", true)
+}
+
+func (c *Client) warmUpPage(pagePath string, force bool) error {
+	isCatalog := pagePath == "/catalog"
+	if !force && ((!isCatalog && c.warmedUp) || (isCatalog && c.catalogWarmedUp)) {
 		return nil
 	}
 
 	if force {
 		c.warmedUp = false
+		c.catalogWarmedUp = false
 		c.csrfToken = ""
 		c.anonID = ""
 	}
 
 	c.injectStoredCookies()
 	c.injectAuthCookie()
-	c.injectCachedSessionContext()
+	if !force {
+		c.injectCachedSessionContext()
+	}
 
-	if !force && c.canReuseWarmup() {
+	if !force && !isCatalog && c.canReuseWarmup() {
 		c.warmedUp = true
 		log.Printf("[vinted] reused cached warmup for %s, csrf=%v, anon_id=%v", c.session.Domain, c.csrfToken != "", c.anonID != "")
 		return nil
 	}
 
-	u := fmt.Sprintf("https://%s/", c.session.Domain)
+	u := fmt.Sprintf("https://%s%s", c.session.Domain, pagePath)
 	req, _ := http.NewRequest("GET", u, nil)
 	req.Header = http.Header{
-		"User-Agent": {c.userAgent()},
-		"Accept":     {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"},
+		"User-Agent":      {c.userAgent()},
+		"Accept":          {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"},
+		"Accept-Language": {c.locale() + ",en;q=0.8"},
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("warmup: %w", err)
+		return fmt.Errorf("warmup %s: %w", pagePath, err)
 	}
-	body, _ := io.ReadAll(resp.Body)
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxWarmupResponseBytes+1))
 	resp.Body.Close()
+	if readErr != nil {
+		return fmt.Errorf("read warmup %s: %w", pagePath, readErr)
+	}
+	if len(body) > maxWarmupResponseBytes {
+		return fmt.Errorf("warmup %s response exceeds %d bytes", pagePath, maxWarmupResponseBytes)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusBadRequest {
+		return fmt.Errorf("warmup %s returned HTTP %d", pagePath, resp.StatusCode)
+	}
 
 	csrfPatterns := []*regexp.Regexp{
 		regexp.MustCompile(`CSRF_TOKEN\\?":\s*\\?"([^"\\]+)`),
@@ -256,7 +294,10 @@ func (c *Client) warmUp(force bool) error {
 	c.rememberWarmupState()
 
 	c.warmedUp = true
-	log.Printf("[vinted] warmup done for %s, csrf=%v, anon_id=%v", c.session.Domain, c.csrfToken != "", c.anonID != "")
+	if isCatalog {
+		c.catalogWarmedUp = true
+	}
+	log.Printf("[vinted] warmup done for %s path=%s csrf=%v anon_id=%v", c.session.Domain, pagePath, c.csrfToken != "", c.anonID != "")
 	return nil
 }
 
@@ -530,6 +571,32 @@ type NotificationsResponse struct {
 type FilterOption struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
+}
+
+type BrandPageResolution struct {
+	ID           string `json:"id"`
+	Label        string `json:"label"`
+	CanonicalURL string `json:"canonical_url"`
+}
+
+type filterSearchError struct {
+	Operation  string
+	StatusCode int
+	Err        error
+}
+
+func (e *filterSearchError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("%s failed: %v", e.Operation, e.Err)
+	}
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("%s failed with HTTP %d", e.Operation, e.StatusCode)
+	}
+	return fmt.Sprintf("%s failed", e.Operation)
+}
+
+func (e *filterSearchError) Unwrap() error {
+	return e.Err
 }
 
 type filterOptionEntry struct {
@@ -2025,29 +2092,40 @@ func (c *Client) doGetWardrobe(vintedUserID int64, page, perPage int, order stri
 
 func (c *Client) SearchBrands(catalogIDs []string, query string) ([]FilterOption, error) {
 	normalizedCatalogIDs := normalizeCatalogIDs(catalogIDs)
-	options, err := c.searchGatewayFilterOptions(
+	options, err := c.searchCatalogFilterOptions(
 		normalizedCatalogIDs,
 		query,
 		"brand",
 	)
-	if len(normalizedCatalogIDs) == 0 || (err == nil && len(options) > 0) {
-		return options, err
+	if err == nil {
+		return options, nil
 	}
 
-	// A selected catalog can hide otherwise valid brands. Retry globally so
-	// the picker remains useful for cross-category and newly added brands.
-	fallbackOptions, fallbackErr := c.searchGatewayFilterOptions(
-		nil,
-		query,
-		"brand",
-	)
-	if fallbackErr == nil {
-		return fallbackOptions, nil
+	if filterSearchStatus(err) == http.StatusUnauthorized || filterSearchStatus(err) == http.StatusForbidden {
+		if warmErr := c.ForceCatalogWarmUp(); warmErr != nil {
+			log.Printf("[vinted] catalog warmup retry failed for domain=%s: %v", c.session.Domain, warmErr)
+		} else {
+			options, err = c.searchCatalogFilterOptions(normalizedCatalogIDs, query, "brand")
+			if err == nil {
+				return options, nil
+			}
+		}
 	}
-	if err != nil {
-		return nil, err
+
+	log.Printf("[vinted] catalog brand search unavailable for domain=%s, using gateway fallback: %v", c.session.Domain, err)
+	fallbackOptions, fallbackErr := c.searchGatewayFilterOptions(normalizedCatalogIDs, query, "brand")
+	if fallbackErr != nil {
+		return nil, fmt.Errorf("catalog brand search failed: %v; gateway fallback failed: %w", err, fallbackErr)
 	}
-	return nil, fallbackErr
+	return fallbackOptions, nil
+}
+
+func filterSearchStatus(err error) int {
+	var searchErr *filterSearchError
+	if errors.As(err, &searchErr) {
+		return searchErr.StatusCode
+	}
+	return 0
 }
 
 func (c *Client) SearchPlatforms(catalogIDs []string, query string) ([]FilterOption, error) {
@@ -2156,6 +2234,79 @@ func platformOptionMatches(label, query string) bool {
 		}
 	}
 	return false
+}
+
+func (c *Client) searchCatalogFilterOptions(catalogIDs []string, query string, filterCode string) ([]FilterOption, error) {
+	if err := c.CatalogWarmUp(); err != nil {
+		log.Printf("[vinted] warmup failed before %s catalog search: %v", filterCode, err)
+	}
+
+	normalizedQuery := strings.TrimSpace(query)
+	if normalizedQuery == "" {
+		return nil, errors.New("query is required")
+	}
+
+	normalizedCatalogIDs := normalizeCatalogIDs(catalogIDs)
+	u := buildCatalogFilterSearchURL(c.session.Domain, normalizedCatalogIDs, normalizedQuery, filterCode)
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, &filterSearchError{Operation: "create catalog filter search request", Err: err}
+	}
+
+	req.Header = c.apiHeaders()
+	req.Header.Set("Accept", "application/json,text/plain,*/*,image/webp")
+	req.Header.Set("Referer", fmt.Sprintf("https://%s/catalog", c.session.Domain))
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, &filterSearchError{Operation: "catalog filter search request", Err: err}
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFilterSearchResponseBytes+1))
+	if err != nil {
+		return nil, &filterSearchError{Operation: "read catalog filter search response", Err: err}
+	}
+	if len(body) > maxFilterSearchResponseBytes {
+		return nil, &filterSearchError{Operation: "catalog filter search response", Err: fmt.Errorf("response exceeds %d bytes", maxFilterSearchResponseBytes)}
+	}
+	log.Printf("[vinted] GET /api/v2/catalog/filters/search code=%s query=%q catalogs=%s -> %d", filterCode, normalizedQuery, strings.Join(normalizedCatalogIDs, ","), resp.StatusCode)
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, &filterSearchError{Operation: "catalog filter search", StatusCode: resp.StatusCode}
+	}
+
+	var payload filterOptionsPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, &filterSearchError{Operation: "decode catalog filter search", StatusCode: resp.StatusCode, Err: err}
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, &filterSearchError{Operation: "decode catalog filter search schema", StatusCode: resp.StatusCode, Err: err}
+	}
+	if _, hasOptions := envelope["options"]; !hasOptions {
+		if _, hasFilters := envelope["filters"]; !hasFilters {
+			if _, hasFacets := envelope["facets"]; !hasFacets {
+				return nil, &filterSearchError{Operation: "decode catalog filter search schema", StatusCode: resp.StatusCode, Err: errors.New("missing filter options")}
+			}
+		}
+	}
+
+	return normalizeFilterOptionsPayload(payload), nil
+}
+
+func buildCatalogFilterSearchURL(domain string, catalogIDs []string, query string, filterCode string) string {
+	params := url.Values{
+		"catalog_ids":        {strings.Join(normalizeCatalogIDs(catalogIDs), ",")},
+		"size_ids":           {""},
+		"brand_ids":          {""},
+		"status_ids":         {""},
+		"color_ids":          {""},
+		"material_ids":       {""},
+		"filter_search_code": {filterCode},
+		"filter_search_text": {strings.TrimSpace(query)},
+	}
+	return fmt.Sprintf("https://%s/api/v2/catalog/filters/search?%s", domain, params.Encode())
 }
 
 func (c *Client) searchGatewayFilterOptions(catalogIDs []string, query string, filterCode string) ([]FilterOption, error) {
@@ -2315,6 +2466,172 @@ func optionIDString(value interface{}) string {
 	default:
 		return strings.TrimSpace(fmt.Sprint(typed))
 	}
+}
+
+var brandPathPattern = regexp.MustCompile(`(?:^|/)brand/(\d+)-([a-z0-9][a-z0-9-]*)/?$`)
+var htmlTitlePattern = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+var htmlH1Pattern = regexp.MustCompile(`(?is)<h1[^>]*>(.*?)</h1>`)
+var htmlLinkPattern = regexp.MustCompile(`(?is)<link\b[^>]*>`)
+var htmlAttributePattern = regexp.MustCompile(`(?is)([a-zA-Z][a-zA-Z0-9:_-]*)\s*=\s*["']([^"']*)["']`)
+var htmlTagPattern = regexp.MustCompile(`(?is)<[^>]+>`)
+
+func ParseVintedBrandURL(rawURL string) (int64, string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return 0, "", errors.New("invalid Vinted brand URL")
+	}
+	if parsed.Scheme != "https" || parsed.User != nil || parsed.Port() != "" {
+		return 0, "", errors.New("brand URL must be an HTTPS Vinted URL")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if !isSupportedBrandHost(host) {
+		return 0, "", errors.New("unsupported Vinted brand domain")
+	}
+
+	matches := brandPathPattern.FindStringSubmatch(strings.TrimSuffix(parsed.EscapedPath(), "/"))
+	if len(matches) != 3 {
+		return 0, "", errors.New("URL must point to a Vinted brand page")
+	}
+	path := strings.TrimSuffix(parsed.Path, "/")
+	if !strings.HasPrefix(path, "/brand/") && !strings.HasPrefix(path, "/catalog/") {
+		return 0, "", errors.New("URL must point to a Vinted brand page")
+	}
+
+	brandID, err := strconv.ParseInt(matches[1], 10, 64)
+	if err != nil || brandID <= 0 {
+		return 0, "", errors.New("invalid Vinted brand ID")
+	}
+	return brandID, matches[2], nil
+}
+
+func isSupportedBrandHost(host string) bool {
+	for _, domain := range brandSearchDomains {
+		if host == domain || host == strings.TrimPrefix(domain, "www.") {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Client) ResolveBrandPage(rawURL string) (*BrandPageResolution, error) {
+	brandID, slug, err := ParseVintedBrandURL(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	if !isSupportedBrandHost(strings.ToLower(c.session.Domain)) {
+		return nil, errors.New("unsupported regional Vinted domain")
+	}
+
+	if err := c.ForceCatalogWarmUp(); err != nil {
+		log.Printf("[vinted] catalog warmup failed before brand page validation for domain=%s: %v", c.session.Domain, err)
+	}
+
+	currentURL := fmt.Sprintf("https://%s/brand/%d-%s", c.session.Domain, brandID, slug)
+	wasFollowingRedirects := c.httpClient.GetFollowRedirect()
+	c.httpClient.SetFollowRedirect(false)
+	defer c.httpClient.SetFollowRedirect(wasFollowingRedirects)
+
+	for redirectCount := 0; redirectCount <= maxBrandPageRedirects; redirectCount++ {
+		req, err := http.NewRequest("GET", currentURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("create brand page request: %w", err)
+		}
+		req.Header = http.Header{
+			"User-Agent":      {c.userAgent()},
+			"Accept":          {"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"},
+			"Accept-Language": {c.locale() + ",en;q=0.8"},
+			"Referer":         {fmt.Sprintf("https://%s/catalog", c.session.Domain)},
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("brand page request failed: %w", err)
+		}
+
+		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+			resp.Body.Close()
+			location := strings.TrimSpace(resp.Header.Get("Location"))
+			if location == "" || redirectCount == maxBrandPageRedirects {
+				return nil, errors.New("invalid Vinted brand page redirect")
+			}
+			nextURL, err := req.URL.Parse(location)
+			if err != nil || nextURL.Scheme != "https" || !strings.EqualFold(nextURL.Hostname(), c.session.Domain) || nextURL.Port() != "" {
+				return nil, errors.New("Vinted brand page redirected outside the selected region")
+			}
+			currentURL = nextURL.String()
+			continue
+		}
+
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBrandPageInspectionBytes))
+		resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read brand page response: %w", readErr)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("brand page returned HTTP %d", resp.StatusCode)
+		}
+		if contentType := strings.ToLower(resp.Header.Get("Content-Type")); contentType != "" && !strings.Contains(contentType, "text/html") {
+			return nil, errors.New("brand page did not return HTML")
+		}
+
+		resolution, err := validateBrandPageHTML(body, c.session.Domain, brandID)
+		if err != nil {
+			return nil, err
+		}
+		return resolution, nil
+	}
+
+	return nil, errors.New("too many Vinted brand page redirects")
+}
+
+func validateBrandPageHTML(body []byte, domain string, expectedBrandID int64) (*BrandPageResolution, error) {
+	titleMatch := htmlTitlePattern.FindSubmatch(body)
+	h1Match := htmlH1Pattern.FindSubmatch(body)
+	if len(titleMatch) != 2 || len(h1Match) != 2 {
+		return nil, errors.New("Vinted brand page is missing its official title")
+	}
+
+	title := normalizeHTMLText(string(titleMatch[1]))
+	h1 := normalizeHTMLText(string(h1Match[1]))
+	label := strings.TrimSpace(strings.TrimSuffix(title, "| Vinted"))
+	if label == "" || h1 == "" || !strings.EqualFold(label, h1) {
+		return nil, errors.New("Vinted brand page title does not match its brand name")
+	}
+
+	canonical := ""
+	for _, linkTag := range htmlLinkPattern.FindAll(body, -1) {
+		attributes := make(map[string]string)
+		for _, match := range htmlAttributePattern.FindAllSubmatch(linkTag, -1) {
+			attributes[strings.ToLower(string(match[1]))] = html.UnescapeString(string(match[2]))
+		}
+		if strings.EqualFold(attributes["rel"], "canonical") {
+			canonical = strings.TrimSpace(attributes["href"])
+			break
+		}
+	}
+	if canonical == "" {
+		return nil, errors.New("Vinted brand page is missing its canonical URL")
+	}
+
+	canonicalURL, err := url.Parse(canonical)
+	if err != nil || canonicalURL.Scheme != "https" || !strings.EqualFold(canonicalURL.Hostname(), domain) || canonicalURL.Port() != "" {
+		return nil, errors.New("Vinted brand page has an invalid canonical URL")
+	}
+	canonicalMatches := brandPathPattern.FindStringSubmatch(strings.TrimSuffix(canonicalURL.EscapedPath(), "/"))
+	if len(canonicalMatches) != 3 || canonicalMatches[1] != strconv.FormatInt(expectedBrandID, 10) {
+		return nil, errors.New("Vinted brand page canonical ID does not match")
+	}
+
+	return &BrandPageResolution{
+		ID:           strconv.FormatInt(expectedBrandID, 10),
+		Label:        label,
+		CanonicalURL: canonicalURL.String(),
+	}, nil
+}
+
+func normalizeHTMLText(value string) string {
+	withoutTags := htmlTagPattern.ReplaceAllString(value, " ")
+	return strings.Join(strings.Fields(html.UnescapeString(withoutTags)), " ")
 }
 
 var isoCountryMap = map[string]string{

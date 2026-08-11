@@ -1,10 +1,18 @@
 import brandsData from "./brands.generated.json";
 
-export type Brand = { label: string; id: string };
+export type BrandSource = "bundled" | "vinted" | "personal";
 
-export const BRANDS: Brand[] = [...brandsData].sort((a, b) =>
-    a.label.localeCompare(b.label),
-);
+export type Brand = {
+    label: string;
+    id: string;
+    source?: BrandSource;
+    canonical_url?: string;
+    active?: boolean;
+};
+
+export const BRANDS: Brand[] = brandsData
+    .map((brand) => ({ ...brand, source: "bundled" as const }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 
 export function normalizeBrandSearch(value: string): string {
     return value
@@ -45,15 +53,21 @@ for (const brand of BRANDS) {
     BRANDS_BY_ID[brand.id] = brand;
 }
 
-export function getBrandLabel(id: string): string {
-    return BRANDS_BY_ID[id]?.label ?? id;
+export function getBrandLabel(
+    id: string,
+    additionalLabels: Record<string, string> = {},
+): string {
+    return additionalLabels[id] ?? BRANDS_BY_ID[id]?.label ?? id;
 }
 
-export function getBrandLabels(brandIds: string | null | undefined): string[] {
+export function getBrandLabels(
+    brandIds: string | null | undefined,
+    additionalLabels: Record<string, string> = {},
+): string[] {
     if (!brandIds) return [];
     return brandIds
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean)
-        .map(getBrandLabel);
+        .map((id) => getBrandLabel(id, additionalLabels));
 }

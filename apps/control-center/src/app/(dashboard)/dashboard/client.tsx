@@ -222,11 +222,14 @@ function formatTimestamp(value: string) {
     return date.toLocaleString();
 }
 
-function getMonitorFilterLabels(monitor: Monitor): string[] {
+function getMonitorFilterLabels(
+    monitor: Monitor,
+    memberBrandLabels: Record<string, string>,
+): string[] {
     const labels = [...monitor.category_labels];
 
     if (monitor.brand_ids) {
-        labels.push(...getBrandLabels(monitor.brand_ids));
+        labels.push(...getBrandLabels(monitor.brand_ids, memberBrandLabels));
     }
     if (monitor.size_id) {
         labels.push(
@@ -293,6 +296,7 @@ export function DashboardClient({
     initialQuickStartOpen,
     quickStartPool,
     initialNow,
+    memberBrandLabels,
 }: {
     initialMonitors: Monitor[];
     userName: string;
@@ -303,6 +307,7 @@ export function DashboardClient({
     initialQuickStartOpen: boolean;
     quickStartPool: QuickStartPool | null;
     initialNow: string;
+    memberBrandLabels: Record<string, string>;
 }) {
     const [selectedMonitor, setSelectedMonitor] = useState<Monitor | null>(
         null,
@@ -1375,16 +1380,23 @@ export function DashboardClient({
                                             <SlidersHorizontal className="text-muted-foreground size-3.5" />
                                             <span className="shrink-0">
                                                 {
-                                                    getMonitorFilterLabels(m)
-                                                        .length
+                                                    getMonitorFilterLabels(
+                                                        m,
+                                                        memberBrandLabels,
+                                                    ).length
                                                 }{" "}
                                                 filters
                                             </span>
-                                            {getMonitorFilterLabels(m).length >
-                                                0 && (
+                                            {getMonitorFilterLabels(
+                                                m,
+                                                memberBrandLabels,
+                                            ).length > 0 && (
                                                 <span className="truncate">
                                                     ·{" "}
-                                                    {getMonitorFilterLabels(m)
+                                                    {getMonitorFilterLabels(
+                                                        m,
+                                                        memberBrandLabels,
+                                                    )
                                                         .slice(0, 2)
                                                         .join(" · ")}
                                                 </span>
@@ -1409,16 +1421,17 @@ export function DashboardClient({
                                             </span>
                                         ))}
                                         {m.brand_ids &&
-                                            getBrandLabels(m.brand_ids).map(
-                                                (label) => (
-                                                    <span
-                                                        key={`brand-${label}`}
-                                                        className="border-border/60 bg-muted/50 text-muted-foreground inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium"
-                                                    >
-                                                        {label}
-                                                    </span>
-                                                ),
-                                            )}
+                                            getBrandLabels(
+                                                m.brand_ids,
+                                                memberBrandLabels,
+                                            ).map((label) => (
+                                                <span
+                                                    key={`brand-${label}`}
+                                                    className="border-border/60 bg-muted/50 text-muted-foreground inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium"
+                                                >
+                                                    {label}
+                                                </span>
+                                            ))}
                                         {m.color_ids &&
                                             getColorLabels(m.color_ids).map(
                                                 (label) => (

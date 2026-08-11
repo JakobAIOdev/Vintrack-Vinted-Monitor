@@ -31,6 +31,25 @@ export default async function DashboardPage() {
             monitor_onboarding_status: true,
         },
     });
+    const usedBrandIds = [
+        ...new Set(
+            rawMonitors.flatMap((monitor) =>
+                (monitor.brand_ids || "")
+                    .split(",")
+                    .filter((id) => /^\d+$/.test(id)),
+            ),
+        ),
+    ].map((id) => BigInt(id));
+    const memberBrands = await db.member_brands.findMany({
+        where: {
+            userId: session.user.id,
+            brand_id: { in: usedBrandIds },
+        },
+        select: { brand_id: true, label: true },
+    });
+    const memberBrandLabels = Object.fromEntries(
+        memberBrands.map((brand) => [brand.brand_id.toString(), brand.label]),
+    );
     const bannedSellerIds = await getBannedSellerIds(session.user.id);
     const visibleCounts = await db.items.groupBy({
         by: ["monitor_id"],
@@ -129,6 +148,7 @@ export default async function DashboardPage() {
             }
             quickStartPool={quickStartPool}
             initialNow={new Date().toISOString()}
+            memberBrandLabels={memberBrandLabels}
         />
     );
 }
