@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/url"
 	"os"
 	"strconv"
@@ -870,7 +871,11 @@ func (e *Engine) handleDetectedItem(ctx context.Context, monitor model.Monitor, 
 }
 
 func sleepMonitorCycle(ctx context.Context, cycleStart time.Time, interval time.Duration) {
-	remaining := interval - time.Since(cycleStart)
+	// Monitors are all started in one loop and a proxy-list change restarts them
+	// together, so without jitter they stay in lockstep and every tick lands as
+	// one burst of catalog requests and database writes. The discovery loop
+	// already spreads itself the same way.
+	remaining := interval + monitorCycleJitter() - time.Since(cycleStart)
 	if remaining <= 0 {
 		return
 	}
@@ -880,6 +885,13 @@ func sleepMonitorCycle(ctx context.Context, cycleStart time.Time, interval time.
 	case <-timer.C:
 	case <-ctx.Done():
 	}
+}
+
+// monitorCycleJitter spreads monitors across their interval. It is deliberately
+// small relative to the 500ms interval floor so it never meaningfully slows a
+// monitor down.
+func monitorCycleJitter() time.Duration {
+	return time.Duration(rand.Intn(101)) * time.Millisecond
 }
 
 func waitForProxyRetry(ctx context.Context, retryAt time.Time) bool {

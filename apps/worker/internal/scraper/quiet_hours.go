@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"strings"
+	"sync"
 	"time"
 	_ "time/tzdata"
 
@@ -9,6 +10,34 @@ import (
 )
 
 const defaultQuietHoursTimezone = "Europe/Berlin"
+
+// Go does not cache time.LoadLocation, and with the embedded tzdata every call
+// re-reads and inflates the zoneinfo archive. Quiet-hours checks run several
+// times per monitor tick plus once per monitor on every manager sync, so the
+// small set of distinct timezone names is worth memoising.
+var (
+	quietHoursLocationMu sync.RWMutex
+	quietHoursLocations  = make(map[string]*time.Location)
+)
+
+func quietHoursLocation(timezone string) (*time.Location, error) {
+	quietHoursLocationMu.RLock()
+	location, ok := quietHoursLocations[timezone]
+	quietHoursLocationMu.RUnlock()
+	if ok {
+		return location, nil
+	}
+
+	location, err := time.LoadLocation(timezone)
+	if err != nil {
+		return nil, err
+	}
+
+	quietHoursLocationMu.Lock()
+	quietHoursLocations[timezone] = location
+	quietHoursLocationMu.Unlock()
+	return location, nil
+}
 
 func monitorQuietHoursActive(m model.Monitor, now time.Time) bool {
 	if !m.QuietHoursEnabled || m.QuietHoursStartMinute < 0 || m.QuietHoursStartMinute > 1439 || m.QuietHoursEndMinute < 0 || m.QuietHoursEndMinute > 1439 || m.QuietHoursStartMinute == m.QuietHoursEndMinute {
@@ -19,7 +48,7 @@ func monitorQuietHoursActive(m model.Monitor, now time.Time) bool {
 	if timezone == "" {
 		timezone = defaultQuietHoursTimezone
 	}
-	location, err := time.LoadLocation(timezone)
+	location, err := quietHoursLocation(timezone)
 	if err != nil {
 		return false
 	}
@@ -58,7 +87,7 @@ func durationUntilQuietHoursEnd(m model.Monitor, now time.Time) (time.Duration, 
 	if timezone == "" {
 		timezone = defaultQuietHoursTimezone
 	}
-	location, err := time.LoadLocation(timezone)
+	location, err := quietHoursLocation(timezone)
 	if err != nil {
 		return 0, false
 	}
