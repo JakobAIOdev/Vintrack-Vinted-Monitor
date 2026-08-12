@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"vintrack-worker/internal/database"
@@ -56,6 +57,8 @@ type Engine struct {
 	enrichmentFastJobs     chan enrichmentJob
 	alertDeliveryWake      chan struct{}
 	claimedAlertDeliveries chan model.AlertDelivery
+	alertDeliveryInFlight  atomic.Int64
+	alertDeliveryMaxFlight int
 	enrichmentMetrics      *sellerEnrichmentMetrics
 	jobsWG                 sync.WaitGroup
 }
@@ -104,7 +107,11 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 		enrichmentScheduler:    NewSellerEnrichmentScheduler(4096, enrichmentWorkers),
 		enrichmentFastJobs:     make(chan enrichmentJob, 4096),
 		alertDeliveryWake:      make(chan struct{}, 64),
-		claimedAlertDeliveries: make(chan model.AlertDelivery, 64),
+		claimedAlertDeliveries: make(chan model.AlertDelivery, alertDeliveryWorkerCount()),
+		// attempt_count and the delivery lease both start when a row is claimed,
+		// so claiming far more than the workers can start means the surplus ages
+		// out of its lease while queued, gets recovered, and is delivered twice.
+		alertDeliveryMaxFlight: alertDeliveryWorkerCount() + alertDeliveryWorkerCount()/2,
 		enrichmentMetrics:      &sellerEnrichmentMetrics{},
 	}
 	engine.startPipelines()
