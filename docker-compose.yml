@@ -37,11 +37,12 @@ services:
     # is high-volume and disposable and should not sit in the fsync path.
     command: >
       postgres
-      -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-160MB}
+      -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-128MB}
       -c effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-512MB}
-      -c maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-64MB}
+      -c maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-48MB}
       -c work_mem=${POSTGRES_WORK_MEM:-4MB}
       -c max_connections=${POSTGRES_MAX_CONNECTIONS:-50}
+      -c autovacuum_max_workers=${POSTGRES_AUTOVACUUM_MAX_WORKERS:-2}
       -c synchronous_commit=${POSTGRES_SYNCHRONOUS_COMMIT:-off}
       -c wal_compression=on
       -c max_wal_size=2GB
@@ -50,6 +51,9 @@ services:
       -c random_page_cost=1.1
       -c autovacuum_naptime=15s
       -c autovacuum_vacuum_cost_limit=1000
+    # Parallel query and parallel vacuum allocate through /dev/shm, which Docker
+    # defaults to 64MB.
+    shm_size: ${POSTGRES_SHM_SIZE:-256m}
     environment:
       POSTGRES_USER: vinuser
       POSTGRES_PASSWORD: vinpassword
@@ -67,7 +71,13 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-    mem_limit: ${POSTGRES_MEM_LIMIT:-512m}
+    # Deliberately unbounded by default. A cgroup limit does not make Postgres
+    # use less memory, it makes the kernel kill a backend or the postmaster when
+    # shared_buffers plus per-backend memory plus autovacuum workers exceed it,
+    # and losing Postgres takes the whole stack down. The settings above are
+    # what actually bounds its footprint; set POSTGRES_MEM_LIMIT only if you
+    # have measured real usage against it.
+    mem_limit: ${POSTGRES_MEM_LIMIT:-0}
     logging: *default-logging
     restart: unless-stopped
 
