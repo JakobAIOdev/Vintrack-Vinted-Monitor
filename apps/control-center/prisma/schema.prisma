@@ -302,6 +302,7 @@ model monitor_item_detections {
 
   @@id([monitor_id, item_id])
   @@index([monitor_id, created_at])
+  @@index([created_at])
 }
 
 model item_preindex_samples {
@@ -315,6 +316,7 @@ model item_preindex_samples {
 
   @@id([region, item_id])
   @@index([region, first_seen_at])
+  @@index([first_seen_at])
 }
 
 model preindex_probe_runs {
@@ -343,6 +345,7 @@ model monitor_events {
 
   @@index([monitor_id, created_at])
   @@index([event_type])
+  @@index([created_at])
 }
 
 model audit_events {
