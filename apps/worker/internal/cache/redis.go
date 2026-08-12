@@ -112,9 +112,18 @@ func (r *RedisCache) BatchIsNew(monitorID int, itemIDs []int64) (map[int64]bool,
 	return result, nil
 }
 
+// seenItemTTL bounds how long a claimed item stays in Redis.
+//
+// This keyspace dominates Redis memory: it holds one key per (monitor, item)
+// pair. Against a maxmemory limit with an allkeys-lru policy, letting it grow
+// means Redis evicts the very keys that prevent an already-alerted item from
+// being detected again. Seven days keeps the working set well inside the limit,
+// and anything older is still covered by the Postgres fallback in BatchIsNew.
+const seenItemTTL = 7 * 24 * time.Hour
+
 func (r *RedisCache) MarkAsSeen(monitorID int, itemID int64) error {
 	return r.writeWithRetry(func() error {
-		return r.client.Set(r.ctx, fmt.Sprintf("item:seen:%d:%d", monitorID, itemID), "1", 30*24*time.Hour).Err()
+		return r.client.Set(r.ctx, fmt.Sprintf("item:seen:%d:%d", monitorID, itemID), "1", seenItemTTL).Err()
 	})
 }
 
@@ -125,7 +134,7 @@ func (r *RedisCache) BatchMarkAsSeen(monitorID int, itemIDs []int64) error {
 	return r.writeWithRetry(func() error {
 		pipe := r.client.Pipeline()
 		for _, id := range itemIDs {
-			pipe.Set(r.ctx, fmt.Sprintf("item:seen:%d:%d", monitorID, id), "1", 30*24*time.Hour)
+			pipe.Set(r.ctx, fmt.Sprintf("item:seen:%d:%d", monitorID, id), "1", seenItemTTL)
 		}
 		_, err := pipe.Exec(r.ctx)
 		if err != nil && err != redis.Nil {
@@ -143,21 +152,7 @@ func (r *RedisCache) ClaimMonitorItem(monitorID int, itemID int64, source string
 
 	var claimed bool
 	err := r.writeWithRetry(func() error {
-		ok, err := r.client.SetNX(r.ctx, key, source, 30*24*time.Hour).Result()
-		claimed = ok
-		return err
-	})
-	if err != nil {
-		return false, err
-	}
-	return claimed, nil
-}
-
-func (r *RedisCache) ClaimUserItemAlert(userID string, itemID int64) (bool, error) {
-	key := fmt.Sprintf("item:alerted:%s:%d", userID, itemID)
-	var claimed bool
-	err := r.writeWithRetry(func() error {
-		ok, err := r.client.SetNX(r.ctx, key, "1", 30*24*time.Hour).Result()
+		ok, err := r.client.SetNX(r.ctx, key, source, seenItemTTL).Result()
 		claimed = ok
 		return err
 	})

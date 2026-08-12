@@ -282,6 +282,7 @@ model monitor_run_hourly_stats {
   last_checked_at        DateTime  @db.Timestamp(6)
   latest_error           String?   @db.Text
   latest_error_at        DateTime? @db.Timestamp(6)
+  latest_status_code     Int?
 
   @@id([monitor_id, fetch_source, bucket_hour])
   @@index([fetch_source, bucket_hour])

@@ -2,18 +2,12 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { inferProxyErrorCode } from "@/lib/proxy-errors";
+import {
+    loadMonitorRunMetrics,
+    monitorRunMetricsWindowStart,
+} from "@/lib/monitor-run-metrics";
 
 export const dynamic = "force-dynamic";
-
-type MetricsRow = {
-    total_checks: bigint;
-    success_count: bigint;
-    failed_count: bigint;
-    avg_duration_ms: number | null;
-    saved_item_count: bigint;
-    last_error: string | null;
-    last_status_code: number | null;
-};
 
 type DetectionMetricsRow = {
     detection_count: bigint;
@@ -45,48 +39,12 @@ export async function GET(
         return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    const [rows, detectionRows] = await Promise.all([
-        db.$queryRaw<MetricsRow[]>`
-        WITH recent AS (
-            SELECT status, status_code, duration_ms, error_message, checked_at
-            FROM monitor_runs
-            WHERE monitor_id = ${monitorId}
-              AND fetch_source = 'canonical'
-            ORDER BY checked_at DESC
-            LIMIT 100
-        ),
-        bounds AS (
-            SELECT MIN(checked_at) AS oldest_check_at
-            FROM recent
-        )
-        SELECT
-            COUNT(*)::bigint AS total_checks,
-            COUNT(*) FILTER (WHERE status = 'success')::bigint AS success_count,
-            COUNT(*) FILTER (WHERE status = 'failed')::bigint AS failed_count,
-            AVG(duration_ms)::float AS avg_duration_ms,
-            (
-                SELECT COUNT(*)::bigint
-                FROM items i, bounds b
-                WHERE i.monitor_id = ${monitorId}
-                  AND b.oldest_check_at IS NOT NULL
-                  AND i.found_at >= b.oldest_check_at
-            ) AS saved_item_count,
-            (
-                SELECT error_message
-                FROM recent
-                WHERE error_message IS NOT NULL
-                ORDER BY checked_at DESC
-                LIMIT 1
-            ) AS last_error,
-            (
-                SELECT status_code
-                FROM recent
-                WHERE error_message IS NOT NULL
-                ORDER BY checked_at DESC
-                LIMIT 1
-            ) AS last_status_code
-        FROM recent
-        `,
+    const windowStart = monitorRunMetricsWindowStart();
+    const [runMetrics, savedItemCount, detectionRows] = await Promise.all([
+        loadMonitorRunMetrics(monitorId, windowStart),
+        db.items.count({
+            where: { monitor_id: monitorId, found_at: { gte: windowStart } },
+        }),
         db.$queryRaw<DetectionMetricsRow[]>`
         WITH recent_raw AS (
             SELECT early_seen_at, canonical_seen_at, alert_sent_at
@@ -138,10 +96,8 @@ export async function GET(
         FROM recent_detections
         `,
     ]);
-    const row = rows[0];
     const detectionRow = detectionRows[0];
-    const totalChecks = Number(row?.total_checks ?? 0);
-    const successCount = Number(row?.success_count ?? 0);
+    const { totalChecks, successCount } = runMetrics;
     const successRate =
         totalChecks > 0 ? Math.round((successCount / totalChecks) * 100) : null;
     const detectionCount = Number(detectionRow?.detection_count ?? 0);
@@ -153,18 +109,18 @@ export async function GET(
 
     return NextResponse.json({
         totalChecks,
-        failedCount: Number(row?.failed_count ?? 0),
+        failedCount: runMetrics.failedCount,
         successRate,
         avgDurationMs:
-            row?.avg_duration_ms === null || row?.avg_duration_ms === undefined
+            runMetrics.avgDurationMs === null
                 ? null
-                : Math.round(row.avg_duration_ms),
-        newItemCount: Number(row?.saved_item_count ?? 0),
-        lastError: row?.last_error ?? null,
-        lastErrorCode: row?.last_error
-            ? inferProxyErrorCode(row.last_error, row.last_status_code)
+                : Math.round(runMetrics.avgDurationMs),
+        newItemCount: savedItemCount,
+        lastError: runMetrics.lastError,
+        lastErrorCode: runMetrics.lastError
+            ? inferProxyErrorCode(runMetrics.lastError, runMetrics.lastStatusCode)
             : null,
-        lastStatusCode: row?.last_status_code ?? null,
+        lastStatusCode: runMetrics.lastStatusCode,
         earlyAlertRate,
         medianEarlyLeadMs:
             detectionRow?.median_early_lead_ms === null ||

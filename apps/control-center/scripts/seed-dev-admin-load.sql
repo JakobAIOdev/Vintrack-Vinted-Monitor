@@ -136,6 +136,54 @@ FROM monitors AS monitor
 CROSS JOIN generate_series(1, 48) AS run(run_no)
 WHERE monitor."userId" LIKE 'dev-seed-user-%';
 
+-- The hourly aggregate used to be filled by a per-row trigger on monitor_runs.
+-- The worker now writes it directly, so the seed has to roll these rows up
+-- itself. Without this the admin dashboard reports zero activity for every
+-- seeded user with no visible error.
+INSERT INTO monitor_run_hourly_stats (
+    monitor_id,
+    fetch_source,
+    bucket_hour,
+    check_count,
+    successful_check_count,
+    failed_check_count,
+    new_item_count,
+    duration_total_ms,
+    duration_sample_count,
+    last_checked_at,
+    latest_error,
+    latest_error_at,
+    latest_status_code
+)
+SELECT
+    run.monitor_id,
+    run.fetch_source,
+    DATE_TRUNC('hour', run.checked_at),
+    COUNT(*),
+    COUNT(*) FILTER (WHERE run.status = 'success'),
+    COUNT(*) FILTER (WHERE run.status = 'failed'),
+    COALESCE(SUM(run.new_item_count), 0),
+    COALESCE(SUM(run.duration_ms), 0),
+    COUNT(*) FILTER (WHERE run.duration_ms IS NOT NULL),
+    MAX(run.checked_at),
+    (ARRAY_AGG(run.error_message ORDER BY run.checked_at DESC)
+        FILTER (WHERE run.error_message IS NOT NULL))[1],
+    MAX(run.checked_at) FILTER (WHERE run.error_message IS NOT NULL),
+    (ARRAY_AGG(run.status_code ORDER BY run.checked_at DESC)
+        FILTER (WHERE run.error_message IS NOT NULL))[1]
+FROM monitor_runs AS run
+JOIN monitors AS monitor ON monitor.id = run.monitor_id
+WHERE monitor."userId" LIKE 'dev-seed-user-%'
+GROUP BY run.monitor_id, run.fetch_source, DATE_TRUNC('hour', run.checked_at)
+ON CONFLICT (monitor_id, fetch_source, bucket_hour) DO UPDATE
+SET check_count            = monitor_run_hourly_stats.check_count            + EXCLUDED.check_count,
+    successful_check_count = monitor_run_hourly_stats.successful_check_count + EXCLUDED.successful_check_count,
+    failed_check_count     = monitor_run_hourly_stats.failed_check_count     + EXCLUDED.failed_check_count,
+    new_item_count         = monitor_run_hourly_stats.new_item_count         + EXCLUDED.new_item_count,
+    duration_total_ms      = monitor_run_hourly_stats.duration_total_ms      + EXCLUDED.duration_total_ms,
+    duration_sample_count  = monitor_run_hourly_stats.duration_sample_count  + EXCLUDED.duration_sample_count,
+    last_checked_at        = GREATEST(monitor_run_hourly_stats.last_checked_at, EXCLUDED.last_checked_at);
+
 INSERT INTO audit_events (
     "userId",
     action,
@@ -194,6 +242,7 @@ COMMIT;
 ANALYZE "User";
 ANALYZE monitors;
 ANALYZE monitor_runs;
+ANALYZE monitor_run_hourly_stats;
 ANALYZE proxy_groups;
 
 SELECT
