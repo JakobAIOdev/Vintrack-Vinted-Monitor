@@ -56,8 +56,10 @@ func TestSendAttemptClassifiesTelegramProviderFailures(t *testing.T) {
 	if terminal.Retryable || terminal.ReasonCode != "invalid_destination" {
 		t.Fatalf("terminal result: %#v", terminal)
 	}
+	// A rejected token is permanent. Retrying it burns every attempt and blocks
+	// newer alerts for the same chat until they expire.
 	authentication := sendAttempt(context.Background(), "not-found", map[string]interface{}{"chat_id": "1"})
-	if !authentication.Retryable || authentication.ReasonCode != "provider_authentication" {
+	if authentication.Retryable || authentication.ReasonCode != "provider_authentication" {
 		t.Fatalf("authentication result: %#v", authentication)
 	}
 	missingChat := sendAttempt(context.Background(), "missing-chat", map[string]interface{}{"chat_id": "1"})
@@ -82,6 +84,9 @@ func withTelegramServer(t *testing.T, handler http.HandlerFunc) {
 	httpClient = server.Client()
 	httpClient.Timeout = 2 * time.Second
 	retryBackoff = 0
+	// The send limiter is process-global. Without a reset, a case that exercises
+	// a 429 pauses the bucket for every case that follows it.
+	globalLimiter.reset()
 	os.Setenv("TELEGRAM_BOT_TOKEN", "test-token")
 	os.Unsetenv("DASHBOARD_URL")
 
@@ -89,6 +94,7 @@ func withTelegramServer(t *testing.T, handler http.HandlerFunc) {
 		apiBaseURL = oldBaseURL
 		httpClient = oldClient
 		retryBackoff = oldRetryBackoff
+		globalLimiter.reset()
 		if hadToken {
 			os.Setenv("TELEGRAM_BOT_TOKEN", oldToken)
 		} else {
