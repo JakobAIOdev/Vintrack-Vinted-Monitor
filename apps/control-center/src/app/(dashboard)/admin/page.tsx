@@ -9,6 +9,7 @@ import {
     getMonitorLimits,
     roleLimitScope,
 } from "@/lib/monitor-limits";
+import { getMemberAnnouncement } from "@/lib/member-announcement.server";
 
 export const dynamic = "force-dynamic";
 
@@ -23,22 +24,27 @@ export default async function AdminPage({
     if (session.user.role !== "admin") redirect("/dashboard");
 
     const roles = ["free", "premium"];
-    const [limits, freeProxyState, serverProxyRows, params] = await Promise.all(
-        [
-            getMonitorLimits([
-                GLOBAL_MONITOR_LIMIT_SCOPE,
-                ...roles.map(roleLimitScope),
-            ]),
-            getFreeProxyAdminState(),
-            db.$queryRaw<{ value: string }[]>`
+    const [
+        limits,
+        freeProxyState,
+        serverProxyRows,
+        memberAnnouncement,
+        params,
+    ] = await Promise.all([
+        getMonitorLimits([
+            GLOBAL_MONITOR_LIMIT_SCOPE,
+            ...roles.map(roleLimitScope),
+        ]),
+        getFreeProxyAdminState(),
+        db.$queryRaw<{ value: string }[]>`
                 SELECT value FROM app_settings WHERE key = ${"server_proxies"}
             `.catch((error) => {
-                console.error("[admin] failed to load server proxies", error);
-                return [];
-            }),
-            searchParams,
-        ],
-    );
+            console.error("[admin] failed to load server proxies", error);
+            return [];
+        }),
+        getMemberAnnouncement(),
+        searchParams,
+    ]);
 
     return (
         <AdminClient
@@ -47,6 +53,7 @@ export default async function AdminPage({
             initialTab={params?.tab}
             currentUserId={session.user.id}
             serverProxies={serverProxyRows[0]?.value ?? ""}
+            memberAnnouncement={memberAnnouncement}
             freeProxyState={freeProxyState}
             monitorLimits={{
                 global:

@@ -308,9 +308,10 @@ test.describe("dashboard overview", () => {
             page.getByRole("link", { name: "Sponsor Vintrack" }),
         ).toHaveAttribute("href", "https://github.com/sponsors/JakobAIOdev");
 
-        const serverUpgradeBanner = page
-            .getByRole("status")
-            .filter({ hasText: "Help keep the free demo fast" });
+        const serverUpgradeBanner = page.getByRole("status").filter({
+            hasText:
+                "Help keep the free demo fast and accessible with as few limits as possible.",
+        });
         await expect(serverUpgradeBanner).toBeVisible();
         await expect(
             serverUpgradeBanner.getByRole("link", {

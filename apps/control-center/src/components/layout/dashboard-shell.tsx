@@ -4,9 +4,12 @@ import { useState } from "react";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { MonitorStreamProvider } from "@/components/monitors/monitor-stream-context";
+import { MemberAnnouncementHost } from "@/components/announcements/member-announcement-banner";
+import type { MemberAnnouncement } from "@/lib/member-announcement";
 
 interface DashboardShellProps {
     children: React.ReactNode;
+    announcement: MemberAnnouncement;
     user?: {
         name?: string | null;
         image?: string | null;
@@ -15,7 +18,11 @@ interface DashboardShellProps {
     };
 }
 
-export function DashboardShell({ children, user }: DashboardShellProps) {
+export function DashboardShell({
+    children,
+    user,
+    announcement,
+}: DashboardShellProps) {
     const [sidebarOpen, setSidebarOpen] = useState(false);
 
     return (
@@ -37,7 +44,13 @@ export function DashboardShell({ children, user }: DashboardShellProps) {
                 <div className="flex min-w-0 flex-1 flex-col lg:ml-60">
                     <Header onMenuClick={() => setSidebarOpen(true)} />
                     <main className="flex-1 overflow-y-auto p-4 md:p-6">
-                        <div className="mx-auto max-w-[88rem]">{children}</div>
+                        <div className="mx-auto max-w-[88rem]">
+                            <MemberAnnouncementHost
+                                initialAnnouncement={announcement}
+                                role={user?.role}
+                            />
+                            {children}
+                        </div>
                     </main>
                 </div>
             </div>

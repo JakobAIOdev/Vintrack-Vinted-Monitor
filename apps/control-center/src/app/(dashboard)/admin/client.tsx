@@ -31,6 +31,7 @@ import {
     UserPlus,
     FlaskConical,
     Sparkles,
+    Megaphone,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -75,11 +76,22 @@ import {
     importFreeProxiesNow,
     updateFreeProxySettings,
     updateServerProxies,
+    updateMemberAnnouncement,
     stopSingleUserMonitor,
     stopUserActiveMonitors,
 } from "@/actions/admin";
 import { getRegionLabel, REGIONS } from "@/lib/regions";
 import { getProxyErrorDetails } from "@/lib/proxy-errors";
+import { MemberAnnouncementBanner } from "@/components/announcements/member-announcement-banner";
+import {
+    MEMBER_ANNOUNCEMENT_AUDIENCES,
+    MEMBER_ANNOUNCEMENT_PLACEMENTS,
+    MEMBER_ANNOUNCEMENT_VARIANTS,
+    toMemberAnnouncementInput,
+    type MemberAnnouncement,
+    type MemberAnnouncementAudience,
+    type MemberAnnouncementPlacement,
+} from "@/lib/member-announcement";
 
 type UserMonitor = {
     id: number;
@@ -162,6 +174,7 @@ type AdminTab =
     | "users"
     | "roles"
     | "logs"
+    | "announcements"
     | "settings";
 
 type AdminLogRow = {
@@ -448,6 +461,48 @@ const FREE_PROXY_SOURCE_OPTIONS = [
         url: "",
     },
 ] as const;
+
+const ANNOUNCEMENT_AUDIENCE_LABELS: Record<MemberAnnouncementAudience, string> =
+    {
+        free: "Free members",
+        premium: "Premium members",
+        admin: "Admins",
+    };
+
+const ANNOUNCEMENT_PLACEMENT_LABELS: Record<
+    MemberAnnouncementPlacement,
+    { label: string; description: string }
+> = {
+    monitors: {
+        label: "Monitors",
+        description: "Dashboard and monitor pages",
+    },
+    live_feed: { label: "Live Feed", description: "Feed page" },
+    member_tools: {
+        label: "Member Tools",
+        description: "Account, listings, likes, chats and checkout",
+    },
+    proxy_groups: {
+        label: "Proxy Groups",
+        description: "Proxy management",
+    },
+    guide: { label: "Guide", description: "Member guide" },
+    admin: { label: "Admin", description: "Admin panel" },
+};
+
+function announcementDateTimeValue(value: string | null) {
+    if (!value) return "";
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return "";
+    const localDate = new Date(
+        date.getTime() - date.getTimezoneOffset() * 60_000,
+    );
+    return localDate.toISOString().slice(0, 16);
+}
+
+function announcementDateTimeIso(value: string) {
+    return value ? new Date(value).toISOString() : null;
+}
 const ADMIN_TABS: {
     value: AdminTab;
     label: string;
@@ -490,6 +545,12 @@ const ADMIN_TABS: {
         label: "Logs",
         icon: ScrollText,
         description: "Important audit, monitor, and alert events.",
+    },
+    {
+        value: "announcements",
+        label: "Announcements",
+        icon: Megaphone,
+        description: "Create and target member-facing product updates.",
     },
     {
         value: "settings",
@@ -1018,6 +1079,7 @@ export function AdminClient({
     initialTab,
     currentUserId,
     serverProxies: initialServerProxies,
+    memberAnnouncement: initialMemberAnnouncement,
     freeProxyState: initialFreeProxyState,
     monitorLimits: initialMonitorLimits,
 }: {
@@ -1026,6 +1088,7 @@ export function AdminClient({
     initialTab?: string;
     currentUserId: string;
     serverProxies: string;
+    memberAnnouncement: MemberAnnouncement;
     freeProxyState: FreeProxyState;
     monitorLimits: MonitorLimits;
 }) {
@@ -1138,6 +1201,11 @@ export function AdminClient({
     const [userFreeProxyLimitInput, setUserFreeProxyLimitInput] = useState("");
     const [serverProxies, setServerProxies] = useState(initialServerProxies);
     const [isSavingServerProxies, setIsSavingServerProxies] = useState(false);
+    const [memberAnnouncement, setMemberAnnouncement] = useState(
+        initialMemberAnnouncement,
+    );
+    const [isSavingMemberAnnouncement, setIsSavingMemberAnnouncement] =
+        useState(false);
     const [freeProxyState, setFreeProxyState] = useState(initialFreeProxyState);
     const [freeProxySettings, setFreeProxySettings] = useState(
         normalizeFreeProxySettings(initialFreeProxyState.settings),
@@ -2142,6 +2210,33 @@ export function AdminClient({
             toast.error("Failed to stop monitor");
         } finally {
             setStoppingMonitorId(null);
+        }
+    };
+
+    const handleSaveMemberAnnouncement = async () => {
+        setIsSavingMemberAnnouncement(true);
+        try {
+            const result = await updateMemberAnnouncement(
+                toMemberAnnouncementInput(memberAnnouncement),
+            );
+            if (!result.success) {
+                toast.error(result.error);
+                return;
+            }
+            setMemberAnnouncement(result.announcement);
+            toast.success(
+                result.changed
+                    ? "Member announcement published"
+                    : "Announcement is already up to date",
+            );
+        } catch (error) {
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save member announcement",
+            );
+        } finally {
+            setIsSavingMemberAnnouncement(false);
         }
     };
 
@@ -4857,6 +4952,575 @@ export function AdminClient({
                                 </Button>
                             </div>
                         ) : null}
+                    </div>
+                </div>
+            ) : null}
+
+            {activeTab === "announcements" ? (
+                <div className="space-y-4">
+                    <div className="border-border/60 bg-card rounded-lg border p-5">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="flex items-start gap-3">
+                                <div className="bg-muted text-muted-foreground rounded-lg p-2">
+                                    <Megaphone className="h-4 w-4" />
+                                </div>
+                                <div className="space-y-1">
+                                    <p className="text-foreground text-sm font-semibold">
+                                        Member Announcement
+                                    </p>
+                                    <p className="text-muted-foreground max-w-2xl text-xs">
+                                        Publish one targeted notice across the
+                                        member area. Saved changes receive a new
+                                        revision and reappear for members who
+                                        dismissed the previous version.
+                                    </p>
+                                </div>
+                            </div>
+                            <Badge
+                                variant={
+                                    memberAnnouncement.enabled
+                                        ? "secondary"
+                                        : "outline"
+                                }
+                                className="self-start rounded-md text-[10px] uppercase"
+                            >
+                                {memberAnnouncement.enabled
+                                    ? "Enabled"
+                                    : "Disabled"}
+                            </Badge>
+                        </div>
+
+                        <div className="mt-5 flex flex-col gap-6">
+                            <div className="space-y-5">
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    <label className="border-border/60 flex items-start gap-3 rounded-lg border px-4 py-3">
+                                        <input
+                                            type="checkbox"
+                                            aria-label="Enable member announcement"
+                                            checked={memberAnnouncement.enabled}
+                                            onChange={(event) =>
+                                                setMemberAnnouncement(
+                                                    (current) => ({
+                                                        ...current,
+                                                        enabled:
+                                                            event.target
+                                                                .checked,
+                                                    }),
+                                                )
+                                            }
+                                            className="mt-1"
+                                        />
+                                        <span>
+                                            <span className="text-sm font-medium">
+                                                Publish announcement
+                                            </span>
+                                            <span className="text-muted-foreground block text-xs">
+                                                Turn off to hide it everywhere.
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <label className="border-border/60 flex items-start gap-3 rounded-lg border px-4 py-3">
+                                        <input
+                                            type="checkbox"
+                                            aria-label="Allow members to dismiss"
+                                            checked={
+                                                memberAnnouncement.dismissible
+                                            }
+                                            onChange={(event) =>
+                                                setMemberAnnouncement(
+                                                    (current) => ({
+                                                        ...current,
+                                                        dismissible:
+                                                            event.target
+                                                                .checked,
+                                                    }),
+                                                )
+                                            }
+                                            className="mt-1"
+                                        />
+                                        <span>
+                                            <span className="text-sm font-medium">
+                                                Allow dismissal
+                                            </span>
+                                            <span className="text-muted-foreground block text-xs">
+                                                Adds an X and remembers it on
+                                                this browser.
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+
+                                <div className="grid gap-4 sm:grid-cols-[180px_minmax(0,1fr)]">
+                                    <div className="space-y-2">
+                                        <Label htmlFor="announcement-variant">
+                                            Variant
+                                        </Label>
+                                        <select
+                                            id="announcement-variant"
+                                            value={memberAnnouncement.variant}
+                                            onChange={(event) =>
+                                                setMemberAnnouncement(
+                                                    (current) => ({
+                                                        ...current,
+                                                        variant: event.target
+                                                            .value as MemberAnnouncement["variant"],
+                                                    }),
+                                                )
+                                            }
+                                            className="border-input bg-background focus-visible:ring-ring h-9 w-full rounded-md border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none"
+                                        >
+                                            {MEMBER_ANNOUNCEMENT_VARIANTS.map(
+                                                (variant) => (
+                                                    <option
+                                                        key={variant}
+                                                        value={variant}
+                                                    >
+                                                        {variant
+                                                            .charAt(0)
+                                                            .toUpperCase() +
+                                                            variant.slice(1)}
+                                                    </option>
+                                                ),
+                                            )}
+                                        </select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <Label htmlFor="announcement-title">
+                                                Title
+                                            </Label>
+                                            <span className="text-muted-foreground text-[11px]">
+                                                {
+                                                    memberAnnouncement.title
+                                                        .length
+                                                }
+                                                /80
+                                            </span>
+                                        </div>
+                                        <Input
+                                            id="announcement-title"
+                                            maxLength={80}
+                                            value={memberAnnouncement.title}
+                                            onChange={(event) =>
+                                                setMemberAnnouncement(
+                                                    (current) => ({
+                                                        ...current,
+                                                        title: event.target
+                                                            .value,
+                                                    }),
+                                                )
+                                            }
+                                            placeholder="Important update"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <Label htmlFor="announcement-message">
+                                            Message
+                                        </Label>
+                                        <span className="text-muted-foreground text-[11px]">
+                                            {memberAnnouncement.message.length}
+                                            /500
+                                        </span>
+                                    </div>
+                                    <textarea
+                                        id="announcement-message"
+                                        maxLength={500}
+                                        rows={4}
+                                        value={memberAnnouncement.message}
+                                        onChange={(event) =>
+                                            setMemberAnnouncement(
+                                                (current) => ({
+                                                    ...current,
+                                                    message: event.target.value,
+                                                }),
+                                            )
+                                        }
+                                        placeholder="Write a concise member update..."
+                                        className="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:ring-ring min-h-24 w-full resize-y rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+                                    />
+                                    <p className="text-muted-foreground text-[11px]">
+                                        Plain text only. Line breaks are
+                                        preserved.
+                                    </p>
+                                </div>
+
+                                <div className="border-border/60 rounded-lg border p-4">
+                                    <label className="flex items-center gap-2 text-sm font-medium">
+                                        <input
+                                            type="checkbox"
+                                            aria-label="Enable announcement call to action"
+                                            checked={
+                                                memberAnnouncement.cta !== null
+                                            }
+                                            onChange={(event) =>
+                                                setMemberAnnouncement(
+                                                    (current) => ({
+                                                        ...current,
+                                                        cta: event.target
+                                                            .checked
+                                                            ? {
+                                                                  label: "Learn more",
+                                                                  url: "",
+                                                              }
+                                                            : null,
+                                                    }),
+                                                )
+                                            }
+                                        />
+                                        Call to action
+                                    </label>
+                                    {memberAnnouncement.cta ? (
+                                        <div className="mt-3 grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)]">
+                                            <div className="space-y-2">
+                                                <Label htmlFor="announcement-cta-label">
+                                                    Button label
+                                                </Label>
+                                                <Input
+                                                    id="announcement-cta-label"
+                                                    maxLength={40}
+                                                    value={
+                                                        memberAnnouncement.cta
+                                                            .label
+                                                    }
+                                                    onChange={(event) =>
+                                                        setMemberAnnouncement(
+                                                            (current) => ({
+                                                                ...current,
+                                                                cta: current.cta
+                                                                    ? {
+                                                                          ...current.cta,
+                                                                          label: event
+                                                                              .target
+                                                                              .value,
+                                                                      }
+                                                                    : null,
+                                                            }),
+                                                        )
+                                                    }
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label htmlFor="announcement-cta-url">
+                                                    Internal or HTTPS URL
+                                                </Label>
+                                                <Input
+                                                    id="announcement-cta-url"
+                                                    value={
+                                                        memberAnnouncement.cta
+                                                            .url
+                                                    }
+                                                    onChange={(event) =>
+                                                        setMemberAnnouncement(
+                                                            (current) => ({
+                                                                ...current,
+                                                                cta: current.cta
+                                                                    ? {
+                                                                          ...current.cta,
+                                                                          url: event
+                                                                              .target
+                                                                              .value,
+                                                                      }
+                                                                    : null,
+                                                            }),
+                                                        )
+                                                    }
+                                                    placeholder="/guide or https://..."
+                                                />
+                                            </div>
+                                        </div>
+                                    ) : null}
+                                </div>
+
+                                <div className="grid gap-4 lg:grid-cols-2">
+                                    <fieldset className="border-border/60 rounded-lg border p-4">
+                                        <legend className="px-1 text-sm font-medium">
+                                            Audience
+                                        </legend>
+                                        <label className="mb-3 flex items-center gap-2 text-xs font-medium">
+                                            <input
+                                                type="checkbox"
+                                                aria-label="All member roles"
+                                                checked={MEMBER_ANNOUNCEMENT_AUDIENCES.every(
+                                                    (audience) =>
+                                                        memberAnnouncement.audiences.includes(
+                                                            audience,
+                                                        ),
+                                                )}
+                                                onChange={(event) =>
+                                                    setMemberAnnouncement(
+                                                        (current) => ({
+                                                            ...current,
+                                                            audiences: event
+                                                                .target.checked
+                                                                ? [
+                                                                      ...MEMBER_ANNOUNCEMENT_AUDIENCES,
+                                                                  ]
+                                                                : [],
+                                                        }),
+                                                    )
+                                                }
+                                            />
+                                            All roles
+                                        </label>
+                                        <div className="space-y-2">
+                                            {MEMBER_ANNOUNCEMENT_AUDIENCES.map(
+                                                (audience) => (
+                                                    <label
+                                                        key={audience}
+                                                        className="flex items-center gap-2 text-sm"
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={memberAnnouncement.audiences.includes(
+                                                                audience,
+                                                            )}
+                                                            onChange={(event) =>
+                                                                setMemberAnnouncement(
+                                                                    (
+                                                                        current,
+                                                                    ) => ({
+                                                                        ...current,
+                                                                        audiences:
+                                                                            event
+                                                                                .target
+                                                                                .checked
+                                                                                ? [
+                                                                                      ...current.audiences,
+                                                                                      audience,
+                                                                                  ]
+                                                                                : current.audiences.filter(
+                                                                                      (
+                                                                                          value,
+                                                                                      ) =>
+                                                                                          value !==
+                                                                                          audience,
+                                                                                  ),
+                                                                    }),
+                                                                )
+                                                            }
+                                                        />
+                                                        {
+                                                            ANNOUNCEMENT_AUDIENCE_LABELS[
+                                                                audience
+                                                            ]
+                                                        }
+                                                    </label>
+                                                ),
+                                            )}
+                                        </div>
+                                    </fieldset>
+
+                                    <fieldset className="border-border/60 rounded-lg border p-4">
+                                        <legend className="px-1 text-sm font-medium">
+                                            Page areas
+                                        </legend>
+                                        <label className="mb-3 flex items-center gap-2 text-xs font-medium">
+                                            <input
+                                                type="checkbox"
+                                                aria-label="All page areas"
+                                                checked={MEMBER_ANNOUNCEMENT_PLACEMENTS.every(
+                                                    (placement) =>
+                                                        memberAnnouncement.placements.includes(
+                                                            placement,
+                                                        ),
+                                                )}
+                                                onChange={(event) =>
+                                                    setMemberAnnouncement(
+                                                        (current) => ({
+                                                            ...current,
+                                                            placements: event
+                                                                .target.checked
+                                                                ? [
+                                                                      ...MEMBER_ANNOUNCEMENT_PLACEMENTS,
+                                                                  ]
+                                                                : [],
+                                                        }),
+                                                    )
+                                                }
+                                            />
+                                            All page areas
+                                        </label>
+                                        <div className="space-y-2.5">
+                                            {MEMBER_ANNOUNCEMENT_PLACEMENTS.map(
+                                                (placement) => (
+                                                    <label
+                                                        key={placement}
+                                                        className="flex items-start gap-2 text-sm"
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            className="mt-1"
+                                                            checked={memberAnnouncement.placements.includes(
+                                                                placement,
+                                                            )}
+                                                            onChange={(event) =>
+                                                                setMemberAnnouncement(
+                                                                    (
+                                                                        current,
+                                                                    ) => ({
+                                                                        ...current,
+                                                                        placements:
+                                                                            event
+                                                                                .target
+                                                                                .checked
+                                                                                ? [
+                                                                                      ...current.placements,
+                                                                                      placement,
+                                                                                  ]
+                                                                                : current.placements.filter(
+                                                                                      (
+                                                                                          value,
+                                                                                      ) =>
+                                                                                          value !==
+                                                                                          placement,
+                                                                                  ),
+                                                                    }),
+                                                                )
+                                                            }
+                                                        />
+                                                        <span>
+                                                            <span className="block font-medium">
+                                                                {
+                                                                    ANNOUNCEMENT_PLACEMENT_LABELS[
+                                                                        placement
+                                                                    ].label
+                                                                }
+                                                            </span>
+                                                            <span className="text-muted-foreground block text-[11px]">
+                                                                {
+                                                                    ANNOUNCEMENT_PLACEMENT_LABELS[
+                                                                        placement
+                                                                    ]
+                                                                        .description
+                                                                }
+                                                            </span>
+                                                        </span>
+                                                    </label>
+                                                ),
+                                            )}
+                                        </div>
+                                    </fieldset>
+                                </div>
+
+                                <fieldset className="border-border/60 rounded-lg border p-4">
+                                    <legend className="px-1 text-sm font-medium">
+                                        Optional schedule
+                                    </legend>
+                                    <div className="grid gap-3 sm:grid-cols-2">
+                                        <div className="space-y-2">
+                                            <Label htmlFor="announcement-starts-at">
+                                                Starts at
+                                            </Label>
+                                            <Input
+                                                id="announcement-starts-at"
+                                                type="datetime-local"
+                                                value={announcementDateTimeValue(
+                                                    memberAnnouncement.startsAt,
+                                                )}
+                                                onChange={(event) =>
+                                                    setMemberAnnouncement(
+                                                        (current) => ({
+                                                            ...current,
+                                                            startsAt:
+                                                                announcementDateTimeIso(
+                                                                    event.target
+                                                                        .value,
+                                                                ),
+                                                        }),
+                                                    )
+                                                }
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label htmlFor="announcement-ends-at">
+                                                Ends at
+                                            </Label>
+                                            <Input
+                                                id="announcement-ends-at"
+                                                type="datetime-local"
+                                                value={announcementDateTimeValue(
+                                                    memberAnnouncement.endsAt,
+                                                )}
+                                                onChange={(event) =>
+                                                    setMemberAnnouncement(
+                                                        (current) => ({
+                                                            ...current,
+                                                            endsAt: announcementDateTimeIso(
+                                                                event.target
+                                                                    .value,
+                                                            ),
+                                                        }),
+                                                    )
+                                                }
+                                            />
+                                        </div>
+                                    </div>
+                                    <p className="text-muted-foreground mt-2 text-[11px]">
+                                        Times use your local timezone and are
+                                        saved as UTC.
+                                    </p>
+                                </fieldset>
+                            </div>
+
+                            <div className="border-border/60 bg-muted/15 order-first space-y-3 rounded-xl border p-4">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                        <p className="text-sm font-semibold">
+                                            Live preview
+                                        </p>
+                                        <p className="text-muted-foreground text-xs">
+                                            Full dashboard width · links and
+                                            dismissal are disabled here.
+                                        </p>
+                                    </div>
+                                    <Badge
+                                        variant="outline"
+                                        className="rounded-md text-[10px] uppercase"
+                                    >
+                                        Dashboard preview
+                                    </Badge>
+                                </div>
+                                <MemberAnnouncementBanner
+                                    announcement={memberAnnouncement}
+                                    preview
+                                />
+                                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                                    <div className="border-border/60 bg-background/60 rounded-lg border px-3.5 py-3 text-xs">
+                                        <p className="font-medium">
+                                            Delivery summary
+                                        </p>
+                                        <p className="text-muted-foreground mt-1 leading-5">
+                                            {memberAnnouncement.enabled
+                                                ? `${memberAnnouncement.audiences.length} role group${memberAnnouncement.audiences.length === 1 ? "" : "s"} · ${memberAnnouncement.placements.length} page area${memberAnnouncement.placements.length === 1 ? "" : "s"}`
+                                                : "Hidden for all members"}
+                                            {memberAnnouncement.dismissible
+                                                ? " · Dismissible"
+                                                : " · Persistent"}
+                                        </p>
+                                        <p className="text-muted-foreground mt-1 font-mono text-[10px] break-all">
+                                            Revision: {memberAnnouncement.revision}
+                                        </p>
+                                    </div>
+                                    <Button
+                                        type="button"
+                                        className="h-9 w-full md:min-w-56 md:w-auto"
+                                        onClick={
+                                            handleSaveMemberAnnouncement
+                                        }
+                                        disabled={
+                                            isSavingMemberAnnouncement
+                                        }
+                                    >
+                                        {isSavingMemberAnnouncement
+                                            ? "Publishing..."
+                                            : "Publish Announcement"}
+                                    </Button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             ) : null}

@@ -17,6 +17,15 @@ import {
     withMonitorActivationLock,
 } from "@/lib/monitor-limits";
 import { logAuditEvent } from "@/lib/audit";
+import { randomUUID } from "node:crypto";
+import {
+    MEMBER_ANNOUNCEMENT_SETTING_KEY,
+    parseMemberAnnouncement,
+    toMemberAnnouncementInput,
+    validateMemberAnnouncementInput,
+    type MemberAnnouncement,
+    type MemberAnnouncementInput,
+} from "@/lib/member-announcement";
 
 const SERVER_PROXIES_SETTING_KEY = "server_proxies";
 const FREE_PROXY_ENABLED_KEY = "free_proxy_enabled";
@@ -1175,6 +1184,78 @@ async function requireAdmin() {
     if (!session?.user?.id) throw new Error("Unauthorized");
     if (session.user.role !== "admin") throw new Error("Forbidden");
     return session.user.id;
+}
+
+export async function updateMemberAnnouncement(
+    input: MemberAnnouncementInput,
+): Promise<
+    | {
+          success: true;
+          announcement: MemberAnnouncement;
+          changed: boolean;
+      }
+    | { success: false; error: string }
+> {
+    const adminUserId = await requireAdmin();
+    let normalized: MemberAnnouncementInput;
+    try {
+        normalized = validateMemberAnnouncementInput(input);
+    } catch (error) {
+        return {
+            success: false,
+            error:
+                error instanceof Error
+                    ? error.message
+                    : "Invalid announcement settings",
+        };
+    }
+    const existingSetting = await db.app_settings.findUnique({
+        where: { key: MEMBER_ANNOUNCEMENT_SETTING_KEY },
+        select: { value: true },
+    });
+    const existing = parseMemberAnnouncement(existingSetting?.value);
+    const changed =
+        JSON.stringify(toMemberAnnouncementInput(existing)) !==
+        JSON.stringify(normalized);
+
+    if (!changed) {
+        return { success: true, announcement: existing, changed: false };
+    }
+
+    const announcement: MemberAnnouncement = {
+        ...normalized,
+        revision: randomUUID(),
+    };
+    await db.app_settings.upsert({
+        where: { key: MEMBER_ANNOUNCEMENT_SETTING_KEY },
+        create: {
+            key: MEMBER_ANNOUNCEMENT_SETTING_KEY,
+            value: JSON.stringify(announcement),
+        },
+        update: { value: JSON.stringify(announcement) },
+    });
+
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.member_announcement_updated",
+        targetType: "app_setting",
+        targetId: MEMBER_ANNOUNCEMENT_SETTING_KEY,
+        metadata: {
+            enabled: announcement.enabled,
+            variant: announcement.variant,
+            dismissible: announcement.dismissible,
+            audiences: announcement.audiences,
+            placements: announcement.placements,
+            startsAt: announcement.startsAt,
+            endsAt: announcement.endsAt,
+            hasCta: announcement.cta !== null,
+            titleLength: announcement.title.length,
+            messageLength: announcement.message.length,
+        },
+    });
+
+    revalidatePath("/", "layout");
+    return { success: true, announcement, changed: true };
 }
 
 function validateProxyLine(
@@ -2759,28 +2840,35 @@ const getCachedAdminOperationsSummary = unstable_cache(
             p95_ms: number | null;
             p99_ms: number | null;
         };
-        const [stats, queue, failures, incidents, briefIncidents, settings, latency] =
-            await Promise.all([
-                db.$queryRaw<StatRow[]>`
+        const [
+            stats,
+            queue,
+            failures,
+            incidents,
+            briefIncidents,
+            settings,
+            latency,
+        ] = await Promise.all([
+            db.$queryRaw<StatRow[]>`
                     SELECT channel, outcome, SUM(event_count)::bigint AS event_count
                     FROM alert_event_hourly_stats
                     WHERE bucket_hour >= DATE_TRUNC('hour', NOW() - INTERVAL '24 hours')
                     GROUP BY channel, outcome
                 `,
-                db.$queryRaw<
-                    {
-                        status: string;
-                        event_count: bigint;
-                        oldest_at: Date | null;
-                    }[]
-                >`
+            db.$queryRaw<
+                {
+                    status: string;
+                    event_count: bigint;
+                    oldest_at: Date | null;
+                }[]
+            >`
                     SELECT status, COUNT(*)::bigint AS event_count,
                         MIN(created_at) AS oldest_at
                     FROM alert_deliveries
                     WHERE status IN ('pending', 'processing', 'retrying')
                     GROUP BY status
                 `,
-                db.$queryRaw<FailureRow[]>`
+            db.$queryRaw<FailureRow[]>`
                     SELECT channel, reason_code, SUM(event_count)::bigint AS event_count,
                         MAX(last_seen_at) AS last_seen_at
                     FROM alert_event_hourly_stats
@@ -2790,13 +2878,13 @@ const getCachedAdminOperationsSummary = unstable_cache(
                     ORDER BY event_count DESC, last_seen_at DESC
                     LIMIT 8
                 `,
-                db.$queryRaw<
-                    {
-                        open_count: bigint;
-                        relevant_recovered_count: bigint;
-                        brief_recovered_count: bigint;
-                    }[]
-                >`
+            db.$queryRaw<
+                {
+                    open_count: bigint;
+                    relevant_recovered_count: bigint;
+                    brief_recovered_count: bigint;
+                }[]
+            >`
                     SELECT
                         COUNT(*) FILTER (WHERE recovered_at IS NULL)::bigint AS open_count,
                         COUNT(*) FILTER (
@@ -2810,14 +2898,14 @@ const getCachedAdminOperationsSummary = unstable_cache(
                     FROM monitor_proxy_incidents
                     WHERE recovered_at IS NULL OR recovered_at >= NOW() - INTERVAL '24 hours'
                 `,
-                db.$queryRaw<
-                    {
-                        domain: string;
-                        proxy_source: string;
-                        incident_count: bigint;
-                        wait_count: bigint;
-                    }[]
-                >`
+            db.$queryRaw<
+                {
+                    domain: string;
+                    proxy_source: string;
+                    incident_count: bigint;
+                    wait_count: bigint;
+                }[]
+            >`
                     SELECT domain, proxy_source,
                         COUNT(*)::bigint AS incident_count,
                         SUM(wait_count)::bigint AS wait_count
@@ -2828,19 +2916,19 @@ const getCachedAdminOperationsSummary = unstable_cache(
                     ORDER BY incident_count DESC, wait_count DESC
                     LIMIT 8
                 `,
-                db.app_settings.findMany({
-                    where: {
-                        key: {
-                            in: [
-                                "alert_telemetry_tracked_since",
-                                "alert_dispatcher_heartbeat",
-                                "seller_enrichment_metrics",
-                            ],
-                        },
+            db.app_settings.findMany({
+                where: {
+                    key: {
+                        in: [
+                            "alert_telemetry_tracked_since",
+                            "alert_dispatcher_heartbeat",
+                            "seller_enrichment_metrics",
+                        ],
                     },
-                    select: { key: true, value: true },
-                }),
-                db.$queryRaw<LatencyRow[]>`
+                },
+                select: { key: true, value: true },
+            }),
+            db.$queryRaw<LatencyRow[]>`
                     SELECT
                         PERCENTILE_CONT(0.50) WITHIN GROUP (
                             ORDER BY EXTRACT(EPOCH FROM (d.completed_at - d.created_at)) * 1000
@@ -2857,7 +2945,7 @@ const getCachedAdminOperationsSummary = unstable_cache(
                       AND d.completed_at >= NOW() - INTERVAL '24 hours'
                       AND n.kind = 'item_match'
                 `,
-            ]);
+        ]);
 
         const outcomeTotals = new Map<string, number>();
         const byChannel: Record<
@@ -2903,7 +2991,10 @@ const getCachedAdminOperationsSummary = unstable_cache(
         } | null = null;
         if (enrichmentRaw) {
             try {
-                const value = JSON.parse(enrichmentRaw) as Record<string, unknown>;
+                const value = JSON.parse(enrichmentRaw) as Record<
+                    string,
+                    unknown
+                >;
                 enrichment = {
                     queueAgeMs: Number(value.queueAgeMs ?? 0),
                     cacheHitRate: Number(value.cacheHitRate ?? 0),
@@ -2998,11 +3089,7 @@ export async function getAdminOperationsPage(input?: {
                     filter === "all"
                         ? "failed"
                         : {
-                              in: [
-                                  "failed",
-                                  "retry_scheduled",
-                                  "cancelled",
-                              ],
+                              in: ["failed", "retry_scheduled", "cancelled"],
                           },
                 ...(cursor ? { created_at: { lt: cursor } } : {}),
             },
