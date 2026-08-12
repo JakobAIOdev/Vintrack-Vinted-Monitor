@@ -147,7 +147,10 @@ test.describe("monitor maintenance", () => {
                 .fill("nike");
             const proxySource = page.locator('select[name="proxy_group_id"]');
             await expect(proxySource).toBeEnabled();
-            await proxySource.selectOption("free");
+            await expect(
+                proxySource.locator('option[value="server"]'),
+            ).toHaveCount(1);
+            await proxySource.selectOption("server");
 
             const now = new Date().toISOString();
             await db.app_settings.create({
@@ -636,7 +639,10 @@ test.describe("monitor maintenance", () => {
                 'select[name="proxy_group_id"]',
             );
             await expect(proxySource).toBeEnabled();
-            await proxySource.selectOption("free");
+            await expect(
+                proxySource.locator('option[value="server"]'),
+            ).toHaveCount(1);
+            await proxySource.selectOption("server");
             const submitCreate = createPage.getByRole("button", {
                 name: "Create Monitor",
             });
