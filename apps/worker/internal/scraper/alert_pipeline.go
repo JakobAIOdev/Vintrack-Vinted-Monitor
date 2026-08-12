@@ -109,7 +109,7 @@ func (e *Engine) enqueueItem(job enrichmentJob, publishNow bool) {
 	if publishNow {
 		// The browser live feed deliberately has no dependency on Postgres or the
 		// durable external-delivery outbox.
-		if err := e.db.PublishItem(job.item); err != nil {
+		if err := e.db.PublishItem(job.monitor.UserID, job.item); err != nil {
 			log.Printf("[%d] immediate live-feed publish error: %v", job.monitor.ID, err)
 		} else {
 			e.db.RecordDetectionAlertSent(job.monitor.ID, job.item.ID, time.Now())
@@ -389,7 +389,7 @@ func (e *Engine) enrichAndPersist(job enrichmentJob) {
 	}
 
 	if job.requireSellerMatch {
-		if err := e.db.PublishItem(job.item); err != nil {
+		if err := e.db.PublishItem(job.monitor.UserID, job.item); err != nil {
 			log.Printf("[%d] strict live-feed publish error: %v", job.monitor.ID, err)
 		} else {
 			e.db.RecordDetectionAlertSent(job.monitor.ID, job.item.ID, time.Now())
@@ -418,7 +418,7 @@ func (e *Engine) enrichAndPersist(job enrichmentJob) {
 		e.enrichmentScheduler.Submit(job.ctx, background)
 	}
 	if job.publishUpdate && !job.requireSellerMatch && (job.item.Location != "" || job.item.Rating != "") {
-		if err := e.db.PublishItem(job.item); err != nil {
+		if err := e.db.PublishItem(job.monitor.UserID, job.item); err != nil {
 			log.Printf("[%d] publish enrichment update: %v", job.monitor.ID, err)
 		}
 	}

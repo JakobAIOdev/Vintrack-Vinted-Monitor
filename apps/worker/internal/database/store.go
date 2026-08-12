@@ -2148,9 +2148,9 @@ func (s *Store) MarkItemsSeen(monitorID int, ids []int64) {
 	}
 }
 
-func (s *Store) PublishItem(item model.Item) error {
+func (s *Store) PublishItem(userID string, item model.Item) error {
 	if s.cache != nil {
-		return s.cache.PublishNewItem(item)
+		return s.cache.PublishNewItem(userID, item)
 	}
 	return nil
 }

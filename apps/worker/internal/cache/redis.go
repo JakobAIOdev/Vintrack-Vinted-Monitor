@@ -217,13 +217,23 @@ func (r *RedisCache) SetSellerInfo(ctx context.Context, domain string, userID in
 	})
 }
 
-func (r *RedisCache) PublishNewItem(item interface{}) error {
+// PublishNewItem sends a live-feed match to the owning member's channel.
+//
+// This used to publish to one global channel that every connected dashboard
+// subscribed to, so every browser received every item found for every member
+// and discarded almost all of them. Scoping the channel to the member makes the
+// delivered volume proportional to the matches themselves.
+func (r *RedisCache) PublishNewItem(userID string, item interface{}) error {
+	if userID == "" {
+		return nil
+	}
 	payload, err := json.Marshal(item)
 	if err != nil {
 		return fmt.Errorf("marshal item: %w", err)
 	}
+	channel := fmt.Sprintf("vinted:new_items:%s", userID)
 	return r.writeWithRetry(func() error {
-		return r.client.Publish(r.ctx, "vinted:new_items", payload).Err()
+		return r.client.Publish(r.ctx, channel, payload).Err()
 	})
 }
 
