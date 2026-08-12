@@ -37,6 +37,19 @@ import {
     getMonitorMaintenance,
     getMonitorWorkerRuntime,
 } from "@/lib/monitor-maintenance.server";
+import {
+    INACTIVE_MEMBER_POLICY_SETTING_KEY,
+    inactivePolicyRuntimeStatus,
+    validateInactiveMemberPolicyInput,
+    type InactiveMemberPolicy,
+    type InactiveMemberPolicyInput,
+} from "@/lib/inactive-member-policy";
+import {
+    countInactivePolicyMatches,
+    getInactiveEligibleMonitorIds,
+    getInactiveMemberPolicy,
+    getInactiveMemberRuntime,
+} from "@/lib/inactive-member-policy.server";
 
 const SERVER_PROXIES_SETTING_KEY = "server_proxies";
 const FREE_PROXY_ENABLED_KEY = "free_proxy_enabled";
@@ -1340,6 +1353,18 @@ export async function disableMonitorMaintenance() {
         if (!existing.enabled) {
             throw new Error("Monitor maintenance is not enabled");
         }
+        const policy = await getInactiveMemberPolicy(tx);
+        const inactivityIds = await getInactiveEligibleMonitorIds(
+            policy,
+            "maintenance_paused",
+            tx,
+        );
+        if (inactivityIds.length > 0) {
+            await tx.monitors.updateMany({
+                where: { id: { in: inactivityIds } },
+                data: { status: "inactivity_paused" },
+            });
+        }
         const resumed = await tx.monitors.updateMany({
             where: { status: "maintenance_paused" },
             data: { status: "active" },
@@ -1360,6 +1385,7 @@ export async function disableMonitorMaintenance() {
         });
         return {
             resumedCount: resumed.count,
+            inactivityPausedCount: inactivityIds.length,
             durationSeconds: existing.enabledAt
                 ? Math.max(
                       0,
@@ -1383,6 +1409,109 @@ export async function disableMonitorMaintenance() {
     revalidatePath("/", "layout");
     revalidatePath("/admin");
     return loadMonitorMaintenanceAdminState();
+}
+
+export type InactiveMemberPolicyAdminState = {
+    policy: InactiveMemberPolicy;
+    runtime: Awaited<ReturnType<typeof getInactiveMemberRuntime>>;
+    status: ReturnType<typeof inactivePolicyRuntimeStatus>;
+    preview: { memberCount: number; monitorCount: number };
+    inactivityPausedCount: number;
+};
+
+async function loadInactiveMemberPolicyAdminState(): Promise<InactiveMemberPolicyAdminState> {
+    const [policy, runtime, inactivityPausedCount] = await Promise.all([
+        getInactiveMemberPolicy(),
+        getInactiveMemberRuntime().catch(() => null),
+        db.monitors.count({ where: { status: "inactivity_paused" } }),
+    ]);
+    return {
+        policy,
+        runtime,
+        status: inactivePolicyRuntimeStatus(policy, runtime),
+        preview: await countInactivePolicyMatches(policy),
+        inactivityPausedCount,
+    };
+}
+
+export async function getInactiveMemberPolicyAdminState() {
+    await requireAdmin();
+    return loadInactiveMemberPolicyAdminState();
+}
+
+export async function previewInactiveMemberPolicy(
+    input: InactiveMemberPolicyInput,
+) {
+    await requireAdmin();
+    const normalized = validateInactiveMemberPolicyInput(input);
+    const existing = await getInactiveMemberPolicy();
+    const policy: InactiveMemberPolicy = {
+        ...existing,
+        ...normalized,
+        enabledAt:
+            input.enabled && !existing.enabled
+                ? new Date().toISOString()
+                : existing.enabledAt,
+    };
+    return countInactivePolicyMatches(policy);
+}
+
+export async function updateInactiveMemberPolicy(
+    input: InactiveMemberPolicyInput,
+) {
+    const adminUserId = await requireAdmin();
+    const normalized = validateInactiveMemberPolicyInput(input);
+    const now = new Date();
+    const result = await db.$transaction(async (tx) => {
+        await acquireGlobalMonitorActivationLock(tx);
+        const existing = await getInactiveMemberPolicy(tx);
+        const changed =
+            existing.enabled !== normalized.enabled ||
+            existing.duration !== normalized.duration ||
+            existing.durationUnit !== normalized.durationUnit ||
+            existing.monitorScope !== normalized.monitorScope ||
+            existing.roles.join(",") !== normalized.roles.join(",");
+        if (!changed) return { changed: false, revision: existing.revision };
+
+        const revision = randomUUID();
+        const policy: InactiveMemberPolicy = {
+            ...normalized,
+            revision,
+            enabledAt:
+                normalized.enabled && !existing.enabled
+                    ? now.toISOString()
+                    : existing.enabledAt,
+            updatedAt: now.toISOString(),
+            updatedBy: adminUserId,
+        };
+        await tx.app_settings.upsert({
+            where: { key: INACTIVE_MEMBER_POLICY_SETTING_KEY },
+            create: {
+                key: INACTIVE_MEMBER_POLICY_SETTING_KEY,
+                value: JSON.stringify(policy),
+            },
+            update: { value: JSON.stringify(policy) },
+        });
+        return { changed: true, revision };
+    });
+    if (result.changed) {
+        await logAuditEvent({
+            userId: adminUserId,
+            action: "admin.inactive_member_policy_updated",
+            targetType: "app_setting",
+            targetId: INACTIVE_MEMBER_POLICY_SETTING_KEY,
+            metadata: {
+                revision: result.revision,
+                enabled: normalized.enabled,
+                durationDays: normalized.durationDays,
+                monitorScope: normalized.monitorScope,
+                roles: normalized.roles,
+            },
+        });
+        revalidatePath("/", "layout");
+        revalidatePath("/admin");
+    }
+    return loadInactiveMemberPolicyAdminState();
 }
 
 export async function updateMemberAnnouncement(

@@ -1305,6 +1305,13 @@ export function DashboardClient({
                                                             <Wrench className="h-3 w-3" />
                                                             Maintenance
                                                         </span>
+                                                    ) : m.status ===
+                                                      "inactivity_paused" ? (
+                                                        <span className="flex items-center gap-1">
+                                                            <Clock3 className="h-3 w-3" />
+                                                            Paused due to
+                                                            inactivity
+                                                        </span>
                                                     ) : m.status === "error" ? (
                                                         <span className="flex items-center gap-1">
                                                             <AlertTriangle className="h-3 w-3" />

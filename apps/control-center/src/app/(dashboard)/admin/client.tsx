@@ -33,6 +33,7 @@ import {
     Sparkles,
     Megaphone,
     Wrench,
+    TimerReset,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -84,6 +85,9 @@ import {
     updateMonitorMaintenance,
     disableMonitorMaintenance,
     type MonitorMaintenanceAdminState,
+    previewInactiveMemberPolicy,
+    updateInactiveMemberPolicy,
+    type InactiveMemberPolicyAdminState,
 } from "@/actions/admin";
 import { getRegionLabel, REGIONS } from "@/lib/regions";
 import { getProxyErrorDetails } from "@/lib/proxy-errors";
@@ -98,6 +102,10 @@ import {
     type MemberAnnouncementPlacement,
 } from "@/lib/member-announcement";
 import { DEFAULT_MONITOR_MAINTENANCE_MESSAGE } from "@/lib/monitor-maintenance";
+import type {
+    InactivityDurationUnit,
+    InactivityMonitorScope,
+} from "@/lib/inactive-member-policy";
 
 type UserMonitor = {
     id: number;
@@ -1088,6 +1096,7 @@ export function AdminClient({
     serverProxies: initialServerProxies,
     memberAnnouncement: initialMemberAnnouncement,
     initialMonitorMaintenanceState,
+    initialInactiveMemberPolicyState,
     freeProxyState: initialFreeProxyState,
     monitorLimits: initialMonitorLimits,
 }: {
@@ -1098,6 +1107,7 @@ export function AdminClient({
     serverProxies: string;
     memberAnnouncement: MemberAnnouncement;
     initialMonitorMaintenanceState: MonitorMaintenanceAdminState;
+    initialInactiveMemberPolicyState: InactiveMemberPolicyAdminState;
     freeProxyState: FreeProxyState;
     monitorLimits: MonitorLimits;
 }) {
@@ -1231,6 +1241,20 @@ export function AdminClient({
         ),
     );
     const [isSavingMaintenance, setIsSavingMaintenance] = useState(false);
+    const [inactivePolicyState, setInactivePolicyState] = useState(
+        initialInactiveMemberPolicyState,
+    );
+    const [inactivePolicyDraft, setInactivePolicyDraft] = useState(() => ({
+        enabled: initialInactiveMemberPolicyState.policy.enabled,
+        duration: initialInactiveMemberPolicyState.policy.duration,
+        durationUnit: initialInactiveMemberPolicyState.policy.durationUnit,
+        monitorScope: initialInactiveMemberPolicyState.policy.monitorScope,
+        roles: initialInactiveMemberPolicyState.policy.roles,
+    }));
+    const [inactivePolicyPreview, setInactivePolicyPreview] = useState(
+        initialInactiveMemberPolicyState.preview,
+    );
+    const [isSavingInactivePolicy, setIsSavingInactivePolicy] = useState(false);
     const [freeProxyState, setFreeProxyState] = useState(initialFreeProxyState);
     const [freeProxySettings, setFreeProxySettings] = useState(
         normalizeFreeProxySettings(initialFreeProxyState.settings),
@@ -1557,6 +1581,28 @@ export function AdminClient({
         monitorMaintenanceState.maintenance.enabled,
         monitorMaintenanceState.status,
     ]);
+
+    useEffect(() => {
+        if (
+            !inactivePolicyState.policy.enabled ||
+            inactivePolicyState.status === "active"
+        ) {
+            return;
+        }
+        const refresh = () => {
+            void fetch("/api/admin/inactive-member-policy", {
+                cache: "no-store",
+            })
+                .then(async (response) => {
+                    if (!response.ok) throw new Error("Refresh failed");
+                    return (await response.json()) as InactiveMemberPolicyAdminState;
+                })
+                .then(setInactivePolicyState)
+                .catch(() => undefined);
+        };
+        const interval = window.setInterval(refresh, 5_000);
+        return () => window.clearInterval(interval);
+    }, [inactivePolicyState.policy.enabled, inactivePolicyState.status]);
 
     useEffect(() => {
         if (!["users", "roles"].includes(activeTab)) return;
@@ -2339,6 +2385,40 @@ export function AdminClient({
             );
         } finally {
             setIsSavingMaintenance(false);
+        }
+    };
+
+    const refreshInactivePolicyPreview = async () => {
+        try {
+            setInactivePolicyPreview(
+                await previewInactiveMemberPolicy(inactivePolicyDraft),
+            );
+        } catch (error) {
+            toast.error(
+                error instanceof Error ? error.message : "Invalid policy",
+            );
+        }
+    };
+
+    const handleSaveInactivePolicy = async () => {
+        setIsSavingInactivePolicy(true);
+        try {
+            const next = await updateInactiveMemberPolicy(inactivePolicyDraft);
+            setInactivePolicyState(next);
+            setInactivePolicyPreview(next.preview);
+            toast.success(
+                next.policy.enabled
+                    ? "Inactive member automation enabled"
+                    : "Inactive member automation disabled",
+            );
+        } catch (error) {
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save inactivity policy",
+            );
+        } finally {
+            setIsSavingInactivePolicy(false);
         }
     };
 
@@ -3974,6 +4054,214 @@ export function AdminClient({
 
             {activeTab === "monitors" ? (
                 <div className="space-y-4">
+                    <div
+                        className="border-border/60 bg-card rounded-lg border p-5"
+                        data-testid="inactive-member-automation"
+                    >
+                        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                            <div className="flex items-start gap-3">
+                                <div className="bg-muted text-muted-foreground flex size-10 shrink-0 items-center justify-center rounded-lg">
+                                    <TimerReset className="size-5" />
+                                </div>
+                                <div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <p className="text-sm font-semibold">
+                                            Inactive Member Automation
+                                        </p>
+                                        <Badge
+                                            variant={
+                                                inactivePolicyState.policy
+                                                    .enabled
+                                                    ? "default"
+                                                    : "secondary"
+                                            }
+                                            className="rounded-md text-[10px] uppercase"
+                                        >
+                                            {inactivePolicyState.policy.enabled
+                                                ? inactivePolicyState.status ===
+                                                  "active"
+                                                    ? "Worker confirmed"
+                                                    : "Confirmation pending"
+                                                : "Disabled"}
+                                        </Badge>
+                                    </div>
+                                    <p className="text-muted-foreground mt-1 max-w-2xl text-xs leading-5">
+                                        Pause abandoned monitors without
+                                        affecting members who keep Vintrack open
+                                        and active. Admin accounts are always
+                                        excluded.
+                                    </p>
+                                </div>
+                            </div>
+                            <label className="border-border/60 bg-background/50 flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-sm font-medium">
+                                <input
+                                    type="checkbox"
+                                    checked={inactivePolicyDraft.enabled}
+                                    onChange={(event) =>
+                                        setInactivePolicyDraft((current) => ({
+                                            ...current,
+                                            enabled: event.target.checked,
+                                        }))
+                                    }
+                                    className="size-4 accent-current"
+                                />
+                                Enable automation
+                            </label>
+                        </div>
+
+                        <div className="mt-5 grid gap-4 xl:grid-cols-[1fr_1fr_1.2fr]">
+                            <div>
+                                <Label className="text-xs">
+                                    Inactive after
+                                </Label>
+                                <div className="mt-2 grid grid-cols-[1fr_1.2fr] gap-2">
+                                    <Input
+                                        type="number"
+                                        min={1}
+                                        value={inactivePolicyDraft.duration}
+                                        onChange={(event) =>
+                                            setInactivePolicyDraft(
+                                                (current) => ({
+                                                    ...current,
+                                                    duration: Number(
+                                                        event.target.value,
+                                                    ),
+                                                }),
+                                            )
+                                        }
+                                    />
+                                    <select
+                                        className="border-input bg-background h-9 rounded-md border px-3 text-sm"
+                                        value={inactivePolicyDraft.durationUnit}
+                                        onChange={(event) =>
+                                            setInactivePolicyDraft(
+                                                (current) => ({
+                                                    ...current,
+                                                    durationUnit: event.target
+                                                        .value as InactivityDurationUnit,
+                                                }),
+                                            )
+                                        }
+                                    >
+                                        <option value="days">Days</option>
+                                        <option value="weeks">Weeks</option>
+                                        <option value="months">Months</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div>
+                                <Label className="text-xs">Monitor scope</Label>
+                                <select
+                                    className="border-input bg-background mt-2 h-9 w-full rounded-md border px-3 text-sm"
+                                    value={inactivePolicyDraft.monitorScope}
+                                    onChange={(event) =>
+                                        setInactivePolicyDraft((current) => ({
+                                            ...current,
+                                            monitorScope: event.target
+                                                .value as InactivityMonitorScope,
+                                        }))
+                                    }
+                                >
+                                    <option value="free_proxy">
+                                        Free Proxy Pool only
+                                    </option>
+                                    <option value="all">All monitors</option>
+                                </select>
+                            </div>
+                            <div>
+                                <Label className="text-xs">Member roles</Label>
+                                <div className="mt-2 flex h-9 gap-2">
+                                    {(["free", "premium"] as const).map(
+                                        (role) => (
+                                            <label
+                                                key={role}
+                                                className="border-input bg-background flex flex-1 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm capitalize"
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={inactivePolicyDraft.roles.includes(
+                                                        role,
+                                                    )}
+                                                    onChange={(event) =>
+                                                        setInactivePolicyDraft(
+                                                            (current) => ({
+                                                                ...current,
+                                                                roles: event
+                                                                    .target
+                                                                    .checked
+                                                                    ? [
+                                                                          ...current.roles,
+                                                                          role,
+                                                                      ]
+                                                                    : current.roles.filter(
+                                                                          (
+                                                                              value,
+                                                                          ) =>
+                                                                              value !==
+                                                                              role,
+                                                                      ),
+                                                            }),
+                                                        )
+                                                    }
+                                                />
+                                                {role}
+                                            </label>
+                                        ),
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="border-border/60 bg-muted/20 mt-4 flex flex-col gap-3 rounded-lg border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="text-xs">
+                                <p className="font-medium">
+                                    Current impact:{" "}
+                                    {inactivePolicyPreview.memberCount} member
+                                    {inactivePolicyPreview.memberCount === 1
+                                        ? ""
+                                        : "s"}{" "}
+                                    · {inactivePolicyPreview.monitorCount}{" "}
+                                    active monitor
+                                    {inactivePolicyPreview.monitorCount === 1
+                                        ? ""
+                                        : "s"}
+                                </p>
+                                <p className="text-muted-foreground mt-1">
+                                    {inactivePolicyState.inactivityPausedCount}{" "}
+                                    currently paused · Last evaluation:{" "}
+                                    {inactivePolicyState.runtime
+                                        ? formatMetricDate(
+                                              new Date(
+                                                  inactivePolicyState.runtime
+                                                      .lastEvaluatedAt,
+                                              ),
+                                          )
+                                        : "No worker confirmation"}
+                                </p>
+                            </div>
+                            <div className="flex gap-2">
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={refreshInactivePolicyPreview}
+                                >
+                                    Preview impact
+                                </Button>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    disabled={isSavingInactivePolicy}
+                                    onClick={handleSaveInactivePolicy}
+                                >
+                                    {isSavingInactivePolicy
+                                        ? "Saving..."
+                                        : "Save automation"}
+                                </Button>
+                            </div>
+                        </div>
+                    </div>
+
                     <div className="border-border/60 bg-card overflow-hidden rounded-lg border">
                         <div className="border-border/60 flex flex-col gap-4 border-b px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
                             <div>

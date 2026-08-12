@@ -18,6 +18,7 @@ import { getNextDemoMonitorExpiry } from "@/lib/demo-monitor";
 import { normalizeQueryDelayMs } from "@/lib/monitor-delay";
 import { normalizeQuietHours } from "@/lib/monitor-schedule";
 import { logAuditEvent } from "@/lib/audit";
+import { touchDashboardActivity } from "@/lib/dashboard-activity";
 
 export type BulkMonitorUpdateInput = {
     monitorIds: number[];
@@ -78,8 +79,12 @@ export async function startAllMonitors() {
                 undefined,
                 tx,
             );
+            await touchDashboardActivity(tx, userId);
             const pausedMonitors = await tx.monitors.findMany({
-                where: { userId, status: "paused" },
+                where: {
+                    userId,
+                    status: { in: ["paused", "inactivity_paused"] },
+                },
                 orderBy: [{ created_at: "desc" }, { id: "desc" }],
             });
 
@@ -192,6 +197,9 @@ export async function toggleMonitor(id: number, currentStatus: string) {
     const userId = session.user.id;
 
     const newStatus = currentStatus === "active" ? "paused" : "active";
+    if (currentStatus === "maintenance_paused") {
+        throw new Error("This monitor is paused for maintenance");
+    }
     const monitor = await withMonitorActivationLock(userId, async (tx) => {
         const existing = await tx.monitors.findFirst({
             where: { id, userId },
@@ -200,6 +208,7 @@ export async function toggleMonitor(id: number, currentStatus: string) {
         if (!existing) throw new Error("Monitor not found");
 
         if (newStatus === "active") {
+            await touchDashboardActivity(tx, userId);
             const activationState = await getMonitorActivationState(
                 userId,
                 existing.proxy_source,

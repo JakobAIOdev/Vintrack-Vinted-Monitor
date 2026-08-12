@@ -144,6 +144,7 @@ func runIDScannerWorker(ctx context.Context, cancel context.CancelFunc, sigChan 
 }
 
 func runMonitorWorker(ctx context.Context, cancel context.CancelFunc, sigChan <-chan os.Signal, store *database.Store, proxyManager *proxy.Manager, freeProxyPools *proxy.RegionPools, mgr *scraper.Manager) {
+	evaluateInactiveMembers(ctx, store)
 	mgr.Sync(ctx)
 	publishMonitorWorkerRuntime(ctx, store, mgr)
 
@@ -151,6 +152,8 @@ func runMonitorWorker(ctx context.Context, cancel context.CancelFunc, sigChan <-
 	defer ticker.Stop()
 	freeProxyRefreshTicker := time.NewTicker(30 * time.Second)
 	defer freeProxyRefreshTicker.Stop()
+	inactiveMemberTicker := time.NewTicker(time.Minute)
+	defer inactiveMemberTicker.Stop()
 
 	log.Println("Worker running. Polling for monitor changes every 5s...")
 
@@ -168,7 +171,24 @@ func runMonitorWorker(ctx context.Context, cancel context.CancelFunc, sigChan <-
 			publishMonitorWorkerRuntime(ctx, store, mgr)
 		case <-freeProxyRefreshTicker.C:
 			refreshFreeProxies(store, freeProxyPools)
+		case <-inactiveMemberTicker.C:
+			evaluateInactiveMembers(ctx, store)
+			mgr.Sync(ctx)
+			publishMonitorWorkerRuntime(ctx, store, mgr)
 		}
+	}
+}
+
+func evaluateInactiveMembers(ctx context.Context, store *database.Store) {
+	evaluateCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	result, err := store.EvaluateInactiveMemberPolicy(evaluateCtx)
+	if err != nil {
+		log.Printf("inactive member policy evaluation failed: %v", err)
+		return
+	}
+	if result.NewlyPausedMonitorCount > 0 {
+		log.Printf("inactive member policy paused %d monitor(s) across %d member(s)", result.NewlyPausedMonitorCount, result.NewlyPausedMemberCount)
 	}
 }
 

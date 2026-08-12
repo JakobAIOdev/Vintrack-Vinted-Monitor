@@ -17,14 +17,21 @@ export default async function DashboardLayout({
         redirect("/login");
     }
 
-    const [dbUser, announcement, maintenance] = await Promise.all([
-        db.user.findUnique({
-            where: { id: session.user.id },
-            select: { role: true },
-        }),
-        getMemberAnnouncement(),
-        getMonitorMaintenance(),
-    ]);
+    const [dbUser, announcement, maintenance, inactivityPausedCount] =
+        await Promise.all([
+            db.user.findUnique({
+                where: { id: session.user.id },
+                select: { role: true },
+            }),
+            getMemberAnnouncement(),
+            getMonitorMaintenance(),
+            db.monitors.count({
+                where: {
+                    userId: session.user.id,
+                    status: "inactivity_paused",
+                },
+            }),
+        ]);
     const role = dbUser?.role ?? "free";
 
     const user = { ...session.user, role };
@@ -35,6 +42,7 @@ export default async function DashboardLayout({
                 user={user}
                 announcement={announcement}
                 maintenance={maintenance}
+                inactivityPausedCount={inactivityPausedCount}
             >
                 {children}
             </DashboardShell>

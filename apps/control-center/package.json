@@ -8,7 +8,7 @@
         "start": "next start",
         "lint": "eslint",
         "test:e2e": "NODE_NO_WARNINGS=1 env -u FORCE_COLOR playwright test tests/e2e/public-pages.spec.ts tests/e2e/mock-assets.spec.ts tests/e2e/auth.spec.ts",
-        "test:e2e:dashboard": "NODE_NO_WARNINGS=1 E2E_TEST_MODE=true E2E_SEED_DB=true PLAYWRIGHT_PORT=3101 env -u FORCE_COLOR playwright test tests/e2e/dashboard.spec.ts tests/e2e/feed.spec.ts tests/e2e/admin.spec.ts tests/e2e/announcement.spec.ts tests/e2e/maintenance.spec.ts --workers=1",
+        "test:e2e:dashboard": "NODE_NO_WARNINGS=1 E2E_TEST_MODE=true E2E_SEED_DB=true PLAYWRIGHT_PORT=3101 env -u FORCE_COLOR playwright test tests/e2e/dashboard.spec.ts tests/e2e/feed.spec.ts tests/e2e/admin.spec.ts tests/e2e/announcement.spec.ts tests/e2e/maintenance.spec.ts tests/e2e/inactive-member-policy.spec.ts --workers=1",
         "test:e2e:onboarding": "NODE_NO_WARNINGS=1 E2E_TEST_MODE=true E2E_SEED_DB=true E2E_ONBOARDING=true PLAYWRIGHT_PORT=3102 env -u FORCE_COLOR playwright test tests/e2e/onboarding.spec.ts --project=chromium --workers=1",
         "test:e2e:headed": "NODE_NO_WARNINGS=1 env -u FORCE_COLOR playwright test tests/e2e/public-pages.spec.ts tests/e2e/mock-assets.spec.ts tests/e2e/auth.spec.ts --headed",
         "test:e2e:ui": "NODE_NO_WARNINGS=1 env -u FORCE_COLOR playwright test tests/e2e/public-pages.spec.ts tests/e2e/mock-assets.spec.ts tests/e2e/auth.spec.ts --ui",

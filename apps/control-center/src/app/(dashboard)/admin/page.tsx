@@ -5,6 +5,7 @@ import { AdminClient } from "./client";
 import {
     getFreeProxyAdminState,
     getMonitorMaintenanceAdminState,
+    getInactiveMemberPolicyAdminState,
 } from "@/actions/admin";
 import {
     DEFAULT_FREE_PROXY_ACTIVE_LIMIT,
@@ -33,6 +34,7 @@ export default async function AdminPage({
         serverProxyRows,
         memberAnnouncement,
         monitorMaintenanceState,
+        inactiveMemberPolicyState,
         params,
     ] = await Promise.all([
         getMonitorLimits([
@@ -48,6 +50,7 @@ export default async function AdminPage({
         }),
         getMemberAnnouncement(),
         getMonitorMaintenanceAdminState(),
+        getInactiveMemberPolicyAdminState(),
         searchParams,
     ]);
 
@@ -60,6 +63,7 @@ export default async function AdminPage({
             serverProxies={serverProxyRows[0]?.value ?? ""}
             memberAnnouncement={memberAnnouncement}
             initialMonitorMaintenanceState={monitorMaintenanceState}
+            initialInactiveMemberPolicyState={inactiveMemberPolicyState}
             freeProxyState={freeProxyState}
             monitorLimits={{
                 global:

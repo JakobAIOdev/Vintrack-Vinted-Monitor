@@ -7,11 +7,14 @@ import { MonitorStreamProvider } from "@/components/monitors/monitor-stream-cont
 import { MemberAnnouncementHost } from "@/components/announcements/member-announcement-banner";
 import type { MemberAnnouncement } from "@/lib/member-announcement";
 import type { MonitorMaintenance } from "@/lib/monitor-maintenance";
+import { DashboardActivity } from "@/components/layout/dashboard-activity";
+import { Info } from "lucide-react";
 
 interface DashboardShellProps {
     children: React.ReactNode;
     announcement: MemberAnnouncement;
     maintenance: MonitorMaintenance;
+    inactivityPausedCount: number;
     user?: {
         name?: string | null;
         image?: string | null;
@@ -25,11 +28,13 @@ export function DashboardShell({
     user,
     announcement,
     maintenance,
+    inactivityPausedCount,
 }: DashboardShellProps) {
     const [sidebarOpen, setSidebarOpen] = useState(false);
 
     return (
         <MonitorStreamProvider>
+            <DashboardActivity />
             <div className="flex min-h-screen bg-transparent">
                 {sidebarOpen && (
                     <div
@@ -53,6 +58,29 @@ export function DashboardShell({
                                 initialMaintenance={maintenance}
                                 role={user?.role}
                             />
+                            {inactivityPausedCount > 0 ? (
+                                <div
+                                    className="mb-4 flex gap-3 rounded-xl border border-sky-500/25 bg-sky-500/8 px-4 py-3 text-sm"
+                                    data-testid="inactivity-paused-notice"
+                                >
+                                    <Info className="mt-0.5 size-4 shrink-0 text-sky-500" />
+                                    <div>
+                                        <p className="font-semibold">
+                                            Monitors paused after inactivity
+                                        </p>
+                                        <p className="text-muted-foreground mt-0.5 leading-5">
+                                            {inactivityPausedCount} monitor
+                                            {inactivityPausedCount === 1
+                                                ? " was"
+                                                : "s were"}{" "}
+                                            paused because the dashboard had not
+                                            been used for a while. Review and
+                                            restart them manually when you are
+                                            ready.
+                                        </p>
+                                    </div>
+                                </div>
+                            ) : null}
                             {children}
                         </div>
                     </main>

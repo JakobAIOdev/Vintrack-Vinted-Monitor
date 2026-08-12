@@ -31,6 +31,7 @@ import {
     getMonitorAntiKeywordsValidationError,
     normalizeMonitorAntiKeywords,
 } from "@/lib/monitor-anti-keywords";
+import { touchDashboardActivity } from "@/lib/dashboard-activity";
 
 function normalizeSellerQualityFilter(formData: FormData) {
     const rawRating = String(formData.get("min_seller_rating") ?? "").trim();
@@ -945,6 +946,9 @@ export async function toggleMonitorStatus(id: number, currentStatus: string) {
     const userId = session.user.id;
 
     const newStatus = currentStatus === "active" ? "paused" : "active";
+    if (currentStatus === "maintenance_paused") {
+        throw new Error("This monitor is paused for maintenance");
+    }
     await withMonitorActivationLock(userId, async (tx) => {
         const existing = await tx.monitors.findFirst({
             where: { id, userId },
@@ -953,6 +957,7 @@ export async function toggleMonitorStatus(id: number, currentStatus: string) {
         if (!existing) throw new Error("Monitor not found");
 
         if (newStatus === "active") {
+            await touchDashboardActivity(tx, userId);
             const activationState = await getMonitorActivationState(
                 userId,
                 existing.proxy_source,
