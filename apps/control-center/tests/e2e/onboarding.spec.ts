@@ -1,6 +1,157 @@
 import { expect, test } from "@playwright/test";
+import { PrismaClient } from "@prisma/client";
+import {
+    DEFAULT_MONITOR_MAINTENANCE_MESSAGE,
+    MONITOR_MAINTENANCE_SETTING_KEY,
+} from "../../src/lib/monitor-maintenance";
+
+const db = new PrismaClient();
+
+test.afterAll(async () => db.$disconnect());
 
 test.describe("first monitor onboarding", () => {
+    test.describe.configure({ mode: "serial" });
+
+    test("blocks quick start and manual creation during maintenance", async ({
+        page,
+    }) => {
+        const previous = await db.app_settings.findUnique({
+            where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+        });
+        try {
+            const now = new Date().toISOString();
+            await db.app_settings.upsert({
+                where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+                create: {
+                    key: MONITOR_MAINTENANCE_SETTING_KEY,
+                    value: JSON.stringify({
+                        enabled: true,
+                        revision: `onboarding-maintenance-${Date.now()}`,
+                        message: DEFAULT_MONITOR_MAINTENANCE_MESSAGE,
+                        estimatedEndAt: null,
+                        enabledAt: now,
+                        enabledBy: "e2e-user",
+                        updatedAt: now,
+                    }),
+                },
+                update: {
+                    value: JSON.stringify({
+                        enabled: true,
+                        revision: `onboarding-maintenance-${Date.now()}`,
+                        message: DEFAULT_MONITOR_MAINTENANCE_MESSAGE,
+                        estimatedEndAt: null,
+                        enabledAt: now,
+                        enabledBy: "e2e-user",
+                        updatedAt: now,
+                    }),
+                },
+            });
+
+            await page.goto("/dashboard");
+            const quickStart = page.getByTestId("first-monitor-quick-start");
+            await expect(quickStart).toBeVisible();
+            await quickStart
+                .getByTestId("monitor-preset-nike-dunk-low")
+                .click();
+            await expect(
+                quickStart.getByTestId("start-preset-monitor"),
+            ).toBeDisabled();
+            await expect(
+                quickStart.getByTestId("start-preset-monitor"),
+            ).toHaveAttribute(
+                "title",
+                "Monitor creation is paused during maintenance",
+            );
+            await expect(
+                quickStart.getByRole("button", { name: "Set up manually" }),
+            ).toBeDisabled();
+            expect(
+                await db.monitors.count({ where: { userId: "e2e-user" } }),
+            ).toBe(0);
+
+            await page.goto("/monitors/new");
+            await expect(
+                page.getByTestId("monitor-creation-maintenance"),
+            ).toBeVisible();
+        } finally {
+            if (previous) {
+                await db.app_settings.upsert({
+                    where: { key: previous.key },
+                    create: previous,
+                    update: { value: previous.value },
+                });
+            } else {
+                await db.app_settings.deleteMany({
+                    where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+                });
+            }
+        }
+    });
+
+    test("blocks a stale preset dialog after maintenance starts", async ({
+        page,
+    }) => {
+        const previous = await db.app_settings.findUnique({
+            where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+        });
+        try {
+            await db.app_settings.deleteMany({
+                where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+            });
+            await page.goto("/dashboard");
+            const quickStart = page.getByTestId("first-monitor-quick-start");
+            await quickStart
+                .getByTestId("monitor-preset-nike-dunk-low")
+                .click();
+            const startPreset = quickStart.getByTestId("start-preset-monitor");
+            await expect(startPreset).toBeEnabled();
+
+            const now = new Date().toISOString();
+            await db.app_settings.create({
+                data: {
+                    key: MONITOR_MAINTENANCE_SETTING_KEY,
+                    value: JSON.stringify({
+                        enabled: true,
+                        revision: `stale-preset-${Date.now()}`,
+                        message: DEFAULT_MONITOR_MAINTENANCE_MESSAGE,
+                        estimatedEndAt: null,
+                        enabledAt: now,
+                        enabledBy: "e2e-user",
+                        updatedAt: now,
+                    }),
+                },
+            });
+
+            await startPreset.click();
+            await expect(
+                page.getByText(
+                    "Monitor creation is paused while Vintrack is undergoing maintenance.",
+                ),
+            ).toBeVisible();
+            expect(
+                await db.monitors.count({ where: { userId: "e2e-user" } }),
+            ).toBe(0);
+            expect(
+                await db.user.findUniqueOrThrow({
+                    where: { id: "e2e-user" },
+                    select: { monitor_onboarding_status: true },
+                }),
+            ).toEqual({ monitor_onboarding_status: "pending" });
+        } finally {
+            if (previous) {
+                await db.app_settings.upsert({
+                    where: { key: previous.key },
+                    create: previous,
+                    update: { value: previous.value },
+                });
+            } else {
+                await db.app_settings.deleteMany({
+                    where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+                });
+            }
+        }
+    });
+
     test("dismisses, reopens, creates a preset monitor, and keeps presets in Create", async ({
         page,
     }) => {

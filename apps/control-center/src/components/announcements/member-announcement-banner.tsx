@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useMonitorMaintenance } from "@/components/maintenance/monitor-maintenance-context";
 import {
     AlertTriangle,
     ArrowRight,
@@ -249,16 +250,14 @@ export function MemberAnnouncementBanner({
 
 export function MemberAnnouncementHost({
     initialAnnouncement,
-    initialMaintenance,
     role,
 }: {
     initialAnnouncement: MemberAnnouncement;
-    initialMaintenance: MonitorMaintenance;
     role?: string | null;
 }) {
     const pathname = usePathname();
     const [announcement, setAnnouncement] = useState(initialAnnouncement);
-    const [maintenance, setMaintenance] = useState(initialMaintenance);
+    const { maintenance, setMaintenance } = useMonitorMaintenance();
 
     useEffect(() => {
         const controller = new AbortController();
@@ -290,7 +289,7 @@ export function MemberAnnouncementHost({
             });
 
         return () => controller.abort();
-    }, [pathname]);
+    }, [pathname, setMaintenance]);
 
     const visibleAnnouncement = maintenance.enabled
         ? getMaintenanceAnnouncement(maintenance)

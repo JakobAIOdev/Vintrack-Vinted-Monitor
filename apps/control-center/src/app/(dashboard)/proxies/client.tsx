@@ -40,7 +40,7 @@ import {
     Trash2,
     XCircle,
 } from "lucide-react";
-import Link from "next/link";
+import { CreateMonitorLink } from "@/components/maintenance/create-monitor-link";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -312,10 +312,7 @@ export function ProxiesClient({
             if (canceled) return;
             for (const result of snapshots) {
                 if (result.status === "fulfilled") {
-                    updateProxyCheck(
-                        result.value.id,
-                        result.value.snapshot,
-                    );
+                    updateProxyCheck(result.value.id, result.value.snapshot);
                 }
             }
         };
@@ -399,10 +396,10 @@ export function ProxiesClient({
                         </div>
                     </div>
                     <Button asChild size="sm" className="shrink-0">
-                        <Link href="/monitors/new">
+                        <CreateMonitorLink>
                             Create monitor
                             <ArrowRight />
-                        </Link>
+                        </CreateMonitorLink>
                     </Button>
                 </div>
 
@@ -738,7 +735,9 @@ export function ProxiesClient({
                                                             }
                                                             onChange={(event) =>
                                                                 setCheckRegions(
-                                                                    (current) => ({
+                                                                    (
+                                                                        current,
+                                                                    ) => ({
                                                                         ...current,
                                                                         [group.id]:
                                                                             event

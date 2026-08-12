@@ -2,7 +2,14 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, CheckCircle2, Loader2, Rocket, Zap } from "lucide-react";
+import {
+    ArrowRight,
+    CheckCircle2,
+    Loader2,
+    Rocket,
+    Wrench,
+    Zap,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
     createPresetMonitor,
@@ -23,6 +30,7 @@ import {
     type MonitorPresetKey,
 } from "@/lib/monitor-presets";
 import { REGIONS } from "@/lib/regions";
+import { MONITOR_CREATION_MAINTENANCE_TITLE } from "@/components/maintenance/create-monitor-link";
 
 export type QuickStartPool = {
     enabled: boolean;
@@ -104,7 +112,8 @@ export function FirstMonitorQuickStart({
     };
 
     const handleCreate = async () => {
-        if (!selectedPreset || !selectedRegionReady) return;
+        if (maintenanceEnabled || !selectedPreset || !selectedRegionReady)
+            return;
 
         setIsSubmitting(true);
         try {
@@ -124,11 +133,9 @@ export function FirstMonitorQuickStart({
             toast.success(
                 result.started
                     ? "Your demo monitor is running for 30 minutes"
-                    : result.pauseReason === "maintenance"
-                      ? "Monitor created paused while Vintrack is under maintenance"
-                      : result.pauseReason === "free-proxy-limit"
-                        ? "Monitor created and saved paused because your Free Proxy Pool monitor limit is reached"
-                        : "Monitor created and saved paused because your active limit is reached",
+                    : result.pauseReason === "free-proxy-limit"
+                      ? "Monitor created and saved paused because your Free Proxy Pool monitor limit is reached"
+                      : "Monitor created and saved paused because your active limit is reached",
             );
             router.push(result.redirectTo);
             router.refresh();
@@ -140,6 +147,7 @@ export function FirstMonitorQuickStart({
     };
 
     const handleManualSetup = async () => {
+        if (maintenanceEnabled) return;
         setIsLeaving(true);
         onOpenChange(false);
         await persistDismissal();
@@ -173,6 +181,21 @@ export function FirstMonitorQuickStart({
                 </div>
 
                 <div className="space-y-5 px-5 py-5 sm:px-7 sm:py-6">
+                    {maintenanceEnabled ? (
+                        <div className="flex gap-3 rounded-lg border border-red-500/25 bg-red-500/8 px-4 py-3 text-sm">
+                            <Wrench className="mt-0.5 size-4 shrink-0 text-red-500" />
+                            <div>
+                                <p className="font-semibold">
+                                    Monitor creation is temporarily unavailable
+                                </p>
+                                <p className="text-muted-foreground mt-1 text-xs leading-5">
+                                    Vintrack is under maintenance. You can
+                                    create a monitor as soon as maintenance is
+                                    complete.
+                                </p>
+                            </div>
+                        </div>
+                    ) : null}
                     <MonitorPresetPicker
                         selected={selectedPreset}
                         onSelect={handlePresetSelect}
@@ -242,7 +265,14 @@ export function FirstMonitorQuickStart({
                         type="button"
                         variant="ghost"
                         onClick={handleManualSetup}
-                        disabled={isSubmitting || isLeaving}
+                        disabled={
+                            maintenanceEnabled || isSubmitting || isLeaving
+                        }
+                        title={
+                            maintenanceEnabled
+                                ? MONITOR_CREATION_MAINTENANCE_TITLE
+                                : undefined
+                        }
                     >
                         Set up manually
                     </Button>
@@ -253,23 +283,25 @@ export function FirstMonitorQuickStart({
                         disabled={
                             !selectedPreset ||
                             !selectedRegionReady ||
+                            maintenanceEnabled ||
                             isSubmitting ||
                             isLeaving
+                        }
+                        title={
+                            maintenanceEnabled
+                                ? MONITOR_CREATION_MAINTENANCE_TITLE
+                                : undefined
                         }
                         className="gap-2 sm:min-w-52"
                     >
                         {isSubmitting ? (
                             <>
                                 <Loader2 className="size-4 animate-spin" />
-                                {maintenanceEnabled
-                                    ? "Creating monitor…"
-                                    : "Starting monitor…"}
+                                Starting monitor…
                             </>
                         ) : selectedPresetDefinition ? (
                             <>
-                                {maintenanceEnabled
-                                    ? `Create ${selectedPresetDefinition} paused`
-                                    : `Start ${selectedPresetDefinition}`}
+                                {`Start ${selectedPresetDefinition}`}
                                 <ArrowRight className="size-4" />
                             </>
                         ) : (

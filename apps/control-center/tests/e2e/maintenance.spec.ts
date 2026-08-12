@@ -124,6 +124,65 @@ test.describe("monitor maintenance", () => {
         );
     });
 
+    test("blocks a stale manual create form after maintenance starts", async ({
+        page,
+        isMobile,
+    }) => {
+        test.skip(isMobile, "The shared create guard is tested once");
+        const previousMaintenance = await db.app_settings.findUnique({
+            where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+        });
+        const monitorName = `E2E stale maintenance create ${Date.now()}`;
+        try {
+            await db.app_settings.deleteMany({
+                where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+            });
+            await page.goto("/monitors/new");
+            await page.getByLabel("Monitor Name").fill(monitorName);
+            await page
+                .getByRole("textbox", {
+                    name: "Search Queries (optional)",
+                    exact: true,
+                })
+                .fill("nike");
+            const proxySource = page.locator('select[name="proxy_group_id"]');
+            await expect(proxySource).toBeEnabled();
+            await proxySource.selectOption("free");
+
+            const now = new Date().toISOString();
+            await db.app_settings.create({
+                data: {
+                    key: MONITOR_MAINTENANCE_SETTING_KEY,
+                    value: JSON.stringify({
+                        enabled: true,
+                        revision: `stale-create-${Date.now()}`,
+                        message: DEFAULT_MONITOR_MAINTENANCE_MESSAGE,
+                        estimatedEndAt: null,
+                        enabledAt: now,
+                        enabledBy: "e2e-user",
+                        updatedAt: now,
+                    }),
+                },
+            });
+
+            await page.getByRole("button", { name: "Create Monitor" }).click();
+            await expect(
+                page.getByText(
+                    "Monitor creation is paused while Vintrack is undergoing maintenance.",
+                ),
+            ).toBeVisible();
+            expect(
+                await db.monitors.count({ where: { name: monitorName } }),
+            ).toBe(0);
+        } finally {
+            await db.monitors.deleteMany({ where: { name: monitorName } });
+            await restoreSetting(
+                MONITOR_MAINTENANCE_SETTING_KEY,
+                previousMaintenance,
+            );
+        }
+    });
+
     test("pauses safely, confirms drain, prioritizes the banner, updates, and resumes", async ({
         page,
         isMobile,
@@ -296,6 +355,40 @@ test.describe("monitor maintenance", () => {
                     })
                     .first(),
             ).toBeDisabled();
+            const disabledCreateLinks = page.locator(
+                '[data-maintenance-disabled="true"]',
+            );
+            await expect(
+                disabledCreateLinks.filter({ hasText: "New Monitor" }),
+            ).toHaveCount(2);
+            await expect(disabledCreateLinks.first()).toHaveAttribute(
+                "title",
+                "Monitor creation is paused during maintenance",
+            );
+
+            await page.goto("/guide");
+            await expect(
+                page
+                    .locator('[data-maintenance-disabled="true"]')
+                    .filter({ hasText: "Create monitor" }),
+            ).toHaveCount(2);
+            await page.goto("/proxies");
+            await expect(
+                page
+                    .locator('[data-maintenance-disabled="true"]')
+                    .filter({ hasText: "Create monitor" }),
+            ).toBeVisible();
+
+            await page.goto("/monitors/new");
+            const creationBlocked = page.getByTestId(
+                "monitor-creation-maintenance",
+            );
+            await expect(creationBlocked).toContainText(
+                "Monitor creation is temporarily unavailable",
+            );
+            await expect(
+                page.getByRole("button", { name: "Create Monitor" }),
+            ).toHaveCount(0);
 
             await page.goto("/admin?tab=monitors");
             await systemControl
@@ -414,6 +507,12 @@ test.describe("monitor maintenance", () => {
                     "Help keep the free demo fast and accessible with as few limits as possible.",
                 ),
             ).toBeVisible();
+            await expect(
+                page.locator('[data-maintenance-disabled="true"]'),
+            ).toHaveCount(0);
+            await expect(
+                page.getByRole("link", { name: "New Monitor" }).first(),
+            ).toHaveAttribute("href", "/monitors/new");
         } finally {
             for (const monitor of monitorStates) {
                 await db.monitors.updateMany({
@@ -492,6 +591,94 @@ test.describe("monitor maintenance", () => {
             ).toBe(0);
             await dashboardPage.close();
         } finally {
+            for (const monitor of monitorStates) {
+                await db.monitors.updateMany({
+                    where: { id: monitor.id },
+                    data: { status: monitor.status },
+                });
+            }
+            await restoreSetting(
+                MONITOR_MAINTENANCE_SETTING_KEY,
+                previousMaintenance,
+            );
+        }
+    });
+
+    test("serializes monitor creation against maintenance activation", async ({
+        page,
+        context,
+        isMobile,
+    }) => {
+        test.skip(isMobile, "The global create race is tested once");
+        const previousMaintenance = await db.app_settings.findUnique({
+            where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+        });
+        const monitorStates = await db.monitors.findMany({
+            select: { id: true, status: true },
+        });
+        const monitorName = `E2E maintenance create race ${Date.now()}`;
+
+        try {
+            await db.app_settings.deleteMany({
+                where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+            });
+
+            const createPage = await context.newPage();
+            await createPage.goto("/monitors/new");
+            await createPage.getByLabel("Monitor Name").fill(monitorName);
+            await createPage
+                .getByRole("textbox", {
+                    name: "Search Queries (optional)",
+                    exact: true,
+                })
+                .fill("nike");
+            const proxySource = createPage.locator(
+                'select[name="proxy_group_id"]',
+            );
+            await expect(proxySource).toBeEnabled();
+            await proxySource.selectOption("free");
+            const submitCreate = createPage.getByRole("button", {
+                name: "Create Monitor",
+            });
+            await expect(submitCreate).toBeEnabled();
+
+            await page.goto("/admin?tab=monitors");
+            const systemControl = page.getByTestId(
+                "maintenance-system-control",
+            );
+            await systemControl
+                .getByRole("button", { name: "Enable maintenance" })
+                .click();
+            const confirmMaintenance = page
+                .getByRole("dialog", { name: "Enable monitor maintenance?" })
+                .getByRole("button", {
+                    name: /Pause \d+ monitors? & enable maintenance/,
+                });
+
+            await Promise.all([
+                confirmMaintenance.click(),
+                submitCreate.click(),
+            ]);
+            await expect
+                .poll(async () => {
+                    const setting = await db.app_settings.findUnique({
+                        where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+                    });
+                    return parseMonitorMaintenance(setting?.value).enabled;
+                })
+                .toBe(true);
+
+            const created = await db.monitors.findMany({
+                where: { name: monitorName },
+                select: { status: true },
+            });
+            expect(created.length).toBeLessThanOrEqual(1);
+            if (created.length === 1) {
+                expect(created[0].status).toBe("maintenance_paused");
+            }
+            await createPage.close();
+        } finally {
+            await db.monitors.deleteMany({ where: { name: monitorName } });
             for (const monitor of monitorStates) {
                 await db.monitors.updateMany({
                     where: { id: monitor.id },

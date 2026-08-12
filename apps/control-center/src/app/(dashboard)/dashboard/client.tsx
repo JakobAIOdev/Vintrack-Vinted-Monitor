@@ -103,6 +103,11 @@ import {
     type QuickStartPool,
 } from "@/components/monitors/first-monitor-quick-start";
 import { DEMO_MONITOR_DURATION_MS } from "@/lib/demo-monitor";
+import { useMonitorMaintenance } from "@/components/maintenance/monitor-maintenance-context";
+import {
+    CreateMonitorLink,
+    MONITOR_CREATION_MAINTENANCE_TITLE,
+} from "@/components/maintenance/create-monitor-link";
 
 type MonitorHealth = {
     monitor_id: number;
@@ -298,7 +303,6 @@ export function DashboardClient({
     quickStartPool,
     initialNow,
     memberBrandLabels,
-    maintenanceEnabled,
 }: {
     initialMonitors: Monitor[];
     userName: string;
@@ -310,8 +314,9 @@ export function DashboardClient({
     quickStartPool: QuickStartPool | null;
     initialNow: string;
     memberBrandLabels: Record<string, string>;
-    maintenanceEnabled: boolean;
 }) {
+    const { maintenance } = useMonitorMaintenance();
+    const maintenanceEnabled = maintenance.enabled;
     const [selectedMonitor, setSelectedMonitor] = useState<Monitor | null>(
         null,
     );
@@ -1108,11 +1113,15 @@ export function DashboardClient({
                     >
                         <Settings className="h-3.5 w-3.5" />
                     </Button>
-                    <Link href="/monitors/new" className="flex-1 sm:flex-none">
-                        <Button size="sm" className="w-full gap-1.5">
+                    <Button
+                        asChild
+                        size="sm"
+                        className="flex-1 gap-1.5 sm:flex-none"
+                    >
+                        <CreateMonitorLink>
                             <Plus className="h-3.5 w-3.5" /> New Monitor
-                        </Button>
-                    </Link>
+                        </CreateMonitorLink>
+                    </Button>
                 </div>
             </div>
 
@@ -1176,21 +1185,26 @@ export function DashboardClient({
                                 size="sm"
                                 className="gap-1.5"
                                 onClick={() => setIsQuickStartOpen(true)}
+                                disabled={maintenanceEnabled}
+                                title={
+                                    maintenanceEnabled
+                                        ? MONITOR_CREATION_MAINTENANCE_TITLE
+                                        : undefined
+                                }
                             >
                                 <Rocket className="h-3.5 w-3.5" /> Quick start
                             </Button>
                         )}
-                        <Link href="/monitors/new">
-                            <Button
-                                size="sm"
-                                variant={
-                                    quickStartEligible ? "outline" : "default"
-                                }
-                                className="gap-1.5"
-                            >
+                        <Button
+                            asChild
+                            size="sm"
+                            variant={quickStartEligible ? "outline" : "default"}
+                            className="gap-1.5"
+                        >
+                            <CreateMonitorLink>
                                 <Plus className="h-3.5 w-3.5" /> Create manually
-                            </Button>
-                        </Link>
+                            </CreateMonitorLink>
+                        </Button>
                     </div>
                 </div>
             ) : (

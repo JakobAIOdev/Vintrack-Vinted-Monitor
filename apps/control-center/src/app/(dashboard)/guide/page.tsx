@@ -20,6 +20,7 @@ import {
     UserRound,
 } from "lucide-react";
 import Link from "next/link";
+import { CreateMonitorLink } from "@/components/maintenance/create-monitor-link";
 
 const CHROME_EXTENSION_DOWNLOAD_URL =
     "https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest/download/vintrack-browser-sync-extension.zip";
@@ -145,10 +146,10 @@ export default function GuidePage() {
                     </p>
                 </div>
                 <Button asChild className="self-start md:self-auto">
-                    <Link href="/monitors/new">
+                    <CreateMonitorLink>
                         <MonitorDot className="h-4 w-4" />
                         Create monitor
-                    </Link>
+                    </CreateMonitorLink>
                 </Button>
             </header>
 
@@ -319,9 +320,9 @@ export default function GuidePage() {
                                     work.
                                 </p>
                                 <Button asChild size="sm" className="mt-5">
-                                    <Link href="/monitors/new">
+                                    <CreateMonitorLink>
                                         Create monitor
-                                    </Link>
+                                    </CreateMonitorLink>
                                 </Button>
                             </div>
                         </div>
