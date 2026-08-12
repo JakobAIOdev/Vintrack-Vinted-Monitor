@@ -101,7 +101,10 @@ import {
     type MemberAnnouncementAudience,
     type MemberAnnouncementPlacement,
 } from "@/lib/member-announcement";
-import { DEFAULT_MONITOR_MAINTENANCE_MESSAGE } from "@/lib/monitor-maintenance";
+import {
+    DEFAULT_MONITOR_MAINTENANCE_MESSAGE,
+    validateMonitorMaintenanceInput,
+} from "@/lib/monitor-maintenance";
 import type {
     InactivityDurationUnit,
     InactivityMonitorScope,
@@ -2349,24 +2352,36 @@ export function AdminClient({
 
     const handleMaintenanceAction = async () => {
         if (!maintenanceDialogMode) return;
+
+        let maintenanceInput: ReturnType<
+            typeof validateMonitorMaintenanceInput
+        > | null = null;
+        if (maintenanceDialogMode !== "disable") {
+            try {
+                maintenanceInput = validateMonitorMaintenanceInput({
+                    message: maintenanceMessage,
+                    estimatedEndAt: announcementDateTimeIso(
+                        maintenanceEstimatedEndAt,
+                    ),
+                });
+            } catch (error) {
+                toast.error(
+                    error instanceof Error
+                        ? error.message
+                        : "Invalid maintenance settings",
+                );
+                return;
+            }
+        }
+
         setIsSavingMaintenance(true);
         try {
             const nextState =
                 maintenanceDialogMode === "disable"
                     ? await disableMonitorMaintenance()
                     : maintenanceDialogMode === "update"
-                      ? await updateMonitorMaintenance({
-                            message: maintenanceMessage,
-                            estimatedEndAt: announcementDateTimeIso(
-                                maintenanceEstimatedEndAt,
-                            ),
-                        })
-                      : await enableMonitorMaintenance({
-                            message: maintenanceMessage,
-                            estimatedEndAt: announcementDateTimeIso(
-                                maintenanceEstimatedEndAt,
-                            ),
-                        });
+                      ? await updateMonitorMaintenance(maintenanceInput!)
+                      : await enableMonitorMaintenance(maintenanceInput!);
             setMonitorMaintenanceState(nextState);
             setMaintenanceDialogMode(null);
             toast.success(
