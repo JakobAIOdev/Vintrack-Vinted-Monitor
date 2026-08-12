@@ -39,6 +39,7 @@ import {
     ListChecks,
     Loader2,
     RefreshCw,
+    Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -297,6 +298,7 @@ export function DashboardClient({
     quickStartPool,
     initialNow,
     memberBrandLabels,
+    maintenanceEnabled,
 }: {
     initialMonitors: Monitor[];
     userName: string;
@@ -308,6 +310,7 @@ export function DashboardClient({
     quickStartPool: QuickStartPool | null;
     initialNow: string;
     memberBrandLabels: Record<string, string>;
+    maintenanceEnabled: boolean;
 }) {
     const [selectedMonitor, setSelectedMonitor] = useState<Monitor | null>(
         null,
@@ -1050,7 +1053,7 @@ export function DashboardClient({
     };
 
     const activeCount = monitors.filter((m) => m.status === "active").length;
-    const pausedCount = monitors.filter((m) => m.status === "paused").length;
+    const pausedCount = monitors.filter((m) => m.status !== "active").length;
     const totalItems = monitors.reduce((sum, m) => sum + m._count.items, 0);
 
     return (
@@ -1060,6 +1063,7 @@ export function DashboardClient({
                     open={isQuickStartOpen}
                     onOpenChange={setIsQuickStartOpen}
                     initialPool={quickStartPool}
+                    maintenanceEnabled={maintenanceEnabled}
                 />
             )}
 
@@ -1074,7 +1078,7 @@ export function DashboardClient({
                 </div>
 
                 <div className="flex w-full items-center gap-2 sm:w-auto">
-                    {pausedCount > 0 && (
+                    {pausedCount > 0 && !maintenanceEnabled && (
                         <Button
                             variant="outline"
                             size="sm"
@@ -1294,6 +1298,12 @@ export function DashboardClient({
                                                         <span className="flex items-center gap-1">
                                                             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                                                             Running
+                                                        </span>
+                                                    ) : m.status ===
+                                                      "maintenance_paused" ? (
+                                                        <span className="flex items-center gap-1">
+                                                            <Wrench className="h-3 w-3" />
+                                                            Maintenance
                                                         </span>
                                                     ) : m.status === "error" ? (
                                                         <span className="flex items-center gap-1">
@@ -1610,6 +1620,16 @@ export function DashboardClient({
                                             onClick={() =>
                                                 handleToggle(m.id, m.status)
                                             }
+                                            disabled={
+                                                maintenanceEnabled &&
+                                                m.status !== "active"
+                                            }
+                                            title={
+                                                maintenanceEnabled &&
+                                                m.status !== "active"
+                                                    ? "Paused for maintenance"
+                                                    : undefined
+                                            }
                                             className={`h-8 px-3 text-xs font-medium ${
                                                 m.status === "active"
                                                     ? "text-amber-700 hover:bg-amber-50 hover:text-amber-800 dark:text-amber-400 dark:hover:bg-amber-500/10 dark:hover:text-amber-300"
@@ -1624,7 +1644,9 @@ export function DashboardClient({
                                             ) : (
                                                 <>
                                                     <PlayCircle className="h-3.5 w-3.5" />
-                                                    Resume
+                                                    {maintenanceEnabled
+                                                        ? "Paused for maintenance"
+                                                        : "Resume"}
                                                 </>
                                             )}
                                         </Button>

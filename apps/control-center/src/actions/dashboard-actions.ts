@@ -43,7 +43,7 @@ export async function stopAllMonitors() {
     if (!session?.user?.id) throw new Error("Unauthorized");
     const userId = session.user.id;
     const transitionKey = Date.now().toString();
-    await db.$transaction(async (tx) => {
+    await withMonitorActivationLock(userId, async (tx) => {
         const monitorsToStop = await tx.monitors.findMany({
             where: { userId, status: "active" },
         });
@@ -86,6 +86,7 @@ export async function startAllMonitors() {
             let activeSlots = activationState.activeSlots;
             let freeProxySlots = activationState.freeProxyActiveSlots;
             const monitorsToStart = pausedMonitors.filter((monitor) => {
+                if (activationState.maintenanceEnabled) return false;
                 if (activeSlots !== null && activeSlots <= 0) return false;
                 if (
                     monitor.proxy_source === "free" &&
@@ -161,9 +162,11 @@ export async function startAllMonitors() {
             message:
                 skippedCount === 0
                     ? "No paused monitors to start."
-                    : freeLimitOnly
-                      ? `Free proxy monitor limit reached (${activationState.freeProxyActiveCount}/${activationState.freeProxyActiveLimit}).`
-                      : `Active monitor limit reached (${activationState.activeCount}/${activationState.activeLimit}).`,
+                    : activationState.maintenanceEnabled
+                      ? "Monitors are temporarily paused while Vintrack is undergoing maintenance."
+                      : freeLimitOnly
+                        ? `Free proxy monitor limit reached (${activationState.freeProxyActiveCount}/${activationState.freeProxyActiveLimit}).`
+                        : `Active monitor limit reached (${activationState.activeCount}/${activationState.activeLimit}).`,
         };
     }
 

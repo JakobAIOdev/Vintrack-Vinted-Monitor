@@ -132,7 +132,11 @@ export type CreateMonitorResult =
           redirectTo: string;
           started: boolean;
           activeLimit: number | null;
-          pauseReason: "active-limit" | "free-proxy-limit" | null;
+          pauseReason:
+              | "active-limit"
+              | "free-proxy-limit"
+              | "maintenance"
+              | null;
       }
     | { ok: false; message: string };
 
@@ -297,9 +301,11 @@ export async function createMonitor(
         pauseReason:
             initialStatus === "active"
                 ? null
-                : activationState.freeProxyLimitReached
-                  ? "free-proxy-limit"
-                  : "active-limit",
+                : activationState.maintenanceEnabled
+                  ? "maintenance"
+                  : activationState.freeProxyLimitReached
+                    ? "free-proxy-limit"
+                    : "active-limit",
     };
 }
 
@@ -309,7 +315,11 @@ export type CreatePresetMonitorResult =
           redirectTo: string;
           started: boolean;
           activeLimit: number | null;
-          pauseReason: "active-limit" | "free-proxy-limit" | null;
+          pauseReason:
+              | "active-limit"
+              | "free-proxy-limit"
+              | "maintenance"
+              | null;
       }
     | {
           ok: false;
@@ -460,9 +470,11 @@ export async function createPresetMonitor(input: {
             pauseReason:
                 initialStatus === "active"
                     ? null
-                    : activationState.freeProxyLimitReached
-                      ? "free-proxy-limit"
-                      : "active-limit",
+                    : activationState.maintenanceEnabled
+                      ? "maintenance"
+                      : activationState.freeProxyLimitReached
+                        ? "free-proxy-limit"
+                        : "active-limit",
         };
     } catch (error) {
         console.error("Failed to create preset monitor", error);

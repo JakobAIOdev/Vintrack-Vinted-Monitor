@@ -15,6 +15,7 @@ import {
     USER_MONITOR_LIMIT_PREFIX,
     userLimitScope,
     withMonitorActivationLock,
+    acquireGlobalMonitorActivationLock,
 } from "@/lib/monitor-limits";
 import { logAuditEvent } from "@/lib/audit";
 import { randomUUID } from "node:crypto";
@@ -26,6 +27,16 @@ import {
     type MemberAnnouncement,
     type MemberAnnouncementInput,
 } from "@/lib/member-announcement";
+import {
+    MONITOR_MAINTENANCE_SETTING_KEY,
+    getMonitorMaintenanceStatus,
+    validateMonitorMaintenanceInput,
+    type MonitorMaintenance,
+} from "@/lib/monitor-maintenance";
+import {
+    getMonitorMaintenance,
+    getMonitorWorkerRuntime,
+} from "@/lib/monitor-maintenance.server";
 
 const SERVER_PROXIES_SETTING_KEY = "server_proxies";
 const FREE_PROXY_ENABLED_KEY = "free_proxy_enabled";
@@ -1184,6 +1195,194 @@ async function requireAdmin() {
     if (!session?.user?.id) throw new Error("Unauthorized");
     if (session.user.role !== "admin") throw new Error("Forbidden");
     return session.user.id;
+}
+
+export type MonitorMaintenanceAdminState = {
+    maintenance: MonitorMaintenance;
+    runtime: Awaited<ReturnType<typeof getMonitorWorkerRuntime>>;
+    status: ReturnType<typeof getMonitorMaintenanceStatus>;
+    activeMonitorCount: number;
+    maintenancePausedCount: number;
+};
+
+async function loadMonitorMaintenanceAdminState(): Promise<MonitorMaintenanceAdminState> {
+    const [maintenance, runtime, activeMonitorCount, maintenancePausedCount] =
+        await Promise.all([
+            getMonitorMaintenance(),
+            getMonitorWorkerRuntime().catch(() => null),
+            db.monitors.count({ where: { status: "active" } }),
+            db.monitors.count({ where: { status: "maintenance_paused" } }),
+        ]);
+    return {
+        maintenance,
+        runtime,
+        status: getMonitorMaintenanceStatus(maintenance, runtime),
+        activeMonitorCount,
+        maintenancePausedCount,
+    };
+}
+
+export async function getMonitorMaintenanceAdminState() {
+    await requireAdmin();
+    return loadMonitorMaintenanceAdminState();
+}
+
+export async function enableMonitorMaintenance(input: {
+    message: string;
+    estimatedEndAt: string | null;
+}) {
+    const adminUserId = await requireAdmin();
+    const normalized = validateMonitorMaintenanceInput(input);
+    const enabledAt = new Date();
+    const revision = randomUUID();
+
+    const pausedCount = await db.$transaction(async (tx) => {
+        await acquireGlobalMonitorActivationLock(tx);
+        const existing = await getMonitorMaintenance(tx);
+        if (existing.enabled) {
+            throw new Error("Monitor maintenance is already enabled");
+        }
+        const result = await tx.monitors.updateMany({
+            where: { status: "active" },
+            data: { status: "maintenance_paused" },
+        });
+        const maintenance: MonitorMaintenance = {
+            enabled: true,
+            revision,
+            ...normalized,
+            enabledAt: enabledAt.toISOString(),
+            enabledBy: adminUserId,
+            updatedAt: enabledAt.toISOString(),
+        };
+        await tx.app_settings.upsert({
+            where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+            create: {
+                key: MONITOR_MAINTENANCE_SETTING_KEY,
+                value: JSON.stringify(maintenance),
+            },
+            update: { value: JSON.stringify(maintenance) },
+        });
+        return result.count;
+    });
+
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.monitor_maintenance_enabled",
+        targetType: "app_setting",
+        targetId: MONITOR_MAINTENANCE_SETTING_KEY,
+        metadata: {
+            revision,
+            pausedCount,
+            estimatedEndAt: normalized.estimatedEndAt,
+        },
+    });
+    revalidatePath("/", "layout");
+    revalidatePath("/admin");
+    return loadMonitorMaintenanceAdminState();
+}
+
+export async function updateMonitorMaintenance(input: {
+    message: string;
+    estimatedEndAt: string | null;
+}) {
+    const adminUserId = await requireAdmin();
+    const normalized = validateMonitorMaintenanceInput(input);
+    const revision = randomUUID();
+    const changed = await db.$transaction(async (tx) => {
+        await acquireGlobalMonitorActivationLock(tx);
+        const existing = await getMonitorMaintenance(tx);
+        if (!existing.enabled) {
+            throw new Error("Monitor maintenance is not enabled");
+        }
+        if (
+            existing.message === normalized.message &&
+            existing.estimatedEndAt === normalized.estimatedEndAt
+        ) {
+            return false;
+        }
+        const maintenance: MonitorMaintenance = {
+            ...existing,
+            ...normalized,
+            revision,
+            updatedAt: new Date().toISOString(),
+        };
+        await tx.app_settings.upsert({
+            where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+            create: {
+                key: MONITOR_MAINTENANCE_SETTING_KEY,
+                value: JSON.stringify(maintenance),
+            },
+            update: { value: JSON.stringify(maintenance) },
+        });
+        return true;
+    });
+    if (!changed) return loadMonitorMaintenanceAdminState();
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.monitor_maintenance_updated",
+        targetType: "app_setting",
+        targetId: MONITOR_MAINTENANCE_SETTING_KEY,
+        metadata: { revision, estimatedEndAt: normalized.estimatedEndAt },
+    });
+    revalidatePath("/", "layout");
+    revalidatePath("/admin");
+    return loadMonitorMaintenanceAdminState();
+}
+
+export async function disableMonitorMaintenance() {
+    const adminUserId = await requireAdmin();
+    const disabledAt = new Date();
+    const revision = randomUUID();
+
+    const result = await db.$transaction(async (tx) => {
+        await acquireGlobalMonitorActivationLock(tx);
+        const existing = await getMonitorMaintenance(tx);
+        if (!existing.enabled) {
+            throw new Error("Monitor maintenance is not enabled");
+        }
+        const resumed = await tx.monitors.updateMany({
+            where: { status: "maintenance_paused" },
+            data: { status: "active" },
+        });
+        const maintenance: MonitorMaintenance = {
+            ...existing,
+            enabled: false,
+            revision,
+            updatedAt: disabledAt.toISOString(),
+        };
+        await tx.app_settings.upsert({
+            where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+            create: {
+                key: MONITOR_MAINTENANCE_SETTING_KEY,
+                value: JSON.stringify(maintenance),
+            },
+            update: { value: JSON.stringify(maintenance) },
+        });
+        return {
+            resumedCount: resumed.count,
+            durationSeconds: existing.enabledAt
+                ? Math.max(
+                      0,
+                      Math.round(
+                          (disabledAt.getTime() -
+                              new Date(existing.enabledAt).getTime()) /
+                              1000,
+                      ),
+                  )
+                : null,
+        };
+    });
+
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.monitor_maintenance_disabled",
+        targetType: "app_setting",
+        targetId: MONITOR_MAINTENANCE_SETTING_KEY,
+        metadata: { revision, ...result },
+    });
+    revalidatePath("/", "layout");
+    revalidatePath("/admin");
+    return loadMonitorMaintenanceAdminState();
 }
 
 export async function updateMemberAnnouncement(
@@ -3542,26 +3741,21 @@ export async function setUserFreeProxyMonitorLimit(
 
 export async function stopUserActiveMonitors(userId: string) {
     await requireAdmin();
-
-    const monitorsToStop = await db.monitors.findMany({
-        where: { userId, status: "active" },
-        select: {
-            id: true,
-            name: true,
-            userId: true,
-            discord_webhook: true,
-            webhook_active: true,
-            telegram_active: true,
-            notifications_enabled: true,
-        },
-    });
-
-    if (monitorsToStop.length === 0) {
-        return { success: true, stoppedCount: 0 };
-    }
-
     const transitionKey = Date.now().toString();
-    await db.$transaction(async (tx) => {
+    const stoppedCount = await withMonitorActivationLock(userId, async (tx) => {
+        const monitorsToStop = await tx.monitors.findMany({
+            where: { userId, status: "active" },
+            select: {
+                id: true,
+                name: true,
+                userId: true,
+                discord_webhook: true,
+                webhook_active: true,
+                telegram_active: true,
+                notifications_enabled: true,
+            },
+        });
+        if (monitorsToStop.length === 0) return 0;
         await tx.monitors.updateMany({
             where: { userId, status: "active" },
             data: { status: "paused" },
@@ -3574,41 +3768,37 @@ export async function stopUserActiveMonitors(userId: string) {
                 idempotencyKey: `admin-pause:${monitor.id}:${transitionKey}`,
             });
         }
+        return monitorsToStop.length;
     });
 
     revalidatePath("/admin");
 
     return {
         success: true,
-        stoppedCount: monitorsToStop.length,
+        stoppedCount,
     };
 }
 
 export async function stopSingleUserMonitor(userId: string, monitorId: number) {
     await requireAdmin();
-
-    const monitor = await db.monitors.findFirst({
-        where: {
-            id: monitorId,
-            userId,
-            status: "active",
-        },
-        select: {
-            id: true,
-            name: true,
-            userId: true,
-            discord_webhook: true,
-            webhook_active: true,
-            telegram_active: true,
-            notifications_enabled: true,
-        },
-    });
-
-    if (!monitor) {
-        return { success: true, stopped: false };
-    }
-
-    await db.$transaction(async (tx) => {
+    const stopped = await withMonitorActivationLock(userId, async (tx) => {
+        const monitor = await tx.monitors.findFirst({
+            where: {
+                id: monitorId,
+                userId,
+                status: "active",
+            },
+            select: {
+                id: true,
+                name: true,
+                userId: true,
+                discord_webhook: true,
+                webhook_active: true,
+                telegram_active: true,
+                notifications_enabled: true,
+            },
+        });
+        if (!monitor) return false;
         await tx.monitors.update({
             where: { id: monitorId, userId },
             data: { status: "paused" },
@@ -3619,9 +3809,10 @@ export async function stopSingleUserMonitor(userId: string, monitorId: number) {
             message: `The monitor ${monitor.name} was paused via User Management.`,
             idempotencyKey: `admin-pause:${monitor.id}:${Date.now()}`,
         });
+        return true;
     });
 
     revalidatePath("/admin");
 
-    return { success: true, stopped: true };
+    return { success: true, stopped };
 }

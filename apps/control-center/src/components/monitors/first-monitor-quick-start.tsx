@@ -40,10 +40,12 @@ export function FirstMonitorQuickStart({
     open,
     onOpenChange,
     initialPool,
+    maintenanceEnabled = false,
 }: {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     initialPool: QuickStartPool | null;
+    maintenanceEnabled?: boolean;
 }) {
     const router = useRouter();
     const [selectedPreset, setSelectedPreset] =
@@ -122,9 +124,11 @@ export function FirstMonitorQuickStart({
             toast.success(
                 result.started
                     ? "Your demo monitor is running for 30 minutes"
-                    : result.pauseReason === "free-proxy-limit"
-                      ? "Monitor created and saved paused because your Free Proxy Pool monitor limit is reached"
-                      : "Monitor created and saved paused because your active limit is reached",
+                    : result.pauseReason === "maintenance"
+                      ? "Monitor created paused while Vintrack is under maintenance"
+                      : result.pauseReason === "free-proxy-limit"
+                        ? "Monitor created and saved paused because your Free Proxy Pool monitor limit is reached"
+                        : "Monitor created and saved paused because your active limit is reached",
             );
             router.push(result.redirectTo);
             router.refresh();
@@ -257,11 +261,15 @@ export function FirstMonitorQuickStart({
                         {isSubmitting ? (
                             <>
                                 <Loader2 className="size-4 animate-spin" />
-                                Starting monitor…
+                                {maintenanceEnabled
+                                    ? "Creating monitor…"
+                                    : "Starting monitor…"}
                             </>
                         ) : selectedPresetDefinition ? (
                             <>
-                                Start {selectedPresetDefinition}
+                                {maintenanceEnabled
+                                    ? `Create ${selectedPresetDefinition} paused`
+                                    : `Start ${selectedPresetDefinition}`}
                                 <ArrowRight className="size-4" />
                             </>
                         ) : (

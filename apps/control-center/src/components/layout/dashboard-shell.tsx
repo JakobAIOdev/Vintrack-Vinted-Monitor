@@ -6,10 +6,12 @@ import { Header } from "@/components/layout/header";
 import { MonitorStreamProvider } from "@/components/monitors/monitor-stream-context";
 import { MemberAnnouncementHost } from "@/components/announcements/member-announcement-banner";
 import type { MemberAnnouncement } from "@/lib/member-announcement";
+import type { MonitorMaintenance } from "@/lib/monitor-maintenance";
 
 interface DashboardShellProps {
     children: React.ReactNode;
     announcement: MemberAnnouncement;
+    maintenance: MonitorMaintenance;
     user?: {
         name?: string | null;
         image?: string | null;
@@ -22,6 +24,7 @@ export function DashboardShell({
     children,
     user,
     announcement,
+    maintenance,
 }: DashboardShellProps) {
     const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -47,6 +50,7 @@ export function DashboardShell({
                         <div className="mx-auto max-w-[88rem]">
                             <MemberAnnouncementHost
                                 initialAnnouncement={announcement}
+                                initialMaintenance={maintenance}
                                 role={user?.role}
                             />
                             {children}

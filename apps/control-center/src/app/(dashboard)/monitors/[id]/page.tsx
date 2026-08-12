@@ -109,6 +109,7 @@ export default async function MonitorPage({
                   monitor.proxy_source,
               );
     const resumeBlocked = resumeState ? !resumeState.canActivate : false;
+    const maintenanceEnabled = resumeState?.maintenanceEnabled ?? false;
     const deleteAction = deleteMonitor.bind(null, monitor.id);
     const categoryLabels = await getCategoryLabelsForRegion(
         monitor.catalog_ids,
@@ -420,9 +421,11 @@ export default async function MonitorPage({
                                 disabled={resumeBlocked}
                                 title={
                                     resumeBlocked && resumeState
-                                        ? resumeState.freeProxyLimitReached
-                                            ? `Free proxy monitor limit reached (${resumeState.freeProxyActiveCount}/${resumeState.freeProxyActiveLimit})`
-                                            : `Active monitor limit reached (${resumeState.activeCount}/${resumeState.activeLimit})`
+                                        ? resumeState.maintenanceEnabled
+                                            ? "Paused for maintenance"
+                                            : resumeState.freeProxyLimitReached
+                                              ? `Free proxy monitor limit reached (${resumeState.freeProxyActiveCount}/${resumeState.freeProxyActiveLimit})`
+                                              : `Active monitor limit reached (${resumeState.activeCount}/${resumeState.activeLimit})`
                                         : undefined
                                 }
                                 className={`h-8 text-xs font-medium ${
@@ -439,7 +442,9 @@ export default async function MonitorPage({
                                 ) : (
                                     <>
                                         <PlayCircle className="mr-1.5 h-3.5 w-3.5" />{" "}
-                                        Resume
+                                        {maintenanceEnabled
+                                            ? "Paused for maintenance"
+                                            : "Resume"}
                                     </>
                                 )}
                             </Button>
@@ -463,6 +468,7 @@ export default async function MonitorPage({
                         initialExpiresAt={monitor.demo_expires_at.toISOString()}
                         initialStatus={monitor.status ?? "paused"}
                         initialNow={new Date().toISOString()}
+                        maintenanceEnabled={maintenanceEnabled}
                     />
                 )}
 

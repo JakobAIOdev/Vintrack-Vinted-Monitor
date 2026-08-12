@@ -32,6 +32,7 @@ import {
     FlaskConical,
     Sparkles,
     Megaphone,
+    Wrench,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -79,6 +80,10 @@ import {
     updateMemberAnnouncement,
     stopSingleUserMonitor,
     stopUserActiveMonitors,
+    enableMonitorMaintenance,
+    updateMonitorMaintenance,
+    disableMonitorMaintenance,
+    type MonitorMaintenanceAdminState,
 } from "@/actions/admin";
 import { getRegionLabel, REGIONS } from "@/lib/regions";
 import { getProxyErrorDetails } from "@/lib/proxy-errors";
@@ -92,6 +97,7 @@ import {
     type MemberAnnouncementAudience,
     type MemberAnnouncementPlacement,
 } from "@/lib/member-announcement";
+import { DEFAULT_MONITOR_MAINTENANCE_MESSAGE } from "@/lib/monitor-maintenance";
 
 type UserMonitor = {
     id: number;
@@ -526,7 +532,8 @@ const ADMIN_TABS: {
         value: "monitors",
         label: "Running Monitors",
         icon: Monitor,
-        description: "All currently running monitors, grouped by member.",
+        description:
+            "Monitor operations, maintenance controls, and active workloads.",
     },
     {
         value: "users",
@@ -1080,6 +1087,7 @@ export function AdminClient({
     currentUserId,
     serverProxies: initialServerProxies,
     memberAnnouncement: initialMemberAnnouncement,
+    initialMonitorMaintenanceState,
     freeProxyState: initialFreeProxyState,
     monitorLimits: initialMonitorLimits,
 }: {
@@ -1089,6 +1097,7 @@ export function AdminClient({
     currentUserId: string;
     serverProxies: string;
     memberAnnouncement: MemberAnnouncement;
+    initialMonitorMaintenanceState: MonitorMaintenanceAdminState;
     freeProxyState: FreeProxyState;
     monitorLimits: MonitorLimits;
 }) {
@@ -1206,6 +1215,22 @@ export function AdminClient({
     );
     const [isSavingMemberAnnouncement, setIsSavingMemberAnnouncement] =
         useState(false);
+    const [monitorMaintenanceState, setMonitorMaintenanceState] = useState(
+        initialMonitorMaintenanceState,
+    );
+    const [maintenanceDialogMode, setMaintenanceDialogMode] = useState<
+        "enable" | "update" | "disable" | null
+    >(null);
+    const [maintenanceMessage, setMaintenanceMessage] = useState(
+        initialMonitorMaintenanceState.maintenance.message ||
+            DEFAULT_MONITOR_MAINTENANCE_MESSAGE,
+    );
+    const [maintenanceEstimatedEndAt, setMaintenanceEstimatedEndAt] = useState(
+        announcementDateTimeValue(
+            initialMonitorMaintenanceState.maintenance.estimatedEndAt,
+        ),
+    );
+    const [isSavingMaintenance, setIsSavingMaintenance] = useState(false);
     const [freeProxyState, setFreeProxyState] = useState(initialFreeProxyState);
     const [freeProxySettings, setFreeProxySettings] = useState(
         normalizeFreeProxySettings(initialFreeProxyState.settings),
@@ -1509,6 +1534,29 @@ export function AdminClient({
         const interval = window.setInterval(() => setNowMs(Date.now()), 60_000);
         return () => window.clearInterval(interval);
     }, []);
+
+    useEffect(() => {
+        if (
+            !monitorMaintenanceState.maintenance.enabled ||
+            monitorMaintenanceState.status === "active"
+        ) {
+            return;
+        }
+        const refresh = () => {
+            void fetch("/api/admin/maintenance", { cache: "no-store" })
+                .then(async (response) => {
+                    if (!response.ok) throw new Error("Refresh failed");
+                    return (await response.json()) as MonitorMaintenanceAdminState;
+                })
+                .then(setMonitorMaintenanceState)
+                .catch(() => undefined);
+        };
+        const interval = window.setInterval(refresh, 2_000);
+        return () => window.clearInterval(interval);
+    }, [
+        monitorMaintenanceState.maintenance.enabled,
+        monitorMaintenanceState.status,
+    ]);
 
     useEffect(() => {
         if (!["users", "roles"].includes(activeTab)) return;
@@ -2240,6 +2288,60 @@ export function AdminClient({
         }
     };
 
+    const openMaintenanceDialog = (mode: "enable" | "update" | "disable") => {
+        setMaintenanceMessage(
+            monitorMaintenanceState.maintenance.message ||
+                DEFAULT_MONITOR_MAINTENANCE_MESSAGE,
+        );
+        setMaintenanceEstimatedEndAt(
+            announcementDateTimeValue(
+                monitorMaintenanceState.maintenance.estimatedEndAt,
+            ),
+        );
+        setMaintenanceDialogMode(mode);
+    };
+
+    const handleMaintenanceAction = async () => {
+        if (!maintenanceDialogMode) return;
+        setIsSavingMaintenance(true);
+        try {
+            const nextState =
+                maintenanceDialogMode === "disable"
+                    ? await disableMonitorMaintenance()
+                    : maintenanceDialogMode === "update"
+                      ? await updateMonitorMaintenance({
+                            message: maintenanceMessage,
+                            estimatedEndAt: announcementDateTimeIso(
+                                maintenanceEstimatedEndAt,
+                            ),
+                        })
+                      : await enableMonitorMaintenance({
+                            message: maintenanceMessage,
+                            estimatedEndAt: announcementDateTimeIso(
+                                maintenanceEstimatedEndAt,
+                            ),
+                        });
+            setMonitorMaintenanceState(nextState);
+            setMaintenanceDialogMode(null);
+            toast.success(
+                maintenanceDialogMode === "disable"
+                    ? `${nextState.activeMonitorCount} monitor${nextState.activeMonitorCount === 1 ? "" : "s"} resumed`
+                    : maintenanceDialogMode === "update"
+                      ? "Maintenance notice updated"
+                      : `${nextState.maintenancePausedCount} monitor${nextState.maintenancePausedCount === 1 ? "" : "s"} safely paused`,
+            );
+            void loadOverview();
+        } catch (error) {
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to update maintenance mode",
+            );
+        } finally {
+            setIsSavingMaintenance(false);
+        }
+    };
+
     const handleSaveServerProxies = async () => {
         const previous = serverProxies;
         const formData = new FormData();
@@ -2483,6 +2585,14 @@ export function AdminClient({
     const activeTabDefinition =
         ADMIN_TABS.find((tab) => tab.value === activeTab) ?? ADMIN_TABS[0];
     const ActiveTabIcon = activeTabDefinition.icon;
+    const maintenanceStatusLabel =
+        monitorMaintenanceState.status === "active"
+            ? "Maintenance active"
+            : monitorMaintenanceState.status === "draining"
+              ? "Draining"
+              : monitorMaintenanceState.status === "confirmation_pending"
+                ? "Worker confirmation pending"
+                : "Normal operation";
     const userMetricsLoaded = overviewState !== null;
     const userMetricsLoadFailed = overviewLoadFailed;
     const isLoadingUserMetrics = isLoadingOverview;
@@ -2607,6 +2717,159 @@ export function AdminClient({
                     );
                 })}
             </div>
+
+            {activeTab === "monitors" ? (
+                <div className="w-full">
+                    <div
+                        className={`rounded-xl border p-5 ${
+                            monitorMaintenanceState.maintenance.enabled
+                                ? "border-red-500/30 bg-red-500/5"
+                                : "border-border/60 bg-card"
+                        }`}
+                        data-testid="maintenance-system-control"
+                    >
+                        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                            <div className="flex items-start gap-3">
+                                <div
+                                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${
+                                        monitorMaintenanceState.maintenance
+                                            .enabled
+                                            ? "bg-red-500 text-white"
+                                            : "bg-muted text-muted-foreground"
+                                    }`}
+                                >
+                                    <Wrench className="h-5 w-5" />
+                                </div>
+                                <div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <p className="text-sm font-semibold">
+                                            Monitor Maintenance
+                                        </p>
+                                        <Badge
+                                            variant={
+                                                monitorMaintenanceState
+                                                    .maintenance.enabled
+                                                    ? "destructive"
+                                                    : "secondary"
+                                            }
+                                            className="rounded-md text-[10px] uppercase"
+                                        >
+                                            {maintenanceStatusLabel}
+                                        </Badge>
+                                    </div>
+                                    <p className="text-muted-foreground mt-1 max-w-2xl text-xs leading-5">
+                                        {monitorMaintenanceState.maintenance
+                                            .enabled
+                                            ? monitorMaintenanceState
+                                                  .maintenance.message
+                                            : "Pause every monitor safely and block new starts while planned maintenance is in progress."}
+                                    </p>
+                                </div>
+                            </div>
+                            <div className="flex shrink-0 flex-wrap gap-2">
+                                {monitorMaintenanceState.maintenance.enabled ? (
+                                    <>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() =>
+                                                openMaintenanceDialog("update")
+                                            }
+                                        >
+                                            Edit notice
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            onClick={() =>
+                                                openMaintenanceDialog("disable")
+                                            }
+                                        >
+                                            End maintenance
+                                        </Button>
+                                    </>
+                                ) : (
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="destructive"
+                                        onClick={() =>
+                                            openMaintenanceDialog("enable")
+                                        }
+                                    >
+                                        Enable maintenance
+                                    </Button>
+                                )}
+                            </div>
+                        </div>
+                        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                            <div className="border-border/60 bg-background/50 rounded-lg border px-3 py-2.5">
+                                <p className="text-muted-foreground text-[10px] uppercase">
+                                    Active monitors
+                                </p>
+                                <p className="mt-1 text-lg font-semibold tabular-nums">
+                                    {monitorMaintenanceState.activeMonitorCount}
+                                </p>
+                            </div>
+                            <div className="border-border/60 bg-background/50 rounded-lg border px-3 py-2.5">
+                                <p className="text-muted-foreground text-[10px] uppercase">
+                                    Maintenance paused
+                                </p>
+                                <p className="mt-1 text-lg font-semibold tabular-nums">
+                                    {
+                                        monitorMaintenanceState.maintenancePausedCount
+                                    }
+                                </p>
+                            </div>
+                            <div className="border-border/60 bg-background/50 rounded-lg border px-3 py-2.5">
+                                <p className="text-muted-foreground text-[10px] uppercase">
+                                    Worker tasks
+                                </p>
+                                <p className="mt-1 text-lg font-semibold tabular-nums">
+                                    {monitorMaintenanceState.runtime
+                                        ? monitorMaintenanceState.runtime
+                                              .runningMonitorTasks +
+                                          monitorMaintenanceState.runtime
+                                              .runningDiscoveryTasks
+                                        : "—"}
+                                </p>
+                            </div>
+                            <div className="border-border/60 bg-background/50 rounded-lg border px-3 py-2.5">
+                                <p className="text-muted-foreground text-[10px] uppercase">
+                                    Worker heartbeat
+                                </p>
+                                <p className="mt-1 text-sm font-semibold">
+                                    {monitorMaintenanceState.runtime
+                                        ? formatMetricDate(
+                                              new Date(
+                                                  monitorMaintenanceState
+                                                      .runtime.heartbeatAt,
+                                              ),
+                                          )
+                                        : "No confirmation"}
+                                </p>
+                            </div>
+                            <div className="border-border/60 bg-background/50 rounded-lg border px-3 py-2.5">
+                                <p className="text-muted-foreground text-[10px] uppercase">
+                                    Last change
+                                </p>
+                                <p className="mt-1 text-sm font-semibold">
+                                    {monitorMaintenanceState.maintenance
+                                        .updatedAt
+                                        ? formatMetricDate(
+                                              new Date(
+                                                  monitorMaintenanceState
+                                                      .maintenance.updatedAt,
+                                              ),
+                                          )
+                                        : "Never"}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
 
             {activeTab === "overview" ? (
                 <>
@@ -5501,18 +5764,15 @@ export function AdminClient({
                                                 : " · Persistent"}
                                         </p>
                                         <p className="text-muted-foreground mt-1 font-mono text-[10px] break-all">
-                                            Revision: {memberAnnouncement.revision}
+                                            Revision:{" "}
+                                            {memberAnnouncement.revision}
                                         </p>
                                     </div>
                                     <Button
                                         type="button"
-                                        className="h-9 w-full md:min-w-56 md:w-auto"
-                                        onClick={
-                                            handleSaveMemberAnnouncement
-                                        }
-                                        disabled={
-                                            isSavingMemberAnnouncement
-                                        }
+                                        className="h-9 w-full md:w-auto md:min-w-56"
+                                        onClick={handleSaveMemberAnnouncement}
+                                        disabled={isSavingMemberAnnouncement}
                                     >
                                         {isSavingMemberAnnouncement
                                             ? "Publishing..."
@@ -6635,6 +6895,124 @@ export function AdminClient({
                             </p>
                         )}
                     </div>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog
+                open={maintenanceDialogMode !== null}
+                onOpenChange={(open) => {
+                    if (!open && !isSavingMaintenance) {
+                        setMaintenanceDialogMode(null);
+                    }
+                }}
+            >
+                <DialogContent className="sm:max-w-lg">
+                    <DialogHeader>
+                        <DialogTitle>
+                            {maintenanceDialogMode === "disable"
+                                ? "End monitor maintenance?"
+                                : maintenanceDialogMode === "update"
+                                  ? "Update maintenance notice"
+                                  : "Enable monitor maintenance?"}
+                        </DialogTitle>
+                        <DialogDescription>
+                            {maintenanceDialogMode === "disable"
+                                ? `${monitorMaintenanceState.maintenancePausedCount} monitor${monitorMaintenanceState.maintenancePausedCount === 1 ? "" : "s"} paused by maintenance will resume automatically.`
+                                : maintenanceDialogMode === "update"
+                                  ? "Update the member-facing message and optional ETA. The ETA is informational only."
+                                  : `${monitorMaintenanceState.activeMonitorCount} active monitor${monitorMaintenanceState.activeMonitorCount === 1 ? "" : "s"} will be paused and all new starts will be blocked.`}
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    {maintenanceDialogMode !== "disable" ? (
+                        <div className="space-y-4 py-2">
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between gap-3">
+                                    <Label htmlFor="maintenance-message">
+                                        Member message
+                                    </Label>
+                                    <span className="text-muted-foreground text-[11px]">
+                                        {maintenanceMessage.length}/300
+                                    </span>
+                                </div>
+                                <textarea
+                                    id="maintenance-message"
+                                    rows={4}
+                                    maxLength={300}
+                                    value={maintenanceMessage}
+                                    onChange={(event) =>
+                                        setMaintenanceMessage(
+                                            event.target.value,
+                                        )
+                                    }
+                                    className="border-input bg-background focus-visible:ring-ring w-full resize-y rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="maintenance-estimated-end">
+                                    Estimated completion (optional)
+                                </Label>
+                                <Input
+                                    id="maintenance-estimated-end"
+                                    type="datetime-local"
+                                    value={maintenanceEstimatedEndAt}
+                                    onChange={(event) =>
+                                        setMaintenanceEstimatedEndAt(
+                                            event.target.value,
+                                        )
+                                    }
+                                />
+                                <p className="text-muted-foreground text-xs">
+                                    Saved and displayed as UTC; maintenance
+                                    never ends automatically.
+                                </p>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="border-border/60 bg-muted/30 rounded-lg border p-4 text-sm">
+                            <p className="font-medium">
+                                Resume only maintenance-paused monitors
+                            </p>
+                            <p className="text-muted-foreground mt-1 text-xs leading-5">
+                                Monitors that were already manually paused stay
+                                paused. No Discord or Telegram status flood will
+                                be sent.
+                            </p>
+                        </div>
+                    )}
+
+                    <DialogFooter>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            disabled={isSavingMaintenance}
+                            onClick={() => setMaintenanceDialogMode(null)}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            type="button"
+                            variant={
+                                maintenanceDialogMode === "enable"
+                                    ? "destructive"
+                                    : "default"
+                            }
+                            disabled={
+                                isSavingMaintenance ||
+                                (maintenanceDialogMode !== "disable" &&
+                                    !maintenanceMessage.trim())
+                            }
+                            onClick={handleMaintenanceAction}
+                        >
+                            {isSavingMaintenance
+                                ? "Saving..."
+                                : maintenanceDialogMode === "disable"
+                                  ? `Resume ${monitorMaintenanceState.maintenancePausedCount} monitor${monitorMaintenanceState.maintenancePausedCount === 1 ? "" : "s"} & end maintenance`
+                                  : maintenanceDialogMode === "update"
+                                    ? "Update maintenance notice"
+                                    : `Pause ${monitorMaintenanceState.activeMonitorCount} monitor${monitorMaintenanceState.activeMonitorCount === 1 ? "" : "s"} & enable maintenance`}
+                        </Button>
+                    </DialogFooter>
                 </DialogContent>
             </Dialog>
 

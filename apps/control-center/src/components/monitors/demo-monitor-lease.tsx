@@ -20,11 +20,13 @@ export function DemoMonitorLease({
     initialExpiresAt,
     initialStatus,
     initialNow,
+    maintenanceEnabled = false,
 }: {
     monitorId: number;
     initialExpiresAt: string;
     initialStatus: string;
     initialNow: string;
+    maintenanceEnabled?: boolean;
 }) {
     const router = useRouter();
     const [expiresAt, setExpiresAt] = useState(initialExpiresAt);
@@ -119,7 +121,9 @@ export function DemoMonitorLease({
                     <p className="text-muted-foreground mt-1 text-xs leading-5">
                         {running
                             ? "It pauses automatically when the timer ends. Extend it or remove the demo limit whenever you want."
-                            : "Start another 30-minute session or keep this monitor running without a time limit."}
+                            : maintenanceEnabled
+                              ? "This demo is safely paused and cannot be resumed until maintenance is complete."
+                              : "Start another 30-minute session or keep this monitor running without a time limit."}
                     </p>
                 </div>
             </div>
@@ -129,7 +133,12 @@ export function DemoMonitorLease({
                     variant="outline"
                     size="sm"
                     onClick={handleExtend}
-                    disabled={pendingAction !== null}
+                    disabled={pendingAction !== null || maintenanceEnabled}
+                    title={
+                        maintenanceEnabled
+                            ? "Paused for maintenance"
+                            : undefined
+                    }
                     className="gap-1.5"
                 >
                     {pendingAction === "extend" ? (
@@ -143,7 +152,12 @@ export function DemoMonitorLease({
                     type="button"
                     size="sm"
                     onClick={handleKeepRunning}
-                    disabled={pendingAction !== null}
+                    disabled={pendingAction !== null || maintenanceEnabled}
+                    title={
+                        maintenanceEnabled
+                            ? "Paused for maintenance"
+                            : undefined
+                    }
                     className="gap-1.5"
                 >
                     {pendingAction === "keep" ? (

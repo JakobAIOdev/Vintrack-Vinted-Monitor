@@ -1,5 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { getMonitorMaintenance } from "@/lib/monitor-maintenance.server";
+import { MONITOR_MAINTENANCE_LOCK_KEY } from "@/lib/monitor-maintenance";
 
 export const GLOBAL_MONITOR_LIMIT_SCOPE = "global";
 export const ROLE_MONITOR_LIMIT_PREFIX = "role:";
@@ -162,13 +164,15 @@ export async function getMonitorActivationState(
     proxySource?: string | null,
     client: MonitorLimitClient = db,
 ) {
-    const [limit, activeCount, freeProxyActiveCount] = await Promise.all([
-        getEffectiveMonitorLimits(userId, client),
-        getActiveMonitorCount(userId, client),
-        client.monitors.count({
-            where: { userId, status: "active", proxy_source: "free" },
-        }),
-    ]);
+    const [limit, activeCount, freeProxyActiveCount, maintenance] =
+        await Promise.all([
+            getEffectiveMonitorLimits(userId, client),
+            getActiveMonitorCount(userId, client),
+            client.monitors.count({
+                where: { userId, status: "active", proxy_source: "free" },
+            }),
+            getMonitorMaintenance(client),
+        ]);
 
     const withinActiveLimit =
         limit.activeLimit === null || activeCount < limit.activeLimit;
@@ -192,8 +196,10 @@ export async function getMonitorActivationState(
                       0,
                   ),
         canActivate:
+            !maintenance.enabled &&
             withinActiveLimit &&
             (proxySource !== "free" || withinFreeProxyLimit),
+        maintenanceEnabled: maintenance.enabled,
         activeLimitReached: !withinActiveLimit,
         freeProxyLimitReached: proxySource === "free" && !withinFreeProxyLimit,
     };
@@ -203,6 +209,9 @@ export function monitorActivationErrorMessage(
     state: Awaited<ReturnType<typeof getMonitorActivationState>>,
     proxySource?: string | null,
 ) {
+    if (state.maintenanceEnabled) {
+        return "Monitors are temporarily paused while Vintrack is undergoing maintenance.";
+    }
     if (proxySource === "free" && state.freeProxyLimitReached) {
         return `Free proxy monitor limit reached (${state.freeProxyActiveCount}/${state.freeProxyActiveLimit}). Pause another free proxy monitor first.`;
     }
@@ -214,6 +223,7 @@ export async function withMonitorActivationLock<T>(
     operation: (tx: Prisma.TransactionClient) => Promise<T>,
 ) {
     return db.$transaction(async (tx) => {
+        await acquireGlobalMonitorActivationLock(tx);
         await tx.$queryRaw`
             SELECT pg_advisory_xact_lock(
                 hashtextextended(${userId}, 0)
@@ -221,4 +231,14 @@ export async function withMonitorActivationLock<T>(
         `;
         return operation(tx);
     });
+}
+
+export async function acquireGlobalMonitorActivationLock(
+    tx: Prisma.TransactionClient,
+) {
+    await tx.$queryRaw`
+        SELECT pg_advisory_xact_lock(
+            hashtextextended(${MONITOR_MAINTENANCE_LOCK_KEY}, 0)
+        )::text AS lock_result
+    `;
 }

@@ -234,9 +234,11 @@ export default function NewMonitorPage() {
                 success: (result) =>
                     result.started
                         ? "Monitor created"
-                        : result.pauseReason === "free-proxy-limit"
-                          ? "Monitor saved paused because your Free Proxy Pool monitor limit is reached"
-                          : "Monitor saved paused because your active monitor limit is reached",
+                        : result.pauseReason === "maintenance"
+                          ? "Monitor created paused while Vintrack is under maintenance"
+                          : result.pauseReason === "free-proxy-limit"
+                            ? "Monitor saved paused because your Free Proxy Pool monitor limit is reached"
+                            : "Monitor saved paused because your active monitor limit is reached",
                 error: (error) =>
                     error instanceof Error
                         ? error.message

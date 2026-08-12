@@ -2,7 +2,10 @@ import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
 import { AdminClient } from "./client";
-import { getFreeProxyAdminState } from "@/actions/admin";
+import {
+    getFreeProxyAdminState,
+    getMonitorMaintenanceAdminState,
+} from "@/actions/admin";
 import {
     DEFAULT_FREE_PROXY_ACTIVE_LIMIT,
     GLOBAL_MONITOR_LIMIT_SCOPE,
@@ -29,6 +32,7 @@ export default async function AdminPage({
         freeProxyState,
         serverProxyRows,
         memberAnnouncement,
+        monitorMaintenanceState,
         params,
     ] = await Promise.all([
         getMonitorLimits([
@@ -43,6 +47,7 @@ export default async function AdminPage({
             return [];
         }),
         getMemberAnnouncement(),
+        getMonitorMaintenanceAdminState(),
         searchParams,
     ]);
 
@@ -54,6 +59,7 @@ export default async function AdminPage({
             currentUserId={session.user.id}
             serverProxies={serverProxyRows[0]?.value ?? ""}
             memberAnnouncement={memberAnnouncement}
+            initialMonitorMaintenanceState={monitorMaintenanceState}
             freeProxyState={freeProxyState}
             monitorLimits={{
                 global:

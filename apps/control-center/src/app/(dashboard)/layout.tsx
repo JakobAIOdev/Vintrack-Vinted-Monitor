@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
 import { getMemberAnnouncement } from "@/lib/member-announcement.server";
+import { getMonitorMaintenance } from "@/lib/monitor-maintenance.server";
 
 export default async function DashboardLayout({
     children,
@@ -16,12 +17,13 @@ export default async function DashboardLayout({
         redirect("/login");
     }
 
-    const [dbUser, announcement] = await Promise.all([
+    const [dbUser, announcement, maintenance] = await Promise.all([
         db.user.findUnique({
             where: { id: session.user.id },
             select: { role: true },
         }),
         getMemberAnnouncement(),
+        getMonitorMaintenance(),
     ]);
     const role = dbUser?.role ?? "free";
 
@@ -29,7 +31,11 @@ export default async function DashboardLayout({
 
     return (
         <AccountProvider>
-            <DashboardShell user={user} announcement={announcement}>
+            <DashboardShell
+                user={user}
+                announcement={announcement}
+                maintenance={maintenance}
+            >
                 {children}
             </DashboardShell>
         </AccountProvider>

@@ -7,6 +7,7 @@ import { getBannedSellerIds, visibleSellerWhere } from "@/lib/seller-bans";
 import { getFreeProxyPoolHealth } from "@/lib/free-proxy-health";
 import { normalizeMonitorOnboardingStatus } from "@/lib/monitor-presets";
 import { normalizeNotificationMessageStyle } from "@/lib/notification-message-style";
+import { getMonitorMaintenance } from "@/lib/monitor-maintenance.server";
 
 export const dynamic = "force-dynamic";
 
@@ -14,25 +15,27 @@ export default async function DashboardPage() {
     const session = await auth();
     if (!session?.user) redirect("/login");
 
-    const [rawMonitors, userSettings, bannedSellerIds] = await Promise.all([
-        db.monitors.findMany({
-            where: { userId: session.user.id },
-            orderBy: { created_at: "desc" },
-            include: {
-                proxy_group: { select: { name: true } },
-            },
-        }),
-        db.user.findUnique({
-            where: { id: session.user.id },
-            select: {
-                dedupe_monitor_alerts: true,
-                telegram_message_style: true,
-                discord_message_style: true,
-                monitor_onboarding_status: true,
-            },
-        }),
-        getBannedSellerIds(session.user.id),
-    ]);
+    const [rawMonitors, userSettings, bannedSellerIds, maintenance] =
+        await Promise.all([
+            db.monitors.findMany({
+                where: { userId: session.user.id },
+                orderBy: { created_at: "desc" },
+                include: {
+                    proxy_group: { select: { name: true } },
+                },
+            }),
+            db.user.findUnique({
+                where: { id: session.user.id },
+                select: {
+                    dedupe_monitor_alerts: true,
+                    telegram_message_style: true,
+                    discord_message_style: true,
+                    monitor_onboarding_status: true,
+                },
+            }),
+            getBannedSellerIds(session.user.id),
+            getMonitorMaintenance(),
+        ]);
     const usedBrandIds = [
         ...new Set(
             rawMonitors.flatMap((monitor) =>
@@ -152,6 +155,7 @@ export default async function DashboardPage() {
             quickStartPool={quickStartPool}
             initialNow={new Date().toISOString()}
             memberBrandLabels={memberBrandLabels}
+            maintenanceEnabled={maintenance.enabled}
         />
     );
 }

@@ -20,6 +20,10 @@ import {
     type MemberAnnouncement,
     type MemberAnnouncementVariant,
 } from "@/lib/member-announcement";
+import {
+    getMaintenanceAnnouncement,
+    type MonitorMaintenance,
+} from "@/lib/monitor-maintenance";
 
 const LEGACY_SPONSOR_DISMISSAL_KEY =
     "vintrack:demo-server-upgrade-banner-dismissed:v1";
@@ -245,13 +249,16 @@ export function MemberAnnouncementBanner({
 
 export function MemberAnnouncementHost({
     initialAnnouncement,
+    initialMaintenance,
     role,
 }: {
     initialAnnouncement: MemberAnnouncement;
+    initialMaintenance: MonitorMaintenance;
     role?: string | null;
 }) {
     const pathname = usePathname();
     const [announcement, setAnnouncement] = useState(initialAnnouncement);
+    const [maintenance, setMaintenance] = useState(initialMaintenance);
 
     useEffect(() => {
         const controller = new AbortController();
@@ -264,11 +271,15 @@ export function MemberAnnouncementHost({
                 if (!response.ok) return null;
                 return (await response.json()) as {
                     announcement?: MemberAnnouncement;
+                    maintenance?: MonitorMaintenance;
                 };
             })
             .then((payload) => {
                 if (payload?.announcement) {
                     setAnnouncement(payload.announcement);
+                }
+                if (payload?.maintenance) {
+                    setMaintenance(payload.maintenance);
                 }
             })
             .catch((error: unknown) => {
@@ -281,8 +292,12 @@ export function MemberAnnouncementHost({
         return () => controller.abort();
     }, [pathname]);
 
+    const visibleAnnouncement = maintenance.enabled
+        ? getMaintenanceAnnouncement(maintenance)
+        : announcement;
+
     if (
-        !isMemberAnnouncementVisible(announcement, {
+        !isMemberAnnouncementVisible(visibleAnnouncement, {
             pathname,
             role,
         })
@@ -292,7 +307,7 @@ export function MemberAnnouncementHost({
 
     return (
         <div className="mb-6">
-            <MemberAnnouncementBanner announcement={announcement} />
+            <MemberAnnouncementBanner announcement={visibleAnnouncement} />
         </div>
     );
 }
