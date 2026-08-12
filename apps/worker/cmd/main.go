@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -143,12 +144,16 @@ func runIDScannerWorker(ctx context.Context, cancel context.CancelFunc, sigChan 
 }
 
 func runMonitorWorker(ctx context.Context, cancel context.CancelFunc, sigChan <-chan os.Signal, store *database.Store, proxyManager *proxy.Manager, freeProxyPools *proxy.RegionPools, mgr *scraper.Manager) {
+	evaluateInactiveMembers(ctx, store)
 	mgr.Sync(ctx)
+	publishMonitorWorkerRuntime(ctx, store, mgr)
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	freeProxyRefreshTicker := time.NewTicker(30 * time.Second)
 	defer freeProxyRefreshTicker.Stop()
+	inactiveMemberTicker := time.NewTicker(time.Minute)
+	defer inactiveMemberTicker.Stop()
 
 	log.Println("Worker running. Polling for monitor changes every 5s...")
 
@@ -163,9 +168,74 @@ func runMonitorWorker(ctx context.Context, cancel context.CancelFunc, sigChan <-
 		case <-ticker.C:
 			refreshServerProxies(store, proxyManager)
 			mgr.Sync(ctx)
+			publishMonitorWorkerRuntime(ctx, store, mgr)
 		case <-freeProxyRefreshTicker.C:
 			refreshFreeProxies(store, freeProxyPools)
+		case <-inactiveMemberTicker.C:
+			evaluateInactiveMembers(ctx, store)
+			mgr.Sync(ctx)
+			publishMonitorWorkerRuntime(ctx, store, mgr)
 		}
+	}
+}
+
+func evaluateInactiveMembers(ctx context.Context, store *database.Store) {
+	evaluateCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	result, err := store.EvaluateInactiveMemberPolicy(evaluateCtx)
+	if err != nil {
+		log.Printf("inactive member policy evaluation failed: %v", err)
+		return
+	}
+	if result.NewlyPausedMonitorCount > 0 {
+		log.Printf("inactive member policy paused %d monitor(s) across %d member(s)", result.NewlyPausedMonitorCount, result.NewlyPausedMemberCount)
+	}
+}
+
+type monitorWorkerRuntimePayload struct {
+	HeartbeatAt           string `json:"heartbeatAt"`
+	MaintenanceRevision   string `json:"maintenanceRevision"`
+	RunningMonitorTasks   int    `json:"runningMonitorTasks"`
+	RunningDiscoveryTasks int    `json:"runningDiscoveryTasks"`
+}
+
+func buildMonitorWorkerRuntimePayload(revision string, monitorTasks int, discoveryTasks int, now time.Time) ([]byte, error) {
+	revision = strings.TrimSpace(revision)
+	if revision == "" {
+		revision = "maintenance-disabled-v1"
+	}
+	return json.Marshal(monitorWorkerRuntimePayload{
+		HeartbeatAt:           now.UTC().Format(time.RFC3339Nano),
+		MaintenanceRevision:   revision,
+		RunningMonitorTasks:   monitorTasks,
+		RunningDiscoveryTasks: discoveryTasks,
+	})
+}
+
+func publishMonitorWorkerRuntime(ctx context.Context, store *database.Store, mgr *scraper.Manager) {
+	revision := "maintenance-disabled-v1"
+	if value, ok, err := store.GetSettingValueContext(ctx, "monitor_maintenance"); err != nil {
+		log.Printf("monitor maintenance setting refresh failed: %v", err)
+	} else if ok {
+		var setting struct {
+			Revision string `json:"revision"`
+		}
+		if err := json.Unmarshal([]byte(value), &setting); err != nil {
+			log.Printf("monitor maintenance setting decode failed: %v", err)
+		} else if strings.TrimSpace(setting.Revision) != "" {
+			revision = strings.TrimSpace(setting.Revision)
+		}
+	}
+	monitorTasks, discoveryTasks := mgr.RuntimeCounts()
+	payload, err := buildMonitorWorkerRuntimePayload(revision, monitorTasks, discoveryTasks, time.Now())
+	if err != nil {
+		log.Printf("monitor worker runtime encode failed: %v", err)
+		return
+	}
+	writeCtx, cancelWrite := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelWrite()
+	if err := store.SetSettingValueContext(writeCtx, "monitor_worker_runtime", string(payload)); err != nil {
+		log.Printf("monitor worker runtime publish failed: %v", err)
 	}
 }
 

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import Redis from "ioredis";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
+import { redisClient } from "@/lib/redis";
 
 export const dynamic = "force-dynamic";
 
@@ -33,29 +33,26 @@ export async function GET() {
         return NextResponse.json({});
     }
 
-    const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
+    // This endpoint is polled every few seconds by every open dashboard, so it
+    // uses the shared client rather than opening and quitting a connection per
+    // request.
+    const pipe = redisClient().pipeline();
+    for (const m of userMonitors) {
+        pipe.get(`monitor:health:${m.id}`);
+    }
+    const results = await pipe.exec();
 
-    try {
-        const pipe = redis.pipeline();
-        for (const m of userMonitors) {
-            pipe.get(`monitor:health:${m.id}`);
-        }
-        const results = await pipe.exec();
-
-        const health: Record<number, MonitorHealth> = {};
-        if (results) {
-            for (let i = 0; i < userMonitors.length; i++) {
-                const [err, val] = results[i];
-                if (!err && val && typeof val === "string") {
-                    try {
-                        health[userMonitors[i].id] = JSON.parse(val);
-                    } catch {}
-                }
+    const health: Record<number, MonitorHealth> = {};
+    if (results) {
+        for (let i = 0; i < userMonitors.length; i++) {
+            const [err, val] = results[i];
+            if (!err && val && typeof val === "string") {
+                try {
+                    health[userMonitors[i].id] = JSON.parse(val);
+                } catch {}
             }
         }
-
-        return NextResponse.json(health);
-    } finally {
-        redis.quit();
     }
+
+    return NextResponse.json(health);
 }

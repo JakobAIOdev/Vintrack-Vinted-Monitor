@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +22,7 @@ import (
 
 type Store struct {
 	db             *sql.DB
+	alertDB        *sql.DB
 	connString     string
 	cache          *cache.RedisCache
 	healthErrLog   map[int]time.Time
@@ -32,6 +35,10 @@ type Store struct {
 	telemetryCh    chan telemetryEvent
 	telemetryStop  chan struct{}
 	telemetryDone  chan struct{}
+	runStatsMu     sync.Mutex
+	runStats       map[monitorRunStatsKey]*monitorRunStatsDelta
+	runStatsStop   chan struct{}
+	runStatsDone   chan struct{}
 }
 
 type telemetryEvent struct {
@@ -266,6 +273,49 @@ func (s *Store) FailProxyGroupCheckJobContext(ctx context.Context, id int, messa
 	return err
 }
 
+// configuredMaxOpenConns sizes the general connection pool.
+//
+// The historical runtime.NumCPU()*4 assumes CPU-bound work, but this workload is
+// dominated by waiting: hundreds of monitor goroutines plus the alert and
+// enrichment pipelines all block on Postgres round trips. On a small host that
+// formula yields single-digit connections, which serialises everything, so
+// apply a floor and allow an explicit override.
+func configuredMaxOpenConns() int {
+	if configured := envInt("DB_MAX_OPEN_CONNS", 0); configured > 0 {
+		return configured
+	}
+	maxConns := runtime.NumCPU() * 4
+	if maxConns < 16 {
+		maxConns = 16
+	}
+	return maxConns
+}
+
+func configuredAlertPoolSize() int {
+	size := envInt("ALERT_DB_POOL_SIZE", 6)
+	if size < 2 {
+		size = 2
+	}
+	return size
+}
+
+func envInt(key string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+// alertPool returns the dedicated outbox pool, falling back to the general pool
+// for tests that construct a Store directly.
+func (s *Store) alertPool() *sql.DB {
+	if s.alertDB != nil {
+		return s.alertDB
+	}
+	return s.db
+}
+
 func NewStore(connStr string, redisCache *cache.RedisCache) (*Store, error) {
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
@@ -276,16 +326,32 @@ func NewStore(connStr string, redisCache *cache.RedisCache) (*Store, error) {
 		return nil, fmt.Errorf("db ping: %w", err)
 	}
 
-	maxConns := runtime.NumCPU() * 4
+	maxConns := configuredMaxOpenConns()
 	db.SetMaxOpenConns(maxConns)
 	db.SetMaxIdleConns(maxConns / 2)
 	db.SetConnMaxLifetime(10 * time.Minute)
 	db.SetConnMaxIdleTime(5 * time.Minute)
 
-	log.Printf("PostgreSQL connected (pool: %d max, %d idle)", maxConns, maxConns/2)
+	// The alert outbox gets its own pool. Sharing the general pool meant every
+	// enqueue competed with hundreds of monitor goroutines and with the
+	// telemetry flusher, so the alert path spent its deadline waiting for a
+	// connection rather than talking to Postgres.
+	alertDB, err := sql.Open("postgres", connStr)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sql open alert pool: %w", err)
+	}
+	alertConns := configuredAlertPoolSize()
+	alertDB.SetMaxOpenConns(alertConns)
+	alertDB.SetMaxIdleConns(alertConns)
+	alertDB.SetConnMaxLifetime(10 * time.Minute)
+	alertDB.SetConnMaxIdleTime(5 * time.Minute)
+
+	log.Printf("PostgreSQL connected (pool: %d max, %d idle; alert pool: %d)", maxConns, maxConns/2, alertConns)
 
 	store := &Store{
 		db:            db,
+		alertDB:       alertDB,
 		connString:    connStr,
 		cache:         redisCache,
 		healthErrLog:  make(map[int]time.Time),
@@ -296,10 +362,14 @@ func NewStore(connStr string, redisCache *cache.RedisCache) (*Store, error) {
 		telemetryCh:   make(chan telemetryEvent, 4096),
 		telemetryStop: make(chan struct{}),
 		telemetryDone: make(chan struct{}),
+		runStats:      make(map[monitorRunStatsKey]*monitorRunStatsDelta),
+		runStatsStop:  make(chan struct{}),
+		runStatsDone:  make(chan struct{}),
 	}
 
 	go store.bandwidthFlushLoop()
 	go store.telemetryFlushLoop()
+	go store.monitorRunStatsFlushLoop()
 
 	return store, nil
 }
@@ -2078,26 +2148,11 @@ func (s *Store) MarkItemsSeen(monitorID int, ids []int64) {
 	}
 }
 
-func (s *Store) PublishItem(item model.Item) error {
+func (s *Store) PublishItem(userID string, item model.Item) error {
 	if s.cache != nil {
-		return s.cache.PublishNewItem(item)
+		return s.cache.PublishNewItem(userID, item)
 	}
 	return nil
-}
-
-func (s *Store) ClaimUserItemAlert(userID string, itemID int64) bool {
-	if userID == "" {
-		return true
-	}
-	if s.cache == nil {
-		return true
-	}
-	claimed, err := s.cache.ClaimUserItemAlert(userID, itemID)
-	if err != nil {
-		log.Printf("redis alert dedupe failed for %s:%d: %v", userID, itemID, err)
-		return true
-	}
-	return claimed
 }
 
 func (s *Store) UpdateItemSellerInfo(itemID int64, location, rating string) error {
@@ -2225,12 +2280,18 @@ func (s *Store) attachBannedSellerIDs(monitors []model.Monitor) error {
 }
 
 func (s *Store) Close() error {
+	// Flush the aggregate first, while the pool is still open.
+	close(s.runStatsStop)
+	<-s.runStatsDone
 	close(s.telemetryStop)
 	<-s.telemetryDone
 	close(s.trafficStop)
 	<-s.trafficDone
 	if s.cache != nil {
 		s.cache.Close()
+	}
+	if s.alertDB != nil {
+		s.alertDB.Close()
 	}
 	return s.db.Close()
 }
@@ -2423,7 +2484,95 @@ func (s *Store) RecordMonitorRun(run model.MonitorRun) {
 	if run.FetchSource == "" {
 		run.FetchSource = "canonical"
 	}
-	s.enqueueTelemetry(telemetryEvent{kind: "run", run: run})
+	checkedAt := time.Now().UTC()
+
+	// Every run reaches the hourly aggregate. This is a map merge under a mutex,
+	// so unlike the bounded telemetry channel it cannot drop events under load.
+	s.accumulateMonitorRunStats(run, checkedAt)
+
+	if !monitorRunCarriesDetail(run) {
+		return
+	}
+	s.enqueueTelemetry(telemetryEvent{kind: "run", run: run, occurredAt: checkedAt})
+}
+
+func (s *Store) accumulateMonitorRunStats(run model.MonitorRun, checkedAt time.Time) {
+	key := monitorRunStatsKey{
+		monitorID:   run.MonitorID,
+		fetchSource: run.FetchSource,
+		// UTC, so the bucket cannot drift with the database session timezone.
+		bucketHour: checkedAt.Truncate(time.Hour),
+	}
+
+	s.runStatsMu.Lock()
+	defer s.runStatsMu.Unlock()
+	delta, ok := s.runStats[key]
+	if !ok {
+		delta = &monitorRunStatsDelta{}
+		s.runStats[key] = delta
+	}
+	delta.add(run, checkedAt)
+}
+
+func (s *Store) monitorRunStatsFlushLoop() {
+	defer close(s.runStatsDone)
+	ticker := time.NewTicker(monitorRunStatsFlushInterval())
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.flushMonitorRunStats()
+		case <-s.runStatsStop:
+			s.flushMonitorRunStats()
+			return
+		}
+	}
+}
+
+func (s *Store) flushMonitorRunStats() {
+	s.runStatsMu.Lock()
+	pending := s.runStats
+	s.runStats = make(map[monitorRunStatsKey]*monitorRunStatsDelta, len(pending))
+	s.runStatsMu.Unlock()
+
+	if len(pending) == 0 {
+		return
+	}
+
+	rows := make([]monitorRunStatsRow, 0, len(pending))
+	for key, delta := range pending {
+		rows = append(rows, monitorRunStatsRow{key: key, delta: *delta})
+	}
+
+	for start := 0; start < len(rows); start += monitorRunStatsUpsertChunkSize {
+		end := min(start+monitorRunStatsUpsertChunkSize, len(rows))
+		chunk := rows[start:end]
+
+		statement, args := buildMonitorRunStatsUpsert(chunk)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, err := s.db.ExecContext(ctx, statement, args...)
+		cancel()
+		if err != nil {
+			log.Printf("monitor run stats flush failed for %d buckets: %v", len(chunk), err)
+			s.requeueMonitorRunStats(chunk)
+		}
+	}
+}
+
+// requeueMonitorRunStats folds a failed chunk back into the live map so a
+// transient database problem costs latency rather than counts.
+func (s *Store) requeueMonitorRunStats(rows []monitorRunStatsRow) {
+	s.runStatsMu.Lock()
+	defer s.runStatsMu.Unlock()
+	for _, row := range rows {
+		delta, ok := s.runStats[row.key]
+		if !ok {
+			delta = &monitorRunStatsDelta{}
+			s.runStats[row.key] = delta
+		}
+		delta.mergeFrom(row.delta)
+	}
 }
 
 func (s *Store) RecordItemDetection(detection model.MonitorItemDetection) {
@@ -2502,67 +2651,210 @@ func (s *Store) telemetryFlushLoop() {
 	}
 }
 
+// flushTelemetry writes a batch as one statement per event kind.
+//
+// It deliberately does not open a transaction. The four groups touch
+// independent rows and never needed atomicity, while a single transaction held
+// one pooled connection across up to a hundred sequential round trips and let
+// one failing statement discard the whole batch.
+//
+// The execution order is load-bearing: a detection row has to exist before the
+// alert timing updates that reference it, and RecordItemDetection always runs
+// before the alert is enqueued, so both can share one batch.
 func (s *Store) flushTelemetry(events []telemetryEvent) {
-	tx, err := s.db.Begin()
-	if err != nil {
-		log.Printf("telemetry batch begin failed: %v", err)
-		return
-	}
-	defer tx.Rollback()
-
+	var runs, detections, queued, sent []telemetryEvent
 	for _, event := range events {
 		switch event.kind {
 		case "run":
-			run := event.run
-			_, err = tx.Exec(`
-				INSERT INTO monitor_runs (
-					monitor_id, status, status_code, duration_ms, item_count,
-					new_item_count, error_message, proxy_source, fetch_source, region
-				)
-				VALUES ($1, $2, NULLIF($3, 0), NULLIF($4, 0), $5, $6, NULLIF($7, ''), NULLIF($8, ''), $9, $10)`,
-				run.MonitorID, run.Status, run.StatusCode, run.DurationMS, run.ItemCount,
-				run.NewItemCount, run.ErrorMessage, run.ProxySource, run.FetchSource, run.Region,
-			)
+			runs = append(runs, event)
 		case "detection":
-			detection := event.detection
-			var earlySeenAt interface{}
-			var canonicalSeenAt interface{}
-			if detection.Source == "discovery" {
-				earlySeenAt = detection.SeenAt
-			} else {
-				canonicalSeenAt = detection.SeenAt
-			}
-			_, err = tx.Exec(`
-				INSERT INTO monitor_item_detections (
-					monitor_id, item_id, first_source, early_seen_at, canonical_seen_at, updated_at
-				)
-				VALUES ($1, $2, $3, $4, $5, NOW())
-				ON CONFLICT (monitor_id, item_id) DO UPDATE SET
-					early_seen_at = COALESCE(monitor_item_detections.early_seen_at, EXCLUDED.early_seen_at),
-					canonical_seen_at = COALESCE(monitor_item_detections.canonical_seen_at, EXCLUDED.canonical_seen_at),
-					updated_at = NOW()`,
-				detection.MonitorID, detection.ItemID, detection.Source, earlySeenAt, canonicalSeenAt,
-			)
+			detections = append(detections, event)
 		case "alert_queued":
-			_, err = tx.Exec(`
-				UPDATE monitor_item_detections
-				SET alert_queued_at = COALESCE(alert_queued_at, $3), updated_at = NOW()
-				WHERE monitor_id = $1 AND item_id = $2`, event.monitorID, event.itemID, event.occurredAt)
+			queued = append(queued, event)
 		case "alert_sent":
-			_, err = tx.Exec(`
-				UPDATE monitor_item_detections
-				SET alert_sent_at = COALESCE(alert_sent_at, $3), updated_at = NOW()
-				WHERE monitor_id = $1 AND item_id = $2`, event.monitorID, event.itemID, event.occurredAt)
-		}
-		if err != nil {
-			log.Printf("telemetry %s write failed: %v", event.kind, err)
-			return
+			sent = append(sent, event)
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		log.Printf("telemetry batch commit failed: %v", err)
+	s.insertMonitorRuns(runs)
+	s.upsertItemDetections(detections)
+	s.applyDetectionTiming("alert_queued_at", queued)
+	s.applyDetectionTiming("alert_sent_at", sent)
+}
+
+func (s *Store) telemetryExec(label string, statement string, args []interface{}) {
+	if statement == "" {
+		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := s.db.ExecContext(ctx, statement, args...); err != nil {
+		log.Printf("telemetry %s write failed: %v", label, err)
+	}
+}
+
+func (s *Store) insertMonitorRuns(events []telemetryEvent) {
+	if len(events) == 0 {
+		return
+	}
+
+	var statement strings.Builder
+	statement.WriteString(`
+		INSERT INTO monitor_runs (
+			monitor_id, status, status_code, duration_ms, item_count,
+			new_item_count, error_message, proxy_source, fetch_source, region, checked_at
+		) VALUES `)
+
+	args := make([]interface{}, 0, len(events)*11)
+	for index, event := range events {
+		if index > 0 {
+			statement.WriteString(", ")
+		}
+		base := index * 11
+		statement.WriteString(fmt.Sprintf(
+			"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+			base+1, base+2, base+3, base+4, base+5, base+6,
+			base+7, base+8, base+9, base+10, base+11,
+		))
+
+		run := event.run
+		checkedAt := event.occurredAt
+		if checkedAt.IsZero() {
+			checkedAt = time.Now().UTC()
+		}
+		// NULL semantics are preserved from the previous NULLIF form so the
+		// aggregate and the detail rows keep agreeing on what counts as a sample.
+		args = append(args,
+			run.MonitorID, run.Status, nilIfZero(int64(run.StatusCode)),
+			nilIfZero(int64(run.DurationMS)), run.ItemCount, run.NewItemCount,
+			nilIfEmpty(run.ErrorMessage), nilIfEmpty(run.ProxySource),
+			run.FetchSource, run.Region, checkedAt,
+		)
+	}
+
+	s.telemetryExec("run", statement.String(), args)
+}
+
+func (s *Store) upsertItemDetections(events []telemetryEvent) {
+	if len(events) == 0 {
+		return
+	}
+
+	// A canonical and a discovery detection for the same item can land in one
+	// batch. PostgreSQL rejects a statement that affects the same row twice, so
+	// merge them here with the same first-writer-wins rule the upsert applies.
+	type detectionKey struct {
+		monitorID int
+		itemID    int64
+	}
+	order := make([]detectionKey, 0, len(events))
+	merged := make(map[detectionKey]model.MonitorItemDetection, len(events))
+	early := make(map[detectionKey]time.Time, len(events))
+	canonical := make(map[detectionKey]time.Time, len(events))
+
+	for _, event := range events {
+		detection := event.detection
+		key := detectionKey{monitorID: detection.MonitorID, itemID: detection.ItemID}
+		if _, seen := merged[key]; !seen {
+			order = append(order, key)
+			merged[key] = detection
+		}
+		if detection.Source == "discovery" {
+			if existing, ok := early[key]; !ok || detection.SeenAt.Before(existing) {
+				early[key] = detection.SeenAt
+			}
+			continue
+		}
+		if existing, ok := canonical[key]; !ok || detection.SeenAt.Before(existing) {
+			canonical[key] = detection.SeenAt
+		}
+	}
+
+	var statement strings.Builder
+	statement.WriteString(`
+		INSERT INTO monitor_item_detections (
+			monitor_id, item_id, first_source, early_seen_at, canonical_seen_at, updated_at
+		) VALUES `)
+
+	args := make([]interface{}, 0, len(order)*5)
+	for index, key := range order {
+		if index > 0 {
+			statement.WriteString(", ")
+		}
+		base := index * 5
+		statement.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,NOW())", base+1, base+2, base+3, base+4, base+5))
+		args = append(args,
+			key.monitorID, key.itemID, merged[key].Source,
+			nilIfZeroTime(early[key]), nilIfZeroTime(canonical[key]),
+		)
+	}
+
+	statement.WriteString(`
+		ON CONFLICT (monitor_id, item_id) DO UPDATE SET
+			early_seen_at = COALESCE(monitor_item_detections.early_seen_at, EXCLUDED.early_seen_at),
+			canonical_seen_at = COALESCE(monitor_item_detections.canonical_seen_at, EXCLUDED.canonical_seen_at),
+			updated_at = NOW()`)
+
+	s.telemetryExec("detection", statement.String(), args)
+}
+
+// applyDetectionTiming stamps alert_queued_at or alert_sent_at for a batch.
+// column comes from a fixed internal allowlist, never from user input.
+func (s *Store) applyDetectionTiming(column string, events []telemetryEvent) {
+	if len(events) == 0 {
+		return
+	}
+	if column != "alert_queued_at" && column != "alert_sent_at" {
+		log.Printf("telemetry timing write refused for unknown column %q", column)
+		return
+	}
+
+	// Duplicate keys in a VALUES list would match arbitrarily rather than error,
+	// making the stamped timestamp non-deterministic. Keep the earliest, which
+	// is what sequential COALESCE application produced.
+	type timingKey struct {
+		monitorID int
+		itemID    int64
+	}
+	order := make([]timingKey, 0, len(events))
+	earliest := make(map[timingKey]time.Time, len(events))
+	for _, event := range events {
+		key := timingKey{monitorID: event.monitorID, itemID: event.itemID}
+		occurredAt := event.occurredAt
+		if occurredAt.IsZero() {
+			occurredAt = time.Now().UTC()
+		}
+		if existing, ok := earliest[key]; !ok || occurredAt.Before(existing) {
+			if !ok {
+				order = append(order, key)
+			}
+			earliest[key] = occurredAt
+		}
+	}
+
+	var statement strings.Builder
+	fmt.Fprintf(&statement, `
+		UPDATE monitor_item_detections AS d
+		SET %s = COALESCE(d.%s, v.occurred_at), updated_at = NOW()
+		FROM (VALUES `, column, column)
+
+	args := make([]interface{}, 0, len(order)*3)
+	for index, key := range order {
+		if index > 0 {
+			statement.WriteString(", ")
+		}
+		base := index * 3
+		// timestamptz, not timestamp: a bare VALUES list needs an explicit cast,
+		// and the plain timestamp form would drop the driver's offset and shift
+		// every value by the session's UTC offset.
+		statement.WriteString(fmt.Sprintf("($%d::int,$%d::bigint,$%d::timestamptz)", base+1, base+2, base+3))
+		args = append(args, key.monitorID, key.itemID, earliest[key])
+	}
+
+	statement.WriteString(`) AS v(monitor_id, item_id, occurred_at)
+		WHERE d.monitor_id = v.monitor_id AND d.item_id = v.item_id`)
+
+	s.telemetryExec(column, statement.String(), args)
 }
 
 func (s *Store) PruneDetectionTelemetry(retentionDays int) {
@@ -2682,7 +2974,9 @@ func (s *Store) RecordAlertEvent(event model.AlertEvent) {
 	if strings.TrimSpace(metadata) == "" {
 		metadata = "{}"
 	}
-	_, err := s.db.Exec(`
+	// Called synchronously from the alert workers, so it belongs on the alert
+	// pool rather than queueing behind monitor and telemetry traffic.
+	_, err := s.alertPool().Exec(`
 		INSERT INTO alert_events (
 			"userId", monitor_id, item_id, notification_id, delivery_id,
 			channel, status, notification_kind, reason_code, attempt_number,

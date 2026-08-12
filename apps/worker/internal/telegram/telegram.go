@@ -16,10 +16,11 @@ import (
 	"strings"
 	"time"
 
+	"vintrack-worker/internal/httpclient"
 	"vintrack-worker/internal/model"
 )
 
-var httpClient = &http.Client{Timeout: 20 * time.Second}
+var httpClient = httpclient.New(20 * time.Second)
 var apiBaseURL = "https://api.telegram.org"
 var retryBackoff = 750 * time.Millisecond
 
@@ -191,6 +192,16 @@ func sendAttempt(ctx context.Context, method string, payload map[string]interfac
 		return model.AlertDeliveryResult{ReasonCode: "provider_rejected", Detail: "telegram request could not be created"}
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// One bot token serves every member, so the send rate is a shared resource.
+	// Pacing here is what keeps a busy minute from turning into a bot-wide 429
+	// that penalises every other chat.
+	if err := globalLimiter.wait(ctx); err != nil {
+		return model.AlertDeliveryResult{
+			Retryable:  true,
+			ReasonCode: "rate_limited",
+			Detail:     "telegram send budget was not available before the attempt deadline",
+		}
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		reason := "network_error"
@@ -218,6 +229,14 @@ func sendAttempt(ctx context.Context, method string, payload map[string]interfac
 		} else {
 			result.RetryAfter = 2 * time.Second
 		}
+		// Telegram does not report the scope of a 429. A retry_after of seconds is
+		// the bot-wide flood limit, which every chat shares because one token
+		// serves every member; a per-chat limit reports about a second. Pausing
+		// the shared budget stops the other chats from compounding the problem.
+		if result.RetryAfter >= globalPauseThreshold {
+			globalLimiter.pause(result.RetryAfter)
+			result.GlobalRateLimit = true
+		}
 		return result
 	}
 	if resp.StatusCode >= 500 {
@@ -232,9 +251,14 @@ func sendAttempt(ctx context.Context, method string, payload map[string]interfac
 	result.ReasonCode = "provider_rejected"
 	result.Detail = fmt.Sprintf("telegram returned %d", resp.StatusCode)
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusNotFound {
-		result.Retryable = true
+		// A rejected bot token is a configuration fault, not a transient one.
+		// Retrying burns all eight attempts and, because claiming is ordered per
+		// destination, head-of-line blocks every newer alert for that chat until
+		// the deadline expires it.
+		result.Retryable = false
 		result.ReasonCode = "provider_authentication"
 		result.Detail = "telegram bot authentication failed"
+		logAuthenticationFailure(resp.StatusCode)
 		return result
 	}
 	if resp.StatusCode == http.StatusForbidden ||

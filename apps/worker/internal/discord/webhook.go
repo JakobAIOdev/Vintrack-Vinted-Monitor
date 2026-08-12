@@ -15,10 +15,11 @@ import (
 	"strings"
 	"time"
 
+	"vintrack-worker/internal/httpclient"
 	"vintrack-worker/internal/model"
 )
 
-var httpClient = &http.Client{Timeout: 5 * time.Second}
+var httpClient = httpclient.New(5 * time.Second)
 
 func SendWebhook(webhookURL string, item model.Item, monitorName string, proxySource string, style model.NotificationMessageStyle) error {
 	payload := buildItemWebhookPayload(item, monitorName, proxySource, style)
@@ -291,7 +292,7 @@ func SendStartupWebhook(webhookURL string, monitorName string) {
 
 	resp, err := httpClient.Post(webhookURL, "application/json", bytes.NewReader(body))
 	if err == nil {
-		resp.Body.Close()
+		httpclient.DrainAndClose(resp.Body)
 	}
 }
 
@@ -381,7 +382,7 @@ func SendProxyWarningWebhook(webhookURL string, monitorName string, consecutiveE
 
 	resp, err := httpClient.Post(webhookURL, "application/json", bytes.NewReader(body))
 	if err == nil {
-		resp.Body.Close()
+		httpclient.DrainAndClose(resp.Body)
 	}
 }
 
@@ -414,6 +415,6 @@ func SendAutoStopWebhook(webhookURL string, monitorName string, consecutiveError
 
 	resp, err := httpClient.Post(webhookURL, "application/json", bytes.NewReader(body))
 	if err == nil {
-		resp.Body.Close()
+		httpclient.DrainAndClose(resp.Body)
 	}
 }

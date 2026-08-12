@@ -15,8 +15,41 @@ import {
     USER_MONITOR_LIMIT_PREFIX,
     userLimitScope,
     withMonitorActivationLock,
+    acquireGlobalMonitorActivationLock,
 } from "@/lib/monitor-limits";
 import { logAuditEvent } from "@/lib/audit";
+import { randomUUID } from "node:crypto";
+import {
+    MEMBER_ANNOUNCEMENT_SETTING_KEY,
+    parseMemberAnnouncement,
+    toMemberAnnouncementInput,
+    validateMemberAnnouncementInput,
+    type MemberAnnouncement,
+    type MemberAnnouncementInput,
+} from "@/lib/member-announcement";
+import {
+    MONITOR_MAINTENANCE_SETTING_KEY,
+    getMonitorMaintenanceStatus,
+    validateMonitorMaintenanceInput,
+    type MonitorMaintenance,
+} from "@/lib/monitor-maintenance";
+import {
+    getMonitorMaintenance,
+    getMonitorWorkerRuntime,
+} from "@/lib/monitor-maintenance.server";
+import {
+    INACTIVE_MEMBER_POLICY_SETTING_KEY,
+    inactivePolicyRuntimeStatus,
+    validateInactiveMemberPolicyInput,
+    type InactiveMemberPolicy,
+    type InactiveMemberPolicyInput,
+} from "@/lib/inactive-member-policy";
+import {
+    countInactivePolicyMatches,
+    getInactiveEligibleMonitorIds,
+    getInactiveMemberPolicy,
+    getInactiveMemberRuntime,
+} from "@/lib/inactive-member-policy.server";
 
 const SERVER_PROXIES_SETTING_KEY = "server_proxies";
 const FREE_PROXY_ENABLED_KEY = "free_proxy_enabled";
@@ -1175,6 +1208,382 @@ async function requireAdmin() {
     if (!session?.user?.id) throw new Error("Unauthorized");
     if (session.user.role !== "admin") throw new Error("Forbidden");
     return session.user.id;
+}
+
+export type MonitorMaintenanceAdminState = {
+    maintenance: MonitorMaintenance;
+    runtime: Awaited<ReturnType<typeof getMonitorWorkerRuntime>>;
+    status: ReturnType<typeof getMonitorMaintenanceStatus>;
+    activeMonitorCount: number;
+    maintenancePausedCount: number;
+};
+
+async function loadMonitorMaintenanceAdminState(): Promise<MonitorMaintenanceAdminState> {
+    const [maintenance, runtime, activeMonitorCount, maintenancePausedCount] =
+        await Promise.all([
+            getMonitorMaintenance(),
+            getMonitorWorkerRuntime().catch(() => null),
+            db.monitors.count({ where: { status: "active" } }),
+            db.monitors.count({ where: { status: "maintenance_paused" } }),
+        ]);
+    return {
+        maintenance,
+        runtime,
+        status: getMonitorMaintenanceStatus(maintenance, runtime),
+        activeMonitorCount,
+        maintenancePausedCount,
+    };
+}
+
+export async function getMonitorMaintenanceAdminState() {
+    await requireAdmin();
+    return loadMonitorMaintenanceAdminState();
+}
+
+export async function enableMonitorMaintenance(input: {
+    message: string;
+    estimatedEndAt: string | null;
+}) {
+    const adminUserId = await requireAdmin();
+    const normalized = validateMonitorMaintenanceInput(input);
+    const enabledAt = new Date();
+    const revision = randomUUID();
+
+    const pausedCount = await db.$transaction(async (tx) => {
+        await acquireGlobalMonitorActivationLock(tx);
+        const existing = await getMonitorMaintenance(tx);
+        if (existing.enabled) {
+            throw new Error("Monitor maintenance is already enabled");
+        }
+        const result = await tx.monitors.updateMany({
+            where: { status: "active" },
+            data: { status: "maintenance_paused" },
+        });
+        const maintenance: MonitorMaintenance = {
+            enabled: true,
+            revision,
+            ...normalized,
+            enabledAt: enabledAt.toISOString(),
+            enabledBy: adminUserId,
+            updatedAt: enabledAt.toISOString(),
+        };
+        await tx.app_settings.upsert({
+            where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+            create: {
+                key: MONITOR_MAINTENANCE_SETTING_KEY,
+                value: JSON.stringify(maintenance),
+            },
+            update: { value: JSON.stringify(maintenance) },
+        });
+        return result.count;
+    });
+
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.monitor_maintenance_enabled",
+        targetType: "app_setting",
+        targetId: MONITOR_MAINTENANCE_SETTING_KEY,
+        metadata: {
+            revision,
+            pausedCount,
+            estimatedEndAt: normalized.estimatedEndAt,
+        },
+    });
+    revalidatePath("/", "layout");
+    revalidatePath("/admin");
+    return loadMonitorMaintenanceAdminState();
+}
+
+export async function updateMonitorMaintenance(input: {
+    message: string;
+    estimatedEndAt: string | null;
+}) {
+    const adminUserId = await requireAdmin();
+    const normalized = validateMonitorMaintenanceInput(input);
+    const revision = randomUUID();
+    const changed = await db.$transaction(async (tx) => {
+        await acquireGlobalMonitorActivationLock(tx);
+        const existing = await getMonitorMaintenance(tx);
+        if (!existing.enabled) {
+            throw new Error("Monitor maintenance is not enabled");
+        }
+        if (
+            existing.message === normalized.message &&
+            existing.estimatedEndAt === normalized.estimatedEndAt
+        ) {
+            return false;
+        }
+        const maintenance: MonitorMaintenance = {
+            ...existing,
+            ...normalized,
+            revision,
+            updatedAt: new Date().toISOString(),
+        };
+        await tx.app_settings.upsert({
+            where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+            create: {
+                key: MONITOR_MAINTENANCE_SETTING_KEY,
+                value: JSON.stringify(maintenance),
+            },
+            update: { value: JSON.stringify(maintenance) },
+        });
+        return true;
+    });
+    if (!changed) return loadMonitorMaintenanceAdminState();
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.monitor_maintenance_updated",
+        targetType: "app_setting",
+        targetId: MONITOR_MAINTENANCE_SETTING_KEY,
+        metadata: { revision, estimatedEndAt: normalized.estimatedEndAt },
+    });
+    revalidatePath("/", "layout");
+    revalidatePath("/admin");
+    return loadMonitorMaintenanceAdminState();
+}
+
+export async function disableMonitorMaintenance() {
+    const adminUserId = await requireAdmin();
+    const disabledAt = new Date();
+    const revision = randomUUID();
+
+    const result = await db.$transaction(async (tx) => {
+        await acquireGlobalMonitorActivationLock(tx);
+        const existing = await getMonitorMaintenance(tx);
+        if (!existing.enabled) {
+            throw new Error("Monitor maintenance is not enabled");
+        }
+        const policy = await getInactiveMemberPolicy(tx);
+        const inactivityIds = await getInactiveEligibleMonitorIds(
+            policy,
+            "maintenance_paused",
+            tx,
+        );
+        if (inactivityIds.length > 0) {
+            await tx.monitors.updateMany({
+                where: { id: { in: inactivityIds } },
+                data: { status: "inactivity_paused" },
+            });
+        }
+        const resumed = await tx.monitors.updateMany({
+            where: { status: "maintenance_paused" },
+            data: { status: "active" },
+        });
+        const maintenance: MonitorMaintenance = {
+            ...existing,
+            enabled: false,
+            revision,
+            updatedAt: disabledAt.toISOString(),
+        };
+        await tx.app_settings.upsert({
+            where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
+            create: {
+                key: MONITOR_MAINTENANCE_SETTING_KEY,
+                value: JSON.stringify(maintenance),
+            },
+            update: { value: JSON.stringify(maintenance) },
+        });
+        return {
+            resumedCount: resumed.count,
+            inactivityPausedCount: inactivityIds.length,
+            durationSeconds: existing.enabledAt
+                ? Math.max(
+                      0,
+                      Math.round(
+                          (disabledAt.getTime() -
+                              new Date(existing.enabledAt).getTime()) /
+                              1000,
+                      ),
+                  )
+                : null,
+        };
+    });
+
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.monitor_maintenance_disabled",
+        targetType: "app_setting",
+        targetId: MONITOR_MAINTENANCE_SETTING_KEY,
+        metadata: { revision, ...result },
+    });
+    revalidatePath("/", "layout");
+    revalidatePath("/admin");
+    return loadMonitorMaintenanceAdminState();
+}
+
+export type InactiveMemberPolicyAdminState = {
+    policy: InactiveMemberPolicy;
+    runtime: Awaited<ReturnType<typeof getInactiveMemberRuntime>>;
+    status: ReturnType<typeof inactivePolicyRuntimeStatus>;
+    preview: { memberCount: number; monitorCount: number };
+    inactivityPausedCount: number;
+};
+
+async function loadInactiveMemberPolicyAdminState(): Promise<InactiveMemberPolicyAdminState> {
+    const [policy, runtime, inactivityPausedCount] = await Promise.all([
+        getInactiveMemberPolicy(),
+        getInactiveMemberRuntime().catch(() => null),
+        db.monitors.count({ where: { status: "inactivity_paused" } }),
+    ]);
+    return {
+        policy,
+        runtime,
+        status: inactivePolicyRuntimeStatus(policy, runtime),
+        preview: await countInactivePolicyMatches(policy),
+        inactivityPausedCount,
+    };
+}
+
+export async function getInactiveMemberPolicyAdminState() {
+    await requireAdmin();
+    return loadInactiveMemberPolicyAdminState();
+}
+
+export async function previewInactiveMemberPolicy(
+    input: InactiveMemberPolicyInput,
+) {
+    await requireAdmin();
+    const normalized = validateInactiveMemberPolicyInput(input);
+    const existing = await getInactiveMemberPolicy();
+    const policy: InactiveMemberPolicy = {
+        ...existing,
+        ...normalized,
+        enabledAt:
+            input.enabled && !existing.enabled
+                ? new Date().toISOString()
+                : existing.enabledAt,
+    };
+    return countInactivePolicyMatches(policy);
+}
+
+export async function updateInactiveMemberPolicy(
+    input: InactiveMemberPolicyInput,
+) {
+    const adminUserId = await requireAdmin();
+    const normalized = validateInactiveMemberPolicyInput(input);
+    const now = new Date();
+    const result = await db.$transaction(async (tx) => {
+        await acquireGlobalMonitorActivationLock(tx);
+        const existing = await getInactiveMemberPolicy(tx);
+        const changed =
+            existing.enabled !== normalized.enabled ||
+            existing.duration !== normalized.duration ||
+            existing.durationUnit !== normalized.durationUnit ||
+            existing.monitorScope !== normalized.monitorScope ||
+            existing.roles.join(",") !== normalized.roles.join(",");
+        if (!changed) return { changed: false, revision: existing.revision };
+
+        const revision = randomUUID();
+        const policy: InactiveMemberPolicy = {
+            ...normalized,
+            revision,
+            enabledAt:
+                normalized.enabled && !existing.enabled
+                    ? now.toISOString()
+                    : existing.enabledAt,
+            updatedAt: now.toISOString(),
+            updatedBy: adminUserId,
+        };
+        await tx.app_settings.upsert({
+            where: { key: INACTIVE_MEMBER_POLICY_SETTING_KEY },
+            create: {
+                key: INACTIVE_MEMBER_POLICY_SETTING_KEY,
+                value: JSON.stringify(policy),
+            },
+            update: { value: JSON.stringify(policy) },
+        });
+        return { changed: true, revision };
+    });
+    if (result.changed) {
+        await logAuditEvent({
+            userId: adminUserId,
+            action: "admin.inactive_member_policy_updated",
+            targetType: "app_setting",
+            targetId: INACTIVE_MEMBER_POLICY_SETTING_KEY,
+            metadata: {
+                revision: result.revision,
+                enabled: normalized.enabled,
+                durationDays: normalized.durationDays,
+                monitorScope: normalized.monitorScope,
+                roles: normalized.roles,
+            },
+        });
+        revalidatePath("/", "layout");
+        revalidatePath("/admin");
+    }
+    return loadInactiveMemberPolicyAdminState();
+}
+
+export async function updateMemberAnnouncement(
+    input: MemberAnnouncementInput,
+): Promise<
+    | {
+          success: true;
+          announcement: MemberAnnouncement;
+          changed: boolean;
+      }
+    | { success: false; error: string }
+> {
+    const adminUserId = await requireAdmin();
+    let normalized: MemberAnnouncementInput;
+    try {
+        normalized = validateMemberAnnouncementInput(input);
+    } catch (error) {
+        return {
+            success: false,
+            error:
+                error instanceof Error
+                    ? error.message
+                    : "Invalid announcement settings",
+        };
+    }
+    const existingSetting = await db.app_settings.findUnique({
+        where: { key: MEMBER_ANNOUNCEMENT_SETTING_KEY },
+        select: { value: true },
+    });
+    const existing = parseMemberAnnouncement(existingSetting?.value);
+    const changed =
+        JSON.stringify(toMemberAnnouncementInput(existing)) !==
+        JSON.stringify(normalized);
+
+    if (!changed) {
+        return { success: true, announcement: existing, changed: false };
+    }
+
+    const announcement: MemberAnnouncement = {
+        ...normalized,
+        revision: randomUUID(),
+    };
+    await db.app_settings.upsert({
+        where: { key: MEMBER_ANNOUNCEMENT_SETTING_KEY },
+        create: {
+            key: MEMBER_ANNOUNCEMENT_SETTING_KEY,
+            value: JSON.stringify(announcement),
+        },
+        update: { value: JSON.stringify(announcement) },
+    });
+
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.member_announcement_updated",
+        targetType: "app_setting",
+        targetId: MEMBER_ANNOUNCEMENT_SETTING_KEY,
+        metadata: {
+            enabled: announcement.enabled,
+            variant: announcement.variant,
+            dismissible: announcement.dismissible,
+            audiences: announcement.audiences,
+            placements: announcement.placements,
+            startsAt: announcement.startsAt,
+            endsAt: announcement.endsAt,
+            hasCta: announcement.cta !== null,
+            titleLength: announcement.title.length,
+            messageLength: announcement.message.length,
+        },
+    });
+
+    revalidatePath("/", "layout");
+    return { success: true, announcement, changed: true };
 }
 
 function validateProxyLine(
@@ -2759,28 +3168,35 @@ const getCachedAdminOperationsSummary = unstable_cache(
             p95_ms: number | null;
             p99_ms: number | null;
         };
-        const [stats, queue, failures, incidents, briefIncidents, settings, latency] =
-            await Promise.all([
-                db.$queryRaw<StatRow[]>`
+        const [
+            stats,
+            queue,
+            failures,
+            incidents,
+            briefIncidents,
+            settings,
+            latency,
+        ] = await Promise.all([
+            db.$queryRaw<StatRow[]>`
                     SELECT channel, outcome, SUM(event_count)::bigint AS event_count
                     FROM alert_event_hourly_stats
                     WHERE bucket_hour >= DATE_TRUNC('hour', NOW() - INTERVAL '24 hours')
                     GROUP BY channel, outcome
                 `,
-                db.$queryRaw<
-                    {
-                        status: string;
-                        event_count: bigint;
-                        oldest_at: Date | null;
-                    }[]
-                >`
+            db.$queryRaw<
+                {
+                    status: string;
+                    event_count: bigint;
+                    oldest_at: Date | null;
+                }[]
+            >`
                     SELECT status, COUNT(*)::bigint AS event_count,
                         MIN(created_at) AS oldest_at
                     FROM alert_deliveries
                     WHERE status IN ('pending', 'processing', 'retrying')
                     GROUP BY status
                 `,
-                db.$queryRaw<FailureRow[]>`
+            db.$queryRaw<FailureRow[]>`
                     SELECT channel, reason_code, SUM(event_count)::bigint AS event_count,
                         MAX(last_seen_at) AS last_seen_at
                     FROM alert_event_hourly_stats
@@ -2790,13 +3206,13 @@ const getCachedAdminOperationsSummary = unstable_cache(
                     ORDER BY event_count DESC, last_seen_at DESC
                     LIMIT 8
                 `,
-                db.$queryRaw<
-                    {
-                        open_count: bigint;
-                        relevant_recovered_count: bigint;
-                        brief_recovered_count: bigint;
-                    }[]
-                >`
+            db.$queryRaw<
+                {
+                    open_count: bigint;
+                    relevant_recovered_count: bigint;
+                    brief_recovered_count: bigint;
+                }[]
+            >`
                     SELECT
                         COUNT(*) FILTER (WHERE recovered_at IS NULL)::bigint AS open_count,
                         COUNT(*) FILTER (
@@ -2810,14 +3226,14 @@ const getCachedAdminOperationsSummary = unstable_cache(
                     FROM monitor_proxy_incidents
                     WHERE recovered_at IS NULL OR recovered_at >= NOW() - INTERVAL '24 hours'
                 `,
-                db.$queryRaw<
-                    {
-                        domain: string;
-                        proxy_source: string;
-                        incident_count: bigint;
-                        wait_count: bigint;
-                    }[]
-                >`
+            db.$queryRaw<
+                {
+                    domain: string;
+                    proxy_source: string;
+                    incident_count: bigint;
+                    wait_count: bigint;
+                }[]
+            >`
                     SELECT domain, proxy_source,
                         COUNT(*)::bigint AS incident_count,
                         SUM(wait_count)::bigint AS wait_count
@@ -2828,19 +3244,19 @@ const getCachedAdminOperationsSummary = unstable_cache(
                     ORDER BY incident_count DESC, wait_count DESC
                     LIMIT 8
                 `,
-                db.app_settings.findMany({
-                    where: {
-                        key: {
-                            in: [
-                                "alert_telemetry_tracked_since",
-                                "alert_dispatcher_heartbeat",
-                                "seller_enrichment_metrics",
-                            ],
-                        },
+            db.app_settings.findMany({
+                where: {
+                    key: {
+                        in: [
+                            "alert_telemetry_tracked_since",
+                            "alert_dispatcher_heartbeat",
+                            "seller_enrichment_metrics",
+                        ],
                     },
-                    select: { key: true, value: true },
-                }),
-                db.$queryRaw<LatencyRow[]>`
+                },
+                select: { key: true, value: true },
+            }),
+            db.$queryRaw<LatencyRow[]>`
                     SELECT
                         PERCENTILE_CONT(0.50) WITHIN GROUP (
                             ORDER BY EXTRACT(EPOCH FROM (d.completed_at - d.created_at)) * 1000
@@ -2857,7 +3273,7 @@ const getCachedAdminOperationsSummary = unstable_cache(
                       AND d.completed_at >= NOW() - INTERVAL '24 hours'
                       AND n.kind = 'item_match'
                 `,
-            ]);
+        ]);
 
         const outcomeTotals = new Map<string, number>();
         const byChannel: Record<
@@ -2903,7 +3319,10 @@ const getCachedAdminOperationsSummary = unstable_cache(
         } | null = null;
         if (enrichmentRaw) {
             try {
-                const value = JSON.parse(enrichmentRaw) as Record<string, unknown>;
+                const value = JSON.parse(enrichmentRaw) as Record<
+                    string,
+                    unknown
+                >;
                 enrichment = {
                     queueAgeMs: Number(value.queueAgeMs ?? 0),
                     cacheHitRate: Number(value.cacheHitRate ?? 0),
@@ -2998,11 +3417,7 @@ export async function getAdminOperationsPage(input?: {
                     filter === "all"
                         ? "failed"
                         : {
-                              in: [
-                                  "failed",
-                                  "retry_scheduled",
-                                  "cancelled",
-                              ],
+                              in: ["failed", "retry_scheduled", "cancelled"],
                           },
                 ...(cursor ? { created_at: { lt: cursor } } : {}),
             },
@@ -3455,26 +3870,21 @@ export async function setUserFreeProxyMonitorLimit(
 
 export async function stopUserActiveMonitors(userId: string) {
     await requireAdmin();
-
-    const monitorsToStop = await db.monitors.findMany({
-        where: { userId, status: "active" },
-        select: {
-            id: true,
-            name: true,
-            userId: true,
-            discord_webhook: true,
-            webhook_active: true,
-            telegram_active: true,
-            notifications_enabled: true,
-        },
-    });
-
-    if (monitorsToStop.length === 0) {
-        return { success: true, stoppedCount: 0 };
-    }
-
     const transitionKey = Date.now().toString();
-    await db.$transaction(async (tx) => {
+    const stoppedCount = await withMonitorActivationLock(userId, async (tx) => {
+        const monitorsToStop = await tx.monitors.findMany({
+            where: { userId, status: "active" },
+            select: {
+                id: true,
+                name: true,
+                userId: true,
+                discord_webhook: true,
+                webhook_active: true,
+                telegram_active: true,
+                notifications_enabled: true,
+            },
+        });
+        if (monitorsToStop.length === 0) return 0;
         await tx.monitors.updateMany({
             where: { userId, status: "active" },
             data: { status: "paused" },
@@ -3487,41 +3897,37 @@ export async function stopUserActiveMonitors(userId: string) {
                 idempotencyKey: `admin-pause:${monitor.id}:${transitionKey}`,
             });
         }
+        return monitorsToStop.length;
     });
 
     revalidatePath("/admin");
 
     return {
         success: true,
-        stoppedCount: monitorsToStop.length,
+        stoppedCount,
     };
 }
 
 export async function stopSingleUserMonitor(userId: string, monitorId: number) {
     await requireAdmin();
-
-    const monitor = await db.monitors.findFirst({
-        where: {
-            id: monitorId,
-            userId,
-            status: "active",
-        },
-        select: {
-            id: true,
-            name: true,
-            userId: true,
-            discord_webhook: true,
-            webhook_active: true,
-            telegram_active: true,
-            notifications_enabled: true,
-        },
-    });
-
-    if (!monitor) {
-        return { success: true, stopped: false };
-    }
-
-    await db.$transaction(async (tx) => {
+    const stopped = await withMonitorActivationLock(userId, async (tx) => {
+        const monitor = await tx.monitors.findFirst({
+            where: {
+                id: monitorId,
+                userId,
+                status: "active",
+            },
+            select: {
+                id: true,
+                name: true,
+                userId: true,
+                discord_webhook: true,
+                webhook_active: true,
+                telegram_active: true,
+                notifications_enabled: true,
+            },
+        });
+        if (!monitor) return false;
         await tx.monitors.update({
             where: { id: monitorId, userId },
             data: { status: "paused" },
@@ -3532,9 +3938,10 @@ export async function stopSingleUserMonitor(userId: string, monitorId: number) {
             message: `The monitor ${monitor.name} was paused via User Management.`,
             idempotencyKey: `admin-pause:${monitor.id}:${Date.now()}`,
         });
+        return true;
     });
 
     revalidatePath("/admin");
 
-    return { success: true, stopped: true };
+    return { success: true, stopped };
 }

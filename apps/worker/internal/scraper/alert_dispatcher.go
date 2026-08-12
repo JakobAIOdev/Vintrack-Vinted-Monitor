@@ -26,8 +26,10 @@ func (e *Engine) alertDeliveryWorker() {
 		case <-e.jobsCtx.Done():
 			return
 		case delivery := <-e.claimedAlertDeliveries:
-			if err := e.processAlertDelivery(e.jobsCtx, delivery); err != nil {
-				log.Printf("alert dispatcher delivery %d: %v", delivery.ID, err)
+			err := e.processAlertDelivery(e.jobsCtx, delivery)
+			e.alertDeliveryInFlight.Add(-1)
+			if err != nil {
+				log.Printf("alert dispatcher delivery %d (%s): %v", delivery.ID, delivery.Channel, err)
 			}
 			select {
 			case e.alertDeliveryWake <- struct{}{}:
@@ -45,8 +47,16 @@ func (e *Engine) alertDeliveryCoordinator() {
 	for {
 		if wake {
 			wake = false
-			for available := cap(e.claimedAlertDeliveries) - len(e.claimedAlertDeliveries); available > 0; available = cap(e.claimedAlertDeliveries) - len(e.claimedAlertDeliveries) {
-				batchSize := min(available, 32)
+			for {
+				// Claim against worker capacity, not buffer capacity: the lease
+				// clock starts at claim time, so anything claimed beyond what the
+				// workers can begin shortly is at risk of being recovered and sent
+				// a second time.
+				capacity := e.alertDeliveryMaxFlight - int(e.alertDeliveryInFlight.Load())
+				if capacity <= 0 {
+					break
+				}
+				batchSize := min(capacity, 16)
 				claimToken, err := newAlertClaimToken()
 				if err != nil {
 					log.Printf("alert claim token: %v", err)
@@ -60,9 +70,11 @@ func (e *Engine) alertDeliveryCoordinator() {
 					break
 				}
 				for _, delivery := range deliveries {
+					e.alertDeliveryInFlight.Add(1)
 					select {
 					case e.claimedAlertDeliveries <- delivery:
 					case <-e.jobsCtx.Done():
+						e.alertDeliveryInFlight.Add(-1)
 						return
 					}
 				}
@@ -120,20 +132,6 @@ func (e *Engine) runAlertMaintenance(interval time.Duration, label string, run f
 	}
 }
 
-func (e *Engine) processNextAlertDelivery(ctx context.Context) (bool, error) {
-	claimToken, err := newAlertClaimToken()
-	if err != nil {
-		return false, err
-	}
-	claimCtx, cancelClaim := context.WithTimeout(ctx, 5*time.Second)
-	delivery, err := e.db.ClaimAlertDelivery(claimCtx, claimToken)
-	cancelClaim()
-	if err != nil || delivery == nil {
-		return false, err
-	}
-	return true, e.processAlertDelivery(ctx, *delivery)
-}
-
 func (e *Engine) processAlertDelivery(ctx context.Context, delivery model.AlertDelivery) error {
 	if !delivery.NotificationsEnabled || !delivery.ChannelEnabled {
 		_, err := e.db.CancelAlertDelivery(ctx, delivery, "notifications_disabled", "notification target is disabled")
@@ -152,9 +150,19 @@ func (e *Engine) processAlertDelivery(ctx context.Context, delivery model.AlertD
 		return err
 	}
 
-	attemptTimeout := 10 * time.Second
+	attemptTimeout := 8 * time.Second
 	if delivery.Channel == "telegram" {
-		attemptTimeout = 25 * time.Second
+		attemptTimeout = 10 * time.Second
+	}
+	// A worker slot and its claim lease must never outlive the point where the
+	// notification is still deliverable. The old 25s telegram budget allowed a
+	// single destination to consume most of a two-minute deadline in one attempt.
+	if remaining := time.Until(delivery.ExpiresAt); remaining < attemptTimeout {
+		attemptTimeout = remaining
+	}
+	if attemptTimeout < 750*time.Millisecond {
+		_, err := e.db.FailAlertDelivery(ctx, delivery, "expired", "delivery expired before provider accepted it")
+		return err
 	}
 	attemptCtx, cancelAttempt := context.WithTimeout(ctx, attemptTimeout)
 	result := sendAlertDeliveryAttempt(attemptCtx, delivery)
@@ -172,6 +180,13 @@ func (e *Engine) processAlertDelivery(ctx context.Context, delivery model.AlertD
 		delay := result.RetryAfter
 		if delay <= 0 {
 			delay = alertExponentialBackoff(delivery.AttemptCount)
+		}
+		// Claiming is ordered per destination, so a backoff also stalls every
+		// newer alert queued for the same webhook or chat. Beyond a few seconds
+		// that guarantees the ones behind it miss the deadline, which is a worse
+		// outcome than retrying this one sooner.
+		if delivery.Kind == "item_match" && delay > 5*time.Second {
+			delay = 5 * time.Second
 		}
 		nextAttempt := time.Now().Add(delay + alertRetryJitter(delivery))
 		if nextAttempt.Before(delivery.ExpiresAt) {

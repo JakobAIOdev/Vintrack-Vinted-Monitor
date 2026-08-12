@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"vintrack-worker/internal/database"
@@ -56,6 +58,8 @@ type Engine struct {
 	enrichmentFastJobs     chan enrichmentJob
 	alertDeliveryWake      chan struct{}
 	claimedAlertDeliveries chan model.AlertDelivery
+	alertDeliveryInFlight  atomic.Int64
+	alertDeliveryMaxFlight int
 	enrichmentMetrics      *sellerEnrichmentMetrics
 	jobsWG                 sync.WaitGroup
 }
@@ -104,7 +108,11 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 		enrichmentScheduler:    NewSellerEnrichmentScheduler(4096, enrichmentWorkers),
 		enrichmentFastJobs:     make(chan enrichmentJob, 4096),
 		alertDeliveryWake:      make(chan struct{}, 64),
-		claimedAlertDeliveries: make(chan model.AlertDelivery, 64),
+		claimedAlertDeliveries: make(chan model.AlertDelivery, alertDeliveryWorkerCount()),
+		// attempt_count and the delivery lease both start when a row is claimed,
+		// so claiming far more than the workers can start means the surplus ages
+		// out of its lease while queued, gets recovered, and is delivered twice.
+		alertDeliveryMaxFlight: alertDeliveryWorkerCount() + alertDeliveryWorkerCount()/2,
 		enrichmentMetrics:      &sellerEnrichmentMetrics{},
 	}
 	engine.startPipelines()
@@ -863,7 +871,11 @@ func (e *Engine) handleDetectedItem(ctx context.Context, monitor model.Monitor, 
 }
 
 func sleepMonitorCycle(ctx context.Context, cycleStart time.Time, interval time.Duration) {
-	remaining := interval - time.Since(cycleStart)
+	// Monitors are all started in one loop and a proxy-list change restarts them
+	// together, so without jitter they stay in lockstep and every tick lands as
+	// one burst of catalog requests and database writes. The discovery loop
+	// already spreads itself the same way.
+	remaining := interval + monitorCycleJitter() - time.Since(cycleStart)
 	if remaining <= 0 {
 		return
 	}
@@ -873,6 +885,13 @@ func sleepMonitorCycle(ctx context.Context, cycleStart time.Time, interval time.
 	case <-timer.C:
 	case <-ctx.Done():
 	}
+}
+
+// monitorCycleJitter spreads monitors across their interval. It is deliberately
+// small relative to the 500ms interval floor so it never meaningfully slows a
+// monitor down.
+func monitorCycleJitter() time.Duration {
+	return time.Duration(rand.Intn(101)) * time.Millisecond
 }
 
 func waitForProxyRetry(ctx context.Context, retryAt time.Time) bool {

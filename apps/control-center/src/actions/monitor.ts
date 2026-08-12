@@ -31,6 +31,7 @@ import {
     getMonitorAntiKeywordsValidationError,
     normalizeMonitorAntiKeywords,
 } from "@/lib/monitor-anti-keywords";
+import { touchDashboardActivity } from "@/lib/dashboard-activity";
 
 function normalizeSellerQualityFilter(formData: FormData) {
     const rawRating = String(formData.get("min_seller_rating") ?? "").trim();
@@ -75,6 +76,9 @@ function normalizeSellerQualityFilter(formData: FormData) {
 
     return { minSellerRating, minSellerRatingCount };
 }
+
+const MONITOR_CREATION_MAINTENANCE_MESSAGE =
+    "Monitor creation is paused while Vintrack is undergoing maintenance.";
 
 async function isFreeProxyPoolAvailable(region: string) {
     void region;
@@ -210,67 +214,76 @@ export async function createMonitor(
         ? await getTelegramConnection(userId)
         : null;
 
-    const { monitor, activationState, initialStatus } =
-        await withMonitorActivationLock(userId, async (tx) => {
-            const activationState = await getMonitorActivationState(
+    const creation = await withMonitorActivationLock(userId, async (tx) => {
+        const activationState = await getMonitorActivationState(
+            userId,
+            proxySource,
+            tx,
+        );
+        if (activationState.maintenanceEnabled) {
+            return {
+                monitor: null,
+                activationState,
+                initialStatus: null,
+            };
+        }
+        const initialStatus = activationState.canActivate ? "active" : "paused";
+        const createdMonitor = await tx.monitors.create({
+            data: {
                 userId,
-                proxySource,
-                tx,
-            );
-            const initialStatus = activationState.canActivate
-                ? "active"
-                : "paused";
-            const createdMonitor = await tx.monitors.create({
-                data: {
-                    userId,
-                    name: normalizedName,
-                    query: normalizedQuery,
-                    title_only: titleOnly,
-                    anti_keywords: antiKeywords,
-                    query_delay_ms: queryDelayMs,
-                    quiet_hours_enabled: quietHours.enabled,
-                    quiet_hours_start_minute: quietHours.startMinute,
-                    quiet_hours_end_minute: quietHours.endMinute,
-                    quiet_hours_mode: quietHours.mode,
-                    quiet_hours_delay_ms: quietHours.delayMs,
-                    quiet_hours_timezone: quietHours.timezone,
-                    price_min: priceMin,
-                    price_max: priceMax,
-                    size_id: sizeId,
-                    catalog_ids: catalogIds || null,
-                    brand_ids: brandIds || null,
-                    color_ids: colorIds || null,
-                    status_ids: statusIds || null,
-                    video_game_platform_ids: videoGamePlatformIds || null,
-                    region,
-                    allowed_countries: allowedCountries || null,
-                    min_seller_rating: minSellerRating,
-                    min_seller_rating_count: minSellerRatingCount,
-                    discord_webhook: urlToSave,
-                    telegram_active: Boolean(telegramConnection),
-                    proxy_group_id: proxyGroupId,
-                    proxy_source: proxySource,
-                    status: initialStatus,
-                    webhook_active: urlToSave ? true : false,
-                },
-            });
-
-            await tx.user.update({
-                where: { id: userId },
-                data: { monitor_onboarding_status: "completed" },
-            });
-
-            if (initialStatus === "active") {
-                await enqueueMonitorStatusNotification(tx, createdMonitor, {
-                    kind: "monitor_created",
-                    title: "Monitor created and started",
-                    message: `The monitor ${createdMonitor.name} was created and is now active.`,
-                    idempotencyKey: `monitor-created:${createdMonitor.id}`,
-                });
-            }
-
-            return { monitor: createdMonitor, activationState, initialStatus };
+                name: normalizedName,
+                query: normalizedQuery,
+                title_only: titleOnly,
+                anti_keywords: antiKeywords,
+                query_delay_ms: queryDelayMs,
+                quiet_hours_enabled: quietHours.enabled,
+                quiet_hours_start_minute: quietHours.startMinute,
+                quiet_hours_end_minute: quietHours.endMinute,
+                quiet_hours_mode: quietHours.mode,
+                quiet_hours_delay_ms: quietHours.delayMs,
+                quiet_hours_timezone: quietHours.timezone,
+                price_min: priceMin,
+                price_max: priceMax,
+                size_id: sizeId,
+                catalog_ids: catalogIds || null,
+                brand_ids: brandIds || null,
+                color_ids: colorIds || null,
+                status_ids: statusIds || null,
+                video_game_platform_ids: videoGamePlatformIds || null,
+                region,
+                allowed_countries: allowedCountries || null,
+                min_seller_rating: minSellerRating,
+                min_seller_rating_count: minSellerRatingCount,
+                discord_webhook: urlToSave,
+                telegram_active: Boolean(telegramConnection),
+                proxy_group_id: proxyGroupId,
+                proxy_source: proxySource,
+                status: initialStatus,
+                webhook_active: urlToSave ? true : false,
+            },
         });
+
+        await tx.user.update({
+            where: { id: userId },
+            data: { monitor_onboarding_status: "completed" },
+        });
+
+        if (initialStatus === "active") {
+            await enqueueMonitorStatusNotification(tx, createdMonitor, {
+                kind: "monitor_created",
+                title: "Monitor created and started",
+                message: `The monitor ${createdMonitor.name} was created and is now active.`,
+                idempotencyKey: `monitor-created:${createdMonitor.id}`,
+            });
+        }
+
+        return { monitor: createdMonitor, activationState, initialStatus };
+    });
+
+    if (!creation.monitor || !creation.initialStatus) {
+        return { ok: false, message: MONITOR_CREATION_MAINTENANCE_MESSAGE };
+    }
+    const { monitor, activationState, initialStatus } = creation;
 
     if (appliedPreset) {
         await logAuditEvent({
@@ -317,6 +330,7 @@ export type CreatePresetMonitorResult =
               | "INVALID_PRESET"
               | "INVALID_REGION"
               | "POOL_UNAVAILABLE"
+              | "MAINTENANCE"
               | "NOT_ELIGIBLE"
               | "CREATE_FAILED";
           message: string;
@@ -363,13 +377,21 @@ export async function createPresetMonitor(input: {
     const demoExpiresAt = getNextDemoMonitorExpiry();
 
     try {
-        const { monitor, activationState, initialStatus } =
+        const { monitor, activationState, initialStatus, maintenanceBlocked } =
             await withMonitorActivationLock(userId, async (tx) => {
                 const activationState = await getMonitorActivationState(
                     userId,
                     "free",
                     tx,
                 );
+                if (activationState.maintenanceEnabled) {
+                    return {
+                        monitor: null,
+                        activationState,
+                        initialStatus: null,
+                        maintenanceBlocked: true,
+                    };
+                }
                 const initialStatus = activationState.canActivate
                     ? "active"
                     : "paused";
@@ -382,7 +404,12 @@ export async function createPresetMonitor(input: {
                         where: { id: userId },
                         data: { monitor_onboarding_status: "completed" },
                     });
-                    return { monitor: null, activationState, initialStatus };
+                    return {
+                        monitor: null,
+                        activationState,
+                        initialStatus,
+                        maintenanceBlocked: false,
+                    };
                 }
 
                 const claim = await tx.user.updateMany({
@@ -396,7 +423,12 @@ export async function createPresetMonitor(input: {
                 });
 
                 if (claim.count !== 1) {
-                    return { monitor: null, activationState, initialStatus };
+                    return {
+                        monitor: null,
+                        activationState,
+                        initialStatus,
+                        maintenanceBlocked: false,
+                    };
                 }
 
                 const monitor = await tx.monitors.create({
@@ -424,9 +456,21 @@ export async function createPresetMonitor(input: {
                         demo_expires_at: demoExpiresAt,
                     },
                 });
-                return { monitor, activationState, initialStatus };
+                return {
+                    monitor,
+                    activationState,
+                    initialStatus,
+                    maintenanceBlocked: false,
+                };
             });
 
+        if (maintenanceBlocked) {
+            return {
+                ok: false,
+                code: "MAINTENANCE",
+                message: MONITOR_CREATION_MAINTENANCE_MESSAGE,
+            };
+        }
         if (!monitor) {
             return {
                 ok: false,
@@ -933,6 +977,9 @@ export async function toggleMonitorStatus(id: number, currentStatus: string) {
     const userId = session.user.id;
 
     const newStatus = currentStatus === "active" ? "paused" : "active";
+    if (currentStatus === "maintenance_paused") {
+        throw new Error("This monitor is paused for maintenance");
+    }
     await withMonitorActivationLock(userId, async (tx) => {
         const existing = await tx.monitors.findFirst({
             where: { id, userId },
@@ -941,6 +988,7 @@ export async function toggleMonitorStatus(id: number, currentStatus: string) {
         if (!existing) throw new Error("Monitor not found");
 
         if (newStatus === "active") {
+            await touchDashboardActivity(tx, userId);
             const activationState = await getMonitorActivationState(
                 userId,
                 existing.proxy_source,

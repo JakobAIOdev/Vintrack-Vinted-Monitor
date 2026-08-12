@@ -292,6 +292,11 @@ func (p *ClientPool) Replace(bad *Client) {
 			log.Printf("pool: replace failed: %v", err)
 			return
 		}
+		// Release the outgoing client's sockets instead of leaving them to the
+		// transport's idle timeout.
+		if previous := target.client; previous != nil && previous != c {
+			defer previous.Close()
+		}
 		target.client = c
 		target.ewmaLatencyMS = 0
 		target.failures = 0

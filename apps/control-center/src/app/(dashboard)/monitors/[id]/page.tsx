@@ -39,15 +39,10 @@ import { MonitorMetricsDialog } from "@/components/monitors/monitor-metrics-dial
 import { getBannedSellerIds, visibleSellerWhere } from "@/lib/seller-bans";
 import { DemoMonitorLease } from "@/components/monitors/demo-monitor-lease";
 import { inferProxyErrorCode } from "@/lib/proxy-errors";
-
-type MonitorRunRow = {
-    status: string;
-    status_code: number | null;
-    duration_ms: number | null;
-    item_count: number;
-    error_message: string | null;
-    checked_at: Date;
-};
+import {
+    loadMonitorRunMetrics,
+    monitorRunMetricsWindowStart,
+} from "@/lib/monitor-run-metrics";
 
 export default async function MonitorPage({
     params,
@@ -109,52 +104,34 @@ export default async function MonitorPage({
                   monitor.proxy_source,
               );
     const resumeBlocked = resumeState ? !resumeState.canActivate : false;
+    const maintenanceEnabled = resumeState?.maintenanceEnabled ?? false;
     const deleteAction = deleteMonitor.bind(null, monitor.id);
     const categoryLabels = await getCategoryLabelsForRegion(
         monitor.catalog_ids,
         monitor.region,
     );
-    const recentRuns = await db.$queryRaw<MonitorRunRow[]>`
-        SELECT status, status_code, duration_ms, item_count, error_message, checked_at
-        FROM monitor_runs
-        WHERE monitor_id = ${monitor.id}
-          AND fetch_source = 'canonical'
-        ORDER BY checked_at DESC
-        LIMIT 100
-    `;
-    const successCount = recentRuns.filter(
-        (run) => run.status === "success",
-    ).length;
-    const failedCount = recentRuns.filter(
-        (run) => run.status === "failed",
-    ).length;
-    const durations = recentRuns
-        .map((run) => run.duration_ms)
-        .filter((value): value is number => typeof value === "number");
+    const metricsWindowStart = monitorRunMetricsWindowStart();
+    const [runMetrics, savedItemsInWindow] = await Promise.all([
+        loadMonitorRunMetrics(monitor.id, metricsWindowStart),
+        db.items.count({
+            where: {
+                ...visibleItemWhere,
+                found_at: { gte: metricsWindowStart },
+            },
+        }),
+    ]);
+    const failedCount = runMetrics.failedCount;
     const avgDuration =
-        durations.length > 0
-            ? Math.round(
-                  durations.reduce((sum, value) => sum + value, 0) /
-                      durations.length,
-              )
-            : null;
+        runMetrics.avgDurationMs === null
+            ? null
+            : Math.round(runMetrics.avgDurationMs);
     const successRate =
-        recentRuns.length > 0
-            ? Math.round((successCount / recentRuns.length) * 100)
+        runMetrics.totalChecks > 0
+            ? Math.round((runMetrics.successCount / runMetrics.totalChecks) * 100)
             : null;
-    const oldestRecentRunAt = recentRuns.at(-1)?.checked_at ?? null;
-    const savedItemsInWindow = oldestRecentRunAt
-        ? await db.items.count({
-              where: {
-                  ...visibleItemWhere,
-                  found_at: { gte: oldestRecentRunAt },
-              },
-          })
-        : 0;
-    const lastErrorRun = recentRuns.find((run) => run.error_message) ?? null;
-    const lastError = lastErrorRun?.error_message ?? null;
+    const lastError = runMetrics.lastError;
     const lastErrorCode = lastError
-        ? inferProxyErrorCode(lastError, lastErrorRun?.status_code)
+        ? inferProxyErrorCode(lastError, runMetrics.lastStatusCode ?? undefined)
         : null;
 
     return (
@@ -420,9 +397,11 @@ export default async function MonitorPage({
                                 disabled={resumeBlocked}
                                 title={
                                     resumeBlocked && resumeState
-                                        ? resumeState.freeProxyLimitReached
-                                            ? `Free proxy monitor limit reached (${resumeState.freeProxyActiveCount}/${resumeState.freeProxyActiveLimit})`
-                                            : `Active monitor limit reached (${resumeState.activeCount}/${resumeState.activeLimit})`
+                                        ? resumeState.maintenanceEnabled
+                                            ? "Paused for maintenance"
+                                            : resumeState.freeProxyLimitReached
+                                              ? `Free proxy monitor limit reached (${resumeState.freeProxyActiveCount}/${resumeState.freeProxyActiveLimit})`
+                                              : `Active monitor limit reached (${resumeState.activeCount}/${resumeState.activeLimit})`
                                         : undefined
                                 }
                                 className={`h-8 text-xs font-medium ${
@@ -439,7 +418,9 @@ export default async function MonitorPage({
                                 ) : (
                                     <>
                                         <PlayCircle className="mr-1.5 h-3.5 w-3.5" />{" "}
-                                        Resume
+                                        {maintenanceEnabled
+                                            ? "Paused for maintenance"
+                                            : "Resume"}
                                     </>
                                 )}
                             </Button>
@@ -463,6 +444,7 @@ export default async function MonitorPage({
                         initialExpiresAt={monitor.demo_expires_at.toISOString()}
                         initialStatus={monitor.status ?? "paused"}
                         initialNow={new Date().toISOString()}
+                        maintenanceEnabled={maintenanceEnabled}
                     />
                 )}
 
@@ -478,7 +460,7 @@ export default async function MonitorPage({
                         <MonitorMetricsDialog
                             monitorId={monitor.id}
                             initialMetrics={{
-                                recentChecks: recentRuns.length,
+                                recentChecks: runMetrics.totalChecks,
                                 successRate,
                                 avgDurationMs: avgDuration,
                                 newItems: savedItemsInWindow,

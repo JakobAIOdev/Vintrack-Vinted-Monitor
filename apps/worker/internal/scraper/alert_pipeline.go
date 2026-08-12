@@ -38,18 +38,26 @@ type enrichmentJob struct {
 	notificationTimer  *time.Timer
 }
 
+// alertDeliveryWorkerCount is the single source of truth for delivery
+// concurrency. NewEngine sizes the claim buffer and the in-flight ceiling from
+// it before startPipelines spawns the workers themselves.
+func alertDeliveryWorkerCount() int {
+	workers := getEnvInt("ALERT_DELIVERY_WORKERS", 16)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > 64 {
+		workers = 64
+	}
+	return workers
+}
+
 func (e *Engine) startPipelines() {
 	alertWorkers := getEnvInt("ALERT_WORKERS", 8)
 	if alertWorkers < 1 {
 		alertWorkers = 1
 	}
-	deliveryWorkers := getEnvInt("ALERT_DELIVERY_WORKERS", 16)
-	if deliveryWorkers < 1 {
-		deliveryWorkers = 1
-	}
-	if deliveryWorkers > 64 {
-		deliveryWorkers = 64
-	}
+	deliveryWorkers := alertDeliveryWorkerCount()
 	enrichmentWorkers := getEnvInt("ENRICHMENT_WORKERS", 24)
 	if enrichmentWorkers < 1 {
 		enrichmentWorkers = 1
@@ -101,7 +109,7 @@ func (e *Engine) enqueueItem(job enrichmentJob, publishNow bool) {
 	if publishNow {
 		// The browser live feed deliberately has no dependency on Postgres or the
 		// durable external-delivery outbox.
-		if err := e.db.PublishItem(job.item); err != nil {
+		if err := e.db.PublishItem(job.monitor.UserID, job.item); err != nil {
 			log.Printf("[%d] immediate live-feed publish error: %v", job.monitor.ID, err)
 		} else {
 			e.db.RecordDetectionAlertSent(job.monitor.ID, job.item.ID, time.Now())
@@ -214,7 +222,11 @@ func (e *Engine) deliverAlert(job alertJob) {
 	if hasTelegram {
 		request.TelegramTarget = job.monitor.TelegramChatID.String
 	}
-	queueTimeout := min(225*time.Millisecond, time.Until(deadline))
+	// The enqueue is the point where an alert becomes durable, so failing it
+	// means the alert never existed. Budget generously against the two-minute
+	// deadline instead of racing it: a tight budget turned every moment of
+	// database contention into a retry loop that outlived the deadline.
+	queueTimeout := min(2*time.Second, time.Until(deadline))
 	queueCtx, cancel := context.WithTimeout(job.ctx, queueTimeout)
 	created, err := e.db.EnqueueAlertNotification(queueCtx, request)
 	cancel()
@@ -238,7 +250,9 @@ func (e *Engine) scheduleAlertEnqueueRetry(job alertJob) {
 	if attempt > 4 {
 		attempt = 4
 	}
-	delay := time.Duration(1<<attempt) * 250 * time.Millisecond
+	// Linear, not exponential: the deadline is two minutes and doubling reaches
+	// it while the contention that caused the failure has usually already passed.
+	delay := time.Duration(attempt+1) * 250 * time.Millisecond
 	if remaining := time.Until(deadline); delay > remaining {
 		delay = remaining
 	}
@@ -375,7 +389,7 @@ func (e *Engine) enrichAndPersist(job enrichmentJob) {
 	}
 
 	if job.requireSellerMatch {
-		if err := e.db.PublishItem(job.item); err != nil {
+		if err := e.db.PublishItem(job.monitor.UserID, job.item); err != nil {
 			log.Printf("[%d] strict live-feed publish error: %v", job.monitor.ID, err)
 		} else {
 			e.db.RecordDetectionAlertSent(job.monitor.ID, job.item.ID, time.Now())
@@ -404,7 +418,7 @@ func (e *Engine) enrichAndPersist(job enrichmentJob) {
 		e.enrichmentScheduler.Submit(job.ctx, background)
 	}
 	if job.publishUpdate && !job.requireSellerMatch && (job.item.Location != "" || job.item.Rating != "") {
-		if err := e.db.PublishItem(job.item); err != nil {
+		if err := e.db.PublishItem(job.monitor.UserID, job.item); err != nil {
 			log.Printf("[%d] publish enrichment update: %v", job.monitor.ID, err)
 		}
 	}

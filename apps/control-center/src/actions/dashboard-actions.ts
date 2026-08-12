@@ -18,6 +18,7 @@ import { getNextDemoMonitorExpiry } from "@/lib/demo-monitor";
 import { normalizeQueryDelayMs } from "@/lib/monitor-delay";
 import { normalizeQuietHours } from "@/lib/monitor-schedule";
 import { logAuditEvent } from "@/lib/audit";
+import { touchDashboardActivity } from "@/lib/dashboard-activity";
 
 export type BulkMonitorUpdateInput = {
     monitorIds: number[];
@@ -43,7 +44,7 @@ export async function stopAllMonitors() {
     if (!session?.user?.id) throw new Error("Unauthorized");
     const userId = session.user.id;
     const transitionKey = Date.now().toString();
-    await db.$transaction(async (tx) => {
+    await withMonitorActivationLock(userId, async (tx) => {
         const monitorsToStop = await tx.monitors.findMany({
             where: { userId, status: "active" },
         });
@@ -78,14 +79,19 @@ export async function startAllMonitors() {
                 undefined,
                 tx,
             );
+            await touchDashboardActivity(tx, userId);
             const pausedMonitors = await tx.monitors.findMany({
-                where: { userId, status: "paused" },
+                where: {
+                    userId,
+                    status: { in: ["paused", "inactivity_paused"] },
+                },
                 orderBy: [{ created_at: "desc" }, { id: "desc" }],
             });
 
             let activeSlots = activationState.activeSlots;
             let freeProxySlots = activationState.freeProxyActiveSlots;
             const monitorsToStart = pausedMonitors.filter((monitor) => {
+                if (activationState.maintenanceEnabled) return false;
                 if (activeSlots !== null && activeSlots <= 0) return false;
                 if (
                     monitor.proxy_source === "free" &&
@@ -161,9 +167,11 @@ export async function startAllMonitors() {
             message:
                 skippedCount === 0
                     ? "No paused monitors to start."
-                    : freeLimitOnly
-                      ? `Free proxy monitor limit reached (${activationState.freeProxyActiveCount}/${activationState.freeProxyActiveLimit}).`
-                      : `Active monitor limit reached (${activationState.activeCount}/${activationState.activeLimit}).`,
+                    : activationState.maintenanceEnabled
+                      ? "Monitors are temporarily paused while Vintrack is undergoing maintenance."
+                      : freeLimitOnly
+                        ? `Free proxy monitor limit reached (${activationState.freeProxyActiveCount}/${activationState.freeProxyActiveLimit}).`
+                        : `Active monitor limit reached (${activationState.activeCount}/${activationState.activeLimit}).`,
         };
     }
 
@@ -189,6 +197,9 @@ export async function toggleMonitor(id: number, currentStatus: string) {
     const userId = session.user.id;
 
     const newStatus = currentStatus === "active" ? "paused" : "active";
+    if (currentStatus === "maintenance_paused") {
+        throw new Error("This monitor is paused for maintenance");
+    }
     const monitor = await withMonitorActivationLock(userId, async (tx) => {
         const existing = await tx.monitors.findFirst({
             where: { id, userId },
@@ -197,6 +208,7 @@ export async function toggleMonitor(id: number, currentStatus: string) {
         if (!existing) throw new Error("Monitor not found");
 
         if (newStatus === "active") {
+            await touchDashboardActivity(tx, userId);
             const activationState = await getMonitorActivationState(
                 userId,
                 existing.proxy_source,

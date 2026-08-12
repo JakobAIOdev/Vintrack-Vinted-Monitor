@@ -132,8 +132,8 @@ export function MonitorMetricsDialog({
                         <div className="space-y-1.5">
                             <DialogTitle>Monitor Health</DialogTitle>
                             <DialogDescription>
-                                Performance from the latest {recentChecks}{" "}
-                                worker checks. Refreshes every 10 seconds while
+                                Performance from {recentChecks} worker checks in
+                                the past hour. Refreshes every 10 seconds while
                                 this dialog is open.
                             </DialogDescription>
                         </div>
@@ -194,8 +194,8 @@ export function MonitorMetricsDialog({
                         </p>
                         <p className="mt-1 text-[12px] text-amber-700 dark:text-amber-300">
                             {failedChecks} failed check
-                            {failedChecks === 1 ? "" : "s"} in the latest 100
-                            runs. {issue?.description}
+                            {failedChecks === 1 ? "" : "s"} in the past hour.{" "}
+                            {issue?.description}
                         </p>
                         {issue?.action ? (
                             <p className="mt-1 text-[12px] font-medium text-amber-800 dark:text-amber-200">

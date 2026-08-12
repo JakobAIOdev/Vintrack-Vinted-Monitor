@@ -40,6 +40,10 @@ func ValidateFreeProxy(ctx context.Context, proxyURL string, region string, maxL
 			Stage:     FreeProxyValidationStageClientInit,
 		}, err
 	}
+	// One client per candidate, and validation runs in large concurrent batches
+	// every cycle. Without this the maintainer accumulates sockets for every
+	// proxy it has ever probed.
+	defer client.Close()
 
 	domain := model.RegionDomain(region)
 	warmupStartedAt := time.Now()

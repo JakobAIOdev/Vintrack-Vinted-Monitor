@@ -465,6 +465,19 @@ func (c *Client) ResetWarm(domain string) {
 	c.warmedMu.Unlock()
 }
 
+// Close releases the client's pooled connections.
+//
+// A discarded client keeps its TCP and TLS connections alive until the
+// transport's idle timeout, and an HTTP/2 connection also keeps a read-loop
+// goroutine running. With proxies churning, unclosed clients accumulate into a
+// steady population of dead-but-open sockets.
+func (c *Client) Close() {
+	if c == nil || c.HttpClient == nil {
+		return
+	}
+	c.HttpClient.CloseIdleConnections()
+}
+
 func (c *Client) RecordTraffic(txBytes int64, rxBytes int64) {
 	if c == nil || c.trafficRecorder == nil {
 		return

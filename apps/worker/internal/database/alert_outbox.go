@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -36,26 +37,30 @@ func (s *Store) EnqueueAlertNotification(ctx context.Context, request model.Aler
 		return false, fmt.Errorf("marshal alert payload: %w", err)
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.alertPool().BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback()
 
 	if request.DedupeUserItem && request.UserID != "" && request.ItemID > 0 {
-		if _, err := tx.ExecContext(ctx, `
-			DELETE FROM alert_dedupe_claims
-			WHERE user_id = $1 AND item_id = $2 AND expires_at <= NOW()`,
-			request.UserID, request.ItemID,
-		); err != nil {
-			return false, err
-		}
-
+		// The claim starts provisional and is promoted to its full lifetime only
+		// once a delivery actually succeeds (see promoteAlertDedupeClaimTx).
+		//
+		// It used to be written with a 30-day expiry before the first attempt.
+		// Because it is scoped to the user rather than the monitor, any alert
+		// that then expired or was cancelled left a claim behind that suppressed
+		// that item across every one of that member's monitors for a month.
+		//
+		// Expiring claims are reclaimed in the same statement, which also closes
+		// the race the previous separate DELETE left open.
 		var claimed bool
 		err := tx.QueryRowContext(ctx, `
 			INSERT INTO alert_dedupe_claims (user_id, item_id, expires_at)
-			VALUES ($1, $2, NOW() + INTERVAL '30 days')
-			ON CONFLICT (user_id, item_id) DO NOTHING
+			VALUES ($1, $2, NOW() + INTERVAL '15 minutes')
+			ON CONFLICT (user_id, item_id) DO UPDATE
+			SET expires_at = EXCLUDED.expires_at, claimed_at = NOW()
+			WHERE alert_dedupe_claims.expires_at <= NOW()
 			RETURNING TRUE`, request.UserID, request.ItemID).Scan(&claimed)
 		if err == sql.ErrNoRows {
 			if err := insertAlertEventTx(ctx, tx, model.AlertEvent{
@@ -155,7 +160,7 @@ func (s *Store) ClaimAlertDeliveries(ctx context.Context, claimToken string, lim
 		limit = 100
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.alertPool().QueryContext(ctx, `
 		WITH candidate AS (
 			SELECT d.id
 			FROM alert_deliveries d
@@ -259,7 +264,7 @@ func (s *Store) ClaimAlertDeliveries(ctx context.Context, claimToken string, lim
 }
 
 func (s *Store) RecoverExpiredAlertDeliveryLeases(ctx context.Context) (int64, error) {
-	result, err := s.db.ExecContext(ctx, `
+	result, err := s.alertPool().ExecContext(ctx, `
 		WITH expired AS (
 			SELECT id
 			FROM alert_deliveries
@@ -299,7 +304,7 @@ func (s *Store) finishAlertDelivery(
 	detail string,
 ) (bool, error) {
 	detail = boundedAlertDetail(detail)
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.alertPool().BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
@@ -317,8 +322,31 @@ func (s *Store) finishAlertDelivery(
 		return false, err
 	}
 	affected, err := result.RowsAffected()
-	if err != nil || affected == 0 {
+	if err != nil {
 		return false, err
+	}
+	if affected == 0 {
+		// The 60 second lease expired while the provider call was in flight and
+		// the recovery sweep released the row, so this outcome cannot be
+		// recorded and the message will be sent again. Silently returning here
+		// made duplicate notifications untraceable.
+		log.Printf(
+			"alert delivery %d (%s) lost its lease before completion with outcome %q; it may be delivered twice",
+			delivery.ID, delivery.Channel, status,
+		)
+		if err := insertAlertEventTx(ctx, tx, model.AlertEvent{
+			UserID: delivery.UserID, MonitorID: delivery.MonitorID, ItemID: delivery.ItemID,
+			NotificationID: delivery.NotificationID, DeliveryID: delivery.ID,
+			Channel: delivery.Channel, Status: "failed", NotificationKind: delivery.Kind,
+			ReasonCode: "lease_lost", AttemptNumber: delivery.AttemptCount,
+			FailureReason: "lease expired after the provider call; message may be duplicated",
+		}); err != nil {
+			return false, err
+		}
+		if err := tx.Commit(); err != nil {
+			return false, err
+		}
+		return false, nil
 	}
 
 	if err := insertAlertEventTx(ctx, tx, model.AlertEvent{
@@ -329,11 +357,23 @@ func (s *Store) finishAlertDelivery(
 	}); err != nil {
 		return false, err
 	}
-	if status == "sent" && delivery.MonitorID > 0 && delivery.ItemID > 0 {
+	if status == "sent" {
+		if delivery.MonitorID > 0 && delivery.ItemID > 0 {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE monitor_item_detections
+				SET alert_sent_at = COALESCE(alert_sent_at, NOW()), updated_at = NOW()
+				WHERE monitor_id = $1 AND item_id = $2`, delivery.MonitorID, delivery.ItemID); err != nil {
+				return false, err
+			}
+		}
+		// The message reached the member, so the provisional dedupe claim earns
+		// its full lifetime. Both sides of this are primary-key lookups.
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE monitor_item_detections
-			SET alert_sent_at = COALESCE(alert_sent_at, NOW()), updated_at = NOW()
-			WHERE monitor_id = $1 AND item_id = $2`, delivery.MonitorID, delivery.ItemID); err != nil {
+			UPDATE alert_dedupe_claims c
+			SET expires_at = GREATEST(c.expires_at, NOW() + INTERVAL '30 days')
+			FROM alert_notifications n
+			WHERE n.id = $1 AND c.user_id = n.user_id AND c.item_id = n.item_id`,
+			delivery.NotificationID); err != nil {
 			return false, err
 		}
 	}
@@ -351,7 +391,7 @@ func (s *Store) RetryAlertDelivery(
 	nextAttempt time.Time,
 ) (bool, error) {
 	detail = boundedAlertDetail(detail)
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.alertPool().BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
@@ -423,13 +463,19 @@ func boundedAlertDetail(detail string) string {
 	return detail
 }
 
+// alertExpiryBatchSize bounds one expiry sweep.
+//
+// The previous implementation claimed up to 1000 rows and then issued one
+// alert_events insert per row inside the same transaction. Under a few seconds
+// of maintenance budget that reliably timed out and rolled back, so the same
+// rows were retried every cycle and never actually expired.
+const alertExpiryBatchSize = 200
+
+// ExpireAlertDeliveries fails deliveries whose notification deadline has passed.
+// It is a single statement, so it runs in an implicit transaction and one round
+// trip regardless of batch size.
 func (s *Store) ExpireAlertDeliveries(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `
+	_, err := s.alertPool().ExecContext(ctx, `
 		WITH expired AS (
 			SELECT d.id
 			FROM alert_deliveries d
@@ -437,50 +483,28 @@ func (s *Store) ExpireAlertDeliveries(ctx context.Context) error {
 			WHERE d.status IN ('pending', 'processing', 'retrying')
 			  AND n.expires_at <= NOW()
 			ORDER BY n.expires_at, d.id
-			LIMIT 1000
+			LIMIT $1
 			FOR UPDATE OF d SKIP LOCKED
+		), failed AS (
+			UPDATE alert_deliveries d
+			SET status = 'failed', last_reason_code = 'expired',
+				last_error_detail = 'delivery expired before provider accepted it',
+				completed_at = NOW(), lease_until = NULL, claim_token = NULL, updated_at = NOW()
+			FROM expired
+			WHERE d.id = expired.id
+			RETURNING d.id, d.notification_id, d.channel, d.attempt_count
 		)
-		UPDATE alert_deliveries d
-		SET status = 'failed', last_reason_code = 'expired',
-			last_error_detail = 'delivery expired before provider accepted it',
-			completed_at = NOW(), lease_until = NULL, claim_token = NULL, updated_at = NOW()
-		FROM expired
-		WHERE d.id = expired.id
-		RETURNING d.id, d.notification_id, d.channel, d.attempt_count`)
-	if err != nil {
-		return err
-	}
-	type expiredDelivery struct {
-		id, notificationID int64
-		channel            string
-		attempt            int
-	}
-	var expired []expiredDelivery
-	for rows.Next() {
-		var row expiredDelivery
-		if err := rows.Scan(&row.id, &row.notificationID, &row.channel, &row.attempt); err != nil {
-			rows.Close()
-			return err
-		}
-		expired = append(expired, row)
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	for _, row := range expired {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO alert_events (
-				"userId", monitor_id, item_id, notification_id, delivery_id,
-				channel, status, notification_kind, reason_code, attempt_number, failure_reason
-			)
-			SELECT user_id, monitor_id, item_id, id, $1, $2, 'failed', kind,
-				'expired', NULLIF($3, 0), 'delivery expired before provider accepted it'
-			FROM alert_notifications WHERE id = $4`,
-			row.id, row.channel, row.attempt, row.notificationID); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
+		INSERT INTO alert_events (
+			"userId", monitor_id, item_id, notification_id, delivery_id,
+			channel, status, notification_kind, reason_code, attempt_number, failure_reason
+		)
+		SELECT n.user_id, n.monitor_id, n.item_id, n.id, failed.id, failed.channel,
+			'failed', n.kind, 'expired', NULLIF(failed.attempt_count, 0),
+			'delivery expired before provider accepted it'
+		FROM failed
+		JOIN alert_notifications n ON n.id = failed.notification_id`,
+		alertExpiryBatchSize)
+	return err
 }
 
 func (s *Store) PruneAlertTelemetry(successDays int, failureDays int, statsDays int) {
@@ -667,13 +691,13 @@ func (s *Store) DeferAlertDestination(ctx context.Context, channel string, finge
 		return nil
 	}
 	if global {
-		_, err := s.db.ExecContext(ctx, `
+		_, err := s.alertPool().ExecContext(ctx, `
 			UPDATE alert_deliveries
 			SET next_attempt_at = GREATEST(next_attempt_at, $2), updated_at = NOW()
 			WHERE channel = $1 AND status IN ('pending', 'retrying')`, channel, until.UTC())
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.alertPool().ExecContext(ctx, `
 		UPDATE alert_deliveries
 		SET next_attempt_at = GREATEST(next_attempt_at, $2), updated_at = NOW()
 		WHERE destination_fingerprint = $1 AND status IN ('pending', 'retrying')`, fingerprint, until.UTC())

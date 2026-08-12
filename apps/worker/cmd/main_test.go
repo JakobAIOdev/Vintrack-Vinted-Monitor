@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"maps"
 	"reflect"
 	"slices"
@@ -13,6 +14,38 @@ import (
 	"vintrack-worker/internal/database"
 	"vintrack-worker/internal/scraper"
 )
+
+func TestBuildMonitorWorkerRuntimePayload(t *testing.T) {
+	now := time.Date(2026, time.August, 12, 10, 30, 15, 123, time.FixedZone("CEST", 2*60*60))
+	payload, err := buildMonitorWorkerRuntimePayload(" maintenance-revision ", 3, 2, now)
+	if err != nil {
+		t.Fatalf("build runtime payload: %v", err)
+	}
+	var got monitorWorkerRuntimePayload
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("decode runtime payload: %v", err)
+	}
+	if got.HeartbeatAt != "2026-08-12T08:30:15.000000123Z" {
+		t.Fatalf("heartbeat = %q", got.HeartbeatAt)
+	}
+	if got.MaintenanceRevision != "maintenance-revision" || got.RunningMonitorTasks != 3 || got.RunningDiscoveryTasks != 2 {
+		t.Fatalf("unexpected runtime payload: %#v", got)
+	}
+}
+
+func TestBuildMonitorWorkerRuntimePayloadUsesDisabledRevisionFallback(t *testing.T) {
+	payload, err := buildMonitorWorkerRuntimePayload(" ", 0, 0, time.Unix(0, 0))
+	if err != nil {
+		t.Fatalf("build runtime payload: %v", err)
+	}
+	var got monitorWorkerRuntimePayload
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("decode runtime payload: %v", err)
+	}
+	if got.MaintenanceRevision != "maintenance-disabled-v1" {
+		t.Fatalf("revision = %q", got.MaintenanceRevision)
+	}
+}
 
 func TestFreeProxyValidationTimeout(t *testing.T) {
 	tests := []struct {

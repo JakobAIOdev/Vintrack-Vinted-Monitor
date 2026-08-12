@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"sync"
 	"time"
@@ -13,28 +14,37 @@ import (
 type Manager struct {
 	store            *database.Store
 	engine           *Engine
-	running          map[int]context.CancelFunc
+	running          map[int]*managedTask
 	monitorCfg       map[int]string
-	discoveryRunning map[string]context.CancelFunc
+	discoveryRunning map[string]*managedTask
 	discoveryCfg     map[string]string
 	scheduledPaused  map[int]bool
 	initialSyncDone  bool
+	maintenanceSeen  bool
+	maintenanceOn    bool
 	mu               sync.Mutex
+}
+
+type managedTask struct {
+	cancel   context.CancelFunc
+	done     chan struct{}
+	stopping bool
 }
 
 func NewManager(store *database.Store, engine *Engine) *Manager {
 	return &Manager{
 		store:            store,
 		engine:           engine,
-		running:          make(map[int]context.CancelFunc),
+		running:          make(map[int]*managedTask),
 		monitorCfg:       make(map[int]string),
-		discoveryRunning: make(map[string]context.CancelFunc),
+		discoveryRunning: make(map[string]*managedTask),
 		discoveryCfg:     make(map[string]string),
 		scheduledPaused:  make(map[int]bool),
 	}
 }
 
 func (m *Manager) Sync(ctx context.Context) {
+	maintenanceEnabled, maintenanceRead := m.readMaintenanceEnabled(ctx)
 	expiredDemoIDs, err := m.store.PauseExpiredDemoMonitors()
 	if err != nil {
 		log.Printf("Error pausing expired demo monitors: %v", err)
@@ -51,8 +61,10 @@ func (m *Manager) Sync(ctx context.Context) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.reapFinishedTasksLocked()
 	initialWorkerSync := !m.initialSyncDone
 	m.initialSyncDone = true
+	maintenanceJustEnded := m.recordMaintenanceState(maintenanceEnabled, maintenanceRead)
 
 	activeIDs := make(map[int]bool, len(monitors))
 	returnedIDs := make(map[int]bool, len(monitors))
@@ -75,39 +87,48 @@ func (m *Manager) Sync(ctx context.Context) {
 			m.scheduledPaused[mon.ID] = true
 			continue
 		}
-		if initialWorkerSync || m.scheduledPaused[mon.ID] {
+		if initialWorkerSync || maintenanceJustEnded || m.scheduledPaused[mon.ID] {
 			prepareMonitorResume(mon)
 			delete(m.scheduledPaused, mon.ID)
 		}
 		activeIDs[mon.ID] = true
 		hash := monitorConfigFingerprint(*mon)
 
-		if cancelFn, exists := m.running[mon.ID]; exists {
+		if task, exists := m.running[mon.ID]; exists {
+			if task.stopping {
+				continue
+			}
 			if oldHash, ok := m.monitorCfg[mon.ID]; ok && oldHash != hash {
 				log.Printf("Config changed for monitor [%d], restarting...", mon.ID)
-				cancelFn()
-				delete(m.running, mon.ID)
+				task.cancel()
+				task.stopping = true
 				// A config refresh is a continuation of an existing monitor. Treat
 				// its first catalog response as a resume so items published during
 				// the restart window are checked instead of silently seeded.
 				prepareMonitorResume(mon)
+				continue
 			} else {
 				continue
 			}
 		}
 
 		mCtx, mCancel := context.WithCancel(ctx)
-		m.running[mon.ID] = mCancel
+		task := &managedTask{cancel: mCancel, done: make(chan struct{})}
+		m.running[mon.ID] = task
 		m.monitorCfg[mon.ID] = hash
-		go m.engine.MonitorTask(mCtx, *mon)
+		go func(ctx context.Context, monitor model.Monitor, managed *managedTask) {
+			defer close(managed.done)
+			m.engine.MonitorTask(ctx, monitor)
+		}(mCtx, *mon, task)
 	}
 
-	for id, cancelFn := range m.running {
+	for id, task := range m.running {
 		if !activeIDs[id] {
-			log.Printf("Stopping monitor [%d] (removed/paused)", id)
-			cancelFn()
-			delete(m.running, id)
-			delete(m.monitorCfg, id)
+			if !task.stopping {
+				log.Printf("Stopping monitor [%d] (removed/paused)", id)
+				task.cancel()
+				task.stopping = true
+			}
 		}
 	}
 	for id := range m.scheduledPaused {
@@ -118,26 +139,97 @@ func (m *Manager) Sync(ctx context.Context) {
 
 	discoverySpecs := BuildDiscoverySpecs(discoveryMonitors, m.engine.discoveryMode)
 	for key, spec := range discoverySpecs {
-		if cancelFn, exists := m.discoveryRunning[key]; exists {
+		if task, exists := m.discoveryRunning[key]; exists {
+			if task.stopping {
+				continue
+			}
 			if m.discoveryCfg[key] == spec.Fingerprint {
 				continue
 			}
-			cancelFn()
-			delete(m.discoveryRunning, key)
-			delete(m.discoveryCfg, key)
+			task.cancel()
+			task.stopping = true
+			continue
 		}
 		dCtx, dCancel := context.WithCancel(ctx)
-		m.discoveryRunning[key] = dCancel
+		task := &managedTask{cancel: dCancel, done: make(chan struct{})}
+		m.discoveryRunning[key] = task
 		m.discoveryCfg[key] = spec.Fingerprint
-		go m.engine.DiscoveryTask(dCtx, spec)
+		go func(ctx context.Context, discoverySpec DiscoverySpec, managed *managedTask) {
+			defer close(managed.done)
+			m.engine.DiscoveryTask(ctx, discoverySpec)
+		}(dCtx, spec, task)
 	}
-	for key, cancelFn := range m.discoveryRunning {
+	for key, task := range m.discoveryRunning {
 		if _, active := discoverySpecs[key]; !active {
-			cancelFn()
-			delete(m.discoveryRunning, key)
-			delete(m.discoveryCfg, key)
+			if !task.stopping {
+				task.cancel()
+				task.stopping = true
+			}
 		}
 	}
+}
+
+func parseMaintenanceEnabled(value string) (bool, bool) {
+	var setting struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.Unmarshal([]byte(value), &setting); err != nil {
+		return false, false
+	}
+	return setting.Enabled, true
+}
+
+func (m *Manager) recordMaintenanceState(enabled bool, read bool) bool {
+	if !read {
+		return false
+	}
+	justEnded := m.maintenanceSeen && m.maintenanceOn && !enabled
+	m.maintenanceSeen = true
+	m.maintenanceOn = enabled
+	return justEnded
+}
+
+func (m *Manager) readMaintenanceEnabled(ctx context.Context) (bool, bool) {
+	value, exists, err := m.store.GetSettingValueContext(ctx, "monitor_maintenance")
+	if err != nil {
+		log.Printf("Error fetching monitor maintenance state: %v", err)
+		return false, false
+	}
+	if !exists {
+		return false, true
+	}
+	enabled, valid := parseMaintenanceEnabled(value)
+	if !valid {
+		log.Printf("Invalid monitor maintenance state; keeping previous worker state")
+		return false, false
+	}
+	return enabled, true
+}
+
+func (m *Manager) reapFinishedTasksLocked() {
+	for id, task := range m.running {
+		select {
+		case <-task.done:
+			delete(m.running, id)
+			delete(m.monitorCfg, id)
+		default:
+		}
+	}
+	for key, task := range m.discoveryRunning {
+		select {
+		case <-task.done:
+			delete(m.discoveryRunning, key)
+			delete(m.discoveryCfg, key)
+		default:
+		}
+	}
+}
+
+func (m *Manager) RuntimeCounts() (monitorTasks int, discoveryTasks int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reapFinishedTasksLocked()
+	return len(m.running), len(m.discoveryRunning)
 }
 
 func prepareMonitorResume(monitor *model.Monitor) {
@@ -149,14 +241,17 @@ func (m *Manager) StopAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for id, cancelFn := range m.running {
-		cancelFn()
-		delete(m.running, id)
-		delete(m.monitorCfg, id)
+	for _, task := range m.running {
+		if !task.stopping {
+			task.cancel()
+			task.stopping = true
+		}
 	}
-	for key, cancelFn := range m.discoveryRunning {
-		cancelFn()
-		delete(m.discoveryRunning, key)
-		delete(m.discoveryCfg, key)
+	for _, task := range m.discoveryRunning {
+		if !task.stopping {
+			task.cancel()
+			task.stopping = true
+		}
 	}
+	m.reapFinishedTasksLocked()
 }

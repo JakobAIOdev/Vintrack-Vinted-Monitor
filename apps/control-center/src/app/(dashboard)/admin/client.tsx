@@ -31,6 +31,9 @@ import {
     UserPlus,
     FlaskConical,
     Sparkles,
+    Megaphone,
+    Wrench,
+    TimerReset,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -75,11 +78,34 @@ import {
     importFreeProxiesNow,
     updateFreeProxySettings,
     updateServerProxies,
+    updateMemberAnnouncement,
     stopSingleUserMonitor,
     stopUserActiveMonitors,
+    enableMonitorMaintenance,
+    updateMonitorMaintenance,
+    disableMonitorMaintenance,
+    type MonitorMaintenanceAdminState,
+    previewInactiveMemberPolicy,
+    updateInactiveMemberPolicy,
+    type InactiveMemberPolicyAdminState,
 } from "@/actions/admin";
 import { getRegionLabel, REGIONS } from "@/lib/regions";
 import { getProxyErrorDetails } from "@/lib/proxy-errors";
+import { MemberAnnouncementBanner } from "@/components/announcements/member-announcement-banner";
+import {
+    MEMBER_ANNOUNCEMENT_AUDIENCES,
+    MEMBER_ANNOUNCEMENT_PLACEMENTS,
+    MEMBER_ANNOUNCEMENT_VARIANTS,
+    toMemberAnnouncementInput,
+    type MemberAnnouncement,
+    type MemberAnnouncementAudience,
+    type MemberAnnouncementPlacement,
+} from "@/lib/member-announcement";
+import { DEFAULT_MONITOR_MAINTENANCE_MESSAGE } from "@/lib/monitor-maintenance";
+import type {
+    InactivityDurationUnit,
+    InactivityMonitorScope,
+} from "@/lib/inactive-member-policy";
 
 type UserMonitor = {
     id: number;
@@ -162,6 +188,7 @@ type AdminTab =
     | "users"
     | "roles"
     | "logs"
+    | "announcements"
     | "settings";
 
 type AdminLogRow = {
@@ -448,6 +475,48 @@ const FREE_PROXY_SOURCE_OPTIONS = [
         url: "",
     },
 ] as const;
+
+const ANNOUNCEMENT_AUDIENCE_LABELS: Record<MemberAnnouncementAudience, string> =
+    {
+        free: "Free members",
+        premium: "Premium members",
+        admin: "Admins",
+    };
+
+const ANNOUNCEMENT_PLACEMENT_LABELS: Record<
+    MemberAnnouncementPlacement,
+    { label: string; description: string }
+> = {
+    monitors: {
+        label: "Monitors",
+        description: "Dashboard and monitor pages",
+    },
+    live_feed: { label: "Live Feed", description: "Feed page" },
+    member_tools: {
+        label: "Member Tools",
+        description: "Account, listings, likes, chats and checkout",
+    },
+    proxy_groups: {
+        label: "Proxy Groups",
+        description: "Proxy management",
+    },
+    guide: { label: "Guide", description: "Member guide" },
+    admin: { label: "Admin", description: "Admin panel" },
+};
+
+function announcementDateTimeValue(value: string | null) {
+    if (!value) return "";
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return "";
+    const localDate = new Date(
+        date.getTime() - date.getTimezoneOffset() * 60_000,
+    );
+    return localDate.toISOString().slice(0, 16);
+}
+
+function announcementDateTimeIso(value: string) {
+    return value ? new Date(value).toISOString() : null;
+}
 const ADMIN_TABS: {
     value: AdminTab;
     label: string;
@@ -471,7 +540,8 @@ const ADMIN_TABS: {
         value: "monitors",
         label: "Running Monitors",
         icon: Monitor,
-        description: "All currently running monitors, grouped by member.",
+        description:
+            "Monitor operations, maintenance controls, and active workloads.",
     },
     {
         value: "users",
@@ -490,6 +560,12 @@ const ADMIN_TABS: {
         label: "Logs",
         icon: ScrollText,
         description: "Important audit, monitor, and alert events.",
+    },
+    {
+        value: "announcements",
+        label: "Announcements",
+        icon: Megaphone,
+        description: "Create and target member-facing product updates.",
     },
     {
         value: "settings",
@@ -1018,6 +1094,9 @@ export function AdminClient({
     initialTab,
     currentUserId,
     serverProxies: initialServerProxies,
+    memberAnnouncement: initialMemberAnnouncement,
+    initialMonitorMaintenanceState,
+    initialInactiveMemberPolicyState,
     freeProxyState: initialFreeProxyState,
     monitorLimits: initialMonitorLimits,
 }: {
@@ -1026,6 +1105,9 @@ export function AdminClient({
     initialTab?: string;
     currentUserId: string;
     serverProxies: string;
+    memberAnnouncement: MemberAnnouncement;
+    initialMonitorMaintenanceState: MonitorMaintenanceAdminState;
+    initialInactiveMemberPolicyState: InactiveMemberPolicyAdminState;
     freeProxyState: FreeProxyState;
     monitorLimits: MonitorLimits;
 }) {
@@ -1138,6 +1220,41 @@ export function AdminClient({
     const [userFreeProxyLimitInput, setUserFreeProxyLimitInput] = useState("");
     const [serverProxies, setServerProxies] = useState(initialServerProxies);
     const [isSavingServerProxies, setIsSavingServerProxies] = useState(false);
+    const [memberAnnouncement, setMemberAnnouncement] = useState(
+        initialMemberAnnouncement,
+    );
+    const [isSavingMemberAnnouncement, setIsSavingMemberAnnouncement] =
+        useState(false);
+    const [monitorMaintenanceState, setMonitorMaintenanceState] = useState(
+        initialMonitorMaintenanceState,
+    );
+    const [maintenanceDialogMode, setMaintenanceDialogMode] = useState<
+        "enable" | "update" | "disable" | null
+    >(null);
+    const [maintenanceMessage, setMaintenanceMessage] = useState(
+        initialMonitorMaintenanceState.maintenance.message ||
+            DEFAULT_MONITOR_MAINTENANCE_MESSAGE,
+    );
+    const [maintenanceEstimatedEndAt, setMaintenanceEstimatedEndAt] = useState(
+        announcementDateTimeValue(
+            initialMonitorMaintenanceState.maintenance.estimatedEndAt,
+        ),
+    );
+    const [isSavingMaintenance, setIsSavingMaintenance] = useState(false);
+    const [inactivePolicyState, setInactivePolicyState] = useState(
+        initialInactiveMemberPolicyState,
+    );
+    const [inactivePolicyDraft, setInactivePolicyDraft] = useState(() => ({
+        enabled: initialInactiveMemberPolicyState.policy.enabled,
+        duration: initialInactiveMemberPolicyState.policy.duration,
+        durationUnit: initialInactiveMemberPolicyState.policy.durationUnit,
+        monitorScope: initialInactiveMemberPolicyState.policy.monitorScope,
+        roles: initialInactiveMemberPolicyState.policy.roles,
+    }));
+    const [inactivePolicyPreview, setInactivePolicyPreview] = useState(
+        initialInactiveMemberPolicyState.preview,
+    );
+    const [isSavingInactivePolicy, setIsSavingInactivePolicy] = useState(false);
     const [freeProxyState, setFreeProxyState] = useState(initialFreeProxyState);
     const [freeProxySettings, setFreeProxySettings] = useState(
         normalizeFreeProxySettings(initialFreeProxyState.settings),
@@ -1441,6 +1558,51 @@ export function AdminClient({
         const interval = window.setInterval(() => setNowMs(Date.now()), 60_000);
         return () => window.clearInterval(interval);
     }, []);
+
+    useEffect(() => {
+        if (
+            !monitorMaintenanceState.maintenance.enabled ||
+            monitorMaintenanceState.status === "active"
+        ) {
+            return;
+        }
+        const refresh = () => {
+            void fetch("/api/admin/maintenance", { cache: "no-store" })
+                .then(async (response) => {
+                    if (!response.ok) throw new Error("Refresh failed");
+                    return (await response.json()) as MonitorMaintenanceAdminState;
+                })
+                .then(setMonitorMaintenanceState)
+                .catch(() => undefined);
+        };
+        const interval = window.setInterval(refresh, 2_000);
+        return () => window.clearInterval(interval);
+    }, [
+        monitorMaintenanceState.maintenance.enabled,
+        monitorMaintenanceState.status,
+    ]);
+
+    useEffect(() => {
+        if (
+            !inactivePolicyState.policy.enabled ||
+            inactivePolicyState.status === "active"
+        ) {
+            return;
+        }
+        const refresh = () => {
+            void fetch("/api/admin/inactive-member-policy", {
+                cache: "no-store",
+            })
+                .then(async (response) => {
+                    if (!response.ok) throw new Error("Refresh failed");
+                    return (await response.json()) as InactiveMemberPolicyAdminState;
+                })
+                .then(setInactivePolicyState)
+                .catch(() => undefined);
+        };
+        const interval = window.setInterval(refresh, 5_000);
+        return () => window.clearInterval(interval);
+    }, [inactivePolicyState.policy.enabled, inactivePolicyState.status]);
 
     useEffect(() => {
         if (!["users", "roles"].includes(activeTab)) return;
@@ -2145,6 +2307,121 @@ export function AdminClient({
         }
     };
 
+    const handleSaveMemberAnnouncement = async () => {
+        setIsSavingMemberAnnouncement(true);
+        try {
+            const result = await updateMemberAnnouncement(
+                toMemberAnnouncementInput(memberAnnouncement),
+            );
+            if (!result.success) {
+                toast.error(result.error);
+                return;
+            }
+            setMemberAnnouncement(result.announcement);
+            toast.success(
+                result.changed
+                    ? "Member announcement published"
+                    : "Announcement is already up to date",
+            );
+        } catch (error) {
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save member announcement",
+            );
+        } finally {
+            setIsSavingMemberAnnouncement(false);
+        }
+    };
+
+    const openMaintenanceDialog = (mode: "enable" | "update" | "disable") => {
+        setMaintenanceMessage(
+            monitorMaintenanceState.maintenance.message ||
+                DEFAULT_MONITOR_MAINTENANCE_MESSAGE,
+        );
+        setMaintenanceEstimatedEndAt(
+            announcementDateTimeValue(
+                monitorMaintenanceState.maintenance.estimatedEndAt,
+            ),
+        );
+        setMaintenanceDialogMode(mode);
+    };
+
+    const handleMaintenanceAction = async () => {
+        if (!maintenanceDialogMode) return;
+        setIsSavingMaintenance(true);
+        try {
+            const nextState =
+                maintenanceDialogMode === "disable"
+                    ? await disableMonitorMaintenance()
+                    : maintenanceDialogMode === "update"
+                      ? await updateMonitorMaintenance({
+                            message: maintenanceMessage,
+                            estimatedEndAt: announcementDateTimeIso(
+                                maintenanceEstimatedEndAt,
+                            ),
+                        })
+                      : await enableMonitorMaintenance({
+                            message: maintenanceMessage,
+                            estimatedEndAt: announcementDateTimeIso(
+                                maintenanceEstimatedEndAt,
+                            ),
+                        });
+            setMonitorMaintenanceState(nextState);
+            setMaintenanceDialogMode(null);
+            toast.success(
+                maintenanceDialogMode === "disable"
+                    ? `${nextState.activeMonitorCount} monitor${nextState.activeMonitorCount === 1 ? "" : "s"} resumed`
+                    : maintenanceDialogMode === "update"
+                      ? "Maintenance notice updated"
+                      : `${nextState.maintenancePausedCount} monitor${nextState.maintenancePausedCount === 1 ? "" : "s"} safely paused`,
+            );
+            void loadOverview();
+        } catch (error) {
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to update maintenance mode",
+            );
+        } finally {
+            setIsSavingMaintenance(false);
+        }
+    };
+
+    const refreshInactivePolicyPreview = async () => {
+        try {
+            setInactivePolicyPreview(
+                await previewInactiveMemberPolicy(inactivePolicyDraft),
+            );
+        } catch (error) {
+            toast.error(
+                error instanceof Error ? error.message : "Invalid policy",
+            );
+        }
+    };
+
+    const handleSaveInactivePolicy = async () => {
+        setIsSavingInactivePolicy(true);
+        try {
+            const next = await updateInactiveMemberPolicy(inactivePolicyDraft);
+            setInactivePolicyState(next);
+            setInactivePolicyPreview(next.preview);
+            toast.success(
+                next.policy.enabled
+                    ? "Inactive member automation enabled"
+                    : "Inactive member automation disabled",
+            );
+        } catch (error) {
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save inactivity policy",
+            );
+        } finally {
+            setIsSavingInactivePolicy(false);
+        }
+    };
+
     const handleSaveServerProxies = async () => {
         const previous = serverProxies;
         const formData = new FormData();
@@ -2388,6 +2665,14 @@ export function AdminClient({
     const activeTabDefinition =
         ADMIN_TABS.find((tab) => tab.value === activeTab) ?? ADMIN_TABS[0];
     const ActiveTabIcon = activeTabDefinition.icon;
+    const maintenanceStatusLabel =
+        monitorMaintenanceState.status === "active"
+            ? "Maintenance active"
+            : monitorMaintenanceState.status === "draining"
+              ? "Draining"
+              : monitorMaintenanceState.status === "confirmation_pending"
+                ? "Worker confirmation pending"
+                : "Normal operation";
     const userMetricsLoaded = overviewState !== null;
     const userMetricsLoadFailed = overviewLoadFailed;
     const isLoadingUserMetrics = isLoadingOverview;
@@ -2512,6 +2797,159 @@ export function AdminClient({
                     );
                 })}
             </div>
+
+            {activeTab === "monitors" ? (
+                <div className="w-full">
+                    <div
+                        className={`rounded-xl border p-5 ${
+                            monitorMaintenanceState.maintenance.enabled
+                                ? "border-red-500/30 bg-red-500/5"
+                                : "border-border/60 bg-card"
+                        }`}
+                        data-testid="maintenance-system-control"
+                    >
+                        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                            <div className="flex items-start gap-3">
+                                <div
+                                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${
+                                        monitorMaintenanceState.maintenance
+                                            .enabled
+                                            ? "bg-red-500 text-white"
+                                            : "bg-muted text-muted-foreground"
+                                    }`}
+                                >
+                                    <Wrench className="h-5 w-5" />
+                                </div>
+                                <div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <p className="text-sm font-semibold">
+                                            Monitor Maintenance
+                                        </p>
+                                        <Badge
+                                            variant={
+                                                monitorMaintenanceState
+                                                    .maintenance.enabled
+                                                    ? "destructive"
+                                                    : "secondary"
+                                            }
+                                            className="rounded-md text-[10px] uppercase"
+                                        >
+                                            {maintenanceStatusLabel}
+                                        </Badge>
+                                    </div>
+                                    <p className="text-muted-foreground mt-1 max-w-2xl text-xs leading-5">
+                                        {monitorMaintenanceState.maintenance
+                                            .enabled
+                                            ? monitorMaintenanceState
+                                                  .maintenance.message
+                                            : "Pause every monitor safely and block new starts while planned maintenance is in progress."}
+                                    </p>
+                                </div>
+                            </div>
+                            <div className="flex shrink-0 flex-wrap gap-2">
+                                {monitorMaintenanceState.maintenance.enabled ? (
+                                    <>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() =>
+                                                openMaintenanceDialog("update")
+                                            }
+                                        >
+                                            Edit notice
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            onClick={() =>
+                                                openMaintenanceDialog("disable")
+                                            }
+                                        >
+                                            End maintenance
+                                        </Button>
+                                    </>
+                                ) : (
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="destructive"
+                                        onClick={() =>
+                                            openMaintenanceDialog("enable")
+                                        }
+                                    >
+                                        Enable maintenance
+                                    </Button>
+                                )}
+                            </div>
+                        </div>
+                        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                            <div className="border-border/60 bg-background/50 rounded-lg border px-3 py-2.5">
+                                <p className="text-muted-foreground text-[10px] uppercase">
+                                    Active monitors
+                                </p>
+                                <p className="mt-1 text-lg font-semibold tabular-nums">
+                                    {monitorMaintenanceState.activeMonitorCount}
+                                </p>
+                            </div>
+                            <div className="border-border/60 bg-background/50 rounded-lg border px-3 py-2.5">
+                                <p className="text-muted-foreground text-[10px] uppercase">
+                                    Maintenance paused
+                                </p>
+                                <p className="mt-1 text-lg font-semibold tabular-nums">
+                                    {
+                                        monitorMaintenanceState.maintenancePausedCount
+                                    }
+                                </p>
+                            </div>
+                            <div className="border-border/60 bg-background/50 rounded-lg border px-3 py-2.5">
+                                <p className="text-muted-foreground text-[10px] uppercase">
+                                    Worker tasks
+                                </p>
+                                <p className="mt-1 text-lg font-semibold tabular-nums">
+                                    {monitorMaintenanceState.runtime
+                                        ? monitorMaintenanceState.runtime
+                                              .runningMonitorTasks +
+                                          monitorMaintenanceState.runtime
+                                              .runningDiscoveryTasks
+                                        : "—"}
+                                </p>
+                            </div>
+                            <div className="border-border/60 bg-background/50 rounded-lg border px-3 py-2.5">
+                                <p className="text-muted-foreground text-[10px] uppercase">
+                                    Worker heartbeat
+                                </p>
+                                <p className="mt-1 text-sm font-semibold">
+                                    {monitorMaintenanceState.runtime
+                                        ? formatMetricDate(
+                                              new Date(
+                                                  monitorMaintenanceState
+                                                      .runtime.heartbeatAt,
+                                              ),
+                                          )
+                                        : "No confirmation"}
+                                </p>
+                            </div>
+                            <div className="border-border/60 bg-background/50 rounded-lg border px-3 py-2.5">
+                                <p className="text-muted-foreground text-[10px] uppercase">
+                                    Last change
+                                </p>
+                                <p className="mt-1 text-sm font-semibold">
+                                    {monitorMaintenanceState.maintenance
+                                        .updatedAt
+                                        ? formatMetricDate(
+                                              new Date(
+                                                  monitorMaintenanceState
+                                                      .maintenance.updatedAt,
+                                              ),
+                                          )
+                                        : "Never"}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
 
             {activeTab === "overview" ? (
                 <>
@@ -3616,6 +4054,214 @@ export function AdminClient({
 
             {activeTab === "monitors" ? (
                 <div className="space-y-4">
+                    <div
+                        className="border-border/60 bg-card rounded-lg border p-5"
+                        data-testid="inactive-member-automation"
+                    >
+                        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                            <div className="flex items-start gap-3">
+                                <div className="bg-muted text-muted-foreground flex size-10 shrink-0 items-center justify-center rounded-lg">
+                                    <TimerReset className="size-5" />
+                                </div>
+                                <div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <p className="text-sm font-semibold">
+                                            Inactive Member Automation
+                                        </p>
+                                        <Badge
+                                            variant={
+                                                inactivePolicyState.policy
+                                                    .enabled
+                                                    ? "default"
+                                                    : "secondary"
+                                            }
+                                            className="rounded-md text-[10px] uppercase"
+                                        >
+                                            {inactivePolicyState.policy.enabled
+                                                ? inactivePolicyState.status ===
+                                                  "active"
+                                                    ? "Worker confirmed"
+                                                    : "Confirmation pending"
+                                                : "Disabled"}
+                                        </Badge>
+                                    </div>
+                                    <p className="text-muted-foreground mt-1 max-w-2xl text-xs leading-5">
+                                        Pause abandoned monitors without
+                                        affecting members who keep Vintrack open
+                                        and active. Admin accounts are always
+                                        excluded.
+                                    </p>
+                                </div>
+                            </div>
+                            <label className="border-border/60 bg-background/50 flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-sm font-medium">
+                                <input
+                                    type="checkbox"
+                                    checked={inactivePolicyDraft.enabled}
+                                    onChange={(event) =>
+                                        setInactivePolicyDraft((current) => ({
+                                            ...current,
+                                            enabled: event.target.checked,
+                                        }))
+                                    }
+                                    className="size-4 accent-current"
+                                />
+                                Enable automation
+                            </label>
+                        </div>
+
+                        <div className="mt-5 grid gap-4 xl:grid-cols-[1fr_1fr_1.2fr]">
+                            <div>
+                                <Label className="text-xs">
+                                    Inactive after
+                                </Label>
+                                <div className="mt-2 grid grid-cols-[1fr_1.2fr] gap-2">
+                                    <Input
+                                        type="number"
+                                        min={1}
+                                        value={inactivePolicyDraft.duration}
+                                        onChange={(event) =>
+                                            setInactivePolicyDraft(
+                                                (current) => ({
+                                                    ...current,
+                                                    duration: Number(
+                                                        event.target.value,
+                                                    ),
+                                                }),
+                                            )
+                                        }
+                                    />
+                                    <select
+                                        className="border-input bg-background h-9 rounded-md border px-3 text-sm"
+                                        value={inactivePolicyDraft.durationUnit}
+                                        onChange={(event) =>
+                                            setInactivePolicyDraft(
+                                                (current) => ({
+                                                    ...current,
+                                                    durationUnit: event.target
+                                                        .value as InactivityDurationUnit,
+                                                }),
+                                            )
+                                        }
+                                    >
+                                        <option value="days">Days</option>
+                                        <option value="weeks">Weeks</option>
+                                        <option value="months">Months</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div>
+                                <Label className="text-xs">Monitor scope</Label>
+                                <select
+                                    className="border-input bg-background mt-2 h-9 w-full rounded-md border px-3 text-sm"
+                                    value={inactivePolicyDraft.monitorScope}
+                                    onChange={(event) =>
+                                        setInactivePolicyDraft((current) => ({
+                                            ...current,
+                                            monitorScope: event.target
+                                                .value as InactivityMonitorScope,
+                                        }))
+                                    }
+                                >
+                                    <option value="free_proxy">
+                                        Free Proxy Pool only
+                                    </option>
+                                    <option value="all">All monitors</option>
+                                </select>
+                            </div>
+                            <div>
+                                <Label className="text-xs">Member roles</Label>
+                                <div className="mt-2 flex h-9 gap-2">
+                                    {(["free", "premium"] as const).map(
+                                        (role) => (
+                                            <label
+                                                key={role}
+                                                className="border-input bg-background flex flex-1 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm capitalize"
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={inactivePolicyDraft.roles.includes(
+                                                        role,
+                                                    )}
+                                                    onChange={(event) =>
+                                                        setInactivePolicyDraft(
+                                                            (current) => ({
+                                                                ...current,
+                                                                roles: event
+                                                                    .target
+                                                                    .checked
+                                                                    ? [
+                                                                          ...current.roles,
+                                                                          role,
+                                                                      ]
+                                                                    : current.roles.filter(
+                                                                          (
+                                                                              value,
+                                                                          ) =>
+                                                                              value !==
+                                                                              role,
+                                                                      ),
+                                                            }),
+                                                        )
+                                                    }
+                                                />
+                                                {role}
+                                            </label>
+                                        ),
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="border-border/60 bg-muted/20 mt-4 flex flex-col gap-3 rounded-lg border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="text-xs">
+                                <p className="font-medium">
+                                    Current impact:{" "}
+                                    {inactivePolicyPreview.memberCount} member
+                                    {inactivePolicyPreview.memberCount === 1
+                                        ? ""
+                                        : "s"}{" "}
+                                    · {inactivePolicyPreview.monitorCount}{" "}
+                                    active monitor
+                                    {inactivePolicyPreview.monitorCount === 1
+                                        ? ""
+                                        : "s"}
+                                </p>
+                                <p className="text-muted-foreground mt-1">
+                                    {inactivePolicyState.inactivityPausedCount}{" "}
+                                    currently paused · Last evaluation:{" "}
+                                    {inactivePolicyState.runtime
+                                        ? formatMetricDate(
+                                              new Date(
+                                                  inactivePolicyState.runtime
+                                                      .lastEvaluatedAt,
+                                              ),
+                                          )
+                                        : "No worker confirmation"}
+                                </p>
+                            </div>
+                            <div className="flex gap-2">
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={refreshInactivePolicyPreview}
+                                >
+                                    Preview impact
+                                </Button>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    disabled={isSavingInactivePolicy}
+                                    onClick={handleSaveInactivePolicy}
+                                >
+                                    {isSavingInactivePolicy
+                                        ? "Saving..."
+                                        : "Save automation"}
+                                </Button>
+                            </div>
+                        </div>
+                    </div>
+
                     <div className="border-border/60 bg-card overflow-hidden rounded-lg border">
                         <div className="border-border/60 flex flex-col gap-4 border-b px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
                             <div>
@@ -4861,6 +5507,572 @@ export function AdminClient({
                 </div>
             ) : null}
 
+            {activeTab === "announcements" ? (
+                <div className="space-y-4">
+                    <div className="border-border/60 bg-card rounded-lg border p-5">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="flex items-start gap-3">
+                                <div className="bg-muted text-muted-foreground rounded-lg p-2">
+                                    <Megaphone className="h-4 w-4" />
+                                </div>
+                                <div className="space-y-1">
+                                    <p className="text-foreground text-sm font-semibold">
+                                        Member Announcement
+                                    </p>
+                                    <p className="text-muted-foreground max-w-2xl text-xs">
+                                        Publish one targeted notice across the
+                                        member area. Saved changes receive a new
+                                        revision and reappear for members who
+                                        dismissed the previous version.
+                                    </p>
+                                </div>
+                            </div>
+                            <Badge
+                                variant={
+                                    memberAnnouncement.enabled
+                                        ? "secondary"
+                                        : "outline"
+                                }
+                                className="self-start rounded-md text-[10px] uppercase"
+                            >
+                                {memberAnnouncement.enabled
+                                    ? "Enabled"
+                                    : "Disabled"}
+                            </Badge>
+                        </div>
+
+                        <div className="mt-5 flex flex-col gap-6">
+                            <div className="space-y-5">
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    <label className="border-border/60 flex items-start gap-3 rounded-lg border px-4 py-3">
+                                        <input
+                                            type="checkbox"
+                                            aria-label="Enable member announcement"
+                                            checked={memberAnnouncement.enabled}
+                                            onChange={(event) =>
+                                                setMemberAnnouncement(
+                                                    (current) => ({
+                                                        ...current,
+                                                        enabled:
+                                                            event.target
+                                                                .checked,
+                                                    }),
+                                                )
+                                            }
+                                            className="mt-1"
+                                        />
+                                        <span>
+                                            <span className="text-sm font-medium">
+                                                Publish announcement
+                                            </span>
+                                            <span className="text-muted-foreground block text-xs">
+                                                Turn off to hide it everywhere.
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <label className="border-border/60 flex items-start gap-3 rounded-lg border px-4 py-3">
+                                        <input
+                                            type="checkbox"
+                                            aria-label="Allow members to dismiss"
+                                            checked={
+                                                memberAnnouncement.dismissible
+                                            }
+                                            onChange={(event) =>
+                                                setMemberAnnouncement(
+                                                    (current) => ({
+                                                        ...current,
+                                                        dismissible:
+                                                            event.target
+                                                                .checked,
+                                                    }),
+                                                )
+                                            }
+                                            className="mt-1"
+                                        />
+                                        <span>
+                                            <span className="text-sm font-medium">
+                                                Allow dismissal
+                                            </span>
+                                            <span className="text-muted-foreground block text-xs">
+                                                Adds an X and remembers it on
+                                                this browser.
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+
+                                <div className="grid gap-4 sm:grid-cols-[180px_minmax(0,1fr)]">
+                                    <div className="space-y-2">
+                                        <Label htmlFor="announcement-variant">
+                                            Variant
+                                        </Label>
+                                        <select
+                                            id="announcement-variant"
+                                            value={memberAnnouncement.variant}
+                                            onChange={(event) =>
+                                                setMemberAnnouncement(
+                                                    (current) => ({
+                                                        ...current,
+                                                        variant: event.target
+                                                            .value as MemberAnnouncement["variant"],
+                                                    }),
+                                                )
+                                            }
+                                            className="border-input bg-background focus-visible:ring-ring h-9 w-full rounded-md border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none"
+                                        >
+                                            {MEMBER_ANNOUNCEMENT_VARIANTS.map(
+                                                (variant) => (
+                                                    <option
+                                                        key={variant}
+                                                        value={variant}
+                                                    >
+                                                        {variant
+                                                            .charAt(0)
+                                                            .toUpperCase() +
+                                                            variant.slice(1)}
+                                                    </option>
+                                                ),
+                                            )}
+                                        </select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <Label htmlFor="announcement-title">
+                                                Title
+                                            </Label>
+                                            <span className="text-muted-foreground text-[11px]">
+                                                {
+                                                    memberAnnouncement.title
+                                                        .length
+                                                }
+                                                /80
+                                            </span>
+                                        </div>
+                                        <Input
+                                            id="announcement-title"
+                                            maxLength={80}
+                                            value={memberAnnouncement.title}
+                                            onChange={(event) =>
+                                                setMemberAnnouncement(
+                                                    (current) => ({
+                                                        ...current,
+                                                        title: event.target
+                                                            .value,
+                                                    }),
+                                                )
+                                            }
+                                            placeholder="Important update"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <Label htmlFor="announcement-message">
+                                            Message
+                                        </Label>
+                                        <span className="text-muted-foreground text-[11px]">
+                                            {memberAnnouncement.message.length}
+                                            /500
+                                        </span>
+                                    </div>
+                                    <textarea
+                                        id="announcement-message"
+                                        maxLength={500}
+                                        rows={4}
+                                        value={memberAnnouncement.message}
+                                        onChange={(event) =>
+                                            setMemberAnnouncement(
+                                                (current) => ({
+                                                    ...current,
+                                                    message: event.target.value,
+                                                }),
+                                            )
+                                        }
+                                        placeholder="Write a concise member update..."
+                                        className="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:ring-ring min-h-24 w-full resize-y rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+                                    />
+                                    <p className="text-muted-foreground text-[11px]">
+                                        Plain text only. Line breaks are
+                                        preserved.
+                                    </p>
+                                </div>
+
+                                <div className="border-border/60 rounded-lg border p-4">
+                                    <label className="flex items-center gap-2 text-sm font-medium">
+                                        <input
+                                            type="checkbox"
+                                            aria-label="Enable announcement call to action"
+                                            checked={
+                                                memberAnnouncement.cta !== null
+                                            }
+                                            onChange={(event) =>
+                                                setMemberAnnouncement(
+                                                    (current) => ({
+                                                        ...current,
+                                                        cta: event.target
+                                                            .checked
+                                                            ? {
+                                                                  label: "Learn more",
+                                                                  url: "",
+                                                              }
+                                                            : null,
+                                                    }),
+                                                )
+                                            }
+                                        />
+                                        Call to action
+                                    </label>
+                                    {memberAnnouncement.cta ? (
+                                        <div className="mt-3 grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)]">
+                                            <div className="space-y-2">
+                                                <Label htmlFor="announcement-cta-label">
+                                                    Button label
+                                                </Label>
+                                                <Input
+                                                    id="announcement-cta-label"
+                                                    maxLength={40}
+                                                    value={
+                                                        memberAnnouncement.cta
+                                                            .label
+                                                    }
+                                                    onChange={(event) =>
+                                                        setMemberAnnouncement(
+                                                            (current) => ({
+                                                                ...current,
+                                                                cta: current.cta
+                                                                    ? {
+                                                                          ...current.cta,
+                                                                          label: event
+                                                                              .target
+                                                                              .value,
+                                                                      }
+                                                                    : null,
+                                                            }),
+                                                        )
+                                                    }
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label htmlFor="announcement-cta-url">
+                                                    Internal or HTTPS URL
+                                                </Label>
+                                                <Input
+                                                    id="announcement-cta-url"
+                                                    value={
+                                                        memberAnnouncement.cta
+                                                            .url
+                                                    }
+                                                    onChange={(event) =>
+                                                        setMemberAnnouncement(
+                                                            (current) => ({
+                                                                ...current,
+                                                                cta: current.cta
+                                                                    ? {
+                                                                          ...current.cta,
+                                                                          url: event
+                                                                              .target
+                                                                              .value,
+                                                                      }
+                                                                    : null,
+                                                            }),
+                                                        )
+                                                    }
+                                                    placeholder="/guide or https://..."
+                                                />
+                                            </div>
+                                        </div>
+                                    ) : null}
+                                </div>
+
+                                <div className="grid gap-4 lg:grid-cols-2">
+                                    <fieldset className="border-border/60 rounded-lg border p-4">
+                                        <legend className="px-1 text-sm font-medium">
+                                            Audience
+                                        </legend>
+                                        <label className="mb-3 flex items-center gap-2 text-xs font-medium">
+                                            <input
+                                                type="checkbox"
+                                                aria-label="All member roles"
+                                                checked={MEMBER_ANNOUNCEMENT_AUDIENCES.every(
+                                                    (audience) =>
+                                                        memberAnnouncement.audiences.includes(
+                                                            audience,
+                                                        ),
+                                                )}
+                                                onChange={(event) =>
+                                                    setMemberAnnouncement(
+                                                        (current) => ({
+                                                            ...current,
+                                                            audiences: event
+                                                                .target.checked
+                                                                ? [
+                                                                      ...MEMBER_ANNOUNCEMENT_AUDIENCES,
+                                                                  ]
+                                                                : [],
+                                                        }),
+                                                    )
+                                                }
+                                            />
+                                            All roles
+                                        </label>
+                                        <div className="space-y-2">
+                                            {MEMBER_ANNOUNCEMENT_AUDIENCES.map(
+                                                (audience) => (
+                                                    <label
+                                                        key={audience}
+                                                        className="flex items-center gap-2 text-sm"
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={memberAnnouncement.audiences.includes(
+                                                                audience,
+                                                            )}
+                                                            onChange={(event) =>
+                                                                setMemberAnnouncement(
+                                                                    (
+                                                                        current,
+                                                                    ) => ({
+                                                                        ...current,
+                                                                        audiences:
+                                                                            event
+                                                                                .target
+                                                                                .checked
+                                                                                ? [
+                                                                                      ...current.audiences,
+                                                                                      audience,
+                                                                                  ]
+                                                                                : current.audiences.filter(
+                                                                                      (
+                                                                                          value,
+                                                                                      ) =>
+                                                                                          value !==
+                                                                                          audience,
+                                                                                  ),
+                                                                    }),
+                                                                )
+                                                            }
+                                                        />
+                                                        {
+                                                            ANNOUNCEMENT_AUDIENCE_LABELS[
+                                                                audience
+                                                            ]
+                                                        }
+                                                    </label>
+                                                ),
+                                            )}
+                                        </div>
+                                    </fieldset>
+
+                                    <fieldset className="border-border/60 rounded-lg border p-4">
+                                        <legend className="px-1 text-sm font-medium">
+                                            Page areas
+                                        </legend>
+                                        <label className="mb-3 flex items-center gap-2 text-xs font-medium">
+                                            <input
+                                                type="checkbox"
+                                                aria-label="All page areas"
+                                                checked={MEMBER_ANNOUNCEMENT_PLACEMENTS.every(
+                                                    (placement) =>
+                                                        memberAnnouncement.placements.includes(
+                                                            placement,
+                                                        ),
+                                                )}
+                                                onChange={(event) =>
+                                                    setMemberAnnouncement(
+                                                        (current) => ({
+                                                            ...current,
+                                                            placements: event
+                                                                .target.checked
+                                                                ? [
+                                                                      ...MEMBER_ANNOUNCEMENT_PLACEMENTS,
+                                                                  ]
+                                                                : [],
+                                                        }),
+                                                    )
+                                                }
+                                            />
+                                            All page areas
+                                        </label>
+                                        <div className="space-y-2.5">
+                                            {MEMBER_ANNOUNCEMENT_PLACEMENTS.map(
+                                                (placement) => (
+                                                    <label
+                                                        key={placement}
+                                                        className="flex items-start gap-2 text-sm"
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            className="mt-1"
+                                                            checked={memberAnnouncement.placements.includes(
+                                                                placement,
+                                                            )}
+                                                            onChange={(event) =>
+                                                                setMemberAnnouncement(
+                                                                    (
+                                                                        current,
+                                                                    ) => ({
+                                                                        ...current,
+                                                                        placements:
+                                                                            event
+                                                                                .target
+                                                                                .checked
+                                                                                ? [
+                                                                                      ...current.placements,
+                                                                                      placement,
+                                                                                  ]
+                                                                                : current.placements.filter(
+                                                                                      (
+                                                                                          value,
+                                                                                      ) =>
+                                                                                          value !==
+                                                                                          placement,
+                                                                                  ),
+                                                                    }),
+                                                                )
+                                                            }
+                                                        />
+                                                        <span>
+                                                            <span className="block font-medium">
+                                                                {
+                                                                    ANNOUNCEMENT_PLACEMENT_LABELS[
+                                                                        placement
+                                                                    ].label
+                                                                }
+                                                            </span>
+                                                            <span className="text-muted-foreground block text-[11px]">
+                                                                {
+                                                                    ANNOUNCEMENT_PLACEMENT_LABELS[
+                                                                        placement
+                                                                    ]
+                                                                        .description
+                                                                }
+                                                            </span>
+                                                        </span>
+                                                    </label>
+                                                ),
+                                            )}
+                                        </div>
+                                    </fieldset>
+                                </div>
+
+                                <fieldset className="border-border/60 rounded-lg border p-4">
+                                    <legend className="px-1 text-sm font-medium">
+                                        Optional schedule
+                                    </legend>
+                                    <div className="grid gap-3 sm:grid-cols-2">
+                                        <div className="space-y-2">
+                                            <Label htmlFor="announcement-starts-at">
+                                                Starts at
+                                            </Label>
+                                            <Input
+                                                id="announcement-starts-at"
+                                                type="datetime-local"
+                                                value={announcementDateTimeValue(
+                                                    memberAnnouncement.startsAt,
+                                                )}
+                                                onChange={(event) =>
+                                                    setMemberAnnouncement(
+                                                        (current) => ({
+                                                            ...current,
+                                                            startsAt:
+                                                                announcementDateTimeIso(
+                                                                    event.target
+                                                                        .value,
+                                                                ),
+                                                        }),
+                                                    )
+                                                }
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label htmlFor="announcement-ends-at">
+                                                Ends at
+                                            </Label>
+                                            <Input
+                                                id="announcement-ends-at"
+                                                type="datetime-local"
+                                                value={announcementDateTimeValue(
+                                                    memberAnnouncement.endsAt,
+                                                )}
+                                                onChange={(event) =>
+                                                    setMemberAnnouncement(
+                                                        (current) => ({
+                                                            ...current,
+                                                            endsAt: announcementDateTimeIso(
+                                                                event.target
+                                                                    .value,
+                                                            ),
+                                                        }),
+                                                    )
+                                                }
+                                            />
+                                        </div>
+                                    </div>
+                                    <p className="text-muted-foreground mt-2 text-[11px]">
+                                        Times use your local timezone and are
+                                        saved as UTC.
+                                    </p>
+                                </fieldset>
+                            </div>
+
+                            <div className="border-border/60 bg-muted/15 order-first space-y-3 rounded-xl border p-4">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                        <p className="text-sm font-semibold">
+                                            Live preview
+                                        </p>
+                                        <p className="text-muted-foreground text-xs">
+                                            Full dashboard width · links and
+                                            dismissal are disabled here.
+                                        </p>
+                                    </div>
+                                    <Badge
+                                        variant="outline"
+                                        className="rounded-md text-[10px] uppercase"
+                                    >
+                                        Dashboard preview
+                                    </Badge>
+                                </div>
+                                <MemberAnnouncementBanner
+                                    announcement={memberAnnouncement}
+                                    preview
+                                />
+                                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                                    <div className="border-border/60 bg-background/60 rounded-lg border px-3.5 py-3 text-xs">
+                                        <p className="font-medium">
+                                            Delivery summary
+                                        </p>
+                                        <p className="text-muted-foreground mt-1 leading-5">
+                                            {memberAnnouncement.enabled
+                                                ? `${memberAnnouncement.audiences.length} role group${memberAnnouncement.audiences.length === 1 ? "" : "s"} · ${memberAnnouncement.placements.length} page area${memberAnnouncement.placements.length === 1 ? "" : "s"}`
+                                                : "Hidden for all members"}
+                                            {memberAnnouncement.dismissible
+                                                ? " · Dismissible"
+                                                : " · Persistent"}
+                                        </p>
+                                        <p className="text-muted-foreground mt-1 font-mono text-[10px] break-all">
+                                            Revision:{" "}
+                                            {memberAnnouncement.revision}
+                                        </p>
+                                    </div>
+                                    <Button
+                                        type="button"
+                                        className="h-9 w-full md:w-auto md:min-w-56"
+                                        onClick={handleSaveMemberAnnouncement}
+                                        disabled={isSavingMemberAnnouncement}
+                                    >
+                                        {isSavingMemberAnnouncement
+                                            ? "Publishing..."
+                                            : "Publish Announcement"}
+                                    </Button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
+
             {activeTab === "settings" ? (
                 <div className="space-y-4">
                     <div className="border-border/60 bg-card flex flex-col gap-3 rounded-lg border px-5 py-4 md:flex-row md:items-center md:justify-between">
@@ -5971,6 +7183,124 @@ export function AdminClient({
                             </p>
                         )}
                     </div>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog
+                open={maintenanceDialogMode !== null}
+                onOpenChange={(open) => {
+                    if (!open && !isSavingMaintenance) {
+                        setMaintenanceDialogMode(null);
+                    }
+                }}
+            >
+                <DialogContent className="sm:max-w-lg">
+                    <DialogHeader>
+                        <DialogTitle>
+                            {maintenanceDialogMode === "disable"
+                                ? "End monitor maintenance?"
+                                : maintenanceDialogMode === "update"
+                                  ? "Update maintenance notice"
+                                  : "Enable monitor maintenance?"}
+                        </DialogTitle>
+                        <DialogDescription>
+                            {maintenanceDialogMode === "disable"
+                                ? `${monitorMaintenanceState.maintenancePausedCount} monitor${monitorMaintenanceState.maintenancePausedCount === 1 ? "" : "s"} paused by maintenance will resume automatically.`
+                                : maintenanceDialogMode === "update"
+                                  ? "Update the member-facing message and optional ETA. The ETA is informational only."
+                                  : `${monitorMaintenanceState.activeMonitorCount} active monitor${monitorMaintenanceState.activeMonitorCount === 1 ? "" : "s"} will be paused and all new starts will be blocked.`}
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    {maintenanceDialogMode !== "disable" ? (
+                        <div className="space-y-4 py-2">
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between gap-3">
+                                    <Label htmlFor="maintenance-message">
+                                        Member message
+                                    </Label>
+                                    <span className="text-muted-foreground text-[11px]">
+                                        {maintenanceMessage.length}/300
+                                    </span>
+                                </div>
+                                <textarea
+                                    id="maintenance-message"
+                                    rows={4}
+                                    maxLength={300}
+                                    value={maintenanceMessage}
+                                    onChange={(event) =>
+                                        setMaintenanceMessage(
+                                            event.target.value,
+                                        )
+                                    }
+                                    className="border-input bg-background focus-visible:ring-ring w-full resize-y rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="maintenance-estimated-end">
+                                    Estimated completion (optional)
+                                </Label>
+                                <Input
+                                    id="maintenance-estimated-end"
+                                    type="datetime-local"
+                                    value={maintenanceEstimatedEndAt}
+                                    onChange={(event) =>
+                                        setMaintenanceEstimatedEndAt(
+                                            event.target.value,
+                                        )
+                                    }
+                                />
+                                <p className="text-muted-foreground text-xs">
+                                    Saved and displayed as UTC; maintenance
+                                    never ends automatically.
+                                </p>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="border-border/60 bg-muted/30 rounded-lg border p-4 text-sm">
+                            <p className="font-medium">
+                                Resume only maintenance-paused monitors
+                            </p>
+                            <p className="text-muted-foreground mt-1 text-xs leading-5">
+                                Monitors that were already manually paused stay
+                                paused. No Discord or Telegram status flood will
+                                be sent.
+                            </p>
+                        </div>
+                    )}
+
+                    <DialogFooter>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            disabled={isSavingMaintenance}
+                            onClick={() => setMaintenanceDialogMode(null)}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            type="button"
+                            variant={
+                                maintenanceDialogMode === "enable"
+                                    ? "destructive"
+                                    : "default"
+                            }
+                            disabled={
+                                isSavingMaintenance ||
+                                (maintenanceDialogMode !== "disable" &&
+                                    !maintenanceMessage.trim())
+                            }
+                            onClick={handleMaintenanceAction}
+                        >
+                            {isSavingMaintenance
+                                ? "Saving..."
+                                : maintenanceDialogMode === "disable"
+                                  ? `Resume ${monitorMaintenanceState.maintenancePausedCount} monitor${monitorMaintenanceState.maintenancePausedCount === 1 ? "" : "s"} & end maintenance`
+                                  : maintenanceDialogMode === "update"
+                                    ? "Update maintenance notice"
+                                    : `Pause ${monitorMaintenanceState.activeMonitorCount} monitor${monitorMaintenanceState.activeMonitorCount === 1 ? "" : "s"} & enable maintenance`}
+                        </Button>
+                    </DialogFooter>
                 </DialogContent>
             </Dialog>
 

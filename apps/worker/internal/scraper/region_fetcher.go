@@ -220,9 +220,11 @@ func LookupCachedSellerInfo(ctx context.Context, db *database.Store, domain stri
 		return SellerInfo{}, false
 	}
 	if info, ok := sellerCache.Get(domain, userID, ttl); ok {
-		if isSellerInfoComplete(info) {
-			logSellerEnrichmentSuccess("memory-cache", userID, info)
-		} else {
+		// An in-process cache hit is the expected path and happens for every
+		// detected item. Logging it put one line per item through Go's global
+		// log mutex and into the container log driver for no diagnostic value;
+		// only the incomplete case is worth reporting.
+		if !isSellerInfoComplete(info) {
 			log.Printf("[seller-enrich] user=%d source=memory-cache partial region=%q rating=%q", userID, info.Region, info.Rating)
 		}
 		return info, true

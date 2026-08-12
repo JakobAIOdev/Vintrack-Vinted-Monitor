@@ -23,16 +23,45 @@ services:
       VINTRACK_SITE_ADDRESS: ${VINTRACK_SITE_ADDRESS:-vintrack.jakobaio.dev}
     depends_on:
       - control-center
+    mem_limit: ${CADDY_MEM_LIMIT:-64m}
     logging: *default-logging
     restart: unless-stopped
 
   postgres:
     image: postgres:15-alpine
     container_name: vintrack_db
+    # Defaults are sized for the documented target: a small single-host VPS.
+    # Raise them via .env on larger hardware. Two values matter most here:
+    # effective_cache_size, because the stock 4GB makes the planner assume warm
+    # cache it does not have, and synchronous_commit, because monitor telemetry
+    # is high-volume and disposable and should not sit in the fsync path.
+    command: >
+      postgres
+      -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-128MB}
+      -c effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-512MB}
+      -c maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-48MB}
+      -c work_mem=${POSTGRES_WORK_MEM:-4MB}
+      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-50}
+      -c autovacuum_max_workers=${POSTGRES_AUTOVACUUM_MAX_WORKERS:-2}
+      -c synchronous_commit=${POSTGRES_SYNCHRONOUS_COMMIT:-off}
+      -c wal_compression=on
+      -c max_wal_size=2GB
+      -c min_wal_size=256MB
+      -c checkpoint_timeout=15min
+      -c random_page_cost=1.1
+      -c autovacuum_naptime=15s
+      -c autovacuum_vacuum_cost_limit=1000
+    # Parallel query and parallel vacuum allocate through /dev/shm, which Docker
+    # defaults to 64MB.
+    shm_size: ${POSTGRES_SHM_SIZE:-256m}
     environment:
       POSTGRES_USER: vinuser
       POSTGRES_PASSWORD: vinpassword
       POSTGRES_DB: vintrack
+      # The worker buckets hourly telemetry in UTC. A non-UTC session timezone
+      # would silently shift every bucket and truncate the dashboard windows.
+      TZ: UTC
+      PGTZ: UTC
     ports:
       - "127.0.0.1:5435:5432"
     volumes:
@@ -42,6 +71,13 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    # Deliberately unbounded by default. A cgroup limit does not make Postgres
+    # use less memory, it makes the kernel kill a backend or the postmaster when
+    # shared_buffers plus per-backend memory plus autovacuum workers exceed it,
+    # and losing Postgres takes the whole stack down. The settings above are
+    # what actually bounds its footprint; set POSTGRES_MEM_LIMIT only if you
+    # have measured real usage against it.
+    mem_limit: ${POSTGRES_MEM_LIMIT:-0}
     logging: *default-logging
     restart: unless-stopped
 
@@ -52,12 +88,15 @@ services:
       - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --stop-writes-on-bgsave-error no
+    command: redis-server --appendonly yes --maxmemory ${REDIS_MAXMEMORY:-192mb} --maxmemory-policy allkeys-lru --stop-writes-on-bgsave-error no
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
+    # Leave headroom above maxmemory for the AOF rewrite fork, which transiently
+    # increases resident memory.
+    mem_limit: ${REDIS_MEM_LIMIT:-320m}
     logging: *default-logging
     restart: unless-stopped
 
@@ -68,8 +107,11 @@ services:
     image: ghcr.io/jakobaiodev/vintrack-vinted-monitor/control-center:latest
     container_name: vintrack_control_center
     environment:
-      - DATABASE_URL=postgresql://vinuser:vinpassword@postgres:5432/vintrack
+      # Prisma otherwise derives its pool from the host CPU count, which ignores
+      # any container limit and scales with hardware rather than with load.
+      - DATABASE_URL=postgresql://vinuser:vinpassword@postgres:5432/vintrack?connection_limit=${PRISMA_CONNECTION_LIMIT:-5}
       - REDIS_URL=redis://redis:6379
+      - NODE_OPTIONS=--max-old-space-size=${CONTROL_CENTER_HEAP_MB:-320}
       - AUTH_SECRET=${AUTH_SECRET}
       - AUTH_DISCORD_ID=${AUTH_DISCORD_ID}
       - AUTH_DISCORD_SECRET=${AUTH_DISCORD_SECRET}
@@ -93,6 +135,7 @@ services:
         condition: service_healthy
       control-center-migrate:
         condition: service_completed_successfully
+    mem_limit: ${CONTROL_CENTER_MEM_LIMIT:-512m}
     logging: *default-logging
     restart: unless-stopped
 
@@ -132,6 +175,7 @@ services:
         condition: service_healthy
       control-center-migrate:
         condition: service_completed_successfully
+    mem_limit: ${VINTED_SERVICE_MEM_LIMIT:-128m}
     logging: *default-logging
     restart: unless-stopped
 
@@ -147,6 +191,13 @@ services:
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=
       - PROXY_FILE=/app/proxies.txt
+      # A soft memory limit lets Go collect earlier instead of being OOM killed.
+      # A kill here discards every in-flight alert that has not reached the
+      # outbox yet, so staying alive matters more than peak throughput.
+      - GOMEMLIMIT=${WORKER_GOMEMLIMIT:-340MiB}
+      - GOGC=${WORKER_GOGC:-80}
+      - DB_MAX_OPEN_CONNS=${WORKER_DB_MAX_OPEN_CONNS:-20}
+      - ALERT_DB_POOL_SIZE=${ALERT_DB_POOL_SIZE:-6}
       - VINTED_FETCH_MODE=${VINTED_FETCH_MODE:-live}
       - VINTED_MOCK_SCENARIO=${VINTED_MOCK_SCENARIO:-new-items}
       - VINTED_MOCK_DROP_INTERVAL_MS=${VINTED_MOCK_DROP_INTERVAL_MS:-3000}
@@ -171,6 +222,8 @@ services:
       - DISCOVERY_FREE_HEDGE_DELAY_MS=${DISCOVERY_FREE_HEDGE_DELAY_MS:-150}
       - ALERT_WORKERS=${ALERT_WORKERS:-8}
       - ALERT_DELIVERY_WORKERS=${ALERT_DELIVERY_WORKERS:-16}
+      - TELEGRAM_GLOBAL_RATE_PER_SECOND=${TELEGRAM_GLOBAL_RATE_PER_SECOND:-25}
+      - TELEGRAM_GLOBAL_BURST=${TELEGRAM_GLOBAL_BURST:-25}
       - ENRICHMENT_WORKERS=${ENRICHMENT_WORKERS:-24}
       - SELLER_ENRICHMENT_TIMEOUT_MS=${SELLER_ENRICHMENT_TIMEOUT_MS:-2000}
       - SELLER_CLIENT_POOL_SIZE=${SELLER_CLIENT_POOL_SIZE:-16}
@@ -187,6 +240,7 @@ services:
         condition: service_healthy
       control-center-migrate:
         condition: service_completed_successfully
+    mem_limit: ${WORKER_MEM_LIMIT:-384m}
     logging: *default-logging
     restart: unless-stopped
 
@@ -238,6 +292,10 @@ services:
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=
       - PROXY_FILE=/app/proxies.txt
+      - GOMEMLIMIT=${PROXY_MAINTAINER_GOMEMLIMIT:-180MiB}
+      - GOGC=${WORKER_GOGC:-80}
+      - DB_MAX_OPEN_CONNS=${PROXY_MAINTAINER_DB_MAX_OPEN_CONNS:-6}
+      - ALERT_DB_POOL_SIZE=${PROXY_MAINTAINER_ALERT_DB_POOL_SIZE:-2}
       - MONITOR_RUN_RETENTION_HOURS=${MONITOR_RUN_RETENTION_HOURS:-24}
       - MONITOR_RUN_STATS_RETENTION_DAYS=${MONITOR_RUN_STATS_RETENTION_DAYS:-90}
       - DETECTION_RETENTION_DAYS=${DETECTION_RETENTION_DAYS:-14}
@@ -257,6 +315,7 @@ services:
         condition: service_healthy
       control-center-migrate:
         condition: service_completed_successfully
+    mem_limit: ${PROXY_MAINTAINER_MEM_LIMIT:-200m}
     logging: *default-logging
     restart: unless-stopped
 

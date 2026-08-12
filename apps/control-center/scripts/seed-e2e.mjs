@@ -51,6 +51,19 @@ const items = [
 ];
 
 async function main() {
+    await db.app_settings.deleteMany({
+        where: {
+            key: {
+                in: [
+                    "monitor_maintenance",
+                    "monitor_worker_runtime",
+                    "inactive_member_monitor_policy",
+                    "inactive_member_monitor_runtime",
+                ],
+            },
+        },
+    });
+
     await db.user.upsert({
         where: { id: userId },
         create: {

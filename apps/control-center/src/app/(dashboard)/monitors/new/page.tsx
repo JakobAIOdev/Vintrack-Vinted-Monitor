@@ -59,6 +59,7 @@ import {
     Settings2,
     Sparkles,
     SlidersHorizontal,
+    Wrench,
     X,
 } from "lucide-react";
 import Link from "next/link";
@@ -71,6 +72,7 @@ import {
     type FormEvent,
 } from "react";
 import { toast } from "sonner";
+import { useMonitorMaintenance } from "@/components/maintenance/monitor-maintenance-context";
 
 type ProxyGroupOption = {
     id: number;
@@ -80,6 +82,7 @@ type ProxyGroupOption = {
 
 export default function NewMonitorPage() {
     const router = useRouter();
+    const { maintenance } = useMonitorMaintenance();
     const [name, setName] = useState("");
     const [selectedPreset, setSelectedPreset] =
         useState<MonitorPresetKey | null>(null);
@@ -360,6 +363,58 @@ export default function NewMonitorPage() {
             : (proxyGroups.find(
                   (group) => String(group.id) === selectedProxyGroup,
               )?.name ?? "Select source");
+
+    if (maintenance.enabled) {
+        return (
+            <div className="mx-auto max-w-4xl space-y-6">
+                <div className="flex items-center gap-3">
+                    <Link href="/dashboard">
+                        <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8"
+                        >
+                            <ArrowLeft className="h-4 w-4" />
+                        </Button>
+                    </Link>
+                    <div>
+                        <h1 className="text-2xl font-bold tracking-tight">
+                            Create Monitor
+                        </h1>
+                        <p className="text-muted-foreground mt-0.5 text-sm">
+                            Set up a new Vinted scraper.
+                        </p>
+                    </div>
+                </div>
+
+                <Card
+                    className="border-red-500/25 bg-red-500/5"
+                    data-testid="monitor-creation-maintenance"
+                >
+                    <CardContent className="flex flex-col items-start gap-5 p-6 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex items-start gap-4">
+                            <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-red-500 text-white">
+                                <Wrench className="size-5" />
+                            </span>
+                            <div>
+                                <h2 className="text-base font-semibold">
+                                    Monitor creation is temporarily unavailable
+                                </h2>
+                                <p className="text-muted-foreground mt-1 max-w-2xl text-sm leading-6">
+                                    Vintrack is currently under maintenance. New
+                                    monitors cannot be created until maintenance
+                                    is complete.
+                                </p>
+                            </div>
+                        </div>
+                        <Button asChild variant="outline" className="shrink-0">
+                            <Link href="/dashboard">Back to dashboard</Link>
+                        </Button>
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
 
     return (
         <div className="mx-auto max-w-4xl space-y-6">

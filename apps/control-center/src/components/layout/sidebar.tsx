@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { CreateMonitorLink } from "@/components/maintenance/create-monitor-link";
 
 const ACCOUNT_SEEN_KEY = "vintrack:account-tab-seen";
 const GITHUB_SPONSORS_URL = "https://github.com/sponsors/JakobAIOdev";
@@ -151,14 +152,13 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
                 })}
 
                 <div className="pt-4">
-                    <Link
-                        href="/monitors/new"
+                    <CreateMonitorLink
                         onClick={onClose}
                         className="border-sidebar-border/80 text-sidebar-foreground/68 hover:border-sidebar-foreground/20 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground flex items-center gap-2.5 rounded-lg border border-dashed px-3 py-2 text-[13px] font-medium transition-colors"
                     >
                         <PlusCircle className="text-sidebar-foreground/45 h-4 w-4" />
                         New Monitor
-                    </Link>
+                    </CreateMonitorLink>
                 </div>
 
                 <div className="pt-4">

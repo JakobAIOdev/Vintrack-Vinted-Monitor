@@ -42,6 +42,7 @@ model User {
   emailVerified             DateTime?
   image                     String?
   createdAt                 DateTime? @default(now()) @db.Timestamp(6)
+  last_dashboard_seen_at    DateTime? @db.Timestamp(6)
   role                      String    @default("free") @db.VarChar(20)
   monitor_onboarding_status String    @default("pending") @db.VarChar(20)
   dedupe_monitor_alerts     Boolean   @default(false)
@@ -66,6 +67,7 @@ model User {
 
   @@index([name])
   @@index([createdAt])
+  @@index([last_dashboard_seen_at])
 }
 
 model monitor_limits {
@@ -280,6 +282,7 @@ model monitor_run_hourly_stats {
   last_checked_at        DateTime  @db.Timestamp(6)
   latest_error           String?   @db.Text
   latest_error_at        DateTime? @db.Timestamp(6)
+  latest_status_code     Int?
 
   @@id([monitor_id, fetch_source, bucket_hour])
   @@index([fetch_source, bucket_hour])
@@ -299,6 +302,7 @@ model monitor_item_detections {
 
   @@id([monitor_id, item_id])
   @@index([monitor_id, created_at])
+  @@index([created_at])
 }
 
 model item_preindex_samples {
@@ -312,6 +316,7 @@ model item_preindex_samples {
 
   @@id([region, item_id])
   @@index([region, first_seen_at])
+  @@index([first_seen_at])
 }
 
 model preindex_probe_runs {
@@ -340,6 +345,7 @@ model monitor_events {
 
   @@index([monitor_id, created_at])
   @@index([event_type])
+  @@index([created_at])
 }
 
 model audit_events {

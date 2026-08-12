@@ -43,10 +43,11 @@ Shadow discovery also runs on a healthy shared free-proxy pool so its timing can
 | `DISCOVERY_FREE_CLIENT_POOL_SIZE`  |          `8` | Isolated warm sessions reserved for free discovery.                                                                |
 | `DISCOVERY_FREE_TIMEOUT_MS`        |       `3000` | Free discovery deadline; canonical keeps the normal catalog deadline.                                              |
 | `DISCOVERY_FREE_HEDGE_DELAY_MS`    |        `150` | Earlier second attempt for volatile free proxies.                                                                  |
-| `ALERT_WORKERS`                    |          `8` | Concurrent immediate-alert workers.                                                                                |
-| `DISCORD_ALERT_WORKERS`            |          `8` | Dedicated Discord workers that cannot block dashboard/SSE or Telegram.                                             |
-| `TELEGRAM_ALERT_WORKERS`           |         `16` | Dedicated Telegram workers that cannot block dashboard/SSE or Discord.                                             |
-| `ENRICHMENT_WORKERS`               |          `8` | Concurrent persistence and seller-enrichment workers.                                                              |
+| `ALERT_WORKERS`                    |          `8` | Workers that turn a detected item into a durable outbox entry.                                                     |
+| `ALERT_DELIVERY_WORKERS`           |         `16` | Shared workers that send claimed outbox entries to Discord and Telegram. Also bounds how many entries are claimed. |
+| `TELEGRAM_GLOBAL_RATE_PER_SECOND`  |         `25` | Process-wide Telegram send rate. One bot token serves every member, so this budget is shared by all chats.         |
+| `TELEGRAM_GLOBAL_BURST`            |         `25` | Burst allowance for the Telegram send budget.                                                                      |
+| `ENRICHMENT_WORKERS`               |         `24` | Concurrent persistence and seller-enrichment workers. Effective throughput is capped by `SELLER_CLIENT_POOL_SIZE`. |
 | `FREE_PROXY_HEALTH_CONCURRENCY`    |         `64` | Cluster-wide maximum parallel free-proxy validations in the isolated proxy-maintainer process.                     |
 | `FREE_PROXY_HEALTH_PER_REGION_CONCURRENCY` | `12` | Maximum parallel validations against one Vinted regional domain.                                                    |
 | `FREE_PROXY_HEALTH_BATCH_PER_REGION` |      `100` | Per-region cycle budget once the target reserve is available; work is claimed in bounded waves.                    |
