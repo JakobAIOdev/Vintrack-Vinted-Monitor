@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
-	"sync"
 	"testing"
 	"time"
 
@@ -78,26 +77,41 @@ func TestFreeProxyTimeoutBatchFitsRecoveryCycleBudget(t *testing.T) {
 	}
 }
 
-func TestWaitForFreeProxyBatchHonorsCycleCancellation(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
+func TestValidateFreeProxyWaveDoesNotWaitForStuckValidator(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	validatorRelease := make(chan struct{})
+	validationReturned := make(chan freeProxyWaveStats, 1)
+	go func() {
+		validationReturned <- validateFreeProxyWaveWithValidator(
+			ctx,
+			nil,
+			[]database.FreeProxyCandidate{{
+				ProxyURL: "http://stuck.invalid:1",
+				Region:   "de",
+			}},
+			time.Second,
+			2500,
+			3,
+			30,
+			1,
+			func(context.Context, string, string, int) (scraper.FreeProxyValidationResult, error) {
+				<-validatorRelease
+				return scraper.FreeProxyValidationResult{}, nil
+			},
+		)
+	}()
 
-	if waitForFreeProxyBatch(ctx, &wg) {
-		t.Fatal("waitForFreeProxyBatch returned true for a canceled cycle")
+	select {
+	case stats := <-validationReturned:
+		if stats.Checked != 0 || stats.Canceled != 1 {
+			t.Fatalf("stuck validator stats = %#v, want one canceled check", stats)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("validation wave stayed blocked after its context expired")
 	}
-
-	wg.Done()
-}
-
-func TestWaitForFreeProxyBatchCompletes(t *testing.T) {
-	var wg sync.WaitGroup
-
-	if !waitForFreeProxyBatch(context.Background(), &wg) {
-		t.Fatal("waitForFreeProxyBatch returned false for a completed batch")
-	}
+	close(validatorRelease)
 }
 
 func TestInterleaveFreeProxyCandidates(t *testing.T) {

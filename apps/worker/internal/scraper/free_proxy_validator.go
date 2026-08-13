@@ -6,10 +6,46 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"vintrack-worker/internal/model"
 )
+
+const (
+	freeProxyClientCleanupWorkers = 8
+	freeProxyClientCleanupQueue   = 256
+)
+
+var (
+	freeProxyCleanupOnce  sync.Once
+	freeProxyCleanupQueue = make(chan *Client, freeProxyClientCleanupQueue)
+)
+
+// scheduleFreeProxyClientCleanup keeps transport cleanup outside the validation
+// critical path. CloseIdleConnections has no context-aware variant and a
+// broken proxy transport can therefore hold it forever. A bounded worker set
+// prevents one such cleanup from wedging the maintainer or spawning an
+// unbounded number of cleanup goroutines. If every worker and queue slot is
+// occupied, the client is left to the transport's idle timeout and GC.
+func scheduleFreeProxyClientCleanup(client *Client) {
+	if client == nil {
+		return
+	}
+	freeProxyCleanupOnce.Do(func() {
+		for range freeProxyClientCleanupWorkers {
+			go func() {
+				for queued := range freeProxyCleanupQueue {
+					queued.Close()
+				}
+			}()
+		}
+	})
+	select {
+	case freeProxyCleanupQueue <- client:
+	default:
+	}
+}
 
 type FreeProxyValidationResult struct {
 	LatencyMs        int
@@ -40,10 +76,9 @@ func ValidateFreeProxy(ctx context.Context, proxyURL string, region string, maxL
 			Stage:     FreeProxyValidationStageClientInit,
 		}, err
 	}
-	// One client per candidate, and validation runs in large concurrent batches
-	// every cycle. Without this the maintainer accumulates sockets for every
-	// proxy it has ever probed.
-	defer client.Close()
+	// One client is built per candidate. Cleanup must release its idle sockets,
+	// but it must never become part of the validation completion contract.
+	defer scheduleFreeProxyClientCleanup(client)
 
 	domain := model.RegionDomain(region)
 	warmupStartedAt := time.Now()

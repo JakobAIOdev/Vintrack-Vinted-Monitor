@@ -887,6 +887,23 @@ type freeProxyWaveStats struct {
 	StageCounts             map[string]int
 }
 
+type freeProxyValidator func(
+	context.Context,
+	string,
+	string,
+	int,
+) (scraper.FreeProxyValidationResult, error)
+
+type freeProxyValidationOutcome struct {
+	passed                 bool
+	failed                 bool
+	canceled               bool
+	persistenceFailed      bool
+	warmupTransportFailure bool
+	errorCode              string
+	stage                  string
+}
+
 func observeFreeProxyRegionRate(region string, errorCode string, now time.Time) {
 	freeProxyRegionRates.Lock()
 	defer freeProxyRegionRates.Unlock()
@@ -967,15 +984,37 @@ func validateFreeProxyWave(
 	quarantineMinutes int,
 	perRegionConcurrency int,
 ) freeProxyWaveStats {
-	var wg sync.WaitGroup
-	var passed atomic.Int64
-	var failed atomic.Int64
-	var canceled atomic.Int64
-	var persistenceFailed atomic.Int64
-	var warmupTransportFailures atomic.Int64
+	return validateFreeProxyWaveWithValidator(
+		ctx,
+		store,
+		candidates,
+		validationTimeout,
+		maxLatencyMs,
+		failureThreshold,
+		quarantineMinutes,
+		perRegionConcurrency,
+		scraper.ValidateFreeProxy,
+	)
+}
+
+func validateFreeProxyWaveWithValidator(
+	ctx context.Context,
+	store *database.Store,
+	candidates []database.FreeProxyCandidate,
+	validationTimeout time.Duration,
+	maxLatencyMs int,
+	failureThreshold int,
+	quarantineMinutes int,
+	perRegionConcurrency int,
+	validator freeProxyValidator,
+) freeProxyWaveStats {
+	stats := freeProxyWaveStats{
+		ErrorCounts: make(map[string]int),
+		StageCounts: make(map[string]int),
+	}
+	results := make(chan freeProxyValidationOutcome, len(candidates))
 	errorCounts := make(map[string]int)
 	stageCounts := make(map[string]int)
-	var countsMu sync.Mutex
 	if perRegionConcurrency < 1 {
 		perRegionConcurrency = 1
 	}
@@ -990,25 +1029,27 @@ func validateFreeProxyWave(
 		}
 	}
 
+	launched := 0
 	for _, candidate := range candidates {
 		candidate := candidate
 		if ctx.Err() != nil {
-			canceled.Add(1)
+			stats.Canceled++
 			continue
 		}
-		wg.Add(1)
+		launched++
 		go func() {
-			defer wg.Done()
+			outcome := freeProxyValidationOutcome{}
+			defer func() { results <- outcome }()
 			regionSlot := regionSlots[candidate.Region]
 			select {
 			case regionSlot <- struct{}{}:
 				defer func() { <-regionSlot }()
 			case <-ctx.Done():
-				canceled.Add(1)
+				outcome.canceled = true
 				return
 			}
 			validationCtx, cancelValidation := context.WithTimeout(ctx, validationTimeout)
-			result, err := scraper.ValidateFreeProxy(
+			result, err := validator(
 				validationCtx,
 				candidate.ProxyURL,
 				candidate.Region,
@@ -1016,7 +1057,7 @@ func validateFreeProxyWave(
 			)
 			cancelValidation()
 			if ctx.Err() != nil {
-				canceled.Add(1)
+				outcome.canceled = true
 				return
 			}
 			observeFreeProxyRegionRate(candidate.Region, result.ErrorCode, time.Now())
@@ -1025,24 +1066,18 @@ func validateFreeProxyWave(
 			if stage == "" {
 				stage = "unknown"
 			}
-			countsMu.Lock()
-			stageCounts[stage]++
-			countsMu.Unlock()
+			outcome.stage = stage
 
 			writeCtx, cancelWrite := context.WithTimeout(ctx, freeProxyWriteTimeout)
 			defer cancelWrite()
 			if err != nil {
-				failed.Add(1)
+				outcome.failed = true
 				warmupTransportFailure := isWarmupTransportFailure(
 					result.ErrorCode,
 					result.Stage,
 				)
-				if warmupTransportFailure {
-					warmupTransportFailures.Add(1)
-				}
-				countsMu.Lock()
-				errorCounts[result.ErrorCode]++
-				countsMu.Unlock()
+				outcome.warmupTransportFailure = warmupTransportFailure
+				outcome.errorCode = result.ErrorCode
 				var writeErr error
 				if candidate.Proven && warmupTransportFailure && freeProxyEgressLimited.Load() {
 					writeErr = store.RecordFreeProxyInfrastructureFailureContext(
@@ -1068,35 +1103,59 @@ func validateFreeProxyWave(
 					)
 				}
 				if writeErr != nil {
-					persistenceFailed.Add(1)
+					outcome.persistenceFailed = true
 				}
 				return
 			}
-			passed.Add(1)
+			outcome.passed = true
 			if writeErr := store.RecordFreeProxySuccessContext(
 				writeCtx,
 				candidate.ProxyURL,
 				candidate.Region,
 				result.LatencyMs,
 			); writeErr != nil {
-				persistenceFailed.Add(1)
+				outcome.persistenceFailed = true
 			}
 		}()
 	}
-	if !waitForFreeProxyBatch(ctx, &wg) {
-		wg.Wait()
+
+	for received := 0; received < launched; received++ {
+		select {
+		case outcome := <-results:
+			if outcome.passed {
+				stats.Passed++
+			}
+			if outcome.failed {
+				stats.Failed++
+			}
+			if outcome.canceled {
+				stats.Canceled++
+			}
+			if outcome.persistenceFailed {
+				stats.PersistenceFailed++
+			}
+			if outcome.warmupTransportFailure {
+				stats.WarmupTransportFailures++
+			}
+			if outcome.errorCode != "" {
+				errorCounts[outcome.errorCode]++
+			}
+			if outcome.stage != "" {
+				stageCounts[outcome.stage]++
+			}
+		case <-ctx.Done():
+			stats.Canceled += launched - received
+			stats.Checked = stats.Passed + stats.Failed
+			stats.ErrorCounts = errorCounts
+			stats.StageCounts = stageCounts
+			return stats
+		}
 	}
 
-	return freeProxyWaveStats{
-		Checked:                 int(passed.Load() + failed.Load()),
-		Passed:                  int(passed.Load()),
-		Failed:                  int(failed.Load()),
-		Canceled:                int(canceled.Load()),
-		PersistenceFailed:       int(persistenceFailed.Load()),
-		WarmupTransportFailures: int(warmupTransportFailures.Load()),
-		ErrorCounts:             errorCounts,
-		StageCounts:             stageCounts,
-	}
+	stats.Checked = stats.Passed + stats.Failed
+	stats.ErrorCounts = errorCounts
+	stats.StageCounts = stageCounts
+	return stats
 }
 
 func isWarmupTransportFailure(
@@ -1172,21 +1231,6 @@ func freeProxyWaveShowsEgressRecovery(wave freeProxyWaveStats) bool {
 	}
 	return wave.Passed*100 > wave.Checked*2 ||
 		wave.WarmupTransportFailures*100 < wave.Checked*60
-}
-
-func waitForFreeProxyBatch(ctx context.Context, wg *sync.WaitGroup) bool {
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		return true
-	case <-ctx.Done():
-		return false
-	}
 }
 
 func freeProxyValidationTimeout(maxLatencyMs int) time.Duration {

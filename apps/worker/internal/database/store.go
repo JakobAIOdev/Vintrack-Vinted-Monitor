@@ -1188,6 +1188,7 @@ func (s *Store) EnsureFreeProxyHealthRowsWithLimitsContext(ctx context.Context, 
 				  ),
 				  fp.updated_at DESC
 				LIMIT $2::bigint
+				FOR KEY SHARE OF fp
 			)
 			INSERT INTO free_proxy_health (
 				proxy_id, region, status, next_check_at,
