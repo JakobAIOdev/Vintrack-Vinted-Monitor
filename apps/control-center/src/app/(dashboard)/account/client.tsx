@@ -584,19 +584,9 @@ export function AccountClient({
             : "not synced yet";
 
     return (
-        <div className="mx-auto max-w-4xl space-y-6">
-            <div>
-                <h1 className="text-2xl font-bold tracking-tight">
-                    Vinted Account
-                </h1>
-                <p className="text-muted-foreground mt-0.5 text-sm">
-                    Link your Vinted account to like items and more, directly
-                    from the dashboard.
-                </p>
-            </div>
-
-            <Card>
-                <CardHeader className="gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-4">
+            <Card className="border-border/70 gap-0 overflow-hidden py-0 shadow-sm">
+                <CardHeader className="gap-4 border-b p-5 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                         <CardTitle className="text-base">
                             Browser Extension
@@ -630,9 +620,9 @@ export function AccountClient({
                         {extensionStatusTitle}
                     </div>
                 </CardHeader>
-                <CardContent className="space-y-5 pt-3">
+                <CardContent className="space-y-4 p-5">
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                        <div className="border-border/80 bg-background/60 rounded-md border p-3">
+                        <div className="border-border/70 bg-muted/20 rounded-lg border p-3">
                             <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
                                 Browser
                             </p>
@@ -640,7 +630,7 @@ export function AccountClient({
                                 {extensionInstalled ? "Detected" : "Missing"}
                             </p>
                         </div>
-                        <div className="border-border/80 bg-background/60 rounded-md border p-3">
+                        <div className="border-border/70 bg-muted/20 rounded-lg border p-3">
                             <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
                                 Connection
                             </p>
@@ -650,7 +640,7 @@ export function AccountClient({
                                     : "Not connected"}
                             </p>
                         </div>
-                        <div className="border-border/80 bg-background/60 rounded-md border p-3">
+                        <div className="border-border/70 bg-muted/20 rounded-lg border p-3">
                             <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
                                 Version
                             </p>
@@ -668,7 +658,7 @@ export function AccountClient({
                                       : "Legacy"}
                             </p>
                         </div>
-                        <div className="border-border/80 bg-background/60 rounded-md border p-3">
+                        <div className="border-border/70 bg-muted/20 rounded-lg border p-3">
                             <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
                                 Last browser sync
                             </p>
@@ -748,7 +738,7 @@ export function AccountClient({
                         </div>
                     ) : null}
 
-                    <div className="border-border/80 bg-muted/30 rounded-md border p-4">
+                    <div className="border-border/70 bg-muted/25 rounded-lg border p-4">
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                             <div>
                                 <p className="text-sm font-medium">
@@ -829,8 +819,8 @@ export function AccountClient({
             </Card>
 
             {status.linked ? (
-                <Card>
-                    <CardHeader>
+                <Card className="border-border/70 gap-0 overflow-hidden py-0 shadow-sm">
+                    <CardHeader className="border-b p-5">
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-3">
                                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-500/20">
@@ -858,7 +848,7 @@ export function AccountClient({
                             </Badge>
                         </div>
                     </CardHeader>
-                    <CardContent className="space-y-4">
+                    <CardContent className="space-y-4 p-5">
                         {status.requires_browser_reauth ||
                         status.status === "degraded" ? (
                             <div className="border-border/80 bg-muted/40 rounded-md border p-3 text-sm">
@@ -945,7 +935,7 @@ export function AccountClient({
                             ) : null}
                         </div>
 
-                        <div className="border-border/80 bg-background/60 rounded-md border p-3 text-sm">
+                        <div className="border-border/70 bg-muted/20 rounded-lg border p-4 text-sm">
                             <span className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
                                 Primary Region
                             </span>
@@ -999,7 +989,7 @@ export function AccountClient({
                             </div>
                         </div>
 
-                        <div className="border-border/80 bg-background/60 rounded-md border p-3 text-sm">
+                        <div className="border-border/70 bg-muted/20 rounded-lg border p-4 text-sm">
                             <span className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
                                 Shipping Contact
                             </span>
@@ -1064,15 +1054,15 @@ export function AccountClient({
             ) : null}
 
             {status.linked ? (
-                <Card className="py-0">
+                <Card className="border-border/70 gap-0 overflow-hidden py-0 shadow-sm">
                     <details className="group">
-                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 text-sm font-medium">
+                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-sm font-medium">
                             Manual repair
                             <span className="text-muted-foreground text-xs font-normal group-open:hidden">
                                 Optional
                             </span>
                         </summary>
-                        <CardContent className="space-y-4 pb-6">
+                        <CardContent className="space-y-4 px-5 pb-5">
                             <p className="text-muted-foreground text-sm">
                                 Use this only if the extension cannot sync the
                                 current browser session.
@@ -1126,15 +1116,15 @@ export function AccountClient({
                     </details>
                 </Card>
             ) : (
-                <Card className="py-0">
+                <Card className="border-border/70 gap-0 overflow-hidden py-0 shadow-sm">
                     <details className="group">
-                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 text-sm font-medium">
+                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-sm font-medium">
                             Manual token link
                             <span className="text-muted-foreground text-xs font-normal group-open:hidden">
                                 Fallback
                             </span>
                         </summary>
-                        <CardContent className="space-y-5 pb-6">
+                        <CardContent className="space-y-5 px-5 pb-5">
                             <p className="text-muted-foreground text-sm">
                                 Prefer the extension above. Use tokens only if
                                 the extension is unavailable.

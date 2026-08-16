@@ -47,7 +47,8 @@ rejects local URLs, so Vintrack omits that button when configured for localhost.
 
 ## Authentication
 
-Choose Discord or OIDC.
+Choose Discord or OIDC as the primary provider. GitHub can be enabled alongside
+either one as an equal login provider and reward identity.
 
 ### Discord OAuth
 
@@ -81,6 +82,23 @@ https://vintrack.example.com/api/auth/callback/oidc
 When issuer, client ID, and client secret are all present, OIDC replaces Discord.
 Existing Discord identities are not automatically linked to OIDC identities.
 Verify administrative access before switching an established installation.
+
+### GitHub login and rewards
+
+```env
+AUTH_GITHUB_ID=your-oauth-app-client-id
+AUTH_GITHUB_SECRET=your-oauth-app-client-secret
+GITHUB_REPOSITORY_WEBHOOK_SECRET=separate-random-secret
+GITHUB_SPONSORS_WEBHOOK_SECRET=another-random-secret
+GITHUB_REWARDS_MAINTAINER_TOKEN=maintainer-token
+GITHUB_REWARDS_SYNC_SECRET=random-internal-bearer-secret
+```
+
+GitHub is available only when both OAuth values are set. Its callback is
+`https://vintrack.example.com/api/auth/callback/github`. Existing members must
+link from **Account** after using their original provider. See [GitHub Login and
+Rewards](github-rewards.md) for OAuth, webhook, backfill, privacy, admin policy,
+and safe rollout instructions.
 
 ## Database and Redis
 

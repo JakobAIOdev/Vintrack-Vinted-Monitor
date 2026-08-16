@@ -14,6 +14,7 @@ import {
     roleLimitScope,
 } from "@/lib/monitor-limits";
 import { getMemberAnnouncement } from "@/lib/member-announcement.server";
+import { getGithubRewardsAdminState } from "@/actions/github-rewards";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,7 @@ export default async function AdminPage({
         memberAnnouncement,
         monitorMaintenanceState,
         inactiveMemberPolicyState,
+        githubRewardsState,
         params,
     ] = await Promise.all([
         getMonitorLimits([
@@ -51,6 +53,7 @@ export default async function AdminPage({
         getMemberAnnouncement(),
         getMonitorMaintenanceAdminState(),
         getInactiveMemberPolicyAdminState(),
+        getGithubRewardsAdminState(),
         searchParams,
     ]);
 
@@ -65,6 +68,7 @@ export default async function AdminPage({
             initialMonitorMaintenanceState={monitorMaintenanceState}
             initialInactiveMemberPolicyState={inactiveMemberPolicyState}
             freeProxyState={freeProxyState}
+            initialGithubRewardsState={githubRewardsState}
             monitorLimits={{
                 global:
                     limits.get(GLOBAL_MONITOR_LIMIT_SCOPE)?.active_limit ??

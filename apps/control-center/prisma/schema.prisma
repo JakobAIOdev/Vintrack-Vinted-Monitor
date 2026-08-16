@@ -51,23 +51,119 @@ model User {
   accounts                  Account[]
   sessions                  Session[]
 
-  monitors                 monitors[]
-  member_brands            member_brands[]
-  proxy_groups             proxy_groups[]
-  seller_bans              seller_bans[]
-  telegram_connections     telegram_connections[]
-  telegram_connect_codes   telegram_connect_codes[]
-  vinted_session           vinted_sessions?
-  audit_events             audit_events[]
-  alert_events             alert_events[]
-  alert_notifications      alert_notifications[]
-  alert_dedupe_claims      alert_dedupe_claims[]
-  monitor_runtime_sessions monitor_runtime_sessions[]
-  monitor_runtime_total    member_monitor_runtime_totals?
+  monitors                     monitors[]
+  member_brands                member_brands[]
+  proxy_groups                 proxy_groups[]
+  seller_bans                  seller_bans[]
+  telegram_connections         telegram_connections[]
+  telegram_connect_codes       telegram_connect_codes[]
+  vinted_session               vinted_sessions?
+  audit_events                 audit_events[]
+  alert_events                 alert_events[]
+  alert_notifications          alert_notifications[]
+  alert_dedupe_claims          alert_dedupe_claims[]
+  monitor_runtime_sessions     monitor_runtime_sessions[]
+  monitor_runtime_total        member_monitor_runtime_totals?
+  github_reward_account        github_reward_accounts?
+  member_reward_prompts        member_reward_prompts[]
+  assigned_github_sponsorships github_sponsorships[]
 
   @@index([name])
   @@index([createdAt])
   @@index([last_dashboard_seen_at])
+}
+
+model github_reward_accounts {
+  github_id        BigInt                @id
+  login            String                @db.VarChar(255)
+  account_type     String                @default("user") @db.VarChar(30)
+  display_name     String?               @db.VarChar(255)
+  avatar_url       String?               @db.Text
+  star_status      String                @default("unknown") @db.VarChar(20)
+  star_changed_at  DateTime?             @db.Timestamp(6)
+  star_verified_at DateTime?             @db.Timestamp(6)
+  star_event_at    DateTime?             @db.Timestamp(6)
+  claimed_user_id  String?               @unique
+  claimed_user     User?                 @relation(fields: [claimed_user_id], references: [id], onDelete: SetNull)
+  created_at       DateTime              @default(now()) @db.Timestamp(6)
+  updated_at       DateTime              @updatedAt @db.Timestamp(6)
+  sponsorships     github_sponsorships[]
+
+  @@index([login])
+  @@index([star_status])
+}
+
+model github_sponsorships {
+  id                  String                 @id @db.VarChar(255)
+  sponsor_github_id   BigInt
+  sponsor             github_reward_accounts @relation(fields: [sponsor_github_id], references: [github_id], onDelete: Cascade)
+  assigned_user_id    String?
+  assigned_user       User?                  @relation(fields: [assigned_user_id], references: [id], onDelete: SetNull)
+  sponsorable_login   String                 @db.VarChar(255)
+  is_one_time         Boolean
+  is_active           Boolean
+  tier_name           String?                @db.VarChar(255)
+  amount_cents        Int?
+  payment_source      String?                @db.VarChar(50)
+  privacy_level       String?                @db.VarChar(30)
+  source              String                 @db.VarChar(30)
+  verification_status String                 @default("verified") @db.VarChar(30)
+  sponsored_at        DateTime               @db.Timestamp(6)
+  last_seen_at        DateTime               @db.Timestamp(6)
+  last_verified_at    DateTime               @db.Timestamp(6)
+  reward_revoked_at   DateTime?              @db.Timestamp(6)
+  revoke_reason       String?                @db.Text
+  created_at          DateTime               @default(now()) @db.Timestamp(6)
+  updated_at          DateTime               @updatedAt @db.Timestamp(6)
+
+  @@index([sponsor_github_id, reward_revoked_at])
+  @@index([sponsorable_login, sponsored_at])
+  @@index([assigned_user_id, reward_revoked_at])
+}
+
+model github_webhook_deliveries {
+  delivery_id  String    @id @db.VarChar(255)
+  event        String    @db.VarChar(100)
+  action       String?   @db.VarChar(100)
+  status       String    @default("processing") @db.VarChar(30)
+  error        String?   @db.Text
+  received_at  DateTime  @default(now()) @db.Timestamp(6)
+  processed_at DateTime? @db.Timestamp(6)
+
+  @@index([event, received_at])
+  @@index([status, received_at])
+}
+
+model github_reward_jobs {
+  id           BigInt    @id @default(autoincrement())
+  job_type     String    @db.VarChar(50)
+  status       String    @default("running") @db.VarChar(30)
+  cursor       String?   @db.Text
+  processed    Int       @default(0)
+  changed      Int       @default(0)
+  failed       Int       @default(0)
+  metadata     Json?
+  error        String?   @db.Text
+  started_at   DateTime  @default(now()) @db.Timestamp(6)
+  completed_at DateTime? @db.Timestamp(6)
+
+  @@index([job_type, started_at])
+  @@index([status, started_at])
+}
+
+model member_reward_prompts {
+  id               BigInt    @id @default(autoincrement())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  policy_version   String    @db.VarChar(100)
+  prompt_type      String    @db.VarChar(50)
+  first_reached_at DateTime  @default(now()) @db.Timestamp(6)
+  shown_at         DateTime? @db.Timestamp(6)
+  dismissed_at     DateTime? @db.Timestamp(6)
+  cta_clicked_at   DateTime? @db.Timestamp(6)
+
+  @@unique([userId, policy_version, prompt_type])
+  @@index([prompt_type, first_reached_at])
 }
 
 model monitor_limits {

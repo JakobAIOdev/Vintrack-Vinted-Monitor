@@ -89,8 +89,19 @@ OIDC callback:
 https://vintrack.example.com/api/auth/callback/oidc
 ```
 
+GitHub callback:
+
+```text
+https://vintrack.example.com/api/auth/callback/github
+```
+
 When OIDC is partially configured, remove the incomplete values or set issuer,
 client ID, and client secret together.
+
+If GitHub reports `OAuthAccountNotLinked`, do not enable automatic email
+linking. Sign in with the member's existing Discord/OIDC provider and connect
+GitHub from **Account**. For star, Sponsors, webhook, or sync failures, see the
+[GitHub rewards troubleshooting section](github-rewards.md#troubleshooting).
 
 ## Caddy does not obtain a certificate
 

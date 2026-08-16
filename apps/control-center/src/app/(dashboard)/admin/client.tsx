@@ -17,6 +17,7 @@ import {
     Monitor,
     Minus,
     Globe,
+    Github,
     Server,
     Search,
     ScrollText,
@@ -109,6 +110,8 @@ import type {
     InactivityDurationUnit,
     InactivityMonitorScope,
 } from "@/lib/inactive-member-policy";
+import { GithubRewardsAdminPanel } from "@/components/admin/github-rewards-admin-panel";
+import type { GithubRewardsAdminState } from "@/actions/github-rewards";
 
 type UserMonitor = {
     id: number;
@@ -190,6 +193,7 @@ type AdminTab =
     | "monitors"
     | "users"
     | "roles"
+    | "rewards"
     | "logs"
     | "announcements"
     | "settings";
@@ -548,7 +552,7 @@ const ADMIN_TABS: {
     },
     {
         value: "users",
-        label: "Users",
+        label: "Members",
         icon: Users,
         description: "Accounts, usage, monitor activity, and quick actions.",
     },
@@ -557,6 +561,13 @@ const ADMIN_TABS: {
         label: "Roles",
         icon: Shield,
         description: "Access levels and active monitor limits.",
+    },
+    {
+        value: "rewards",
+        label: "Rewards",
+        icon: Github,
+        description:
+            "GitHub login, stars, sponsorships, limits, and reward health.",
     },
     {
         value: "logs",
@@ -1101,6 +1112,7 @@ export function AdminClient({
     initialMonitorMaintenanceState,
     initialInactiveMemberPolicyState,
     freeProxyState: initialFreeProxyState,
+    initialGithubRewardsState,
     monitorLimits: initialMonitorLimits,
 }: {
     users: UserRow[];
@@ -1112,6 +1124,7 @@ export function AdminClient({
     initialMonitorMaintenanceState: MonitorMaintenanceAdminState;
     initialInactiveMemberPolicyState: InactiveMemberPolicyAdminState;
     freeProxyState: FreeProxyState;
+    initialGithubRewardsState: GithubRewardsAdminState;
     monitorLimits: MonitorLimits;
 }) {
     const [users, setUsers] = useState<UserRow[]>(initialUsers);
@@ -1167,6 +1180,7 @@ export function AdminClient({
     const [activeTab, setActiveTab] = useState<AdminTab>(
         normalizeTab(initialTab),
     );
+    const activeTabButtonRef = useRef<HTMLButtonElement | null>(null);
     const [selected, setSelected] = useState<UserRow | null>(null);
     const [loadingUserDetailsId, setLoadingUserDetailsId] = useState<
         string | null
@@ -1561,6 +1575,14 @@ export function AdminClient({
         const interval = window.setInterval(() => setNowMs(Date.now()), 60_000);
         return () => window.clearInterval(interval);
     }, []);
+
+    useEffect(() => {
+        activeTabButtonRef.current?.scrollIntoView({
+            behavior: "smooth",
+            block: "nearest",
+            inline: "center",
+        });
+    }, [activeTab]);
 
     useEffect(() => {
         if (
@@ -2721,10 +2743,10 @@ export function AdminClient({
         : 0;
 
     return (
-        <div className="space-y-6">
-            <div className="border-border/60 flex flex-col gap-4 border-b pb-5 lg:flex-row lg:items-end lg:justify-between">
+        <div className="space-y-5">
+            <div className="border-border/60 flex flex-col gap-4 border-b pb-4 lg:flex-row lg:items-end lg:justify-between">
                 <div className="flex items-start gap-3">
-                    <div className="border-border/70 bg-muted/40 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border">
+                    <div className="border-border/70 bg-muted/40 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border">
                         <ActiveTabIcon className="text-muted-foreground h-5 w-5" />
                     </div>
                     <div>
@@ -2787,7 +2809,7 @@ export function AdminClient({
             <div
                 role="tablist"
                 aria-label="Admin sections"
-                className="border-border/60 bg-card flex gap-1 overflow-x-auto rounded-lg border p-1"
+                className="border-border/60 bg-card flex gap-1 overflow-x-auto rounded-xl border p-1"
             >
                 {ADMIN_TABS.map((tab) => {
                     const Icon = tab.icon;
@@ -2796,6 +2818,7 @@ export function AdminClient({
                     return (
                         <button
                             key={tab.value}
+                            ref={isActive ? activeTabButtonRef : undefined}
                             type="button"
                             role="tab"
                             aria-selected={isActive}
@@ -4643,7 +4666,7 @@ export function AdminClient({
                     <div className="border-border/60 flex flex-col gap-3 border-b px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
                         <div>
                             <p className="text-foreground text-sm font-semibold">
-                                Team Members
+                                Members
                             </p>
                             <p className="text-muted-foreground text-xs">
                                 {userPagination.total} matching users
@@ -5093,6 +5116,16 @@ export function AdminClient({
                                     excess Free Proxy Pool monitors
                                     automatically.
                                 </p>
+                                {initialGithubRewardsState.policy
+                                    .enforcementEnabled ? (
+                                    <p className="mt-1.5 text-xs leading-5 text-amber-700 dark:text-amber-300">
+                                        GitHub Rewards enforcement is active:
+                                        these global and role values only apply
+                                        to members the reward policy does not
+                                        cover. Per-member overrides still win
+                                        over rewards.
+                                    </p>
+                                ) : null}
                             </div>
                             <div className="bg-primary/10 text-primary rounded-lg p-2">
                                 <Gauge className="h-4 w-4" />
@@ -5172,6 +5205,12 @@ export function AdminClient({
                         </div>
                     </div>
                 </>
+            ) : null}
+
+            {activeTab === "rewards" ? (
+                <GithubRewardsAdminPanel
+                    initialState={initialGithubRewardsState}
+                />
             ) : null}
 
             {activeTab === "logs" ? (

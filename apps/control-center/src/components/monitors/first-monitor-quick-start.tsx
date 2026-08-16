@@ -131,11 +131,13 @@ export function FirstMonitorQuickStart({
             }
 
             toast.success(
-                result.started
-                    ? "Your demo monitor is running for 30 minutes"
-                    : result.pauseReason === "free-proxy-limit"
-                      ? "Monitor created and saved paused because your Free Proxy Pool monitor limit is reached"
-                      : "Monitor created and saved paused because your active limit is reached",
+                result.rewardNotice
+                    ? `${result.rewardNotice.title}: ${result.rewardNotice.message}`
+                    : result.started
+                      ? "Your demo monitor is running for 30 minutes"
+                      : result.pauseReason === "free-proxy-limit"
+                        ? "Monitor created and saved paused because your Free Proxy Pool monitor limit is reached"
+                        : "Monitor created and saved paused because your active limit is reached",
             );
             router.push(result.redirectTo);
             router.refresh();

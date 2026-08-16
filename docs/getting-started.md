@@ -6,7 +6,8 @@ additional checks required before a public deployment.
 ## Try the live demo
 
 1. Open [vintrack.jakobaio.dev](https://vintrack.jakobaio.dev).
-2. Sign in with Discord.
+2. Sign in with Discord or GitHub. Existing Discord members should sign in with
+   Discord first and link GitHub from **Account**.
 3. Open **Monitors** and create a monitor with a Vinted region, query, and any
    price, category, brand, color, size, or seller-country filters.
 4. Select a personal proxy group, or choose **Free Proxy Pool** when the region
@@ -81,6 +82,11 @@ http://localhost:3000/api/auth/callback/discord
 To use OIDC instead, configure the issuer, client ID, and client secret described
 in [Configuration](configuration.md#authentication). When all required OIDC
 variables are set, OIDC replaces Discord on the login page.
+
+Optionally enable GitHub beside Discord or OIDC. Register
+`http://localhost:3000/api/auth/callback/github`, set both `AUTH_GITHUB_ID` and
+`AUTH_GITHUB_SECRET`, and follow the webhook/backfill rollout in [GitHub Login
+and Rewards](github-rewards.md). Reward enforcement starts disabled.
 
 ### 3. Start the stack
 
