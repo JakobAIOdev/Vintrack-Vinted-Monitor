@@ -103,11 +103,14 @@ import {
     type QuickStartPool,
 } from "@/components/monitors/first-monitor-quick-start";
 import { DEMO_MONITOR_DURATION_MS } from "@/lib/demo-monitor";
+import { cn } from "@/lib/utils";
 import { useMonitorMaintenance } from "@/components/maintenance/monitor-maintenance-context";
 import {
     CreateMonitorLink,
     MONITOR_CREATION_MAINTENANCE_TITLE,
 } from "@/components/maintenance/create-monitor-link";
+import { FreePoolLimitDialog } from "@/components/free-pool-limit-dialog";
+import type { MonitorActivationBlock } from "@/lib/monitor-limits";
 
 type MonitorHealth = {
     monitor_id: number;
@@ -155,6 +158,13 @@ export type Monitor = {
     demo_expires_at: string | null;
     _count: { items: number };
     created_at: string;
+};
+
+export type FreePoolUsageSummary = {
+    activeCount: number;
+    limit: number;
+    tier: string;
+    limitReached: boolean;
 };
 
 type TelegramConnectionState = {
@@ -303,6 +313,7 @@ export function DashboardClient({
     quickStartPool,
     initialNow,
     memberBrandLabels,
+    freePoolUsage,
 }: {
     initialMonitors: Monitor[];
     userName: string;
@@ -314,6 +325,7 @@ export function DashboardClient({
     quickStartPool: QuickStartPool | null;
     initialNow: string;
     memberBrandLabels: Record<string, string>;
+    freePoolUsage: FreePoolUsageSummary | null;
 }) {
     const { maintenance } = useMonitorMaintenance();
     const maintenanceEnabled = maintenance.enabled;
@@ -326,6 +338,8 @@ export function DashboardClient({
     const [isUpdatingWebhookStatus, setIsUpdatingWebhookStatus] =
         useState(false);
     const [isTelegramActive, setIsTelegramActive] = useState(false);
+    const [activationBlock, setActivationBlock] =
+        useState<MonitorActivationBlock | null>(null);
     const [isTestingWebhook, setIsTestingWebhook] = useState(false);
     const [isTestingTelegram, setIsTestingTelegram] = useState(false);
     const [isCreatingTelegramCode, setIsCreatingTelegramCode] = useState(false);
@@ -758,30 +772,41 @@ export function DashboardClient({
     };
 
     const handleStartAll = async () => {
-        toast.promise(startAllMonitors(), {
-            loading: "Starting monitors...",
-            success: (result) => {
-                const startedIds = new Set(result.startedMonitorIds);
-                setMonitors((prev) =>
-                    prev.map((m) =>
-                        startedIds.has(m.id)
-                            ? {
-                                  ...m,
-                                  status: "active",
-                                  demo_expires_at:
-                                      result.demoExpirations[m.id] ??
-                                      m.demo_expires_at,
-                              }
-                            : m,
-                    ),
-                );
-                return result.message;
-            },
-            error: (error) =>
+        const toastId = toast.loading("Starting monitors...");
+        try {
+            const result = await startAllMonitors();
+            if (!result.success && result.block) {
+                toast.dismiss(toastId);
+                if (result.block.code === "free_proxy_limit") {
+                    setActivationBlock(result.block);
+                } else {
+                    toast.error(result.block.message);
+                }
+                return;
+            }
+            const startedIds = new Set(result.startedMonitorIds);
+            setMonitors((prev) =>
+                prev.map((m) =>
+                    startedIds.has(m.id)
+                        ? {
+                              ...m,
+                              status: "active",
+                              demo_expires_at:
+                                  result.demoExpirations[m.id] ??
+                                  m.demo_expires_at,
+                          }
+                        : m,
+                ),
+            );
+            toast.success(result.message, { id: toastId });
+        } catch (error) {
+            toast.error(
                 error instanceof Error
                     ? error.message
                     : "Failed to start monitors",
-        });
+                { id: toastId },
+            );
+        }
     };
 
     const handleToggle = async (id: number, currentStatus: string) => {
@@ -806,32 +831,55 @@ export function DashboardClient({
             ),
         );
 
-        toast.promise(toggleMonitor(id, currentStatus), {
-            loading: "Updating...",
-            success: (result) => {
-                setMonitors((prev) =>
-                    prev.map((monitor) =>
-                        monitor.id === id
-                            ? {
-                                  ...monitor,
-                                  demo_expires_at: result.demoExpiresAt,
-                              }
-                            : monitor,
-                    ),
-                );
-                return `Monitor ${actionText}`;
-            },
-            error: (error) => {
+        const toastId = toast.loading("Updating...");
+        try {
+            const result = await toggleMonitor(id, currentStatus);
+            if (!result.success) {
                 setMonitors((prev) =>
                     prev.map((m) =>
                         m.id === id && currentMonitor ? currentMonitor : m,
                     ),
                 );
-                return error instanceof Error
+                toast.dismiss(toastId);
+                if (result.block?.code === "free_proxy_limit") {
+                    setActivationBlock(result.block);
+                } else {
+                    toast.error(
+                        result.block?.message ?? "Failed to update monitor",
+                    );
+                }
+                return;
+            }
+
+            setMonitors((prev) =>
+                prev.map((monitor) =>
+                    monitor.id === id
+                        ? {
+                              ...monitor,
+                              demo_expires_at: result.demoExpiresAt,
+                          }
+                        : monitor,
+                ),
+            );
+            toast.success(
+                result.rewardNotice
+                    ? `${result.rewardNotice.title}: ${result.rewardNotice.message}`
+                    : `Monitor ${actionText}`,
+                { id: toastId },
+            );
+        } catch (error) {
+            setMonitors((prev) =>
+                prev.map((m) =>
+                    m.id === id && currentMonitor ? currentMonitor : m,
+                ),
+            );
+            toast.error(
+                error instanceof Error
                     ? error.message
-                    : "Failed to update monitor";
-            },
-        });
+                    : "Failed to update monitor",
+                { id: toastId },
+            );
+        }
     };
 
     const handleDedupeChange = (checked: boolean) => {
@@ -1125,7 +1173,12 @@ export function DashboardClient({
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div
+                className={cn(
+                    "grid grid-cols-1 gap-4 sm:grid-cols-2",
+                    freePoolUsage ? "xl:grid-cols-4" : "xl:grid-cols-3",
+                )}
+            >
                 <div className="border-border/70 bg-card rounded-lg border px-5 py-4">
                     <p className="text-muted-foreground text-[11px] font-medium tracking-wider uppercase">
                         Total Monitors
@@ -1158,6 +1211,57 @@ export function DashboardClient({
                         {totalItems.toLocaleString()}
                     </p>
                 </div>
+                {freePoolUsage ? (
+                    <Link
+                        href="/account"
+                        className={cn(
+                            "border-border/70 bg-card group hover:border-foreground/20 hover:bg-muted/25 rounded-lg border px-5 py-4 transition-colors",
+                            freePoolUsage.limitReached && "border-amber-500/30",
+                        )}
+                    >
+                        <div className="flex items-center justify-between gap-3">
+                            <p className="text-muted-foreground text-[11px] font-medium tracking-wider uppercase">
+                                Free Pool
+                            </p>
+                            <span className="text-muted-foreground flex items-center gap-1 text-[11px] font-medium">
+                                {freePoolUsage.tier}
+                                <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+                            </span>
+                        </div>
+                        <div className="mt-1 flex items-end justify-between gap-3">
+                            <p className="text-foreground text-2xl font-bold tabular-nums">
+                                {freePoolUsage.activeCount}
+                                <span className="text-muted-foreground text-sm font-medium">
+                                    /{freePoolUsage.limit}
+                                </span>
+                            </p>
+                            <p
+                                className={cn(
+                                    "text-muted-foreground pb-0.5 text-[11px]",
+                                    freePoolUsage.limitReached &&
+                                        "font-medium text-amber-700 dark:text-amber-300",
+                                )}
+                            >
+                                {freePoolUsage.limitReached
+                                    ? "Limit reached"
+                                    : `${freePoolUsage.limit - freePoolUsage.activeCount} left`}
+                            </p>
+                        </div>
+                        <div className="bg-muted mt-2 h-1 overflow-hidden rounded-full">
+                            <div
+                                className={cn(
+                                    "h-full rounded-full transition-[width]",
+                                    freePoolUsage.limitReached
+                                        ? "bg-amber-500"
+                                        : "bg-foreground/70",
+                                )}
+                                style={{
+                                    width: `${Math.min(100, (freePoolUsage.activeCount / freePoolUsage.limit) * 100)}%`,
+                                }}
+                            />
+                        </div>
+                    </Link>
+                ) : null}
             </div>
 
             {monitors.length === 0 ? (
@@ -2143,6 +2247,13 @@ export function DashboardClient({
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            <FreePoolLimitDialog
+                block={activationBlock}
+                onOpenChange={(open) => {
+                    if (!open) setActivationBlock(null);
+                }}
+            />
 
             <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
                 <DialogContent className="sm:max-w-2xl">

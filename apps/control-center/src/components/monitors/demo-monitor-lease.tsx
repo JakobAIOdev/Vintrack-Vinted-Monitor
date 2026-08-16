@@ -60,7 +60,9 @@ export function DemoMonitorLease({
             setStatus(result.status);
             setNow(Date.now());
             toast.success(
-                `Demo monitor is running for another ${DEMO_MONITOR_DURATION_MINUTES} minutes`,
+                result.rewardNotice
+                    ? `${result.rewardNotice.title}: ${result.rewardNotice.message}`
+                    : `Demo monitor is running for another ${DEMO_MONITOR_DURATION_MINUTES} minutes`,
             );
             router.refresh();
         } catch (error) {
@@ -77,9 +79,13 @@ export function DemoMonitorLease({
     const handleKeepRunning = async () => {
         setPendingAction("keep");
         try {
-            await keepDemoMonitorRunning(monitorId);
+            const result = await keepDemoMonitorRunning(monitorId);
             setConverted(true);
-            toast.success("Demo limit removed — this monitor keeps running");
+            toast.success(
+                result.rewardNotice
+                    ? `${result.rewardNotice.title}: ${result.rewardNotice.message}`
+                    : "Demo limit removed — this monitor keeps running",
+            );
             router.refresh();
         } catch (error) {
             toast.error(

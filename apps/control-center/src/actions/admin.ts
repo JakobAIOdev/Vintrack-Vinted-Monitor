@@ -5,9 +5,10 @@ import { db } from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import { revalidatePath, unstable_cache } from "next/cache";
 import { enqueueMonitorStatusNotification } from "@/lib/alert-outbox";
+import { reconcileFreeProxyLimitsForUsers } from "@/lib/free-proxy-limit-reconciliation.server";
 import {
-    getMonitorActivationState,
     GLOBAL_MONITOR_LIMIT_SCOPE,
+    getEffectiveMonitorLimits,
     normalizeMonitorLimitInput,
     roleLimitScope,
     setFreeProxyMonitorLimit,
@@ -1365,10 +1366,70 @@ export async function disableMonitorMaintenance() {
                 data: { status: "inactivity_paused" },
             });
         }
-        const resumed = await tx.monitors.updateMany({
+        const candidates = await tx.monitors.findMany({
             where: { status: "maintenance_paused" },
-            data: { status: "active" },
+            orderBy: [
+                { created_at: { sort: "asc", nulls: "last" } },
+                { id: "asc" },
+            ],
+            select: { id: true, userId: true, proxy_source: true },
         });
+        const byUser = new Map<string, typeof candidates>();
+        for (const monitor of candidates) {
+            const rows = byUser.get(monitor.userId) ?? [];
+            rows.push(monitor);
+            byUser.set(monitor.userId, rows);
+        }
+        const resumeIds: number[] = [];
+        const limitPausedIds: number[] = [];
+        for (const [userId, monitors] of byUser) {
+            const [limits, activeCount, activeFreeCount] = await Promise.all([
+                getEffectiveMonitorLimits(userId, tx),
+                tx.monitors.count({ where: { userId, status: "active" } }),
+                tx.monitors.count({
+                    where: { userId, status: "active", proxy_source: "free" },
+                }),
+            ]);
+            let activeSlots =
+                limits.activeLimit === null
+                    ? null
+                    : Math.max(limits.activeLimit - activeCount, 0);
+            let freeSlots =
+                limits.freeProxyActiveLimit === null
+                    ? null
+                    : Math.max(
+                          limits.freeProxyActiveLimit - activeFreeCount,
+                          0,
+                      );
+            for (const monitor of monitors) {
+                const canResume =
+                    (activeSlots === null || activeSlots > 0) &&
+                    (monitor.proxy_source !== "free" ||
+                        freeSlots === null ||
+                        freeSlots > 0);
+                if (!canResume) {
+                    limitPausedIds.push(monitor.id);
+                    continue;
+                }
+                resumeIds.push(monitor.id);
+                if (activeSlots !== null) activeSlots -= 1;
+                if (monitor.proxy_source === "free" && freeSlots !== null) {
+                    freeSlots -= 1;
+                }
+            }
+        }
+        if (resumeIds.length > 0) {
+            await tx.monitors.updateMany({
+                where: { id: { in: resumeIds } },
+                data: { status: "active" },
+            });
+        }
+        if (limitPausedIds.length > 0) {
+            await tx.monitors.updateMany({
+                where: { id: { in: limitPausedIds } },
+                data: { status: "paused" },
+            });
+        }
         const maintenance: MonitorMaintenance = {
             ...existing,
             enabled: false,
@@ -1384,8 +1445,9 @@ export async function disableMonitorMaintenance() {
             update: { value: JSON.stringify(maintenance) },
         });
         return {
-            resumedCount: resumed.count,
+            resumedCount: resumeIds.length,
             inactivityPausedCount: inactivityIds.length,
+            limitPausedCount: limitPausedIds.length,
             durationSeconds: existing.enabledAt
                 ? Math.max(
                       0,
@@ -3584,121 +3646,6 @@ export async function getAdminOperationsPage(input?: {
                 ? (page.at(-1)?.createdAt.toISOString() ?? null)
                 : null,
     };
-}
-
-type FreeProxyLimitPausedMonitor = {
-    id: number;
-    name: string;
-    userId: string;
-    discord_webhook: string | null;
-    webhook_active: boolean;
-    telegram_active: boolean;
-    notifications_enabled: boolean;
-};
-
-async function reconcileUserFreeProxyMonitorLimit(
-    userId: string,
-    scope: string,
-    adminUserId: string,
-) {
-    const transitionKey = Date.now().toString();
-    const result = await withMonitorActivationLock(userId, async (tx) => {
-        const state = await getMonitorActivationState(userId, "free", tx);
-        if (state.freeProxyActiveLimit === null) {
-            return {
-                limit: null,
-                monitors: [] as FreeProxyLimitPausedMonitor[],
-            };
-        }
-
-        const excess = Math.max(
-            state.freeProxyActiveCount - state.freeProxyActiveLimit,
-            0,
-        );
-        if (excess === 0) {
-            return {
-                limit: state.freeProxyActiveLimit,
-                monitors: [] as FreeProxyLimitPausedMonitor[],
-            };
-        }
-
-        const monitors = await tx.monitors.findMany({
-            where: { userId, status: "active", proxy_source: "free" },
-            orderBy: [
-                { created_at: { sort: "desc", nulls: "last" } },
-                { id: "desc" },
-            ],
-            take: excess,
-            select: {
-                id: true,
-                name: true,
-                userId: true,
-                discord_webhook: true,
-                webhook_active: true,
-                telegram_active: true,
-                notifications_enabled: true,
-            },
-        });
-
-        if (monitors.length > 0) {
-            await tx.monitors.updateMany({
-                where: { id: { in: monitors.map((monitor) => monitor.id) } },
-                data: { status: "paused" },
-            });
-            for (const monitor of monitors) {
-                await enqueueMonitorStatusNotification(tx, monitor, {
-                    kind: "free_proxy_limit_pause",
-                    title: "Monitor paused",
-                    message: `The monitor ${monitor.name} was automatically paused because the running Free Proxy Pool monitor limit is ${state.freeProxyActiveLimit}.`,
-                    idempotencyKey: `free-proxy-limit:${monitor.id}:${scope}:${state.freeProxyActiveLimit}:${transitionKey}`,
-                });
-            }
-        }
-
-        return { limit: state.freeProxyActiveLimit, monitors };
-    });
-
-    if (result.limit === null || result.monitors.length === 0) {
-        return result.monitors;
-    }
-
-    await Promise.all(
-        result.monitors.map(async (monitor) => {
-            await logAuditEvent({
-                userId: adminUserId,
-                action: "monitor.free_proxy_limit_paused",
-                targetType: "monitor",
-                targetId: monitor.id,
-                metadata: {
-                    memberUserId: userId,
-                    scope,
-                    limit: result.limit,
-                    reason: "free_proxy_active_limit",
-                },
-            });
-        }),
-    );
-
-    return result.monitors;
-}
-
-async function reconcileFreeProxyLimitsForUsers(
-    userIds: string[],
-    scope: string,
-    adminUserId: string,
-) {
-    let pausedCount = 0;
-    const pausedMonitorIds: number[] = [];
-    for (const userId of userIds) {
-        const paused = await reconcileUserFreeProxyMonitorLimit(
-            userId,
-            scope,
-            adminUserId,
-        );
-        pausedCount += paused.length;
-        pausedMonitorIds.push(...paused.map((monitor) => monitor.id));
-    }
-    return { pausedCount, pausedMonitorIds };
 }
 
 export async function setUserRole(userId: string, role: string) {

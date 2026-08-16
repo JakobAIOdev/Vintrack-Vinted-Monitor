@@ -2,11 +2,17 @@ import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { getCategoryLabelsForRegion } from "@/lib/categories.server";
 import { redirect } from "next/navigation";
-import { DashboardClient, type Monitor } from "./client";
+import {
+    DashboardClient,
+    type FreePoolUsageSummary,
+    type Monitor,
+} from "./client";
 import { getBannedSellerIds, visibleSellerWhere } from "@/lib/seller-bans";
 import { getFreeProxyPoolHealth } from "@/lib/free-proxy-health";
 import { normalizeMonitorOnboardingStatus } from "@/lib/monitor-presets";
 import { normalizeNotificationMessageStyle } from "@/lib/notification-message-style";
+import { getMemberGithubRewardStatus } from "@/lib/github-rewards.server";
+import { GithubRewardStatusCard } from "@/components/github-reward-status-card";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +20,13 @@ export default async function DashboardPage() {
     const session = await auth();
     if (!session?.user) redirect("/login");
 
-    const [rawMonitors, userSettings, bannedSellerIds] = await Promise.all([
+    const [
+        rawMonitors,
+        userSettings,
+        bannedSellerIds,
+        githubRewards,
+        recentLimitPauses,
+    ] = await Promise.all([
         db.monitors.findMany({
             where: { userId: session.user.id },
             orderBy: { created_at: "desc" },
@@ -32,6 +44,17 @@ export default async function DashboardPage() {
             },
         }),
         getBannedSellerIds(session.user.id),
+        getMemberGithubRewardStatus(session.user.id),
+        db.audit_events.findMany({
+            where: {
+                action: "member.free_proxy_limit_reconciled",
+                target_type: "user",
+                target_id: session.user.id,
+            },
+            orderBy: { created_at: "desc" },
+            take: 1,
+            select: { metadata: true },
+        }),
     ]);
     const usedBrandIds = [
         ...new Set(
@@ -132,26 +155,101 @@ export default async function DashboardPage() {
           }
         : null;
 
+    const promptRecord = githubRewards.prompt
+        ? await db.member_reward_prompts.findUnique({
+              where: {
+                  userId_policy_version_prompt_type: {
+                      userId: session.user.id,
+                      policy_version: githubRewards.policy.version,
+                      prompt_type: githubRewards.prompt.type,
+                  },
+              },
+              select: { shown_at: true },
+          })
+        : null;
+    const announcementRecord = githubRewards.policy.announcementEnabled
+        ? await db.member_reward_prompts.findUnique({
+              where: {
+                  userId_policy_version_prompt_type: {
+                      userId: session.user.id,
+                      policy_version: githubRewards.policy.version,
+                      prompt_type: "announcement",
+                  },
+              },
+              select: { shown_at: true },
+          })
+        : null;
+    const pauseMetadata = recentLimitPauses[0]?.metadata;
+    const pausedIds =
+        pauseMetadata &&
+        typeof pauseMetadata === "object" &&
+        !Array.isArray(pauseMetadata) &&
+        Array.isArray(pauseMetadata.pausedMonitorIds)
+            ? pauseMetadata.pausedMonitorIds.filter(
+                  (id): id is number => typeof id === "number",
+              )
+            : [];
+    const pausedMonitors = rawMonitors
+        .filter(
+            (monitor) =>
+                pausedIds.includes(monitor.id) && monitor.status === "paused",
+        )
+        .map((monitor) => ({ id: monitor.id, name: monitor.name }));
+    const freePoolUsage: FreePoolUsageSummary | null =
+        githubRewards.policy.enforcementEnabled &&
+        githubRewards.effectiveLimit !== null &&
+        githubRewards.source !== "role_exempt"
+            ? {
+                  activeCount: githubRewards.freeProxyActiveCount,
+                  limit: githubRewards.effectiveLimit,
+                  tier:
+                      githubRewards.source === "donation"
+                          ? "Supporter"
+                          : githubRewards.source === "github_star"
+                            ? "GitHub Star"
+                            : githubRewards.source === "user_override"
+                              ? "Admin limit"
+                              : "Default",
+                  limitReached: githubRewards.limitReached,
+              }
+            : null;
+
     return (
-        <DashboardClient
-            initialMonitors={monitors}
-            userName={session.user.name || "User"}
-            initialDedupeMonitorAlerts={
-                userSettings?.dedupe_monitor_alerts ?? false
-            }
-            initialTelegramMessageStyle={normalizeNotificationMessageStyle(
-                userSettings?.telegram_message_style,
-            )}
-            initialDiscordMessageStyle={normalizeNotificationMessageStyle(
-                userSettings?.discord_message_style,
-            )}
-            quickStartEligible={quickStartEligible}
-            initialQuickStartOpen={
-                quickStartEligible && onboardingStatus === "pending"
-            }
-            quickStartPool={quickStartPool}
-            initialNow={new Date().toISOString()}
-            memberBrandLabels={memberBrandLabels}
-        />
+        <div className="space-y-5">
+            <GithubRewardStatusCard
+                status={githubRewards}
+                placement="dashboard"
+                showPrompt={Boolean(
+                    githubRewards.prompt && !promptRecord?.shown_at,
+                )}
+                showAnnouncement={Boolean(
+                    githubRewards.policy.announcementEnabled &&
+                    !githubRewards.prompt &&
+                    !announcementRecord?.shown_at,
+                )}
+                pausedMonitors={pausedMonitors}
+            />
+            <DashboardClient
+                initialMonitors={monitors}
+                userName={session.user.name || "User"}
+                initialDedupeMonitorAlerts={
+                    userSettings?.dedupe_monitor_alerts ?? false
+                }
+                initialTelegramMessageStyle={normalizeNotificationMessageStyle(
+                    userSettings?.telegram_message_style,
+                )}
+                initialDiscordMessageStyle={normalizeNotificationMessageStyle(
+                    userSettings?.discord_message_style,
+                )}
+                quickStartEligible={quickStartEligible}
+                initialQuickStartOpen={
+                    quickStartEligible && onboardingStatus === "pending"
+                }
+                quickStartPool={quickStartPool}
+                initialNow={new Date().toISOString()}
+                memberBrandLabels={memberBrandLabels}
+                freePoolUsage={freePoolUsage}
+            />
+        </div>
     );
 }

@@ -15,8 +15,11 @@ import { normalizeQuietHours } from "@/lib/monitor-schedule";
 import {
     getMonitorActivationState,
     monitorActivationErrorMessage,
+    rewardNoticeAfterActivation,
+    type MonitorRewardNotice,
     withMonitorActivationLock,
 } from "@/lib/monitor-limits";
+import { registerRewardPromptReached } from "@/lib/github-rewards.server";
 import { getFreeProxyPoolHealth } from "@/lib/free-proxy-health";
 import { getMonitorPreset } from "@/lib/monitor-presets";
 import { REGIONS } from "@/lib/regions";
@@ -137,6 +140,7 @@ export type CreateMonitorResult =
           started: boolean;
           activeLimit: number | null;
           pauseReason: "active-limit" | "free-proxy-limit" | null;
+          rewardNotice: MonitorRewardNotice | null;
       }
     | { ok: false; message: string };
 
@@ -277,13 +281,31 @@ export async function createMonitor(
             });
         }
 
-        return { monitor: createdMonitor, activationState, initialStatus };
+        const rewardNotice =
+            initialStatus === "active"
+                ? rewardNoticeAfterActivation(activationState, proxySource)
+                : null;
+        if (rewardNotice) {
+            await registerRewardPromptReached(
+                userId,
+                rewardNotice.policyVersion,
+                rewardNotice.promptType,
+                tx,
+            );
+        }
+
+        return {
+            monitor: createdMonitor,
+            activationState,
+            initialStatus,
+            rewardNotice,
+        };
     });
 
     if (!creation.monitor || !creation.initialStatus) {
         return { ok: false, message: MONITOR_CREATION_MAINTENANCE_MESSAGE };
     }
-    const { monitor, activationState, initialStatus } = creation;
+    const { monitor, activationState, initialStatus, rewardNotice } = creation;
 
     if (appliedPreset) {
         await logAuditEvent({
@@ -313,6 +335,7 @@ export async function createMonitor(
                 : activationState.freeProxyLimitReached
                   ? "free-proxy-limit"
                   : "active-limit",
+        rewardNotice,
     };
 }
 
@@ -323,6 +346,7 @@ export type CreatePresetMonitorResult =
           started: boolean;
           activeLimit: number | null;
           pauseReason: "active-limit" | "free-proxy-limit" | null;
+          rewardNotice: MonitorRewardNotice | null;
       }
     | {
           ok: false;
@@ -507,6 +531,7 @@ export async function createPresetMonitor(input: {
                     : activationState.freeProxyLimitReached
                       ? "free-proxy-limit"
                       : "active-limit",
+            rewardNotice: null,
         };
     } catch (error) {
         console.error("Failed to create preset monitor", error);
@@ -549,7 +574,7 @@ export async function extendDemoMonitor(id: number) {
     const userId = session.user.id;
 
     const expiresAt = getNextDemoMonitorExpiry();
-    await withMonitorActivationLock(userId, async (tx) => {
+    const activation = await withMonitorActivationLock(userId, async (tx) => {
         const existing = await tx.monitors.findFirst({
             where: { id, userId },
             select: {
@@ -564,8 +589,11 @@ export async function extendDemoMonitor(id: number) {
             throw new Error("This monitor is no longer in demo mode");
         }
 
+        let activationState: Awaited<
+            ReturnType<typeof getMonitorActivationState>
+        > | null = null;
         if (existing.status !== "active") {
-            const activationState = await getMonitorActivationState(
+            activationState = await getMonitorActivationState(
                 userId,
                 existing.proxy_source,
                 tx,
@@ -584,6 +612,21 @@ export async function extendDemoMonitor(id: number) {
             where: { id, userId },
             data: { status: "active", demo_expires_at: expiresAt },
         });
+        const rewardNotice = activationState
+            ? rewardNoticeAfterActivation(
+                  activationState,
+                  existing.proxy_source,
+              )
+            : null;
+        if (rewardNotice) {
+            await registerRewardPromptReached(
+                userId,
+                rewardNotice.policyVersion,
+                rewardNotice.promptType,
+                tx,
+            );
+        }
+        return { rewardNotice };
     });
     await logAuditEvent({
         userId,
@@ -599,6 +642,7 @@ export async function extendDemoMonitor(id: number) {
         ok: true,
         status: "active" as const,
         expiresAt: expiresAt.toISOString(),
+        rewardNotice: activation.rewardNotice,
     };
 }
 
@@ -622,8 +666,11 @@ export async function keepDemoMonitorRunning(id: number) {
             return { status: existing.status, changed: false };
         }
 
+        let activationState: Awaited<
+            ReturnType<typeof getMonitorActivationState>
+        > | null = null;
         if (existing.status !== "active") {
-            const activationState = await getMonitorActivationState(
+            activationState = await getMonitorActivationState(
                 userId,
                 existing.proxy_source,
                 tx,
@@ -642,7 +689,21 @@ export async function keepDemoMonitorRunning(id: number) {
             where: { id, userId },
             data: { status: "active", demo_expires_at: null },
         });
-        return { status: "active", changed: true };
+        const rewardNotice = activationState
+            ? rewardNoticeAfterActivation(
+                  activationState,
+                  existing.proxy_source,
+              )
+            : null;
+        if (rewardNotice) {
+            await registerRewardPromptReached(
+                userId,
+                rewardNotice.policyVersion,
+                rewardNotice.promptType,
+                tx,
+            );
+        }
+        return { status: "active", changed: true, rewardNotice };
     });
     if (!result.changed) {
         return { ok: true, status: result.status, expiresAt: null };
@@ -656,7 +717,12 @@ export async function keepDemoMonitorRunning(id: number) {
 
     revalidatePath("/dashboard");
     revalidatePath(`/monitors/${id}`);
-    return { ok: true, status: "active" as const, expiresAt: null };
+    return {
+        ok: true,
+        status: "active" as const,
+        expiresAt: null,
+        rewardNotice: result.rewardNotice,
+    };
 }
 
 export async function updateMonitor(id: number, formData: FormData) {
@@ -811,6 +877,7 @@ export type UpdateMonitorResult =
           success: true;
           redirectTo: string;
           pausedByFreeProxyLimit: boolean;
+          rewardNotice: MonitorRewardNotice | null;
       }
     | { success: false; message: string };
 
@@ -894,66 +961,78 @@ export async function updateMonitorAndReturn(
         ? await getTelegramConnection(userId)
         : null;
 
-    const pausedByFreeProxyLimit = await withMonitorActivationLock(
-        userId,
-        async (tx) => {
-            const currentMonitor = await tx.monitors.findFirst({
-                where: { id, userId },
-                select: { status: true, proxy_source: true },
-            });
-            if (!currentMonitor) throw new Error("Monitor not found");
+    const updateResult = await withMonitorActivationLock(userId, async (tx) => {
+        const currentMonitor = await tx.monitors.findFirst({
+            where: { id, userId },
+            select: { status: true, proxy_source: true },
+        });
+        if (!currentMonitor) throw new Error("Monitor not found");
 
-            let pauseForFreeProxyLimit = false;
-            if (
-                currentMonitor.status === "active" &&
-                currentMonitor.proxy_source !== "free" &&
-                proxySource === "free"
-            ) {
-                const activationState = await getMonitorActivationState(
-                    userId,
+        let pauseForFreeProxyLimit = false;
+        let rewardNotice: MonitorRewardNotice | null = null;
+        if (
+            currentMonitor.status === "active" &&
+            currentMonitor.proxy_source !== "free" &&
+            proxySource === "free"
+        ) {
+            const activationState = await getMonitorActivationState(
+                userId,
+                "free",
+                tx,
+            );
+            pauseForFreeProxyLimit = activationState.freeProxyLimitReached;
+            if (!pauseForFreeProxyLimit) {
+                rewardNotice = rewardNoticeAfterActivation(
+                    activationState,
                     "free",
-                    tx,
                 );
-                pauseForFreeProxyLimit = activationState.freeProxyLimitReached;
             }
+        }
 
-            await tx.monitors.update({
-                where: { id, userId },
-                data: {
-                    name: normalizedName,
-                    query: normalizedQuery,
-                    title_only: titleOnly,
-                    anti_keywords: antiKeywords,
-                    query_delay_ms: queryDelayMs,
-                    quiet_hours_enabled: quietHours.enabled,
-                    quiet_hours_start_minute: quietHours.startMinute,
-                    quiet_hours_end_minute: quietHours.endMinute,
-                    quiet_hours_mode: quietHours.mode,
-                    quiet_hours_delay_ms: quietHours.delayMs,
-                    quiet_hours_timezone: quietHours.timezone,
-                    price_min: priceMin,
-                    price_max: priceMax,
-                    size_id: sizeId,
-                    catalog_ids: catalogIds || null,
-                    brand_ids: brandIds || null,
-                    color_ids: colorIds || null,
-                    status_ids: statusIds || null,
-                    video_game_platform_ids: videoGamePlatformIds || null,
-                    region,
-                    allowed_countries: allowedCountries || null,
-                    min_seller_rating: minSellerRating,
-                    min_seller_rating_count: minSellerRatingCount,
-                    discord_webhook: urlToSave,
-                    proxy_group_id: proxyGroupId,
-                    proxy_source: proxySource,
-                    webhook_active: urlToSave ? true : false,
-                    telegram_active: Boolean(telegramConnection),
-                    ...(pauseForFreeProxyLimit ? { status: "paused" } : {}),
-                },
-            });
-            return pauseForFreeProxyLimit;
-        },
-    );
+        await tx.monitors.update({
+            where: { id, userId },
+            data: {
+                name: normalizedName,
+                query: normalizedQuery,
+                title_only: titleOnly,
+                anti_keywords: antiKeywords,
+                query_delay_ms: queryDelayMs,
+                quiet_hours_enabled: quietHours.enabled,
+                quiet_hours_start_minute: quietHours.startMinute,
+                quiet_hours_end_minute: quietHours.endMinute,
+                quiet_hours_mode: quietHours.mode,
+                quiet_hours_delay_ms: quietHours.delayMs,
+                quiet_hours_timezone: quietHours.timezone,
+                price_min: priceMin,
+                price_max: priceMax,
+                size_id: sizeId,
+                catalog_ids: catalogIds || null,
+                brand_ids: brandIds || null,
+                color_ids: colorIds || null,
+                status_ids: statusIds || null,
+                video_game_platform_ids: videoGamePlatformIds || null,
+                region,
+                allowed_countries: allowedCountries || null,
+                min_seller_rating: minSellerRating,
+                min_seller_rating_count: minSellerRatingCount,
+                discord_webhook: urlToSave,
+                proxy_group_id: proxyGroupId,
+                proxy_source: proxySource,
+                webhook_active: urlToSave ? true : false,
+                telegram_active: Boolean(telegramConnection),
+                ...(pauseForFreeProxyLimit ? { status: "paused" } : {}),
+            },
+        });
+        if (rewardNotice) {
+            await registerRewardPromptReached(
+                userId,
+                rewardNotice.policyVersion,
+                rewardNotice.promptType,
+                tx,
+            );
+        }
+        return { pausedByFreeProxyLimit: pauseForFreeProxyLimit, rewardNotice };
+    });
 
     revalidatePath("/dashboard");
     revalidatePath(`/monitors/${id}`);
@@ -964,10 +1043,11 @@ export async function updateMonitorAndReturn(
         redirectTo:
             returnTo === "dashboard"
                 ? "/dashboard"
-                : pausedByFreeProxyLimit
+                : updateResult.pausedByFreeProxyLimit
                   ? `/monitors/${id}?paused=free-proxy-limit`
                   : `/monitors/${id}`,
-        pausedByFreeProxyLimit,
+        pausedByFreeProxyLimit: updateResult.pausedByFreeProxyLimit,
+        rewardNotice: updateResult.rewardNotice,
     };
 }
 

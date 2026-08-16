@@ -128,6 +128,12 @@ services:
       - AUTH_OIDC_CLIENT_ID=${AUTH_OIDC_CLIENT_ID:-}
       - AUTH_OIDC_CLIENT_SECRET=${AUTH_OIDC_CLIENT_SECRET:-}
       - AUTH_OIDC_NAME=${AUTH_OIDC_NAME:-}
+      - AUTH_GITHUB_ID=${AUTH_GITHUB_ID:-}
+      - AUTH_GITHUB_SECRET=${AUTH_GITHUB_SECRET:-}
+      - GITHUB_REPOSITORY_WEBHOOK_SECRET=${GITHUB_REPOSITORY_WEBHOOK_SECRET:-}
+      - GITHUB_SPONSORS_WEBHOOK_SECRET=${GITHUB_SPONSORS_WEBHOOK_SECRET:-}
+      - GITHUB_REWARDS_MAINTAINER_TOKEN=${GITHUB_REWARDS_MAINTAINER_TOKEN:-}
+      - GITHUB_REWARDS_SYNC_SECRET=${GITHUB_REWARDS_SYNC_SECRET:-}
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
@@ -136,6 +142,20 @@ services:
       control-center-migrate:
         condition: service_completed_successfully
     mem_limit: ${CONTROL_CENTER_MEM_LIMIT:-512m}
+    logging: *default-logging
+    restart: unless-stopped
+
+  github-rewards-scheduler:
+    image: ghcr.io/jakobaiodev/vintrack-vinted-monitor/control-center:latest
+    container_name: vintrack_github_rewards_scheduler
+    command: ["node", "scripts/github-rewards-scheduler.mjs"]
+    environment:
+      - GITHUB_REWARDS_SYNC_URL=http://control-center:3000/api/internal/github-rewards/sync
+      - GITHUB_REWARDS_SYNC_SECRET=${GITHUB_REWARDS_SYNC_SECRET:-}
+    depends_on:
+      control-center:
+        condition: service_started
+    mem_limit: ${GITHUB_REWARDS_SCHEDULER_MEM_LIMIT:-64m}
     logging: *default-logging
     restart: unless-stopped
 

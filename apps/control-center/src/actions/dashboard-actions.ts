@@ -11,9 +11,12 @@ import {
 import { getTelegramConnection } from "@/lib/telegram-connection";
 import {
     getMonitorActivationState,
+    monitorActivationBlock,
     monitorActivationErrorMessage,
+    rewardNoticeAfterActivation,
     withMonitorActivationLock,
 } from "@/lib/monitor-limits";
+import { registerRewardPromptReached } from "@/lib/github-rewards.server";
 import { getNextDemoMonitorExpiry } from "@/lib/demo-monitor";
 import { normalizeQueryDelayMs } from "@/lib/monitor-delay";
 import { normalizeQuietHours } from "@/lib/monitor-schedule";
@@ -72,84 +75,103 @@ export async function startAllMonitors() {
     const userId = session.user.id;
     const transitionKey = Date.now().toString();
 
-    const { activationState, monitorsToStart, demoExpirations, skippedCount } =
-        await withMonitorActivationLock(userId, async (tx) => {
-            const activationState = await getMonitorActivationState(
+    const {
+        activationState,
+        monitorsToStart,
+        demoExpirations,
+        skippedCount,
+        rewardNotice,
+    } = await withMonitorActivationLock(userId, async (tx) => {
+        const activationState = await getMonitorActivationState(
+            userId,
+            undefined,
+            tx,
+        );
+        await touchDashboardActivity(tx, userId);
+        const pausedMonitors = await tx.monitors.findMany({
+            where: {
                 userId,
-                undefined,
-                tx,
-            );
-            await touchDashboardActivity(tx, userId);
-            const pausedMonitors = await tx.monitors.findMany({
-                where: {
-                    userId,
-                    status: { in: ["paused", "inactivity_paused"] },
-                },
-                orderBy: [{ created_at: "desc" }, { id: "desc" }],
-            });
+                status: { in: ["paused", "inactivity_paused"] },
+            },
+            orderBy: [{ created_at: "desc" }, { id: "desc" }],
+        });
 
-            let activeSlots = activationState.activeSlots;
-            let freeProxySlots = activationState.freeProxyActiveSlots;
-            const monitorsToStart = pausedMonitors.filter((monitor) => {
-                if (activationState.maintenanceEnabled) return false;
-                if (activeSlots !== null && activeSlots <= 0) return false;
-                if (
-                    monitor.proxy_source === "free" &&
-                    freeProxySlots !== null &&
-                    freeProxySlots <= 0
-                ) {
-                    return false;
-                }
-
-                if (activeSlots !== null) activeSlots -= 1;
-                if (
-                    monitor.proxy_source === "free" &&
-                    freeProxySlots !== null
-                ) {
-                    freeProxySlots -= 1;
-                }
-                return true;
-            });
-
-            const startedAt = new Date();
-            const demoExpirations = Object.fromEntries(
-                monitorsToStart
-                    .filter((monitor) => monitor.demo_expires_at)
-                    .map((monitor) => [
-                        monitor.id,
-                        getNextDemoMonitorExpiry(startedAt).toISOString(),
-                    ]),
-            );
-
-            for (const monitor of monitorsToStart) {
-                const startedMonitor = await tx.monitors.update({
-                    where: { id: monitor.id, userId },
-                    data: {
-                        status: "active",
-                        ...(monitor.demo_expires_at
-                            ? {
-                                  demo_expires_at: new Date(
-                                      demoExpirations[monitor.id],
-                                  ),
-                              }
-                            : {}),
-                    },
-                });
-                await enqueueMonitorStatusNotification(tx, startedMonitor, {
-                    kind: "monitor_started",
-                    title: "Monitor started",
-                    message: `The monitor ${startedMonitor.name} was started via Start All.`,
-                    idempotencyKey: `monitor-started:${startedMonitor.id}:${transitionKey}`,
-                });
+        let activeSlots = activationState.activeSlots;
+        let freeProxySlots = activationState.freeProxyActiveSlots;
+        const monitorsToStart = pausedMonitors.filter((monitor) => {
+            if (activationState.maintenanceEnabled) return false;
+            if (activeSlots !== null && activeSlots <= 0) return false;
+            if (
+                monitor.proxy_source === "free" &&
+                freeProxySlots !== null &&
+                freeProxySlots <= 0
+            ) {
+                return false;
             }
 
-            return {
-                activationState,
-                monitorsToStart,
-                demoExpirations,
-                skippedCount: pausedMonitors.length - monitorsToStart.length,
-            };
+            if (activeSlots !== null) activeSlots -= 1;
+            if (monitor.proxy_source === "free" && freeProxySlots !== null) {
+                freeProxySlots -= 1;
+            }
+            return true;
         });
+
+        const startedAt = new Date();
+        const demoExpirations = Object.fromEntries(
+            monitorsToStart
+                .filter((monitor) => monitor.demo_expires_at)
+                .map((monitor) => [
+                    monitor.id,
+                    getNextDemoMonitorExpiry(startedAt).toISOString(),
+                ]),
+        );
+
+        for (const monitor of monitorsToStart) {
+            const startedMonitor = await tx.monitors.update({
+                where: { id: monitor.id, userId },
+                data: {
+                    status: "active",
+                    ...(monitor.demo_expires_at
+                        ? {
+                              demo_expires_at: new Date(
+                                  demoExpirations[monitor.id],
+                              ),
+                          }
+                        : {}),
+                },
+            });
+            await enqueueMonitorStatusNotification(tx, startedMonitor, {
+                kind: "monitor_started",
+                title: "Monitor started",
+                message: `The monitor ${startedMonitor.name} was started via Start All.`,
+                idempotencyKey: `monitor-started:${startedMonitor.id}:${transitionKey}`,
+            });
+        }
+        const freeProxyStartedCount = monitorsToStart.filter(
+            (monitor) => monitor.proxy_source === "free",
+        ).length;
+        const rewardNotice = rewardNoticeAfterActivation(
+            activationState,
+            "free",
+            freeProxyStartedCount,
+        );
+        if (rewardNotice) {
+            await registerRewardPromptReached(
+                userId,
+                rewardNotice.policyVersion,
+                rewardNotice.promptType,
+                tx,
+            );
+        }
+
+        return {
+            activationState,
+            monitorsToStart,
+            demoExpirations,
+            skippedCount: pausedMonitors.length - monitorsToStart.length,
+            rewardNotice,
+        };
+    });
 
     if (monitorsToStart.length === 0) {
         const freeLimitOnly =
@@ -157,20 +179,38 @@ export async function startAllMonitors() {
             activationState.freeProxyActiveSlots === 0 &&
             skippedCount > 0;
         return {
-            success: true,
+            success: skippedCount === 0,
             startedCount: 0,
             skippedCount,
             startedMonitorIds: [] as number[],
             demoExpirations,
             activeLimit: activationState.activeLimit,
             activeCount: activationState.activeCount,
+            block:
+                skippedCount === 0
+                    ? null
+                    : monitorActivationBlock(
+                          freeLimitOnly
+                              ? {
+                                    ...activationState,
+                                    freeProxyLimitReached: true,
+                                }
+                              : activationState,
+                          freeLimitOnly ? "free" : undefined,
+                      ),
             message:
                 skippedCount === 0
                     ? "No paused monitors to start."
                     : activationState.maintenanceEnabled
                       ? "Monitors are temporarily paused while Vintrack is undergoing maintenance."
                       : freeLimitOnly
-                        ? `Free proxy monitor limit reached (${activationState.freeProxyActiveCount}/${activationState.freeProxyActiveLimit}).`
+                        ? monitorActivationErrorMessage(
+                              {
+                                  ...activationState,
+                                  freeProxyLimitReached: true,
+                              },
+                              "free",
+                          )
                         : `Active monitor limit reached (${activationState.activeCount}/${activationState.activeLimit}).`,
         };
     }
@@ -184,10 +224,11 @@ export async function startAllMonitors() {
         demoExpirations,
         activeLimit: activationState.activeLimit,
         activeCount: activationState.activeCount + monitorsToStart.length,
-        message:
-            skippedCount > 0
-                ? `Started ${monitorsToStart.length} monitor${monitorsToStart.length === 1 ? "" : "s"}. ${skippedCount} skipped because of monitor limits.`
-                : `Started ${monitorsToStart.length} monitor${monitorsToStart.length === 1 ? "" : "s"}.`,
+        message: rewardNotice
+            ? `${rewardNotice.title}: ${rewardNotice.message}`
+            : skippedCount > 0
+              ? `Started ${monitorsToStart.length} monitor${monitorsToStart.length === 1 ? "" : "s"}. ${skippedCount} skipped because of monitor limits.`
+              : `Started ${monitorsToStart.length} monitor${monitorsToStart.length === 1 ? "" : "s"}.`,
     };
 }
 
@@ -200,27 +241,32 @@ export async function toggleMonitor(id: number, currentStatus: string) {
     if (currentStatus === "maintenance_paused") {
         throw new Error("This monitor is paused for maintenance");
     }
-    const monitor = await withMonitorActivationLock(userId, async (tx) => {
+    const result = await withMonitorActivationLock(userId, async (tx) => {
         const existing = await tx.monitors.findFirst({
             where: { id, userId },
             select: { demo_expires_at: true, proxy_source: true },
         });
         if (!existing) throw new Error("Monitor not found");
 
+        let activationState: Awaited<
+            ReturnType<typeof getMonitorActivationState>
+        > | null = null;
         if (newStatus === "active") {
             await touchDashboardActivity(tx, userId);
-            const activationState = await getMonitorActivationState(
+            activationState = await getMonitorActivationState(
                 userId,
                 existing.proxy_source,
                 tx,
             );
             if (!activationState.canActivate) {
-                throw new Error(
-                    monitorActivationErrorMessage(
+                return {
+                    blocked: monitorActivationBlock(
                         activationState,
                         existing.proxy_source,
                     ),
-                );
+                    monitor: null,
+                    rewardNotice: null,
+                };
             }
         }
 
@@ -240,14 +286,37 @@ export async function toggleMonitor(id: number, currentStatus: string) {
             message: `The monitor ${monitor.name} was ${newStatus === "active" ? "started" : "paused"}.`,
             idempotencyKey: `monitor-${newStatus}:${monitor.id}:${Date.now()}`,
         });
-        return monitor;
+        const rewardNotice = activationState
+            ? rewardNoticeAfterActivation(
+                  activationState,
+                  existing.proxy_source,
+              )
+            : null;
+        if (rewardNotice) {
+            await registerRewardPromptReached(
+                userId,
+                rewardNotice.policyVersion,
+                rewardNotice.promptType,
+                tx,
+            );
+        }
+        return { blocked: null, monitor, rewardNotice };
     });
+
+    if (result.blocked || !result.monitor) {
+        return {
+            success: false as const,
+            status: currentStatus,
+            block: result.blocked,
+        };
+    }
 
     revalidatePath("/dashboard");
     return {
-        success: true,
+        success: true as const,
         status: newStatus,
-        demoExpiresAt: monitor.demo_expires_at?.toISOString() ?? null,
+        demoExpiresAt: result.monitor.demo_expires_at?.toISOString() ?? null,
+        rewardNotice: result.rewardNotice,
     };
 }
 

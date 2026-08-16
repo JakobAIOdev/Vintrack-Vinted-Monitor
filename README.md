@@ -88,6 +88,7 @@ deliver matching items wherever you can act on them fastest.
 | Run my own instance | [Self-host in five minutes](#self-host-in-five-minutes) |
 | Understand the moving parts | [Architecture](#architecture) |
 | Configure auth, proxies, alerts, and tuning | [Configuration guide](docs/configuration.md) |
+| Configure GitHub login and 3/5/15 rewards | [GitHub rewards guide](docs/github-rewards.md) |
 | Develop or contribute | [Development guide](docs/development.md) · [Contributing](CONTRIBUTING.md) |
 | Fix a broken deployment | [Troubleshooting guide](docs/troubleshooting.md) |
 
@@ -111,7 +112,8 @@ deliver matching items wherever you can act on them fastest.
 ## Try the live demo
 
 Open **[vintrack.jakobaio.dev](https://vintrack.jakobaio.dev)** and sign in with
-Discord. New users start with the Free role and can create monitors using their
+Discord or GitHub. Existing Discord members link GitHub from **Account**. New
+users start with the Free role and can create monitors using their
 own proxies or a shared starter pool when a region is marked ready.
 
 The demo is shared, best-effort infrastructure rather than an SLA-backed hosted

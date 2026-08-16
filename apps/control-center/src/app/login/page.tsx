@@ -1,9 +1,10 @@
-import { auth, signIn } from "@/auth";
+import { auth, githubAuthConfigured, signIn } from "@/auth";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import {
     ArrowRight,
     Bell,
+    Github,
     KeyRound,
     ShieldCheck,
     Sparkles,
@@ -49,8 +50,13 @@ const highlights = [
     },
 ];
 
-export default async function LoginPage() {
+export default async function LoginPage({
+    searchParams,
+}: {
+    searchParams?: Promise<{ error?: string }>;
+}) {
     const session = await auth();
+    const error = (await searchParams)?.error;
 
     if (session?.user) {
         redirect("/dashboard");
@@ -149,6 +155,17 @@ export default async function LoginPage() {
                         </div>
 
                         <div className="border-border/70 bg-background/70 space-y-4 rounded-[1.5rem] border p-5">
+                            {error ? (
+                                <div
+                                    role="alert"
+                                    className="rounded-xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-700 dark:text-red-300"
+                                >
+                                    {error === "OAuthAccountNotLinked" ||
+                                    error === "AccessDenied"
+                                        ? "That GitHub account cannot be used to sign in. Sign in with your usual provider below, then connect GitHub from Account. Accounts are never merged by email automatically."
+                                        : "Authentication could not be completed. Please try again or use your existing login provider."}
+                                </div>
+                            ) : null}
                             <p className="text-muted-foreground text-sm leading-7">
                                 {oidcConfigured
                                     ? `Use your ${oidcName} account to authenticate. After login you will be redirected directly into the dashboard.`
@@ -166,8 +183,7 @@ export default async function LoginPage() {
                                             <span className="bg-background/20 flex h-8 w-8 items-center justify-center rounded-xl">
                                                 <KeyRound className="h-4 w-4" />
                                             </span>
-                                            Continue with{" "}
-                                            {oidcName}
+                                            Continue with {oidcName}
                                         </span>
                                         <ArrowRight className="h-4 w-4" />
                                     </Button>
@@ -195,12 +211,26 @@ export default async function LoginPage() {
                                     </Button>
                                 </form>
                             )}
+
+                            {githubAuthConfigured ? (
+                                <p className="text-muted-foreground border-border/70 flex items-start gap-2.5 border-t pt-4 text-xs leading-5">
+                                    <Github className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                    <span>
+                                        GitHub is not a login method. Sign in
+                                        above, then connect GitHub from{" "}
+                                        <strong className="text-foreground font-medium">
+                                            Account
+                                        </strong>{" "}
+                                        to unlock the Free Proxy Pool rewards.
+                                    </span>
+                                </p>
+                            ) : null}
                         </div>
 
                         <div className="text-muted-foreground mt-6 grid gap-3 text-sm sm:grid-cols-2">
                             <div className="border-border/70 bg-background/55 rounded-2xl border p-4">
                                 <p className="text-foreground font-medium">
-                                    Single provider
+                                    Account linking
                                 </p>
                                 <p className="mt-1 leading-6">
                                     {oidcConfigured
@@ -214,8 +244,8 @@ export default async function LoginPage() {
                                 </p>
                                 <p className="mt-1 leading-6">
                                     {oidcConfigured
-                                        ? "Discord is disabled while OIDC is configured."
-                                        : "Authentication runs through Discord and returns you to the app automatically."}
+                                        ? `Discord is disabled while ${oidcName} is configured.`
+                                        : "Discord is the only sign-in method; GitHub is connected later from Account."}
                                 </p>
                             </div>
                         </div>
