@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"vintrack-worker/internal/model"
@@ -88,6 +89,28 @@ func TestBuildVintedURL_WithSizeIDs(t *testing.T) {
 	sizes := parsed.Query()["size_ids[]"]
 	if len(sizes) != 3 {
 		t.Errorf("Expected 3 size_ids, got %d: %v", len(sizes), sizes)
+	}
+}
+
+func TestBuildVintedURL_WithMaximumMonitorSizeIDs(t *testing.T) {
+	ids := make([]string, 100)
+	for index := range ids {
+		ids[index] = strconv.Itoa(1400 + index)
+	}
+	sizeID := strings.Join(ids, ",")
+	m := model.Monitor{Region: "de", SizeID: &sizeID}
+
+	parsed, err := url.Parse(BuildVintedURL(m))
+	if err != nil {
+		t.Fatalf("parse URL: %v", err)
+	}
+
+	sizes := parsed.Query()["size_ids[]"]
+	if len(sizes) != 100 {
+		t.Fatalf("size_ids count = %d, want 100", len(sizes))
+	}
+	if sizes[0] != "1400" || sizes[99] != "1499" {
+		t.Fatalf("size_ids endpoints = %q, %q", sizes[0], sizes[99])
 	}
 }
 

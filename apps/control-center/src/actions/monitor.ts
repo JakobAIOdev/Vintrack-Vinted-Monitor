@@ -35,6 +35,7 @@ import {
     normalizeMonitorAntiKeywords,
 } from "@/lib/monitor-anti-keywords";
 import { touchDashboardActivity } from "@/lib/dashboard-activity";
+import { normalizeSizeIdsForRegion } from "@/lib/sizes.server";
 
 function normalizeSellerQualityFilter(formData: FormData) {
     const rawRating = String(formData.get("min_seller_rating") ?? "").trim();
@@ -167,7 +168,7 @@ export async function createMonitor(
     const priceMax = formData.get("price_max")
         ? Number(formData.get("price_max"))
         : null;
-    const sizeId = formData.get("size_id") as string;
+    const rawSizeIds = formData.get("size_id");
     const requestedCatalogIds = (formData.get("catalog_ids") as string) || null;
     const brandIds = (formData.get("brand_ids") as string) || null;
     const colorIds = (formData.get("color_ids") as string) || null;
@@ -202,6 +203,14 @@ export async function createMonitor(
     }
     if (antiKeywordsValidationError) {
         return { ok: false, message: antiKeywordsValidationError };
+    }
+
+    const normalizedSizeIds = await normalizeSizeIdsForRegion(
+        rawSizeIds,
+        region,
+    );
+    if (!normalizedSizeIds.ok) {
+        return { ok: false, message: normalizedSizeIds.message };
     }
 
     const { proxyGroupId, proxySource } = await resolveMonitorProxySelection(
@@ -248,7 +257,7 @@ export async function createMonitor(
                 quiet_hours_timezone: quietHours.timezone,
                 price_min: priceMin,
                 price_max: priceMax,
-                size_id: sizeId,
+                size_id: normalizedSizeIds.value,
                 catalog_ids: catalogIds || null,
                 brand_ids: brandIds || null,
                 color_ids: colorIds || null,
@@ -388,6 +397,18 @@ export async function createPresetMonitor(input: {
         };
     }
 
+    const normalizedSizeIds = await normalizeSizeIdsForRegion(
+        preset.sizeIds.join(","),
+        region,
+    );
+    if (!normalizedSizeIds.ok) {
+        return {
+            ok: false,
+            code: "CREATE_FAILED",
+            message: normalizedSizeIds.message,
+        };
+    }
+
     const freeProxy = await getFreeProxyPoolHealth();
     if (!freeProxy.enabled) {
         return {
@@ -464,7 +485,7 @@ export async function createPresetMonitor(input: {
                         query_delay_ms: DEFAULT_QUERY_DELAY_MS,
                         price_min: preset.priceMin,
                         price_max: preset.priceMax,
-                        size_id: preset.sizeIds.join(",") || null,
+                        size_id: normalizedSizeIds.value,
                         catalog_ids: preset.catalogIds.join(",") || null,
                         brand_ids: preset.brandIds.join(","),
                         color_ids: preset.colorIds.join(",") || null,
@@ -744,7 +765,7 @@ export async function updateMonitor(id: number, formData: FormData) {
     const priceMax = formData.get("price_max")
         ? Number(formData.get("price_max"))
         : null;
-    const sizeId = formData.get("size_id") as string;
+    const rawSizeIds = formData.get("size_id");
     const requestedCatalogIds = (formData.get("catalog_ids") as string) || null;
     const brandIds = (formData.get("brand_ids") as string) || null;
     const colorIds = (formData.get("color_ids") as string) || null;
@@ -774,6 +795,14 @@ export async function updateMonitor(id: number, formData: FormData) {
         getMonitorAntiKeywordsValidationError(antiKeywords);
     if (antiKeywordsValidationError) {
         throw new Error(antiKeywordsValidationError);
+    }
+
+    const normalizedSizeIds = await normalizeSizeIdsForRegion(
+        rawSizeIds,
+        region,
+    );
+    if (!normalizedSizeIds.ok) {
+        throw new Error(normalizedSizeIds.message);
     }
 
     // Verify the monitor belongs to this user
@@ -835,7 +864,7 @@ export async function updateMonitor(id: number, formData: FormData) {
                     quiet_hours_timezone: quietHours.timezone,
                     price_min: priceMin,
                     price_max: priceMax,
-                    size_id: sizeId,
+                    size_id: normalizedSizeIds.value,
                     catalog_ids: catalogIds || null,
                     brand_ids: brandIds || null,
                     color_ids: colorIds || null,
@@ -903,7 +932,7 @@ export async function updateMonitorAndReturn(
     const priceMax = formData.get("price_max")
         ? Number(formData.get("price_max"))
         : null;
-    const sizeId = formData.get("size_id") as string;
+    const rawSizeIds = formData.get("size_id");
     const requestedCatalogIds = (formData.get("catalog_ids") as string) || null;
     const brandIds = (formData.get("brand_ids") as string) || null;
     const colorIds = (formData.get("color_ids") as string) || null;
@@ -940,6 +969,14 @@ export async function updateMonitorAndReturn(
     }
     if (antiKeywordsValidationError) {
         return { success: false, message: antiKeywordsValidationError };
+    }
+
+    const normalizedSizeIds = await normalizeSizeIdsForRegion(
+        rawSizeIds,
+        region,
+    );
+    if (!normalizedSizeIds.ok) {
+        return { success: false, message: normalizedSizeIds.message };
     }
 
     const existing = await db.monitors.findFirst({
@@ -1005,7 +1042,7 @@ export async function updateMonitorAndReturn(
                 quiet_hours_timezone: quietHours.timezone,
                 price_min: priceMin,
                 price_max: priceMax,
-                size_id: sizeId,
+                size_id: normalizedSizeIds.value,
                 catalog_ids: catalogIds || null,
                 brand_ids: brandIds || null,
                 color_ids: colorIds || null,

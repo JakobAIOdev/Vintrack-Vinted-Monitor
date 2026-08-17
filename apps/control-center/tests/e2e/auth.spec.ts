@@ -23,6 +23,17 @@ test.describe("auth boundaries", () => {
         });
     });
 
+    test("regional size API rejects unauthenticated users", async ({
+        request,
+    }) => {
+        const response = await request.get("/api/sizes?region=de");
+
+        expect(response.status()).toBe(401);
+        await expect(response.json()).resolves.toMatchObject({
+            error: "Unauthorized",
+        });
+    });
+
     test("personal brand APIs reject unauthenticated users", async ({
         request,
     }) => {

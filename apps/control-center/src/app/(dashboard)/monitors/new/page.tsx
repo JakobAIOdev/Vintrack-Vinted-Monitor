@@ -989,6 +989,7 @@ export default function NewMonitorPage() {
                                     </Label>
                                     <SizePicker
                                         key={`sizes-${selectedPreset ?? "custom"}`}
+                                        region={selectedRegion}
                                         selected={selectedSizes}
                                         onChange={setSelectedSizes}
                                         defaultGroup={

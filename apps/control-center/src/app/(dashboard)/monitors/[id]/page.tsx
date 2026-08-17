@@ -21,7 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { getCategoryLabelsForRegion } from "@/lib/categories.server";
 import { getBrandLabels } from "@/lib/brands";
 import { getColorLabels } from "@/lib/colors";
-import { getSizeLabels } from "@/lib/sizes";
+import { getSizeLabelsForRegion } from "@/lib/sizes.server";
 import {
     getRegionLabel,
     getRegionFlags,
@@ -110,6 +110,10 @@ export default async function MonitorPage({
         monitor.catalog_ids,
         monitor.region,
     );
+    const sizeLabels = await getSizeLabelsForRegion(
+        monitor.size_id,
+        monitor.region,
+    );
     const metricsWindowStart = monitorRunMetricsWindowStart();
     const [runMetrics, savedItemsInWindow] = await Promise.all([
         loadMonitorRunMetrics(monitor.id, metricsWindowStart),
@@ -127,7 +131,9 @@ export default async function MonitorPage({
             : Math.round(runMetrics.avgDurationMs);
     const successRate =
         runMetrics.totalChecks > 0
-            ? Math.round((runMetrics.successCount / runMetrics.totalChecks) * 100)
+            ? Math.round(
+                  (runMetrics.successCount / runMetrics.totalChecks) * 100,
+              )
             : null;
     const lastError = runMetrics.lastError;
     const lastErrorCode = lastError
@@ -364,16 +370,14 @@ export default async function MonitorPage({
                                             </span>
                                         ))}
                                     {monitor.size_id &&
-                                        getSizeLabels(monitor.size_id).map(
-                                            (label) => (
-                                                <span
-                                                    key={`size-${label}`}
-                                                    className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400"
-                                                >
-                                                    {label}
-                                                </span>
-                                            ),
-                                        )}
+                                        sizeLabels.map((label, index) => (
+                                            <span
+                                                key={`size-${monitor.id}-${index}`}
+                                                className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400"
+                                            >
+                                                {label}
+                                            </span>
+                                        ))}
                                 </div>
                             )}
                         </div>

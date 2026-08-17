@@ -13,6 +13,7 @@
         "test:e2e:headed": "NODE_NO_WARNINGS=1 env -u FORCE_COLOR playwright test tests/e2e/public-pages.spec.ts tests/e2e/mock-assets.spec.ts tests/e2e/auth.spec.ts --headed",
         "test:e2e:ui": "NODE_NO_WARNINGS=1 env -u FORCE_COLOR playwright test tests/e2e/public-pages.spec.ts tests/e2e/mock-assets.spec.ts tests/e2e/auth.spec.ts --ui",
         "seed:e2e": "node scripts/seed-e2e.mjs",
+        "validate:sizes": "node scripts/validate-size-snapshots.mjs",
         "format": "prettier --write .",
         "format:check": "prettier --check ."
     },

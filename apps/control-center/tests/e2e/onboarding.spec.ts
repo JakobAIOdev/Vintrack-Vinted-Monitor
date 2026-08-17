@@ -1,11 +1,28 @@
 import { expect, test } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import {
     DEFAULT_MONITOR_MAINTENANCE_MESSAGE,
     MONITOR_MAINTENANCE_SETTING_KEY,
 } from "../../src/lib/monitor-maintenance";
 
 const db = new PrismaClient();
+
+function getOverLimitSizeIds() {
+    const snapshot = JSON.parse(
+        readFileSync(
+            path.resolve(process.cwd(), "data/vinted-sizes/de/groups.json"),
+            "utf8",
+        ),
+    ) as { groups: Array<{ sizes: Array<{ id: number }> }> };
+
+    return snapshot.groups
+        .flatMap((group) => group.sizes)
+        .slice(0, 101)
+        .map((size) => String(size.id))
+        .join(",");
+}
 
 test.afterAll(async () => db.$disconnect());
 
@@ -208,9 +225,59 @@ test.describe("first monitor onboarding", () => {
         await expect(demoLease).toBeHidden();
         await page.reload();
         await expect(page.getByTestId("demo-monitor-lease")).toBeHidden();
+        await expect(
+            page.getByText("Schuhe · 39", { exact: true }),
+        ).toBeVisible();
+
+        await page.getByRole("link", { name: "Edit" }).click();
+        await expect(page).toHaveURL(/\/monitors\/\d+\/edit$/);
+        await page.getByText("Filters", { exact: true }).click();
+        const editSizeField = page.getByTestId("size-filter-field");
+        await expect(editSizeField.getByText("10/100 selected")).toBeVisible();
+        await expect(
+            editSizeField
+                .getByTestId("selected-size-chips")
+                .getByText("Schuhe · 39", { exact: true }),
+        ).toBeVisible();
 
         await page.goto("/monitors/new");
         await expect(page.getByTestId("monitor-preset-carhartt")).toBeVisible();
+
+        const deSizesResponse = await page
+            .context()
+            .request.get("/api/sizes?region=de");
+        expect(deSizesResponse.status()).toBe(200);
+        const deSizes = (await deSizesResponse.json()) as {
+            maxSelected: number;
+            sections: Array<{
+                key: string;
+                groups: Array<{ id: number; label: string }>;
+            }>;
+        };
+        expect(deSizes.maxSelected).toBe(100);
+        expect(deSizes.sections).toHaveLength(6);
+        expect(
+            deSizes.sections
+                .find((section) => section.key === "men")
+                ?.groups.find((group) => group.id === 74)?.label,
+        ).toBe("Hemden für Herren");
+
+        const fallbackSizesResponse = await page
+            .context()
+            .request.get("/api/sizes?region=unsupported");
+        expect(fallbackSizesResponse.status()).toBe(200);
+        const fallbackSizes = (await fallbackSizesResponse.json()) as {
+            sections: Array<{
+                key: string;
+                groups: Array<{ id: number; label: string }>;
+            }>;
+        };
+        expect(
+            fallbackSizes.sections
+                .find((section) => section.key === "men")
+                ?.groups.find((group) => group.id === 74)?.label,
+        ).toBe("Men's shirts");
+
         await expect(page.getByTestId("query-filter-field")).toHaveAttribute(
             "data-state",
             "inactive",
@@ -296,6 +363,55 @@ test.describe("first monitor onboarding", () => {
             ).toBeVisible();
         }
 
+        const sizeField = page.getByTestId("size-filter-field");
+        await expect(sizeField.getByText("9/100 selected")).toBeVisible();
+        await expect(
+            sizeField.getByRole("button", { name: "Size group" }),
+        ).toContainText("Hosen für Herren");
+        await sizeField.getByRole("button", { name: "Size group" }).click();
+        await sizeField
+            .getByRole("button", { name: "Hemden für Herren", exact: true })
+            .click();
+        await sizeField
+            .getByRole("button", {
+                name: "Hemden für Herren: 35 | DE 42",
+                exact: true,
+            })
+            .click();
+        await expect(page.locator('input[name="size_id"]')).toHaveValue(
+            "1634,1635,1636,1637,1638,1639,1640,1641,1642,1527",
+        );
+        await expect(
+            sizeField.getByText("Hemden für Herren · 35 | DE 42", {
+                exact: true,
+            }),
+        ).toBeVisible();
+
+        await page
+            .getByTestId("region-picker")
+            .getByRole("button", { name: /United Kingdom/ })
+            .click();
+        await expect(
+            sizeField.getByText("Men's shirts · 13.5 in | 35 cm", {
+                exact: true,
+            }),
+        ).toBeVisible();
+        await page
+            .getByTestId("region-picker")
+            .getByRole("button", { name: /Germany/ })
+            .click();
+        await expect(
+            sizeField.getByText("Hemden für Herren · 35 | DE 42", {
+                exact: true,
+            }),
+        ).toBeVisible();
+        await sizeField
+            .getByRole("button", { name: "Remove 35 | DE 42" })
+            .click();
+        await expect(page.locator('input[name="size_id"]')).toHaveValue(
+            "1634,1635,1636,1637,1638,1639,1640,1641,1642",
+        );
+
         const priceField = page.getByTestId("price-filter-field");
         const minPrice = page.locator('input[name="price_min"]');
         const maxPrice = page.locator('input[name="price_max"]');
@@ -353,5 +469,27 @@ test.describe("first monitor onboarding", () => {
         ).toBeVisible();
         await quietHoursSwitch.click();
         await expect(quietHoursField).toHaveAttribute("data-state", "inactive");
+    });
+
+    test("rejects more than 100 size filters before monitor creation", async ({
+        page,
+    }) => {
+        await page.goto("/monitors/new");
+        await expect(page.getByLabel("Monitor Name")).toBeVisible();
+        await page.getByLabel("Monitor Name").fill("Too many sizes");
+
+        await page.locator('input[name="size_id"]').evaluate((input, value) => {
+            const element = input as HTMLInputElement;
+            element.value = value;
+            element.setAttribute("value", value);
+        }, getOverLimitSizeIds());
+        await page.getByLabel("Monitor Name").evaluate((input) => {
+            (input as HTMLInputElement).form?.requestSubmit();
+        });
+
+        await expect(
+            page.getByText("Choose no more than 100 sizes per monitor."),
+        ).toBeVisible();
+        await expect(page).toHaveURL(/\/monitors\/new$/);
     });
 });

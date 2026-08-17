@@ -76,7 +76,6 @@ import {
 import type { NotificationMessageStyle } from "@/lib/notification-message-style";
 import { getBrandLabels } from "@/lib/brands";
 import { getColorLabels } from "@/lib/colors";
-import { getSizeLabels } from "@/lib/sizes";
 import {
     getRegionLabel,
     getRegionFlags,
@@ -145,6 +144,7 @@ export type Monitor = {
     status_ids: string | null;
     video_game_platform_ids: string | null;
     size_id: string | null;
+    size_labels: string[];
     region: string;
     allowed_countries: string | null;
     min_seller_rating: number | null;
@@ -248,9 +248,7 @@ function getMonitorFilterLabels(
         labels.push(...getBrandLabels(monitor.brand_ids, memberBrandLabels));
     }
     if (monitor.size_id) {
-        labels.push(
-            ...getSizeLabels(monitor.size_id).map((label) => `Size ${label}`),
-        );
+        labels.push(...monitor.size_labels.map((label) => `Size ${label}`));
     }
     if (monitor.status_ids) {
         labels.push(
@@ -1606,10 +1604,10 @@ export function DashboardClient({
                                                 </span>
                                             ))}
                                         {m.size_id &&
-                                            getSizeLabels(m.size_id).map(
-                                                (label) => (
+                                            m.size_labels.map(
+                                                (label, index) => (
                                                     <span
-                                                        key={`size-${label}`}
+                                                        key={`size-${m.id}-${index}`}
                                                         className="border-border/60 bg-muted/50 text-muted-foreground inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium"
                                                     >
                                                         {label}

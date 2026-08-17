@@ -208,7 +208,7 @@ model monitors {
   quiet_hours_timezone     String    @default("Europe/Berlin") @db.VarChar(64)
   price_min                Int?
   price_max                Int?
-  size_id                  String?   @db.VarChar(50)
+  size_id                  String?   @db.Text
   catalog_ids              String?   @db.VarChar(500)
   brand_ids                String?   @db.VarChar(500)
   color_ids                String?   @db.VarChar(500)
