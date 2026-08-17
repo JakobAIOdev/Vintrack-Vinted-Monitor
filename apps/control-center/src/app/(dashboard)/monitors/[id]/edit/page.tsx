@@ -923,6 +923,7 @@ export default function EditMonitorPage() {
                                         </span>
                                     </Label>
                                     <SizePicker
+                                        region={selectedRegion}
                                         selected={selectedSizes}
                                         onChange={setSelectedSizes}
                                     />

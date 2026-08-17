@@ -10,7 +10,7 @@ interface RegionPickerProps {
 
 export function RegionPicker({ selected, onChange }: RegionPickerProps) {
     return (
-        <div className="grid grid-cols-4 gap-1.5">
+        <div className="grid grid-cols-4 gap-1.5" data-testid="region-picker">
             {REGIONS.map((region) => {
                 const isSelected = selected === region.code;
                 return (

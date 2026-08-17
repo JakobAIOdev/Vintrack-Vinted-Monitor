@@ -1,0 +1,3089 @@
+{
+    "region": "lu",
+    "source": "https://www.vinted.lu/api/v2/size_groups",
+    "capturedAt": "2026-08-17",
+    "groups": [
+        {
+            "id": 4,
+            "label": "Tailles",
+            "sizes": [
+                {
+                    "id": 1226,
+                    "label": "XXXS / 30 / 2"
+                },
+                {
+                    "id": 102,
+                    "label": "XXS / 32 / 4"
+                },
+                {
+                    "id": 2,
+                    "label": "XS / 34 / 6"
+                },
+                {
+                    "id": 3,
+                    "label": "S / 36 / 8"
+                },
+                {
+                    "id": 4,
+                    "label": "M / 38 / 10"
+                },
+                {
+                    "id": 5,
+                    "label": "L / 40 / 12"
+                },
+                {
+                    "id": 6,
+                    "label": "XL / 42 / 14"
+                },
+                {
+                    "id": 7,
+                    "label": "XXL / 44 / 16"
+                },
+                {
+                    "id": 310,
+                    "label": "XXXL / 46 / 18"
+                },
+                {
+                    "id": 311,
+                    "label": "4XL / 48 / 20"
+                },
+                {
+                    "id": 312,
+                    "label": "5XL / 50 / 22"
+                },
+                {
+                    "id": 1227,
+                    "label": "6XL / 52 / 24"
+                },
+                {
+                    "id": 1228,
+                    "label": "7XL / 54 / 26"
+                },
+                {
+                    "id": 1229,
+                    "label": "8XL / 56 / 28"
+                },
+                {
+                    "id": 1230,
+                    "label": "9XL / 58 / 30"
+                },
+                {
+                    "id": 90,
+                    "label": "Taille unique"
+                },
+                {
+                    "id": 97,
+                    "label": "Autre"
+                }
+            ]
+        },
+        {
+            "id": 80,
+            "label": "S/M/L",
+            "sizes": [
+                {
+                    "id": 1735,
+                    "label": "XXXS"
+                },
+                {
+                    "id": 1736,
+                    "label": "XXS"
+                },
+                {
+                    "id": 1737,
+                    "label": "XS"
+                },
+                {
+                    "id": 1738,
+                    "label": "S"
+                },
+                {
+                    "id": 1739,
+                    "label": "M"
+                },
+                {
+                    "id": 1740,
+                    "label": "L"
+                },
+                {
+                    "id": 1741,
+                    "label": "XL"
+                },
+                {
+                    "id": 1742,
+                    "label": "XXL"
+                },
+                {
+                    "id": 1743,
+                    "label": "XXXL"
+                },
+                {
+                    "id": 1744,
+                    "label": "4XL"
+                },
+                {
+                    "id": 1745,
+                    "label": "5XL"
+                },
+                {
+                    "id": 1746,
+                    "label": "6XL"
+                },
+                {
+                    "id": 1747,
+                    "label": "7XL"
+                },
+                {
+                    "id": 1748,
+                    "label": "8XL"
+                },
+                {
+                    "id": 1749,
+                    "label": "9XL"
+                },
+                {
+                    "id": 1904,
+                    "label": "Autre"
+                },
+                {
+                    "id": 1905,
+                    "label": "Taille unique"
+                }
+            ]
+        },
+        {
+            "id": 82,
+            "label": "EU",
+            "sizes": [
+                {
+                    "id": 1940,
+                    "label": "EU 30"
+                },
+                {
+                    "id": 1941,
+                    "label": "EU 32"
+                },
+                {
+                    "id": 1942,
+                    "label": "EU 34"
+                },
+                {
+                    "id": 1943,
+                    "label": "EU 36"
+                },
+                {
+                    "id": 1944,
+                    "label": "EU 38"
+                },
+                {
+                    "id": 1945,
+                    "label": "EU 40"
+                },
+                {
+                    "id": 1946,
+                    "label": "EU 42"
+                },
+                {
+                    "id": 1947,
+                    "label": "EU 44"
+                },
+                {
+                    "id": 1948,
+                    "label": "EU 46"
+                },
+                {
+                    "id": 1949,
+                    "label": "EU 48"
+                },
+                {
+                    "id": 1950,
+                    "label": "EU 50"
+                },
+                {
+                    "id": 1951,
+                    "label": "EU 52"
+                },
+                {
+                    "id": 1952,
+                    "label": "EU 54"
+                },
+                {
+                    "id": 1953,
+                    "label": "EU 56"
+                },
+                {
+                    "id": 1954,
+                    "label": "EU 58"
+                },
+                {
+                    "id": 2002,
+                    "label": "Autre"
+                },
+                {
+                    "id": 2003,
+                    "label": "Taille unique"
+                }
+            ]
+        },
+        {
+            "id": 81,
+            "label": "UK",
+            "sizes": [
+                {
+                    "id": 1925,
+                    "label": "UK 2"
+                },
+                {
+                    "id": 1926,
+                    "label": "UK 4"
+                },
+                {
+                    "id": 1927,
+                    "label": "UK 6"
+                },
+                {
+                    "id": 1928,
+                    "label": "UK 8"
+                },
+                {
+                    "id": 1929,
+                    "label": "UK 10"
+                },
+                {
+                    "id": 1930,
+                    "label": "UK 12"
+                },
+                {
+                    "id": 1931,
+                    "label": "UK 14"
+                },
+                {
+                    "id": 1932,
+                    "label": "UK 16"
+                },
+                {
+                    "id": 1933,
+                    "label": "UK 18"
+                },
+                {
+                    "id": 1934,
+                    "label": "UK 20"
+                },
+                {
+                    "id": 1935,
+                    "label": "UK 22"
+                },
+                {
+                    "id": 1936,
+                    "label": "UK 24"
+                },
+                {
+                    "id": 1937,
+                    "label": "UK 26"
+                },
+                {
+                    "id": 1938,
+                    "label": "UK 28"
+                },
+                {
+                    "id": 1939,
+                    "label": "UK 30"
+                },
+                {
+                    "id": 2000,
+                    "label": "Autre"
+                },
+                {
+                    "id": 2001,
+                    "label": "Taille unique"
+                }
+            ]
+        },
+        {
+            "id": 83,
+            "label": "FR",
+            "sizes": [
+                {
+                    "id": 1969,
+                    "label": "FR 30"
+                },
+                {
+                    "id": 1955,
+                    "label": "FR 32"
+                },
+                {
+                    "id": 1956,
+                    "label": "FR 34"
+                },
+                {
+                    "id": 1957,
+                    "label": "FR 36"
+                },
+                {
+                    "id": 1958,
+                    "label": "FR 38"
+                },
+                {
+                    "id": 1959,
+                    "label": "FR 40"
+                },
+                {
+                    "id": 1960,
+                    "label": "FR 42"
+                },
+                {
+                    "id": 1961,
+                    "label": "FR 44"
+                },
+                {
+                    "id": 1962,
+                    "label": "FR 46"
+                },
+                {
+                    "id": 1963,
+                    "label": "FR 48"
+                },
+                {
+                    "id": 1964,
+                    "label": "FR 50"
+                },
+                {
+                    "id": 1965,
+                    "label": "FR 52"
+                },
+                {
+                    "id": 1966,
+                    "label": "FR 54"
+                },
+                {
+                    "id": 1967,
+                    "label": "FR 56"
+                },
+                {
+                    "id": 1968,
+                    "label": "FR 58"
+                },
+                {
+                    "id": 2004,
+                    "label": "Autre"
+                },
+                {
+                    "id": 2005,
+                    "label": "Taille unique"
+                }
+            ]
+        },
+        {
+            "id": 84,
+            "label": "IT",
+            "sizes": [
+                {
+                    "id": 1970,
+                    "label": "IT 34"
+                },
+                {
+                    "id": 1971,
+                    "label": "IT 36"
+                },
+                {
+                    "id": 1972,
+                    "label": "IT 38"
+                },
+                {
+                    "id": 1973,
+                    "label": "IT 40"
+                },
+                {
+                    "id": 1974,
+                    "label": "IT 42"
+                },
+                {
+                    "id": 1975,
+                    "label": "IT 44"
+                },
+                {
+                    "id": 1976,
+                    "label": "IT 46"
+                },
+                {
+                    "id": 1977,
+                    "label": "IT 48"
+                },
+                {
+                    "id": 1978,
+                    "label": "IT 50"
+                },
+                {
+                    "id": 1979,
+                    "label": "IT 52"
+                },
+                {
+                    "id": 1980,
+                    "label": "IT 54"
+                },
+                {
+                    "id": 1981,
+                    "label": "IT 56"
+                },
+                {
+                    "id": 1982,
+                    "label": "IT 58"
+                },
+                {
+                    "id": 1983,
+                    "label": "IT 60"
+                },
+                {
+                    "id": 1984,
+                    "label": "IT 62"
+                },
+                {
+                    "id": 2006,
+                    "label": "Autre"
+                },
+                {
+                    "id": 2007,
+                    "label": "Taille unique"
+                }
+            ]
+        },
+        {
+            "id": 85,
+            "label": "US",
+            "sizes": [
+                {
+                    "id": 1985,
+                    "label": "US 00"
+                },
+                {
+                    "id": 1986,
+                    "label": "US 0"
+                },
+                {
+                    "id": 1987,
+                    "label": "US 2"
+                },
+                {
+                    "id": 1988,
+                    "label": "US 4"
+                },
+                {
+                    "id": 1989,
+                    "label": "US 6"
+                },
+                {
+                    "id": 1990,
+                    "label": "US 8"
+                },
+                {
+                    "id": 1991,
+                    "label": "US 10"
+                },
+                {
+                    "id": 1992,
+                    "label": "US 12"
+                },
+                {
+                    "id": 1993,
+                    "label": "US 14"
+                },
+                {
+                    "id": 1994,
+                    "label": "US 16"
+                },
+                {
+                    "id": 1995,
+                    "label": "US 18"
+                },
+                {
+                    "id": 1996,
+                    "label": "US 20"
+                },
+                {
+                    "id": 1997,
+                    "label": "US 22"
+                },
+                {
+                    "id": 1998,
+                    "label": "US 24"
+                },
+                {
+                    "id": 1999,
+                    "label": "US 26"
+                },
+                {
+                    "id": 2008,
+                    "label": "Autre"
+                },
+                {
+                    "id": 2009,
+                    "label": "Taille unique"
+                }
+            ]
+        },
+        {
+            "id": 7,
+            "label": "Chaussures",
+            "sizes": [
+                {
+                    "id": 1364,
+                    "label": "34"
+                },
+                {
+                    "id": 1580,
+                    "label": "34.5"
+                },
+                {
+                    "id": 55,
+                    "label": "35"
+                },
+                {
+                    "id": 1195,
+                    "label": "35.5"
+                },
+                {
+                    "id": 56,
+                    "label": "36"
+                },
+                {
+                    "id": 1196,
+                    "label": "36.5"
+                },
+                {
+                    "id": 57,
+                    "label": "37"
+                },
+                {
+                    "id": 1197,
+                    "label": "37.5"
+                },
+                {
+                    "id": 58,
+                    "label": "38"
+                },
+                {
+                    "id": 1198,
+                    "label": "38.5"
+                },
+                {
+                    "id": 59,
+                    "label": "39"
+                },
+                {
+                    "id": 1199,
+                    "label": "39.5"
+                },
+                {
+                    "id": 60,
+                    "label": "40"
+                },
+                {
+                    "id": 1200,
+                    "label": "40.5"
+                },
+                {
+                    "id": 61,
+                    "label": "41"
+                },
+                {
+                    "id": 1201,
+                    "label": "41.5"
+                },
+                {
+                    "id": 62,
+                    "label": "42"
+                },
+                {
+                    "id": 1579,
+                    "label": "42.5"
+                },
+                {
+                    "id": 63,
+                    "label": "43"
+                },
+                {
+                    "id": 1573,
+                    "label": "43.5"
+                },
+                {
+                    "id": 1574,
+                    "label": "44"
+                },
+                {
+                    "id": 1575,
+                    "label": "44.5"
+                },
+                {
+                    "id": 1576,
+                    "label": "45"
+                },
+                {
+                    "id": 1577,
+                    "label": "45.5"
+                },
+                {
+                    "id": 1578,
+                    "label": "46"
+                },
+                {
+                    "id": 94,
+                    "label": "Taille unique"
+                },
+                {
+                    "id": 99,
+                    "label": "Autre"
+                }
+            ]
+        },
+        {
+            "id": 32,
+            "label": "Tailles enfants et bébés",
+            "sizes": [
+                {
+                    "id": 610,
+                    "label": "Prématuré, jusqu'à 44cm"
+                },
+                {
+                    "id": 666,
+                    "label": "Naissance / 44 cm"
+                },
+                {
+                    "id": 612,
+                    "label": "Jusqu'à 1 mois / 50 cm"
+                },
+                {
+                    "id": 613,
+                    "label": "1-3 mois / 56 cm"
+                },
+                {
+                    "id": 614,
+                    "label": "3-6 mois / 62 cm"
+                },
+                {
+                    "id": 616,
+                    "label": "6-9 mois / 68 cm"
+                },
+                {
+                    "id": 617,
+                    "label": "9-12 mois / 74 cm"
+                },
+                {
+                    "id": 618,
+                    "label": "12-18 mois / 80 cm"
+                },
+                {
+                    "id": 619,
+                    "label": "18-24 mois / 86 cm"
+                },
+                {
+                    "id": 622,
+                    "label": "24-36 mois / 92 cm"
+                },
+                {
+                    "id": 1567,
+                    "label": "3 ans / 98 cm"
+                },
+                {
+                    "id": 623,
+                    "label": "4 ans / 104 cm"
+                },
+                {
+                    "id": 624,
+                    "label": "5 ans / 110 cm"
+                },
+                {
+                    "id": 625,
+                    "label": "6 ans / 116 cm"
+                },
+                {
+                    "id": 626,
+                    "label": "7 ans / 122 cm"
+                },
+                {
+                    "id": 627,
+                    "label": "8 ans / 128 cm"
+                },
+                {
+                    "id": 628,
+                    "label": "9 ans / 134 cm"
+                },
+                {
+                    "id": 629,
+                    "label": "10 ans / 140 cm"
+                },
+                {
+                    "id": 630,
+                    "label": "11 ans / 146 cm"
+                },
+                {
+                    "id": 631,
+                    "label": "12 ans / 152 cm"
+                },
+                {
+                    "id": 632,
+                    "label": "13 ans / 158 cm"
+                },
+                {
+                    "id": 633,
+                    "label": "14 ans / 164 cm"
+                },
+                {
+                    "id": 634,
+                    "label": "15 ans / 170 cm"
+                },
+                {
+                    "id": 635,
+                    "label": "16 ans / 176 cm"
+                },
+                {
+                    "id": 620,
+                    "label": "Taille unique"
+                },
+                {
+                    "id": 1568,
+                    "label": "XS"
+                },
+                {
+                    "id": 1569,
+                    "label": "S"
+                },
+                {
+                    "id": 1570,
+                    "label": "M"
+                },
+                {
+                    "id": 1571,
+                    "label": "L"
+                },
+                {
+                    "id": 1572,
+                    "label": "XL"
+                },
+                {
+                    "id": 1723,
+                    "label": "XXL"
+                }
+            ]
+        },
+        {
+            "id": 31,
+            "label": "Tailles de chaussures pour enfants",
+            "sizes": [
+                {
+                    "id": 657,
+                    "label": "15 et moins"
+                },
+                {
+                    "id": 585,
+                    "label": "16"
+                },
+                {
+                    "id": 586,
+                    "label": "17"
+                },
+                {
+                    "id": 587,
+                    "label": "18"
+                },
+                {
+                    "id": 588,
+                    "label": "19"
+                },
+                {
+                    "id": 589,
+                    "label": "20"
+                },
+                {
+                    "id": 590,
+                    "label": "21"
+                },
+                {
+                    "id": 591,
+                    "label": "22"
+                },
+                {
+                    "id": 592,
+                    "label": "23"
+                },
+                {
+                    "id": 593,
+                    "label": "24"
+                },
+                {
+                    "id": 594,
+                    "label": "25"
+                },
+                {
+                    "id": 595,
+                    "label": "26"
+                },
+                {
+                    "id": 596,
+                    "label": "27"
+                },
+                {
+                    "id": 597,
+                    "label": "28"
+                },
+                {
+                    "id": 598,
+                    "label": "29"
+                },
+                {
+                    "id": 599,
+                    "label": "30"
+                },
+                {
+                    "id": 600,
+                    "label": "31"
+                },
+                {
+                    "id": 601,
+                    "label": "32"
+                },
+                {
+                    "id": 602,
+                    "label": "33"
+                },
+                {
+                    "id": 603,
+                    "label": "34"
+                },
+                {
+                    "id": 604,
+                    "label": "35"
+                },
+                {
+                    "id": 605,
+                    "label": "36"
+                },
+                {
+                    "id": 606,
+                    "label": "37"
+                },
+                {
+                    "id": 607,
+                    "label": "38"
+                },
+                {
+                    "id": 608,
+                    "label": "39"
+                },
+                {
+                    "id": 609,
+                    "label": "40"
+                }
+            ]
+        },
+        {
+            "id": 26,
+            "label": "Couches",
+            "sizes": [
+                {
+                    "id": 533,
+                    "label": "Jusqu'à 2 kg"
+                },
+                {
+                    "id": 534,
+                    "label": "2–5 kg"
+                },
+                {
+                    "id": 535,
+                    "label": "3–6 kg"
+                },
+                {
+                    "id": 536,
+                    "label": "4–9 kg"
+                },
+                {
+                    "id": 537,
+                    "label": "7–18 kg"
+                },
+                {
+                    "id": 538,
+                    "label": "9–20 kg"
+                },
+                {
+                    "id": 539,
+                    "label": "11–25 kg"
+                },
+                {
+                    "id": 540,
+                    "label": "13–27 kg"
+                },
+                {
+                    "id": 541,
+                    "label": "16 kg et plus"
+                }
+            ]
+        },
+        {
+            "id": 27,
+            "label": "Sièges auto bébé",
+            "sizes": [
+                {
+                    "id": 542,
+                    "label": "0–13 kg"
+                },
+                {
+                    "id": 544,
+                    "label": "9–18 kg"
+                },
+                {
+                    "id": 547,
+                    "label": "15–36 kg"
+                },
+                {
+                    "id": 1188,
+                    "label": "22–36 kg"
+                },
+                {
+                    "id": 662,
+                    "label": "Autre"
+                }
+            ]
+        },
+        {
+            "id": 29,
+            "label": "Âge enfant",
+            "sizes": [
+                {
+                    "id": 577,
+                    "label": "Peu importe"
+                },
+                {
+                    "id": 565,
+                    "label": "0 mois"
+                },
+                {
+                    "id": 566,
+                    "label": "3 mois"
+                },
+                {
+                    "id": 567,
+                    "label": "6 mois"
+                },
+                {
+                    "id": 568,
+                    "label": "9 mois"
+                },
+                {
+                    "id": 569,
+                    "label": "12 mois"
+                },
+                {
+                    "id": 570,
+                    "label": "18 mois"
+                },
+                {
+                    "id": 571,
+                    "label": "2 ans"
+                },
+                {
+                    "id": 572,
+                    "label": "3 ans"
+                },
+                {
+                    "id": 1311,
+                    "label": "4 ans"
+                },
+                {
+                    "id": 573,
+                    "label": "5 ans"
+                },
+                {
+                    "id": 574,
+                    "label": "6 ans"
+                },
+                {
+                    "id": 575,
+                    "label": "7 ans"
+                },
+                {
+                    "id": 576,
+                    "label": "8 ans"
+                }
+            ]
+        },
+        {
+            "id": 43,
+            "label": "Chapeaux enfant",
+            "sizes": [
+                {
+                    "id": 928,
+                    "label": "Prématurés, 30 cm"
+                },
+                {
+                    "id": 929,
+                    "label": "0-3 mois, 38 cm"
+                },
+                {
+                    "id": 930,
+                    "label": "3-6 mois, 42 cm"
+                },
+                {
+                    "id": 931,
+                    "label": "6-12 mois, 47 cm"
+                },
+                {
+                    "id": 932,
+                    "label": "1-2 ans, 49 cm"
+                },
+                {
+                    "id": 933,
+                    "label": "2-3 ans, 51 cm"
+                },
+                {
+                    "id": 934,
+                    "label": "3-5 ans, 53 cm"
+                },
+                {
+                    "id": 935,
+                    "label": "5-8 ans, 54 cm "
+                },
+                {
+                    "id": 936,
+                    "label": "8-12 ans, 56 cm"
+                },
+                {
+                    "id": 937,
+                    "label": "12 ans et plus > 56 cm"
+                },
+                {
+                    "id": 1189,
+                    "label": "Universel"
+                }
+            ]
+        },
+        {
+            "id": 70,
+            "label": "Ceintures enfant",
+            "sizes": [
+                {
+                    "id": 1496,
+                    "label": "45 cm"
+                },
+                {
+                    "id": 1497,
+                    "label": "50 cm"
+                },
+                {
+                    "id": 1498,
+                    "label": "55 cm"
+                },
+                {
+                    "id": 1499,
+                    "label": "60 cm"
+                },
+                {
+                    "id": 1500,
+                    "label": "65 cm"
+                },
+                {
+                    "id": 1501,
+                    "label": "70 cm"
+                },
+                {
+                    "id": 1663,
+                    "label": "75 cm"
+                },
+                {
+                    "id": 1502,
+                    "label": "80 cm"
+                },
+                {
+                    "id": 1503,
+                    "label": "85 cm"
+                },
+                {
+                    "id": 1504,
+                    "label": "Ajustable"
+                },
+                {
+                    "id": 1505,
+                    "label": "Taille unique"
+                }
+            ]
+        },
+        {
+            "id": 71,
+            "label": "Chaussettes enfant",
+            "sizes": [
+                {
+                    "id": 1507,
+                    "label": "13-15"
+                },
+                {
+                    "id": 1508,
+                    "label": "16-18"
+                },
+                {
+                    "id": 1509,
+                    "label": "19-21"
+                },
+                {
+                    "id": 1510,
+                    "label": "22-24"
+                },
+                {
+                    "id": 1511,
+                    "label": "25-27"
+                },
+                {
+                    "id": 1512,
+                    "label": "28-30"
+                },
+                {
+                    "id": 1513,
+                    "label": "31-33"
+                },
+                {
+                    "id": 1514,
+                    "label": "34-36"
+                },
+                {
+                    "id": 1515,
+                    "label": "37-39"
+                },
+                {
+                    "id": 1516,
+                    "label": "40-42"
+                }
+            ]
+        },
+        {
+            "id": 14,
+            "label": "Tailles hommes",
+            "sizes": [
+                {
+                    "id": 206,
+                    "label": "XS"
+                },
+                {
+                    "id": 207,
+                    "label": "S"
+                },
+                {
+                    "id": 208,
+                    "label": "M"
+                },
+                {
+                    "id": 209,
+                    "label": "L"
+                },
+                {
+                    "id": 210,
+                    "label": "XL"
+                },
+                {
+                    "id": 211,
+                    "label": "XXL"
+                },
+                {
+                    "id": 212,
+                    "label": "XXXL"
+                },
+                {
+                    "id": 308,
+                    "label": "4XL"
+                },
+                {
+                    "id": 309,
+                    "label": "5XL"
+                },
+                {
+                    "id": 1192,
+                    "label": "6XL"
+                },
+                {
+                    "id": 1193,
+                    "label": "7XL"
+                },
+                {
+                    "id": 1194,
+                    "label": "8XL"
+                },
+                {
+                    "id": 213,
+                    "label": "Taille unique"
+                }
+            ]
+        },
+        {
+            "id": 53,
+            "label": "Soutiens-gorge",
+            "sizes": [
+                {
+                    "id": 1664,
+                    "label": "75A et AA"
+                },
+                {
+                    "id": 1665,
+                    "label": "75B"
+                },
+                {
+                    "id": 1666,
+                    "label": "75C"
+                },
+                {
+                    "id": 1667,
+                    "label": "75D"
+                },
+                {
+                    "id": 1668,
+                    "label": "75E"
+                },
+                {
+                    "id": 1669,
+                    "label": "75F"
+                },
+                {
+                    "id": 1670,
+                    "label": "75G"
+                },
+                {
+                    "id": 1671,
+                    "label": "75H"
+                },
+                {
+                    "id": 1672,
+                    "label": "75I"
+                },
+                {
+                    "id": 1674,
+                    "label": "75J"
+                },
+                {
+                    "id": 1673,
+                    "label": "75K"
+                },
+                {
+                    "id": 1675,
+                    "label": "75L"
+                },
+                {
+                    "id": 1247,
+                    "label": "80A et AA"
+                },
+                {
+                    "id": 1248,
+                    "label": "80B"
+                },
+                {
+                    "id": 1249,
+                    "label": "80C"
+                },
+                {
+                    "id": 1250,
+                    "label": "80D"
+                },
+                {
+                    "id": 1251,
+                    "label": "80E"
+                },
+                {
+                    "id": 1252,
+                    "label": "80F"
+                },
+                {
+                    "id": 1317,
+                    "label": "80G"
+                },
+                {
+                    "id": 1318,
+                    "label": "80H"
+                },
+                {
+                    "id": 1558,
+                    "label": "80I"
+                },
+                {
+                    "id": 1319,
+                    "label": "80J"
+                },
+                {
+                    "id": 1676,
+                    "label": "80K"
+                },
+                {
+                    "id": 1677,
+                    "label": "80L"
+                },
+                {
+                    "id": 1253,
+                    "label": "85A et AA"
+                },
+                {
+                    "id": 1254,
+                    "label": "85B"
+                },
+                {
+                    "id": 1255,
+                    "label": "85C"
+                },
+                {
+                    "id": 1256,
+                    "label": "85D"
+                },
+                {
+                    "id": 1257,
+                    "label": "85E"
+                },
+                {
+                    "id": 1258,
+                    "label": "85F"
+                },
+                {
+                    "id": 1320,
+                    "label": "85G"
+                },
+                {
+                    "id": 1321,
+                    "label": "85H"
+                },
+                {
+                    "id": 1559,
+                    "label": "85I"
+                },
+                {
+                    "id": 1322,
+                    "label": "85J"
+                },
+                {
+                    "id": 1678,
+                    "label": "85K"
+                },
+                {
+                    "id": 1679,
+                    "label": "85L"
+                },
+                {
+                    "id": 1259,
+                    "label": "90A et AA"
+                },
+                {
+                    "id": 1260,
+                    "label": "90B"
+                },
+                {
+                    "id": 1261,
+                    "label": "90C"
+                },
+                {
+                    "id": 1262,
+                    "label": "90D"
+                },
+                {
+                    "id": 1263,
+                    "label": "90E"
+                },
+                {
+                    "id": 1264,
+                    "label": "90F"
+                },
+                {
+                    "id": 1323,
+                    "label": "90G"
+                },
+                {
+                    "id": 1324,
+                    "label": "90H"
+                },
+                {
+                    "id": 1560,
+                    "label": "90I"
+                },
+                {
+                    "id": 1325,
+                    "label": "90J"
+                },
+                {
+                    "id": 1680,
+                    "label": "90K"
+                },
+                {
+                    "id": 1681,
+                    "label": "90L"
+                },
+                {
+                    "id": 1265,
+                    "label": "95A et AA"
+                },
+                {
+                    "id": 1266,
+                    "label": "95B"
+                },
+                {
+                    "id": 1267,
+                    "label": "95C"
+                },
+                {
+                    "id": 1268,
+                    "label": "95D"
+                },
+                {
+                    "id": 1269,
+                    "label": "95E"
+                },
+                {
+                    "id": 1270,
+                    "label": "95F"
+                },
+                {
+                    "id": 1271,
+                    "label": "95G"
+                },
+                {
+                    "id": 1272,
+                    "label": "95H"
+                },
+                {
+                    "id": 1561,
+                    "label": "95I"
+                },
+                {
+                    "id": 1273,
+                    "label": "95J"
+                },
+                {
+                    "id": 1682,
+                    "label": "95K"
+                },
+                {
+                    "id": 1683,
+                    "label": "95L"
+                },
+                {
+                    "id": 1274,
+                    "label": "100A et AA"
+                },
+                {
+                    "id": 1275,
+                    "label": "100B"
+                },
+                {
+                    "id": 1276,
+                    "label": "100C"
+                },
+                {
+                    "id": 1277,
+                    "label": "100D"
+                },
+                {
+                    "id": 1278,
+                    "label": "100E"
+                },
+                {
+                    "id": 1279,
+                    "label": "100F"
+                },
+                {
+                    "id": 1280,
+                    "label": "100G"
+                },
+                {
+                    "id": 1281,
+                    "label": "100H"
+                },
+                {
+                    "id": 1562,
+                    "label": "100I"
+                },
+                {
+                    "id": 1282,
+                    "label": "100J"
+                },
+                {
+                    "id": 1684,
+                    "label": "100K"
+                },
+                {
+                    "id": 1685,
+                    "label": "100L"
+                },
+                {
+                    "id": 1283,
+                    "label": "105A et AA"
+                },
+                {
+                    "id": 1284,
+                    "label": "105B"
+                },
+                {
+                    "id": 1285,
+                    "label": "105C"
+                },
+                {
+                    "id": 1286,
+                    "label": "105D"
+                },
+                {
+                    "id": 1287,
+                    "label": "105E"
+                },
+                {
+                    "id": 1288,
+                    "label": "105F"
+                },
+                {
+                    "id": 1289,
+                    "label": "106G"
+                },
+                {
+                    "id": 1290,
+                    "label": "105H"
+                },
+                {
+                    "id": 1563,
+                    "label": "105I"
+                },
+                {
+                    "id": 1291,
+                    "label": "105J"
+                },
+                {
+                    "id": 1686,
+                    "label": "105K"
+                },
+                {
+                    "id": 1687,
+                    "label": "105L"
+                },
+                {
+                    "id": 1292,
+                    "label": "110A et AA"
+                },
+                {
+                    "id": 1293,
+                    "label": "110B"
+                },
+                {
+                    "id": 1294,
+                    "label": "110C"
+                },
+                {
+                    "id": 1295,
+                    "label": "110D"
+                },
+                {
+                    "id": 1296,
+                    "label": "110E"
+                },
+                {
+                    "id": 1297,
+                    "label": "110F"
+                },
+                {
+                    "id": 1298,
+                    "label": "110G"
+                },
+                {
+                    "id": 1299,
+                    "label": "110H"
+                },
+                {
+                    "id": 1564,
+                    "label": "110I"
+                },
+                {
+                    "id": 1300,
+                    "label": "110J"
+                },
+                {
+                    "id": 1688,
+                    "label": "110K"
+                },
+                {
+                    "id": 1689,
+                    "label": "110L"
+                },
+                {
+                    "id": 1301,
+                    "label": "115A et AA"
+                },
+                {
+                    "id": 1302,
+                    "label": "115B"
+                },
+                {
+                    "id": 1303,
+                    "label": "115C"
+                },
+                {
+                    "id": 1304,
+                    "label": "115D"
+                },
+                {
+                    "id": 1305,
+                    "label": "115E"
+                },
+                {
+                    "id": 1306,
+                    "label": "115F"
+                },
+                {
+                    "id": 1307,
+                    "label": "115G"
+                },
+                {
+                    "id": 1308,
+                    "label": "115H"
+                },
+                {
+                    "id": 1565,
+                    "label": "115I"
+                },
+                {
+                    "id": 1309,
+                    "label": "115J"
+                },
+                {
+                    "id": 1690,
+                    "label": "115K"
+                },
+                {
+                    "id": 1691,
+                    "label": "115L"
+                },
+                {
+                    "id": 1310,
+                    "label": "Autre"
+                },
+                {
+                    "id": 1394,
+                    "label": "XXS"
+                },
+                {
+                    "id": 1395,
+                    "label": "XS"
+                },
+                {
+                    "id": 1396,
+                    "label": "S"
+                },
+                {
+                    "id": 1397,
+                    "label": "M"
+                },
+                {
+                    "id": 1398,
+                    "label": "L"
+                },
+                {
+                    "id": 1399,
+                    "label": "XL"
+                },
+                {
+                    "id": 1400,
+                    "label": "XXL"
+                },
+                {
+                    "id": 1401,
+                    "label": "XXXL"
+                },
+                {
+                    "id": 1402,
+                    "label": "4XL"
+                },
+                {
+                    "id": 1403,
+                    "label": "5XL"
+                },
+                {
+                    "id": 1404,
+                    "label": "6XL"
+                },
+                {
+                    "id": 1405,
+                    "label": "7XL"
+                },
+                {
+                    "id": 1406,
+                    "label": "8XL"
+                },
+                {
+                    "id": 1407,
+                    "label": "9XL"
+                }
+            ]
+        },
+        {
+            "id": 56,
+            "label": "Bagues",
+            "sizes": [
+                {
+                    "id": 1328,
+                    "label": "14.1 mm"
+                },
+                {
+                    "id": 1329,
+                    "label": "14.5 mm"
+                },
+                {
+                    "id": 1330,
+                    "label": "14.9 mm"
+                },
+                {
+                    "id": 1331,
+                    "label": "15.3 mm"
+                },
+                {
+                    "id": 1332,
+                    "label": "15.7 mm"
+                },
+                {
+                    "id": 1333,
+                    "label": "16.1 mm"
+                },
+                {
+                    "id": 1334,
+                    "label": "16.5 mm"
+                },
+                {
+                    "id": 1335,
+                    "label": "16.9 mm"
+                },
+                {
+                    "id": 1336,
+                    "label": "17.3 mm"
+                },
+                {
+                    "id": 1337,
+                    "label": "17.7 mm"
+                },
+                {
+                    "id": 1338,
+                    "label": "18.1 mm"
+                },
+                {
+                    "id": 1339,
+                    "label": "18.5 mm"
+                },
+                {
+                    "id": 1340,
+                    "label": "19 mm"
+                },
+                {
+                    "id": 1341,
+                    "label": "19.4 mm"
+                },
+                {
+                    "id": 1342,
+                    "label": "19.8 mm"
+                },
+                {
+                    "id": 1343,
+                    "label": "20.2 mm"
+                },
+                {
+                    "id": 1344,
+                    "label": "20.6 mm"
+                },
+                {
+                    "id": 1346,
+                    "label": "21 mm"
+                },
+                {
+                    "id": 1347,
+                    "label": "21.4 mm"
+                },
+                {
+                    "id": 1348,
+                    "label": "21.8 mm"
+                },
+                {
+                    "id": 1349,
+                    "label": "22.2 mm"
+                },
+                {
+                    "id": 1350,
+                    "label": "22.6 mm"
+                },
+                {
+                    "id": 1351,
+                    "label": "Ajustable"
+                }
+            ]
+        },
+        {
+            "id": 77,
+            "label": "Pantalons homme",
+            "sizes": [
+                {
+                    "id": 1631,
+                    "label": "W23 | FR 32"
+                },
+                {
+                    "id": 1632,
+                    "label": "W24 | FR 34"
+                },
+                {
+                    "id": 1633,
+                    "label": "W25 | FR 34"
+                },
+                {
+                    "id": 1634,
+                    "label": "W26 | FR 36"
+                },
+                {
+                    "id": 1635,
+                    "label": "W27 | FR 36"
+                },
+                {
+                    "id": 1636,
+                    "label": "W28 | FR 38"
+                },
+                {
+                    "id": 1637,
+                    "label": "W29 | FR 38"
+                },
+                {
+                    "id": 1638,
+                    "label": "W30 | FR 40"
+                },
+                {
+                    "id": 1639,
+                    "label": "W31 | FR 40"
+                },
+                {
+                    "id": 1640,
+                    "label": "W32 | FR 42"
+                },
+                {
+                    "id": 1641,
+                    "label": "W33 | FR 42"
+                },
+                {
+                    "id": 1642,
+                    "label": "W34 | FR 44"
+                },
+                {
+                    "id": 1662,
+                    "label": "W35 | FR 44"
+                },
+                {
+                    "id": 1643,
+                    "label": "W36 | FR 46"
+                },
+                {
+                    "id": 1644,
+                    "label": "W38 | FR 48"
+                },
+                {
+                    "id": 1645,
+                    "label": "W40 | FR 50"
+                },
+                {
+                    "id": 1646,
+                    "label": "W42 | FR 52"
+                },
+                {
+                    "id": 1647,
+                    "label": "W44 | FR 54"
+                },
+                {
+                    "id": 1648,
+                    "label": "W46 | FR 56"
+                },
+                {
+                    "id": 1649,
+                    "label": "W48 | FR 58"
+                },
+                {
+                    "id": 1704,
+                    "label": "W50 | FR 60"
+                },
+                {
+                    "id": 1705,
+                    "label": "W52 | FR 62"
+                },
+                {
+                    "id": 1706,
+                    "label": "W54 | FR 64"
+                }
+            ]
+        },
+        {
+            "id": 74,
+            "label": "Chemises homme",
+            "sizes": [
+                {
+                    "id": 1527,
+                    "label": "35 cm"
+                },
+                {
+                    "id": 1528,
+                    "label": "36 cm"
+                },
+                {
+                    "id": 1529,
+                    "label": "37 cm"
+                },
+                {
+                    "id": 1530,
+                    "label": "38 cm"
+                },
+                {
+                    "id": 1531,
+                    "label": "39 cm"
+                },
+                {
+                    "id": 1532,
+                    "label": "40 cm"
+                },
+                {
+                    "id": 1533,
+                    "label": "41 cm"
+                },
+                {
+                    "id": 1534,
+                    "label": "42 cm"
+                },
+                {
+                    "id": 1535,
+                    "label": "43 cm"
+                },
+                {
+                    "id": 1536,
+                    "label": "44 cm"
+                },
+                {
+                    "id": 1537,
+                    "label": "45 cm"
+                },
+                {
+                    "id": 1538,
+                    "label": "46 cm"
+                },
+                {
+                    "id": 1539,
+                    "label": "47 cm"
+                },
+                {
+                    "id": 1540,
+                    "label": "48 cm"
+                },
+                {
+                    "id": 1541,
+                    "label": "49 cm"
+                },
+                {
+                    "id": 1542,
+                    "label": "50 cm"
+                },
+                {
+                    "id": 1543,
+                    "label": "51 cm"
+                },
+                {
+                    "id": 1544,
+                    "label": "52 cm"
+                }
+            ]
+        },
+        {
+            "id": 75,
+            "label": "Vestes de costume pour homme",
+            "sizes": [
+                {
+                    "id": 1583,
+                    "label": "22"
+                },
+                {
+                    "id": 1584,
+                    "label": "23"
+                },
+                {
+                    "id": 1585,
+                    "label": "24"
+                },
+                {
+                    "id": 1586,
+                    "label": "25"
+                },
+                {
+                    "id": 1587,
+                    "label": "26"
+                },
+                {
+                    "id": 1588,
+                    "label": "27"
+                },
+                {
+                    "id": 1589,
+                    "label": "28"
+                },
+                {
+                    "id": 1590,
+                    "label": "29"
+                },
+                {
+                    "id": 1591,
+                    "label": "30"
+                },
+                {
+                    "id": 1592,
+                    "label": "42"
+                },
+                {
+                    "id": 1593,
+                    "label": "44"
+                },
+                {
+                    "id": 1594,
+                    "label": "46"
+                },
+                {
+                    "id": 1595,
+                    "label": "48"
+                },
+                {
+                    "id": 1596,
+                    "label": "50"
+                },
+                {
+                    "id": 1597,
+                    "label": "52"
+                },
+                {
+                    "id": 1598,
+                    "label": "54"
+                },
+                {
+                    "id": 1599,
+                    "label": "56"
+                },
+                {
+                    "id": 1600,
+                    "label": "58"
+                },
+                {
+                    "id": 1692,
+                    "label": "60"
+                },
+                {
+                    "id": 1693,
+                    "label": "62"
+                },
+                {
+                    "id": 1694,
+                    "label": "64"
+                },
+                {
+                    "id": 1695,
+                    "label": "66"
+                },
+                {
+                    "id": 1696,
+                    "label": "68"
+                },
+                {
+                    "id": 1697,
+                    "label": "70"
+                },
+                {
+                    "id": 1698,
+                    "label": "72"
+                },
+                {
+                    "id": 1699,
+                    "label": "74"
+                },
+                {
+                    "id": 1700,
+                    "label": "76"
+                },
+                {
+                    "id": 1701,
+                    "label": "78"
+                },
+                {
+                    "id": 1601,
+                    "label": "90"
+                },
+                {
+                    "id": 1602,
+                    "label": "94"
+                },
+                {
+                    "id": 1603,
+                    "label": "98"
+                },
+                {
+                    "id": 1604,
+                    "label": "102"
+                },
+                {
+                    "id": 1605,
+                    "label": "106"
+                },
+                {
+                    "id": 1606,
+                    "label": "110"
+                },
+                {
+                    "id": 1607,
+                    "label": "112"
+                },
+                {
+                    "id": 1608,
+                    "label": "118"
+                }
+            ]
+        },
+        {
+            "id": 38,
+            "label": "Chaussures hommes",
+            "sizes": [
+                {
+                    "id": 776,
+                    "label": "38"
+                },
+                {
+                    "id": 777,
+                    "label": "38,5"
+                },
+                {
+                    "id": 778,
+                    "label": "39"
+                },
+                {
+                    "id": 779,
+                    "label": "39,5"
+                },
+                {
+                    "id": 780,
+                    "label": "40"
+                },
+                {
+                    "id": 781,
+                    "label": "40,5"
+                },
+                {
+                    "id": 782,
+                    "label": "41"
+                },
+                {
+                    "id": 783,
+                    "label": "41,5"
+                },
+                {
+                    "id": 784,
+                    "label": "42"
+                },
+                {
+                    "id": 785,
+                    "label": "42,5"
+                },
+                {
+                    "id": 786,
+                    "label": "43"
+                },
+                {
+                    "id": 787,
+                    "label": "43,5"
+                },
+                {
+                    "id": 788,
+                    "label": "44"
+                },
+                {
+                    "id": 789,
+                    "label": "44,5"
+                },
+                {
+                    "id": 790,
+                    "label": "45"
+                },
+                {
+                    "id": 791,
+                    "label": "45,5"
+                },
+                {
+                    "id": 792,
+                    "label": "46"
+                },
+                {
+                    "id": 793,
+                    "label": "46,5"
+                },
+                {
+                    "id": 794,
+                    "label": "47"
+                },
+                {
+                    "id": 795,
+                    "label": "47,5"
+                },
+                {
+                    "id": 1190,
+                    "label": "48"
+                },
+                {
+                    "id": 1621,
+                    "label": "48,5"
+                },
+                {
+                    "id": 1191,
+                    "label": "49"
+                },
+                {
+                    "id": 1327,
+                    "label": "50"
+                },
+                {
+                    "id": 1622,
+                    "label": "51"
+                },
+                {
+                    "id": 1623,
+                    "label": "52"
+                },
+                {
+                    "id": 1624,
+                    "label": "Taille unique"
+                },
+                {
+                    "id": 1625,
+                    "label": "Autre"
+                }
+            ]
+        },
+        {
+            "id": 30,
+            "label": "Ceintures de soutien maternité",
+            "sizes": [
+                {
+                    "id": 578,
+                    "label": "XS"
+                },
+                {
+                    "id": 580,
+                    "label": "S"
+                },
+                {
+                    "id": 581,
+                    "label": "M"
+                },
+                {
+                    "id": 582,
+                    "label": "L"
+                },
+                {
+                    "id": 583,
+                    "label": "XL"
+                },
+                {
+                    "id": 584,
+                    "label": "XXL"
+                },
+                {
+                    "id": 1557,
+                    "label": "Taille unique"
+                },
+                {
+                    "id": 664,
+                    "label": "Autre"
+                }
+            ]
+        },
+        {
+            "id": 57,
+            "label": "Articles pour chiens",
+            "sizes": [
+                {
+                    "id": 1352,
+                    "label": "XS"
+                },
+                {
+                    "id": 1353,
+                    "label": "S"
+                },
+                {
+                    "id": 1354,
+                    "label": "M"
+                },
+                {
+                    "id": 1355,
+                    "label": "L"
+                },
+                {
+                    "id": 1356,
+                    "label": "XL"
+                },
+                {
+                    "id": 1357,
+                    "label": "XXL"
+                },
+                {
+                    "id": 1363,
+                    "label": "Autre"
+                },
+                {
+                    "id": 1365,
+                    "label": "Taille unique"
+                }
+            ]
+        },
+        {
+            "id": 52,
+            "label": "Bagues",
+            "sizes": [
+                {
+                    "id": 1202,
+                    "label": "14,1 mm"
+                },
+                {
+                    "id": 1203,
+                    "label": "14,5 mm"
+                },
+                {
+                    "id": 1204,
+                    "label": "14,9 mm"
+                },
+                {
+                    "id": 1205,
+                    "label": "15,3 mm"
+                },
+                {
+                    "id": 1206,
+                    "label": "15,7 mm"
+                },
+                {
+                    "id": 1207,
+                    "label": "16,1 mm"
+                },
+                {
+                    "id": 1208,
+                    "label": "16,5 mm"
+                },
+                {
+                    "id": 1209,
+                    "label": "16,9 mm"
+                },
+                {
+                    "id": 1210,
+                    "label": "17,3 mm"
+                },
+                {
+                    "id": 1211,
+                    "label": "17,7 mm"
+                },
+                {
+                    "id": 1212,
+                    "label": "18,1 mm"
+                },
+                {
+                    "id": 1213,
+                    "label": "18,5 mm"
+                },
+                {
+                    "id": 1214,
+                    "label": "19 mm"
+                },
+                {
+                    "id": 1215,
+                    "label": "19,4 mm"
+                },
+                {
+                    "id": 1216,
+                    "label": "19,8 mm"
+                },
+                {
+                    "id": 1217,
+                    "label": "20,2 mm"
+                },
+                {
+                    "id": 1218,
+                    "label": "20,6 mm"
+                },
+                {
+                    "id": 1219,
+                    "label": "21 mm"
+                },
+                {
+                    "id": 1220,
+                    "label": "21,4 mm"
+                },
+                {
+                    "id": 1221,
+                    "label": "21,8 mm"
+                },
+                {
+                    "id": 1222,
+                    "label": "22,2 mm"
+                },
+                {
+                    "id": 1223,
+                    "label": "22,6 mm"
+                },
+                {
+                    "id": 1224,
+                    "label": "Ajustable"
+                }
+            ]
+        },
+        {
+            "id": 60,
+            "label": "Chapeaux adulte",
+            "sizes": [
+                {
+                    "id": 1388,
+                    "label": "XS"
+                },
+                {
+                    "id": 1389,
+                    "label": "S"
+                },
+                {
+                    "id": 1390,
+                    "label": "M"
+                },
+                {
+                    "id": 1391,
+                    "label": "L"
+                },
+                {
+                    "id": 1392,
+                    "label": "XL"
+                },
+                {
+                    "id": 1393,
+                    "label": "XXL"
+                },
+                {
+                    "id": 1387,
+                    "label": "Taille unique"
+                },
+                {
+                    "id": 1373,
+                    "label": "52"
+                },
+                {
+                    "id": 1374,
+                    "label": "53"
+                },
+                {
+                    "id": 1375,
+                    "label": "54"
+                },
+                {
+                    "id": 1376,
+                    "label": "55"
+                },
+                {
+                    "id": 1377,
+                    "label": "56"
+                },
+                {
+                    "id": 1378,
+                    "label": "57"
+                },
+                {
+                    "id": 1379,
+                    "label": "58"
+                },
+                {
+                    "id": 1380,
+                    "label": "59"
+                },
+                {
+                    "id": 1381,
+                    "label": "60"
+                },
+                {
+                    "id": 1382,
+                    "label": "61"
+                },
+                {
+                    "id": 1383,
+                    "label": "62"
+                },
+                {
+                    "id": 1384,
+                    "label": "63"
+                },
+                {
+                    "id": 1385,
+                    "label": "64"
+                },
+                {
+                    "id": 1386,
+                    "label": "65"
+                }
+            ]
+        },
+        {
+            "id": 59,
+            "label": "Tailles de coussins",
+            "sizes": [
+                {
+                    "id": 1487,
+                    "label": "30 x 50 cm"
+                },
+                {
+                    "id": 1488,
+                    "label": "35 x 50 cm"
+                },
+                {
+                    "id": 1366,
+                    "label": "40 x 40 cm"
+                },
+                {
+                    "id": 1367,
+                    "label": "40 x 60 cm"
+                },
+                {
+                    "id": 1368,
+                    "label": "45 x 45 cm"
+                },
+                {
+                    "id": 1369,
+                    "label": "50 x 50 cm"
+                },
+                {
+                    "id": 1370,
+                    "label": "60 x 60 cm"
+                },
+                {
+                    "id": 1371,
+                    "label": "65 x 65 cm"
+                },
+                {
+                    "id": 1372,
+                    "label": "Autre"
+                }
+            ]
+        },
+        {
+            "id": 62,
+            "label": "Montres",
+            "sizes": [
+                {
+                    "id": 1429,
+                    "label": "Jusqu'à 30 mm"
+                },
+                {
+                    "id": 1430,
+                    "label": "30–38 mm"
+                },
+                {
+                    "id": 1431,
+                    "label": "39–42 mm"
+                },
+                {
+                    "id": 1432,
+                    "label": "43–46 mm"
+                },
+                {
+                    "id": 1433,
+                    "label": "47 mm et plus"
+                },
+                {
+                    "id": 1435,
+                    "label": "Taille unique"
+                }
+            ]
+        },
+        {
+            "id": 61,
+            "label": "Gants adulte",
+            "sizes": [
+                {
+                    "id": 1408,
+                    "label": "5"
+                },
+                {
+                    "id": 1409,
+                    "label": "5,5"
+                },
+                {
+                    "id": 1410,
+                    "label": "6"
+                },
+                {
+                    "id": 1411,
+                    "label": "6,5"
+                },
+                {
+                    "id": 1412,
+                    "label": "7"
+                },
+                {
+                    "id": 1413,
+                    "label": "7,5"
+                },
+                {
+                    "id": 1414,
+                    "label": "8"
+                },
+                {
+                    "id": 1415,
+                    "label": "8,5"
+                },
+                {
+                    "id": 1416,
+                    "label": "9"
+                },
+                {
+                    "id": 1417,
+                    "label": "9,5"
+                },
+                {
+                    "id": 1418,
+                    "label": "10"
+                },
+                {
+                    "id": 1419,
+                    "label": "10,5"
+                },
+                {
+                    "id": 1420,
+                    "label": "11"
+                },
+                {
+                    "id": 1421,
+                    "label": "11,5"
+                },
+                {
+                    "id": 1422,
+                    "label": "12"
+                },
+                {
+                    "id": 1423,
+                    "label": "Taille unique"
+                },
+                {
+                    "id": 1424,
+                    "label": "XS"
+                },
+                {
+                    "id": 1425,
+                    "label": "S"
+                },
+                {
+                    "id": 1426,
+                    "label": "M"
+                },
+                {
+                    "id": 1427,
+                    "label": "L"
+                },
+                {
+                    "id": 1428,
+                    "label": "XL"
+                }
+            ]
+        },
+        {
+            "id": 63,
+            "label": "Ceintures homme",
+            "sizes": [
+                {
+                    "id": 1702,
+                    "label": "70 cm"
+                },
+                {
+                    "id": 1703,
+                    "label": "75 cm"
+                },
+                {
+                    "id": 1436,
+                    "label": "80 cm"
+                },
+                {
+                    "id": 1437,
+                    "label": "85 cm"
+                },
+                {
+                    "id": 1438,
+                    "label": "90 cm"
+                },
+                {
+                    "id": 1439,
+                    "label": "95 cm"
+                },
+                {
+                    "id": 1440,
+                    "label": "100 cm"
+                },
+                {
+                    "id": 1441,
+                    "label": "105 cm"
+                },
+                {
+                    "id": 1442,
+                    "label": "110 cm"
+                },
+                {
+                    "id": 1443,
+                    "label": "115 cm"
+                },
+                {
+                    "id": 1444,
+                    "label": "120 cm"
+                },
+                {
+                    "id": 1445,
+                    "label": "125 cm"
+                },
+                {
+                    "id": 1726,
+                    "label": "130 cm"
+                },
+                {
+                    "id": 1581,
+                    "label": "Ajustable"
+                }
+            ]
+        },
+        {
+            "id": 64,
+            "label": "Ceintures femme",
+            "sizes": [
+                {
+                    "id": 1446,
+                    "label": "65 cm"
+                },
+                {
+                    "id": 1447,
+                    "label": "70 cm"
+                },
+                {
+                    "id": 1448,
+                    "label": "75 cm"
+                },
+                {
+                    "id": 1449,
+                    "label": "80 cm"
+                },
+                {
+                    "id": 1450,
+                    "label": "85 cm"
+                },
+                {
+                    "id": 1451,
+                    "label": "90 cm"
+                },
+                {
+                    "id": 1452,
+                    "label": "95 cm"
+                },
+                {
+                    "id": 1453,
+                    "label": "100 cm"
+                },
+                {
+                    "id": 1454,
+                    "label": "105 cm"
+                },
+                {
+                    "id": 1455,
+                    "label": "110 cm"
+                },
+                {
+                    "id": 1456,
+                    "label": "115 cm"
+                },
+                {
+                    "id": 1582,
+                    "label": "Ajustable"
+                }
+            ]
+        },
+        {
+            "id": 66,
+            "label": "Tailles de taies d'oreiller",
+            "sizes": [
+                {
+                    "id": 1462,
+                    "label": "35 x 40 cm"
+                },
+                {
+                    "id": 1463,
+                    "label": "40 x 40 cm"
+                },
+                {
+                    "id": 1464,
+                    "label": "40 x 60 cm"
+                },
+                {
+                    "id": 1465,
+                    "label": "40 x 75 cm"
+                },
+                {
+                    "id": 1466,
+                    "label": "40 x 80 cm"
+                },
+                {
+                    "id": 1467,
+                    "label": "40 x 90 cm"
+                },
+                {
+                    "id": 1468,
+                    "label": "50 x 50 cm"
+                },
+                {
+                    "id": 1469,
+                    "label": "50 x 60 cm"
+                },
+                {
+                    "id": 1470,
+                    "label": "50 x 66 cm"
+                },
+                {
+                    "id": 1471,
+                    "label": "50 x 70 cm"
+                },
+                {
+                    "id": 1472,
+                    "label": "50 x 90 cm"
+                },
+                {
+                    "id": 1473,
+                    "label": "65 x 65 cm"
+                },
+                {
+                    "id": 1474,
+                    "label": "80 x 80 cm"
+                },
+                {
+                    "id": 1475,
+                    "label": "Autre"
+                }
+            ]
+        },
+        {
+            "id": 67,
+            "label": "Tailles de couvertures",
+            "sizes": [
+                {
+                    "id": 1476,
+                    "label": "70 x 90 cm"
+                },
+                {
+                    "id": 1477,
+                    "label": "80 x 100 cm"
+                },
+                {
+                    "id": 1478,
+                    "label": "90 x 90 cm"
+                },
+                {
+                    "id": 1479,
+                    "label": "100 x 150 cm"
+                },
+                {
+                    "id": 1480,
+                    "label": "110 x 150 cm"
+                },
+                {
+                    "id": 1481,
+                    "label": "110 x 170 cm"
+                },
+                {
+                    "id": 1482,
+                    "label": "120 x 160 cm"
+                },
+                {
+                    "id": 1483,
+                    "label": "125 x 150 cm"
+                },
+                {
+                    "id": 1484,
+                    "label": "130 x 170 cm"
+                },
+                {
+                    "id": 1485,
+                    "label": "150 x 200 cm"
+                },
+                {
+                    "id": 1486,
+                    "label": "Autre"
+                }
+            ]
+        },
+        {
+            "id": 68,
+            "label": "Literie bébé",
+            "sizes": [
+                {
+                    "id": 1489,
+                    "label": "Berceau"
+                },
+                {
+                    "id": 1490,
+                    "label": "Lit nouveau né"
+                },
+                {
+                    "id": 1566,
+                    "label": "Lit de voyage bébé"
+                },
+                {
+                    "id": 1491,
+                    "label": "Lit bébé"
+                }
+            ]
+        },
+        {
+            "id": 69,
+            "label": "Tailles de couette",
+            "sizes": [
+                {
+                    "id": 1492,
+                    "label": "Simple (135-150 cm x 200-220 cm)"
+                },
+                {
+                    "id": 1493,
+                    "label": "Double (155-190 cm x 200-220 cm)"
+                },
+                {
+                    "id": 1494,
+                    "label": "Queen Size (200 cm x 200-220 cm)"
+                },
+                {
+                    "id": 1495,
+                    "label": "King Size (220-240 cm x 220-260 cm)"
+                }
+            ]
+        },
+        {
+            "id": 79,
+            "label": "Lits",
+            "sizes": [
+                {
+                    "id": 1727,
+                    "label": "80 x 200 cm"
+                },
+                {
+                    "id": 1728,
+                    "label": "90 x 200 cm"
+                },
+                {
+                    "id": 1729,
+                    "label": "120 x 200 cm"
+                },
+                {
+                    "id": 1730,
+                    "label": "140 x 200 cm"
+                },
+                {
+                    "id": 1731,
+                    "label": "160 x 200 cm"
+                },
+                {
+                    "id": 1732,
+                    "label": "180 x 200 cm"
+                },
+                {
+                    "id": 1733,
+                    "label": "200 x 200 cm"
+                },
+                {
+                    "id": 1734,
+                    "label": "200 x 220 cm"
+                }
+            ]
+        },
+        {
+            "id": 72,
+            "label": "Chaussettes femme",
+            "sizes": [
+                {
+                    "id": 1517,
+                    "label": "S | 35–38"
+                },
+                {
+                    "id": 1518,
+                    "label": "M | 39–42"
+                },
+                {
+                    "id": 1519,
+                    "label": "L | 43–46"
+                },
+                {
+                    "id": 1520,
+                    "label": "XL | 47–51"
+                },
+                {
+                    "id": 1521,
+                    "label": "Taille unique"
+                }
+            ]
+        },
+        {
+            "id": 73,
+            "label": "Chaussettes homme",
+            "sizes": [
+                {
+                    "id": 1522,
+                    "label": "XS | 36–37"
+                },
+                {
+                    "id": 1523,
+                    "label": "S | 38–42"
+                },
+                {
+                    "id": 1524,
+                    "label": "M | 43–46"
+                },
+                {
+                    "id": 1525,
+                    "label": "L | 47–52"
+                },
+                {
+                    "id": 1526,
+                    "label": "Taille unique"
+                }
+            ]
+        },
+        {
+            "id": 65,
+            "label": "Longueur de rideau",
+            "sizes": [
+                {
+                    "id": 1457,
+                    "label": "Jusqu'à 149 cm"
+                },
+                {
+                    "id": 1458,
+                    "label": "150 cm - 199 cm"
+                },
+                {
+                    "id": 1459,
+                    "label": "200 cm - 249 cm"
+                },
+                {
+                    "id": 1460,
+                    "label": "250 cm - 299 cm"
+                },
+                {
+                    "id": 1461,
+                    "label": "300 cm et plus"
+                }
+            ]
+        },
+        {
+            "id": 55,
+            "label": "Literie",
+            "sizes": [
+                {
+                    "id": 1312,
+                    "label": "Simple (70–100cm x 190–200cm)"
+                },
+                {
+                    "id": 1313,
+                    "label": "Double (120-140 x 190-200 cm)"
+                },
+                {
+                    "id": 1314,
+                    "label": "Queen Size (160-170 x 190-200 cm)"
+                },
+                {
+                    "id": 1315,
+                    "label": "King Size (180–200cm x 200cm)"
+                }
+            ]
+        }
+    ]
+}

@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { getCategoryLabelsForRegion } from "@/lib/categories.server";
+import { getSizeLabelsForRegion } from "@/lib/sizes.server";
 import { redirect } from "next/navigation";
 import {
     DashboardClient,
@@ -113,6 +114,10 @@ export default async function DashboardPage() {
             status_ids: m.status_ids ?? null,
             video_game_platform_ids: m.video_game_platform_ids ?? null,
             size_id: m.size_id ?? null,
+            size_labels: await getSizeLabelsForRegion(
+                m.size_id,
+                m.region ?? "de",
+            ),
             region: m.region ?? "de",
             allowed_countries: m.allowed_countries ?? null,
             min_seller_rating: m.min_seller_rating ?? null,

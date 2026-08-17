@@ -1,0 +1,2 @@
+ALTER TABLE "monitors"
+ALTER COLUMN "size_id" TYPE TEXT;
