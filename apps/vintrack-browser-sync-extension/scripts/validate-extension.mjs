@@ -120,7 +120,7 @@ if (developmentManifestArgumentIndex !== -1) {
 
 assert.equal(
   firefoxManifest.browser_specific_settings?.gecko?.id,
-  "browser-sync@vintrack.app",
+  "vintrack-browser-sync@jakobaio.dev",
   "Firefox MV3 builds require a stable AMO add-on ID",
 );
 assert.equal(

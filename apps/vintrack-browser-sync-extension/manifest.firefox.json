@@ -34,7 +34,7 @@
     },
     "browser_specific_settings": {
         "gecko": {
-            "id": "browser-sync@vintrack.app",
+            "id": "vintrack-browser-sync@jakobaio.dev",
             "strict_min_version": "142.0",
             "data_collection_permissions": {
                 "required": [
