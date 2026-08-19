@@ -1,0 +1,26 @@
+{
+    "slug": "vintrack-browser-sync",
+    "name": {
+        "en-US": "Vintrack Browser Sync"
+    },
+    "summary": {
+        "en-US": "Securely links your signed-in Vinted browser session to Vintrack."
+    },
+    "description": {
+        "en-US": "Vintrack Browser Sync connects a Vinted account you are already signed in to with Vintrack. It transmits the Vinted web access token, selected Vinted domain, Vinted account ID and display name for account-mismatch protection, and, with optional Firefox consent, the browser user agent. The Vintrack theme is stored locally and mirrored between the approved Vintrack and Vinted pages. The extension never transmits the complete cookie jar, the browser refresh token, or your Vinted password. Privacy policy: https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/blob/main/docs/browser-extension-privacy.md Support: https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/issues"
+    },
+    "categories": {
+        "firefox": ["shopping"]
+    },
+    "homepage": {
+        "en-US": "https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor"
+    },
+    "support_url": {
+        "en-US": "https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/issues"
+    },
+    "requires_payment": false,
+    "version": {
+        "license": "MIT",
+        "approval_notes": "The extension only accepts runtime commands from https://vintrack.jakobaio.dev and explicitly supported Vinted origins. No browser refresh token or complete cookie jar is read or transmitted. Source and privacy details are linked from the listing description."
+    }
+}

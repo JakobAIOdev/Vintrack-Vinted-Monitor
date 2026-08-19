@@ -15,7 +15,37 @@ const BUY_TAB_READY_TIMEOUT_MS = 20000;
 const SYNC_REQUEST_TIMEOUT_MS = 15000;
 const PROACTIVE_BROWSER_REFRESH_MS = 2 * 60 * 1000;
 const COMPLETED_SYNC_STATUSES = new Set(["completed", "refreshed"]);
+const VINTRACK_APP_ORIGINS = new Set([
+  "https://vintrack.jakobaio.dev",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+]);
+const SUPPORTED_VINTED_DOMAINS = [
+  "vinted.at",
+  "vinted.be",
+  "vinted.co.uk",
+  "vinted.com",
+  "vinted.cz",
+  "vinted.de",
+  "vinted.dk",
+  "vinted.es",
+  "vinted.fi",
+  "vinted.fr",
+  "vinted.hr",
+  "vinted.hu",
+  "vinted.ie",
+  "vinted.it",
+  "vinted.lt",
+  "vinted.lu",
+  "vinted.nl",
+  "vinted.pl",
+  "vinted.pt",
+  "vinted.ro",
+  "vinted.se",
+  "vinted.sk",
+];
 const extensionApi = globalThis.browser || globalThis.chrome;
+const isFirefoxExtension = typeof globalThis.browser !== "undefined";
 const inFlightSyncs = new Map();
 
 function sanitizeDomain(domain) {
@@ -24,11 +54,62 @@ function sanitizeDomain(domain) {
 
 function isVintedDomain(domain) {
   const normalized = sanitizeDomain(domain);
-  return (
-    normalized === "vinted.co.uk" ||
-    normalized.endsWith(".vinted.co.uk") ||
-    /(^|\.)vinted\./.test(normalized)
+  return SUPPORTED_VINTED_DOMAINS.some(
+    (supported) =>
+      normalized === supported || normalized.endsWith(`.${supported}`),
   );
+}
+
+function manifestAllowsAppOrigin(url) {
+  const matches = (extensionApi.runtime.getManifest().content_scripts || [])
+    .flatMap((entry) => entry.matches || []);
+  return matches.some((pattern) => {
+    if (pattern.includes("*.vinted.")) {
+      return false;
+    }
+    try {
+      const patternUrl = new URL(pattern.replace("*", "match"));
+      return (
+        patternUrl.protocol === url.protocol &&
+        patternUrl.hostname === url.hostname
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
+function allowedAppOrigin(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return VINTRACK_APP_ORIGINS.has(url.origin) && manifestAllowsAppOrigin(url)
+      ? url.origin
+      : "";
+  } catch {
+    return "";
+  }
+}
+
+function senderOrigin(sender) {
+  try {
+    return new URL(sender?.url || "").origin;
+  } catch {
+    return "";
+  }
+}
+
+function isExtensionPageSender(sender) {
+  try {
+    const protocol = new URL(sender?.url || "").protocol;
+    return protocol === "chrome-extension:" || protocol === "moz-extension:";
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedAppSender(sender, expectedOrigin = "") {
+  const origin = allowedAppOrigin(senderOrigin(sender));
+  return Boolean(origin && (!expectedOrigin || origin === expectedOrigin));
 }
 
 function domainFromUrl(value) {
@@ -123,7 +204,42 @@ function itemUrlForDomain(itemUrl, domain, itemId) {
 }
 
 async function getConfig() {
-  return extensionApi.storage.local.get(Object.values(STORAGE_KEYS));
+  const storage = await extensionApi.storage.local.get(
+    Object.values(STORAGE_KEYS),
+  );
+  const normalizedOrigin = allowedAppOrigin(storage[STORAGE_KEYS.appOrigin]);
+  if (storage[STORAGE_KEYS.appOrigin] && !normalizedOrigin) {
+    await extensionApi.storage.local.remove([
+      STORAGE_KEYS.token,
+      STORAGE_KEYS.appOrigin,
+    ]);
+    storage[STORAGE_KEYS.token] = "";
+    storage[STORAGE_KEYS.appOrigin] = "";
+  } else if (
+    normalizedOrigin &&
+    normalizedOrigin !== storage[STORAGE_KEYS.appOrigin]
+  ) {
+    await extensionApi.storage.local.set({
+      [STORAGE_KEYS.appOrigin]: normalizedOrigin,
+    });
+    storage[STORAGE_KEYS.appOrigin] = normalizedOrigin;
+  }
+  return storage;
+}
+
+async function userAgentForSync() {
+  if (!isFirefoxExtension) {
+    return navigator.userAgent;
+  }
+
+  try {
+    const permissions = await extensionApi.permissions.getAll();
+    return permissions?.data_collection?.includes("technicalAndInteraction")
+      ? navigator.userAgent
+      : "";
+  } catch {
+    return "";
+  }
 }
 
 async function clearLocalExtensionState() {
@@ -519,6 +635,7 @@ async function performDomainSync(domain, options = {}) {
   }
 
   const endpoint = `${vintrackAppOrigin}/api/account/extension-sync/complete`;
+  const userAgent = await userAgentForSync();
   let response;
   let data = {};
 
@@ -538,7 +655,7 @@ async function performDomainSync(domain, options = {}) {
           link_token: browserLinkToken,
           access_token: accessCookie?.value || "",
           domain: normalizedDomain,
-          user_agent: navigator.userAgent,
+          user_agent: userAgent,
           allow_account_switch: allowAccountSwitch,
           browser_vinted_id: browserVintedId,
           browser_vinted_name: browserVintedName,
@@ -1213,6 +1330,10 @@ extensionApi.alarms.onAlarm.addListener((alarm) => {
 extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     if (message?.type === "VINTRACK_EXTENSION_PING") {
+      if (!isExtensionPageSender(sender) && !isAllowedAppSender(sender)) {
+        sendResponse({ ok: false, error: "Unauthorized extension sender" });
+        return;
+      }
       const config = await getConfig();
       sendResponse({ ok: true, ...formatRuntimeState(config) });
       return;
@@ -1220,12 +1341,12 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (message?.type === "VINTRACK_EXTENSION_CONNECT") {
       const token = String(message?.payload?.token || "").trim();
-      const appOrigin = String(message?.payload?.appOrigin || "").trim();
+      const appOrigin = allowedAppOrigin(message?.payload?.appOrigin);
       const preferredDomain = String(
         message?.payload?.preferredDomain || "",
       ).trim();
-      if (!token || !appOrigin) {
-        sendResponse({ ok: false, error: "Missing token or app origin" });
+      if (!token || !appOrigin || !isAllowedAppSender(sender, appOrigin)) {
+        sendResponse({ ok: false, error: "Invalid Vintrack connection origin" });
         return;
       }
 
@@ -1262,6 +1383,17 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message?.type === "VINTRACK_EXTENSION_MANUAL_SYNC") {
+      const currentConfig = await getConfig();
+      const configuredOrigin = allowedAppOrigin(
+        currentConfig[STORAGE_KEYS.appOrigin],
+      );
+      if (
+        !isExtensionPageSender(sender) &&
+        !isAllowedAppSender(sender, configuredOrigin)
+      ) {
+        sendResponse({ ok: false, error: "Unauthorized extension sender" });
+        return;
+      }
       const preferredDomain = String(
         message?.payload?.preferredDomain || "",
       ).trim();
@@ -1288,6 +1420,10 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message?.type === "VINTRACK_EXTENSION_CLEAR_LOCAL_STATE") {
+      if (!isExtensionPageSender(sender)) {
+        sendResponse({ ok: false, error: "Unauthorized extension sender" });
+        return;
+      }
       await clearLocalExtensionState();
       const config = await getConfig();
       sendResponse({ ok: true, ...formatRuntimeState(config) });
@@ -1301,16 +1437,13 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      let senderOrigin = "";
-      try {
-        senderOrigin = sender?.url ? new URL(sender.url).origin : "";
-      } catch {
-        senderOrigin = "";
-      }
       const config = await getConfig();
+      const configuredOrigin = allowedAppOrigin(
+        config[STORAGE_KEYS.appOrigin],
+      );
       if (
-        !config.vintrackAppOrigin ||
-        senderOrigin !== config.vintrackAppOrigin
+        !configuredOrigin ||
+        !isAllowedAppSender(sender, configuredOrigin)
       ) {
         sendResponse({ ok: false, ignored: true });
         return;
@@ -1322,6 +1455,17 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message?.type === "VINTRACK_EXTENSION_BUY") {
+      const config = await getConfig();
+      const configuredOrigin = allowedAppOrigin(
+        config[STORAGE_KEYS.appOrigin],
+      );
+      if (
+        !configuredOrigin ||
+        !isAllowedAppSender(sender, configuredOrigin)
+      ) {
+        sendResponse({ ok: false, error: "Unauthorized extension sender" });
+        return;
+      }
       const result = await handleBrowserBuy(message.payload);
       sendResponse(result);
       return;

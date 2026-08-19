@@ -23,6 +23,9 @@ jobs:
       major_minor: ${{ steps.version.outputs.major_minor }}
       tag: ${{ steps.version.outputs.tag }}
       tag_exists: ${{ steps.version.outputs.tag_exists }}
+      extension_version: ${{ steps.version.outputs.extension_version }}
+      extension_tag: ${{ steps.version.outputs.extension_tag }}
+      extension_tag_exists: ${{ steps.version.outputs.extension_tag_exists }}
 
     steps:
       - name: Checkout repository
@@ -37,6 +40,14 @@ jobs:
           VERSION="$(node -p "require('./package.json').version")"
           MAJOR_MINOR="$(node -p "const v=require('./package.json').version.split('.'); v.slice(0, 2).join('.')")"
           TAG="v$VERSION"
+          EXTENSION_VERSION="$(node -p "require('../vintrack-browser-sync-extension/manifest.json').version")"
+          FIREFOX_VERSION="$(node -p "require('../vintrack-browser-sync-extension/manifest.firefox.json').version")"
+          EXTENSION_TAG="extension-v$EXTENSION_VERSION"
+
+          if [ "$EXTENSION_VERSION" != "$FIREFOX_VERSION" ]; then
+            echo "Chrome and Firefox extension versions differ" >&2
+            exit 1
+          fi
 
           if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
             TAG_EXISTS=true
@@ -44,10 +55,21 @@ jobs:
             TAG_EXISTS=false
           fi
 
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "major_minor=$MAJOR_MINOR" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "tag_exists=$TAG_EXISTS" >> "$GITHUB_OUTPUT"
+          if git rev-parse "refs/tags/$EXTENSION_TAG" >/dev/null 2>&1; then
+            EXTENSION_TAG_EXISTS=true
+          else
+            EXTENSION_TAG_EXISTS=false
+          fi
+
+          {
+            echo "version=$VERSION"
+            echo "major_minor=$MAJOR_MINOR"
+            echo "tag=$TAG"
+            echo "tag_exists=$TAG_EXISTS"
+            echo "extension_version=$EXTENSION_VERSION"
+            echo "extension_tag=$EXTENSION_TAG"
+            echo "extension_tag_exists=$EXTENSION_TAG_EXISTS"
+          } >> "$GITHUB_OUTPUT"
 
   build-and-push:
     name: Build and push ${{ matrix.app }}
@@ -100,20 +122,94 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.app }}
           cache-to: type=gha,mode=max,scope=${{ matrix.app }}
 
+  publish-firefox:
+    name: Publish Firefox extension if needed
+    runs-on: ubuntu-latest
+    needs: version
+    if: needs.version.outputs.tag_exists == 'false'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify configured extension version
+        env:
+          CONFIGURED_LATEST_VERSION: ${{ vars.BROWSER_EXTENSION_LATEST_VERSION || needs.version.outputs.extension_version }}
+          MANIFEST_VERSION: ${{ needs.version.outputs.extension_version }}
+        run: |
+          if [ "$CONFIGURED_LATEST_VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "BROWSER_EXTENSION_LATEST_VERSION ($CONFIGURED_LATEST_VERSION) must match the manifest version ($MANIFEST_VERSION)" >&2
+            exit 1
+          fi
+
+      - name: Extension version already published
+        if: needs.version.outputs.extension_tag_exists == 'true'
+        run: echo "${{ needs.version.outputs.extension_tag }} already exists; skipping Firefox publishing."
+
+      - name: Set up Node.js 22
+        if: needs.version.outputs.extension_tag_exists == 'false'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Validate manifests and release version
+        if: needs.version.outputs.extension_tag_exists == 'false'
+        run: node apps/vintrack-browser-sync-extension/scripts/validate-extension.mjs --tag "${{ needs.version.outputs.extension_tag }}"
+
+      - name: Build browser extension packages
+        if: needs.version.outputs.extension_tag_exists == 'false'
+        run: apps/vintrack-browser-sync-extension/scripts/build-packages.sh
+
+      - name: Lint Firefox build
+        if: needs.version.outputs.extension_tag_exists == 'false'
+        run: npx --yes web-ext@10 lint --source-dir apps/vintrack-browser-sync-extension/dist/firefox
+
+      - name: Publish listed extension to AMO
+        if: needs.version.outputs.extension_tag_exists == 'false'
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          test -n "$AMO_JWT_ISSUER"
+          test -n "$AMO_JWT_SECRET"
+          npx --yes web-ext@10 sign \
+            --channel=listed \
+            --source-dir apps/vintrack-browser-sync-extension/dist/firefox \
+            --amo-metadata apps/vintrack-browser-sync-extension/amo-metadata.json \
+            --api-key "$AMO_JWT_ISSUER" \
+            --api-secret "$AMO_JWT_SECRET"
+
+      - name: Mark extension version as published
+        if: needs.version.outputs.extension_tag_exists == 'false'
+        env:
+          EXTENSION_TAG: ${{ needs.version.outputs.extension_tag }}
+          EXTENSION_VERSION: ${{ needs.version.outputs.extension_version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$EXTENSION_TAG" "$GITHUB_SHA" -m "Publish Firefox extension v$EXTENSION_VERSION"
+          git push origin "$EXTENSION_TAG"
+
   deploy:
     name: Deploy production
     runs-on: ubuntu-latest
     needs:
       - version
       - build-and-push
+      - publish-firefox
     if: needs.version.outputs.tag_exists == 'false'
 
     steps:
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.2
         env:
-          BROWSER_EXTENSION_LATEST_VERSION: ${{ vars.BROWSER_EXTENSION_LATEST_VERSION || '0.1.3' }}
-          BROWSER_EXTENSION_MIN_VERSION: ${{ vars.BROWSER_EXTENSION_MIN_VERSION || '0.1.3' }}
+          BROWSER_EXTENSION_LATEST_VERSION: ${{ vars.BROWSER_EXTENSION_LATEST_VERSION || needs.version.outputs.extension_version }}
+          BROWSER_EXTENSION_MIN_VERSION: ${{ vars.BROWSER_EXTENSION_MIN_VERSION || needs.version.outputs.extension_version }}
+          BROWSER_EXTENSION_FIREFOX_URL: ${{ vars.BROWSER_EXTENSION_FIREFOX_URL || 'https://addons.mozilla.org/firefox/addon/vintrack-browser-sync/' }}
           DISCOVERY_MODE: ${{ vars.DISCOVERY_MODE || 'off' }}
           DISCOVERY_ALLOW_FREE_ACTIVE: ${{ vars.DISCOVERY_ALLOW_FREE_ACTIVE || 'false' }}
         with:
@@ -121,7 +217,7 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || '22' }}
-          envs: BROWSER_EXTENSION_LATEST_VERSION,BROWSER_EXTENSION_MIN_VERSION,DISCOVERY_MODE,DISCOVERY_ALLOW_FREE_ACTIVE
+          envs: BROWSER_EXTENSION_LATEST_VERSION,BROWSER_EXTENSION_MIN_VERSION,BROWSER_EXTENSION_FIREFOX_URL,DISCOVERY_MODE,DISCOVERY_ALLOW_FREE_ACTIVE
           script: |
             set -euo pipefail
             cd "${{ secrets.DEPLOY_PATH || '/Vintrack' }}"
@@ -131,11 +227,13 @@ jobs:
             touch .env
             sed -i '/^BROWSER_EXTENSION_LATEST_VERSION=/d' .env
             sed -i '/^BROWSER_EXTENSION_MIN_VERSION=/d' .env
+            sed -i '/^BROWSER_EXTENSION_FIREFOX_URL=/d' .env
             sed -i '/^DISCOVERY_MODE=/d' .env
             sed -i '/^DISCOVERY_ALLOW_FREE_ACTIVE=/d' .env
             printf '%s\n' \
               "BROWSER_EXTENSION_LATEST_VERSION=$BROWSER_EXTENSION_LATEST_VERSION" \
               "BROWSER_EXTENSION_MIN_VERSION=$BROWSER_EXTENSION_MIN_VERSION" \
+              "BROWSER_EXTENSION_FIREFOX_URL=$BROWSER_EXTENSION_FIREFOX_URL" \
               "DISCOVERY_MODE=$DISCOVERY_MODE" \
               "DISCOVERY_ALLOW_FREE_ACTIVE=$DISCOVERY_ALLOW_FREE_ACTIVE" \
               >> .env
@@ -171,5 +269,4 @@ jobs:
             --target "${{ github.sha }}" \
             --title "${{ needs.version.outputs.tag }}" \
             --generate-notes \
-            apps/vintrack-browser-sync-extension/dist/vintrack-browser-sync-extension.zip \
-            apps/vintrack-browser-sync-extension/dist/vintrack-browser-sync-extension-firefox.xpi
+            apps/vintrack-browser-sync-extension/dist/vintrack-browser-sync-extension.zip

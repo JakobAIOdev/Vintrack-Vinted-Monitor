@@ -18,6 +18,7 @@ import (
 	"vintrack-vinted/internal/session"
 
 	http "github.com/bogdanfinn/fhttp"
+	"github.com/bogdanfinn/fhttp/cookiejar"
 	tls_client "github.com/bogdanfinn/tls-client"
 	"github.com/bogdanfinn/tls-client/profiles"
 )
@@ -48,7 +49,10 @@ type vintedHTTPClient interface {
 }
 
 func NewClient(sess *session.VintedSession) (*Client, error) {
-	jar := tls_client.NewCookieJar()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, fmt.Errorf("create cookie jar: %w", err)
+	}
 
 	options := []tls_client.HttpClientOption{
 		tls_client.WithTimeoutSeconds(15),
@@ -101,12 +105,51 @@ func (c *Client) injectAuthCookie() {
 	if strings.TrimSpace(c.session.AccessToken) == "" && strings.TrimSpace(c.session.RefreshToken) == "" {
 		return
 	}
-	domainURL, _ := url.Parse(fmt.Sprintf("https://%s/", c.session.Domain))
-	cookies := []*http.Cookie{{Name: "access_token_web", Value: c.session.AccessToken, Path: "/"}}
-	if c.session.RefreshToken != "" {
-		cookies = append(cookies, &http.Cookie{Name: "refresh_token_web", Value: c.session.RefreshToken, Path: "/"})
+
+	authHost := authCookieHost(c.session.Domain)
+	domainURL, _ := url.Parse(fmt.Sprintf("https://%s/", authHost))
+	cookies := make([]*http.Cookie, 0, 6)
+	for _, domain := range authCookieDomains(authHost) {
+		cookies = append(cookies,
+			authCookie("access_token_web", c.session.AccessToken, domain),
+			authCookie("refresh_token_web", c.session.RefreshToken, domain),
+		)
 	}
 	c.httpClient.SetCookies(domainURL, cookies)
+}
+
+func authCookieDomains(domain string) []string {
+	host := authCookieHost(domain)
+	if host == "" {
+		return []string{""}
+	}
+
+	return []string{"", "." + host, "." + strings.TrimPrefix(host, "www.")}
+}
+
+func authCookieHost(domain string) string {
+	host := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(domain)), ".")
+	if host == "" || strings.HasPrefix(host, "www.") {
+		return host
+	}
+	return "www." + host
+}
+
+func authCookie(name, value, domain string) *http.Cookie {
+	cookie := &http.Cookie{
+		Name:     name,
+		Value:    strings.TrimSpace(value),
+		Path:     "/",
+		Domain:   domain,
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}
+	if cookie.Value == "" {
+		cookie.Expires = time.Unix(1, 0).UTC()
+		cookie.MaxAge = -1
+	}
+	return cookie
 }
 
 func (c *Client) apiHeaders() http.Header {

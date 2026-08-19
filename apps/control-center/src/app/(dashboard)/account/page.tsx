@@ -21,10 +21,13 @@ export default async function AccountPage({
     ]);
     const githubResult = (await searchParams)?.github;
     const latestExtensionVersion =
-        process.env.BROWSER_EXTENSION_LATEST_VERSION?.trim() || "0.1.4";
+        process.env.BROWSER_EXTENSION_LATEST_VERSION?.trim() || "0.1.5";
     const minimumExtensionVersion =
         process.env.BROWSER_EXTENSION_MIN_VERSION?.trim() ||
         latestExtensionVersion;
+    const firefoxExtensionUrl =
+        process.env.BROWSER_EXTENSION_FIREFOX_URL?.trim() ||
+        "https://addons.mozilla.org/firefox/addon/vintrack-browser-sync/";
 
     return (
         <div className="mx-auto max-w-[1440px] space-y-5">
@@ -76,6 +79,7 @@ export default async function AccountPage({
                         initialStatus={status as AccountStatus}
                         latestExtensionVersion={latestExtensionVersion}
                         minimumExtensionVersion={minimumExtensionVersion}
+                        firefoxExtensionUrl={firefoxExtensionUrl}
                     />
                 </section>
             </div>

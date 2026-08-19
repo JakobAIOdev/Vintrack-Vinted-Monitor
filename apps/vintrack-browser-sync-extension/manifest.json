@@ -1,10 +1,34 @@
 {
     "manifest_version": 3,
     "name": "Vintrack Browser Sync",
-    "version": "0.1.4",
+    "version": "0.1.5",
     "description": "Keeps the Vintrack Vinted session synced automatically.",
     "permissions": ["alarms", "cookies", "storage", "tabs"],
-    "host_permissions": ["<all_urls>"],
+    "host_permissions": [
+        "https://vintrack.jakobaio.dev/*",
+        "https://*.vinted.at/*",
+        "https://*.vinted.be/*",
+        "https://*.vinted.co.uk/*",
+        "https://*.vinted.com/*",
+        "https://*.vinted.cz/*",
+        "https://*.vinted.de/*",
+        "https://*.vinted.dk/*",
+        "https://*.vinted.es/*",
+        "https://*.vinted.fi/*",
+        "https://*.vinted.fr/*",
+        "https://*.vinted.hr/*",
+        "https://*.vinted.hu/*",
+        "https://*.vinted.ie/*",
+        "https://*.vinted.it/*",
+        "https://*.vinted.lt/*",
+        "https://*.vinted.lu/*",
+        "https://*.vinted.nl/*",
+        "https://*.vinted.pl/*",
+        "https://*.vinted.pt/*",
+        "https://*.vinted.ro/*",
+        "https://*.vinted.se/*",
+        "https://*.vinted.sk/*"
+    ],
     "background": {
         "service_worker": "background.js"
     },
@@ -16,7 +40,31 @@
     },
     "content_scripts": [
         {
-            "matches": ["<all_urls>"],
+            "matches": [
+                "https://vintrack.jakobaio.dev/*",
+                "https://*.vinted.at/*",
+                "https://*.vinted.be/*",
+                "https://*.vinted.co.uk/*",
+                "https://*.vinted.com/*",
+                "https://*.vinted.cz/*",
+                "https://*.vinted.de/*",
+                "https://*.vinted.dk/*",
+                "https://*.vinted.es/*",
+                "https://*.vinted.fi/*",
+                "https://*.vinted.fr/*",
+                "https://*.vinted.hr/*",
+                "https://*.vinted.hu/*",
+                "https://*.vinted.ie/*",
+                "https://*.vinted.it/*",
+                "https://*.vinted.lt/*",
+                "https://*.vinted.lu/*",
+                "https://*.vinted.nl/*",
+                "https://*.vinted.pl/*",
+                "https://*.vinted.pt/*",
+                "https://*.vinted.ro/*",
+                "https://*.vinted.se/*",
+                "https://*.vinted.sk/*"
+            ],
             "js": ["content-script.js"],
             "run_at": "document_start"
         }
@@ -24,7 +72,30 @@
     "web_accessible_resources": [
         {
             "resources": ["page-bridge.js"],
-            "matches": ["<all_urls>"]
+            "matches": [
+                "https://*.vinted.at/*",
+                "https://*.vinted.be/*",
+                "https://*.vinted.co.uk/*",
+                "https://*.vinted.com/*",
+                "https://*.vinted.cz/*",
+                "https://*.vinted.de/*",
+                "https://*.vinted.dk/*",
+                "https://*.vinted.es/*",
+                "https://*.vinted.fi/*",
+                "https://*.vinted.fr/*",
+                "https://*.vinted.hr/*",
+                "https://*.vinted.hu/*",
+                "https://*.vinted.ie/*",
+                "https://*.vinted.it/*",
+                "https://*.vinted.lt/*",
+                "https://*.vinted.lu/*",
+                "https://*.vinted.nl/*",
+                "https://*.vinted.pl/*",
+                "https://*.vinted.pt/*",
+                "https://*.vinted.ro/*",
+                "https://*.vinted.se/*",
+                "https://*.vinted.sk/*"
+            ]
         }
     ],
     "action": {
