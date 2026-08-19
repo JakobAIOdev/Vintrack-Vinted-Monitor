@@ -317,17 +317,20 @@ the shared free proxy pool.
 ### Browser extension
 
 The browser extension is the recommended way to link an account you are
-authorized to use. It syncs the Vinted web access token, selected domain, browser
-user agent, and Vintrack theme; it does **not** copy the complete cookie jar.
+authorized to use. It syncs the Vinted web access token, selected domain,
+account ID/display name for mismatch protection, and, with Firefox permission,
+the browser user agent. The theme stays in local extension storage. It does
+**not** copy the complete cookie jar or browser refresh token.
 
 - [Chrome ZIP](https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest/download/vintrack-browser-sync-extension.zip)
-- [Firefox XPI](https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest/download/vintrack-browser-sync-extension-firefox.xpi)
+- [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/vintrack-browser-sync/)
 - [Extension documentation](apps/vintrack-browser-sync-extension/README.md)
+- [Extension privacy policy](docs/browser-extension-privacy.md)
 
 For Chrome, extract the ZIP, open `chrome://extensions`, enable **Developer
-mode**, and select **Load unpacked**. Firefox development builds can be loaded
-from `about:debugging#/runtime/this-firefox`; normal installations should use
-the signed release XPI.
+mode**, and select **Load unpacked**. Firefox users install the Mozilla-signed
+version from AMO so it persists across browser restarts. Temporary Firefox
+loading through `about:debugging#/runtime/this-firefox` is only for development.
 
 Account actions and checkout support are optional and can break when upstream
 authentication or checkout flows change. Use a dedicated test account, review

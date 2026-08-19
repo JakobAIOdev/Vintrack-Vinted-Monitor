@@ -18,6 +18,7 @@ type fakeHTTPResult struct {
 	status  int
 	body    string
 	headers http.Header
+	cookies []*http.Cookie
 	err     error
 }
 
@@ -37,6 +38,9 @@ func (f *fakeVintedHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	f.results = f.results[1:]
 	if result.err != nil {
 		return nil, result.err
+	}
+	if len(result.cookies) > 0 {
+		f.SetCookies(req.URL, result.cookies)
 	}
 	return &http.Response{
 		StatusCode: result.status,
@@ -688,6 +692,152 @@ func TestSerializeCookies(t *testing.T) {
 	want := "anon_id=anon-2; foo=bar"
 	if got != want {
 		t.Fatalf("serializeCookies() = %q, want %q", got, want)
+	}
+}
+
+func TestAuthCookieDomains(t *testing.T) {
+	want := []string{"", ".www.vinted.co.uk", ".vinted.co.uk"}
+	for _, input := range []string{"www.vinted.co.uk", "vinted.co.uk", ".vinted.co.uk"} {
+		got := authCookieDomains(input)
+		if len(got) != len(want) {
+			t.Fatalf("authCookieDomains(%q) = %#v, want %#v", input, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("authCookieDomains(%q)[%d] = %q, want %q", input, i, got[i], want[i])
+			}
+		}
+	}
+}
+
+func TestInjectAuthCookieReplacesAllVintedScopes(t *testing.T) {
+	tests := []struct {
+		name         string
+		accessToken  string
+		refreshToken string
+	}{
+		{name: "browser access token without refresh", accessToken: "browser-access"},
+		{name: "manual access and refresh tokens", accessToken: "manual-access", refreshToken: "manual-refresh"},
+		{name: "refresh-only session", refreshToken: "manual-refresh"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, transport := testClient()
+			client.session.AccessToken = tt.accessToken
+			client.session.RefreshToken = tt.refreshToken
+
+			client.injectAuthCookie()
+
+			for _, domain := range []string{"", ".www.vinted.cz", ".vinted.cz"} {
+				assertEffectiveCookie(t, transport.cookies, "access_token_web", domain, tt.accessToken)
+				assertEffectiveCookie(t, transport.cookies, "refresh_token_web", domain, tt.refreshToken)
+			}
+		})
+	}
+}
+
+func TestInjectAuthCookieReplacesAnonymousCookiesInRealJar(t *testing.T) {
+	tests := []struct {
+		name         string
+		refreshToken string
+	}{
+		{name: "extension session removes anonymous refresh"},
+		{name: "manual session replaces anonymous refresh", refreshToken: "manual-refresh"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, err := NewClient(&session.VintedSession{
+				Domain:       "www.vinted.cz",
+				AccessToken:  "browser-access",
+				RefreshToken: tt.refreshToken,
+			})
+			if err != nil {
+				t.Fatalf("NewClient() error = %v", err)
+			}
+
+			domainURL, _ := url.Parse("https://www.vinted.cz/")
+			client.httpClient.SetCookies(domainURL, []*http.Cookie{
+				{Name: "access_token_web", Value: "anonymous-access", Domain: ".vinted.cz", Path: "/"},
+				{Name: "refresh_token_web", Value: "anonymous-refresh", Domain: ".www.vinted.cz", Path: "/"},
+			})
+
+			client.injectAuthCookie()
+
+			accessCount := 0
+			refreshCount := 0
+			for _, cookie := range client.httpClient.GetCookies(domainURL) {
+				switch cookie.Name {
+				case "access_token_web":
+					accessCount++
+					if cookie.Value != "browser-access" {
+						t.Fatalf("access cookie retained value %q", cookie.Value)
+					}
+				case "refresh_token_web":
+					refreshCount++
+					if cookie.Value != tt.refreshToken {
+						t.Fatalf("refresh cookie retained value %q, want %q", cookie.Value, tt.refreshToken)
+					}
+				}
+			}
+			if accessCount == 0 {
+				t.Fatal("no access cookie remained in real cookie jar")
+			}
+			if tt.refreshToken == "" && refreshCount != 0 {
+				t.Fatalf("real cookie jar retained %d anonymous refresh cookies", refreshCount)
+			}
+			if tt.refreshToken != "" && refreshCount == 0 {
+				t.Fatal("manual refresh token was not written to real cookie jar")
+			}
+		})
+	}
+}
+
+func TestWarmUpRestoresBrowserAuthCookiesAfterAnonymousBootstrap(t *testing.T) {
+	client, transport := testClient(fakeHTTPResult{
+		status: 200,
+		body:   `<meta name="csrf-token" content="csrf">`,
+		cookies: []*http.Cookie{
+			{Name: "access_token_web", Value: "anonymous-access", Domain: ".vinted.cz", Path: "/"},
+			{Name: "refresh_token_web", Value: "anonymous-refresh", Domain: ".www.vinted.cz", Path: "/"},
+		},
+	})
+	client.session.AccessToken = "browser-access"
+
+	if err := client.WarmUp(); err != nil {
+		t.Fatalf("WarmUp() error = %v", err)
+	}
+
+	for _, domain := range []string{"", ".www.vinted.cz", ".vinted.cz"} {
+		assertEffectiveCookie(t, transport.cookies, "access_token_web", domain, "browser-access")
+		assertEffectiveCookie(t, transport.cookies, "refresh_token_web", domain, "")
+	}
+	if strings.Contains(client.session.CookieHeader, "access_token_web") || strings.Contains(client.session.CookieHeader, "refresh_token_web") {
+		t.Fatalf("CookieHeader persisted auth cookies: %q", client.session.CookieHeader)
+	}
+}
+
+func assertEffectiveCookie(t *testing.T, cookies []*http.Cookie, name, domain, want string) {
+	t.Helper()
+	got := ""
+	found := false
+	for _, cookie := range cookies {
+		if cookie == nil || cookie.Name != name || cookie.Domain != domain || cookie.Path != "/" {
+			continue
+		}
+		found = true
+		if cookie.MaxAge < 0 {
+			got = ""
+			continue
+		}
+		got = cookie.Value
+	}
+	if !found {
+		t.Fatalf("cookie %s domain=%q not written", name, domain)
+	}
+	if got != want {
+		t.Fatalf("cookie %s domain=%q = %q, want %q", name, domain, got, want)
 	}
 }
 

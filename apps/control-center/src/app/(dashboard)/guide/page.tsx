@@ -25,7 +25,8 @@ import { CreateMonitorLink } from "@/components/maintenance/create-monitor-link"
 const CHROME_EXTENSION_DOWNLOAD_URL =
     "https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest/download/vintrack-browser-sync-extension.zip";
 const FIREFOX_EXTENSION_DOWNLOAD_URL =
-    "https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest/download/vintrack-browser-sync-extension-firefox.xpi";
+    process.env.BROWSER_EXTENSION_FIREFOX_URL?.trim() ||
+    "https://addons.mozilla.org/firefox/addon/vintrack-browser-sync/";
 
 const STEPS = [
     {
@@ -465,7 +466,7 @@ export default function GuidePage() {
                                     target="_blank"
                                     rel="noopener noreferrer"
                                 >
-                                    Firefox extension
+                                    Firefox Add-ons
                                     <Download className="h-3.5 w-3.5" />
                                 </a>
                             </Button>

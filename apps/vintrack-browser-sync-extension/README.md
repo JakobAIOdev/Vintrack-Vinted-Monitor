@@ -1,55 +1,88 @@
 # Vintrack Browser Sync Extension
 
-Browser extension for automatic Vintrack/Vinted session sync.
+Browser extension for automatic Vintrack/Vinted session sync. Chrome and
+Firefox use the same source and must always carry the same manifest version.
 
-```text
-https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest/download/vintrack-browser-sync-extension.zip
-https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest/download/vintrack-browser-sync-extension-firefox.xpi
-```
+## Public downloads
 
-## Build Packages
+- Chrome ZIP: <https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest/download/vintrack-browser-sync-extension.zip>
+- Firefox Add-ons: <https://addons.mozilla.org/firefox/addon/vintrack-browser-sync/>
+
+The Firefox listing URL can be overridden for deployments with
+`BROWSER_EXTENSION_FIREFOX_URL`. GitHub releases intentionally do not contain
+an unsigned `.xpi`: Firefox Stable and Beta reject unsigned add-ons, while AMO
+handles signing, review, installation, and updates for the public build.
+
+## Build and validate
 
 ```sh
+node apps/vintrack-browser-sync-extension/scripts/validate-extension.mjs
 apps/vintrack-browser-sync-extension/scripts/build-packages.sh
+npx --yes web-ext@10 lint \
+  --source-dir apps/vintrack-browser-sync-extension/dist/firefox
 ```
 
-The script writes:
+The build writes:
 
-- `dist/vintrack-browser-sync-extension.zip` for Chrome and Chromium browsers.
-- `dist/vintrack-browser-sync-extension-firefox.xpi` for Firefox.
-
-The Firefox `.xpi` must be signed by Mozilla before normal Firefox Release/Beta users can install it permanently. Submit it through addons.mozilla.org as a listed or self-distributed add-on.
+- `dist/vintrack-browser-sync-extension.zip`, the Chrome/Chromium release asset;
+- `dist/chrome`, the unpacked Chrome build;
+- `dist/chrome-development`, the unpacked localhost development build; and
+- `dist/firefox`, the unsigned Firefox source directory used by `web-ext` and AMO.
 
 ## Install in Chrome
 
 1. Download and unzip `vintrack-browser-sync-extension.zip`.
 2. Open `chrome://extensions`.
-3. Enable `Developer mode`.
-4. Click `Load unpacked`.
+3. Enable **Developer mode**.
+4. Click **Load unpacked**.
 5. Select the extracted extension folder.
-6. Open Vintrack, go to `Account`, and click `Link With Installed Extension`.
+6. Open Vintrack, go to **Account**, and click **Link With Installed Extension**.
 
-For local development, select `apps/vintrack-browser-sync-extension` directly in step 5.
+For local development on `http://localhost:3000`, run the build script and
+select `apps/vintrack-browser-sync-extension/dist/chrome-development` in step
+5. The public ZIP intentionally cannot connect to localhost.
 
 ## Install in Firefox
 
-For local development:
+Public users install the signed extension from the AMO listing. This works in
+Firefox Stable and Developer Edition and remains installed after a restart.
+
+For local development only:
 
 1. Run `apps/vintrack-browser-sync-extension/scripts/build-packages.sh`.
 2. Open `about:debugging#/runtime/this-firefox`.
-3. Click `Load Temporary Add-on`.
+3. Click **Load Temporary Add-on**.
 4. Select `apps/vintrack-browser-sync-extension/dist/firefox/manifest.json`.
-5. Open Vintrack, go to `Account`, and click `Link With Installed Extension`.
 
-For users, distribute the signed `vintrack-browser-sync-extension-firefox.xpi` from GitHub releases or addons.mozilla.org.
+Temporary extensions are removed by Firefox on restart by design.
 
-## What it sends
+## Publish to AMO
 
-Only these values are synced to Vintrack:
+1. Create an AMO developer account and API credentials.
+2. Add the JWT issuer and secret as GitHub Actions secrets named
+   `AMO_JWT_ISSUER` and `AMO_JWT_SECRET`.
+3. Confirm the listing metadata in `amo-metadata.json` and the public
+   [privacy policy](../../docs/browser-extension-privacy.md). Add that policy to
+   the AMO listing's privacy-policy field during the initial developer setup.
+4. Bump both manifests to the same new version and run the normal
+   **Prepare Release** workflow.
 
-- `access_token_web`
-- current Vinted domain
-- browser user agent
-- Vintrack light/dark theme preference
+When the prepared release PR is merged, **Release and Deploy** compares the
+manifest version with marker tags such as `extension-v0.1.5`. A missing tag
+causes the workflow to validate and lint the extension, submit the listed build
+with `web-ext sign --channel=listed`, and create the marker tag after a
+successful submission. An unchanged extension version is skipped. After AMO
+approves the first version, set `BROWSER_EXTENSION_FIREFOX_URL` to the final
+listing URL if it differs from the configured slug.
 
-It does not send the full cookie jar or the browser refresh token.
+## Data disclosure
+
+The extension transmits the Vinted web access token, selected Vinted domain,
+and Vinted account ID/display name needed for account-mismatch protection. On
+Firefox, the browser user-agent is transmitted only with the optional technical
+data permission. The theme is stored locally and mirrored between approved
+Vintrack and Vinted pages.
+
+It does not transmit the complete cookie jar, browser refresh token, Vinted
+password, or payment-card data. See the
+[extension privacy policy](../../docs/browser-extension-privacy.md).

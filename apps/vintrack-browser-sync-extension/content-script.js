@@ -1,5 +1,34 @@
 (function () {
-  const extensionApi = globalThis.chrome || globalThis.browser;
+  const extensionApi = globalThis.browser || globalThis.chrome;
+  const VINTRACK_APP_ORIGINS = new Set([
+    "https://vintrack.jakobaio.dev",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+  ]);
+  const SUPPORTED_VINTED_DOMAINS = [
+    "vinted.at",
+    "vinted.be",
+    "vinted.co.uk",
+    "vinted.com",
+    "vinted.cz",
+    "vinted.de",
+    "vinted.dk",
+    "vinted.es",
+    "vinted.fi",
+    "vinted.fr",
+    "vinted.hr",
+    "vinted.hu",
+    "vinted.ie",
+    "vinted.it",
+    "vinted.lt",
+    "vinted.lu",
+    "vinted.nl",
+    "vinted.pl",
+    "vinted.pt",
+    "vinted.ro",
+    "vinted.se",
+    "vinted.sk",
+  ];
 
   function getRuntime() {
     const runtime = extensionApi?.runtime;
@@ -47,11 +76,15 @@
   }
 
   function isVintedHost(hostname) {
-    return (
-      hostname === "vinted.co.uk" ||
-      hostname.endsWith(".vinted.co.uk") ||
-      /(^|\.)vinted\./.test(hostname)
+    const normalized = String(hostname || "").trim().toLowerCase();
+    return SUPPORTED_VINTED_DOMAINS.some(
+      (supported) =>
+        normalized === supported || normalized.endsWith(`.${supported}`),
     );
+  }
+
+  function isVintrackAppOrigin(origin) {
+    return VINTRACK_APP_ORIGINS.has(String(origin || ""));
   }
 
   function post(type, payload) {
@@ -101,7 +134,7 @@
   }
 
   function syncVintrackTheme() {
-    if (isVintedHost(window.location.hostname)) {
+    if (!isVintrackAppOrigin(window.location.origin)) {
       return;
     }
 
@@ -119,7 +152,7 @@
   }
 
   function watchVintrackTheme() {
-    if (isVintedHost(window.location.hostname)) {
+    if (!isVintrackAppOrigin(window.location.origin)) {
       return;
     }
 
@@ -287,18 +320,23 @@
   ensurePageBridge();
   watchVintrackTheme();
 
-  sendRuntimeMessage(
-    { type: "VINTRACK_EXTENSION_PING" },
-    (response, runtimeError) => {
-      if (runtimeError) {
-        return;
-      }
-      post("VINTRACK_EXTENSION_READY", response || { installed: true });
-    },
-  );
+  if (isVintrackAppOrigin(window.location.origin)) {
+    sendRuntimeMessage(
+      { type: "VINTRACK_EXTENSION_PING" },
+      (response, runtimeError) => {
+        if (runtimeError) {
+          return;
+        }
+        post("VINTRACK_EXTENSION_READY", response || { installed: true });
+      },
+    );
+  }
 
   window.addEventListener("message", (event) => {
     if (event.source !== window || !event.data?.type) {
+      return;
+    }
+    if (!isVintrackAppOrigin(window.location.origin)) {
       return;
     }
 

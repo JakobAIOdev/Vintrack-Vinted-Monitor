@@ -23,6 +23,7 @@ jobs:
     outputs:
       control_center: ${{ steps.filter.outputs.control_center }}
       openapi: ${{ steps.filter.outputs.openapi }}
+      extension: ${{ steps.filter.outputs.extension }}
       vinted_service: ${{ steps.filter.outputs.vinted_service }}
       worker: ${{ steps.filter.outputs.worker }}
 
@@ -44,6 +45,10 @@ jobs:
             openapi:
               - 'docs/openapi/**'
               - '.github/workflows/ci.yml'
+            extension:
+              - 'apps/vintrack-browser-sync-extension/**'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release.yml'
             vinted_service:
               - 'apps/vinted-service/**'
               - '.github/workflows/ci.yml'
@@ -68,6 +73,30 @@ jobs:
 
       - name: Lint OpenAPI specs
         run: npx --yes @redocly/cli@1.25.15 lint docs/openapi/vinted-service.yaml
+
+  browser-extension:
+    name: Browser Extension
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.extension == 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Validate manifests and runtime allowlists
+        run: node apps/vintrack-browser-sync-extension/scripts/validate-extension.mjs
+
+      - name: Build packages
+        run: apps/vintrack-browser-sync-extension/scripts/build-packages.sh
+
+      - name: Lint Firefox build
+        run: npx --yes web-ext@10 lint --source-dir apps/vintrack-browser-sync-extension/dist/firefox
 
   control-center-build:
     name: Control Center Build

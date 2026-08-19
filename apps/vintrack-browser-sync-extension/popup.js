@@ -6,6 +6,15 @@ const connectionBadgeEl = document.getElementById("connection-badge");
 const autoBadgeEl = document.getElementById("auto-badge");
 const syncButton = document.getElementById("sync");
 const clearButton = document.getElementById("clear");
+const extensionApi = globalThis.browser || globalThis.chrome;
+
+async function sendRuntimeMessage(message) {
+  try {
+    return await extensionApi.runtime.sendMessage(message);
+  } catch (error) {
+    return { ok: false, error: error?.message || "Extension request failed" };
+  }
+}
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -94,40 +103,34 @@ function renderState(response) {
   hintEl.textContent = "Keep using Vinted normally in this browser.";
 }
 
-function refreshState() {
-  chrome.runtime.sendMessage(
-    { type: "VINTRACK_EXTENSION_PING" },
-    (response) => {
-      renderState(response);
-    },
+async function refreshState() {
+  renderState(
+    await sendRuntimeMessage({ type: "VINTRACK_EXTENSION_PING" }),
   );
 }
 
 refreshState();
 
-syncButton.addEventListener("click", () => {
+syncButton.addEventListener("click", async () => {
   syncButton.disabled = true;
   syncButton.textContent = "Syncing...";
 
-  chrome.runtime.sendMessage(
-    { type: "VINTRACK_EXTENSION_MANUAL_SYNC" },
-    (response) => {
-      if (!response?.ok) {
-        setStatus(response?.error || "Sync failed.");
-        hintEl.textContent =
-          "Open a Vinted tab in this browser, then try again.";
-        syncButton.disabled = false;
-        syncButton.textContent = "Sync";
-        return;
-      }
+  const response = await sendRuntimeMessage({
+    type: "VINTRACK_EXTENSION_MANUAL_SYNC",
+  });
+  if (!response?.ok) {
+    setStatus(response?.error || "Sync failed.");
+    hintEl.textContent = "Open a Vinted tab in this browser, then try again.";
+    syncButton.disabled = false;
+    syncButton.textContent = "Sync";
+    return;
+  }
 
-      renderState(response);
-      syncButton.textContent = "Sync";
-    },
-  );
+  renderState(response);
+  syncButton.textContent = "Sync";
 });
 
-clearButton.addEventListener("click", () => {
+clearButton.addEventListener("click", async () => {
   if (
     !confirm(
       "Clear Vintrack extension data on this browser? Vinted cookies will stay untouched.",
@@ -139,11 +142,9 @@ clearButton.addEventListener("click", () => {
   clearButton.disabled = true;
   clearButton.textContent = "Clearing...";
 
-  chrome.runtime.sendMessage(
-    { type: "VINTRACK_EXTENSION_CLEAR_LOCAL_STATE" },
-    (response) => {
-      renderState(response);
-      clearButton.textContent = "Clear extension data";
-    },
-  );
+  const response = await sendRuntimeMessage({
+    type: "VINTRACK_EXTENSION_CLEAR_LOCAL_STATE",
+  });
+  renderState(response);
+  clearButton.textContent = "Clear extension data";
 });

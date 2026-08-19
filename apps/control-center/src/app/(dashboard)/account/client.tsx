@@ -89,8 +89,6 @@ type ExtensionSyncResult = {
 
 const CHROME_EXTENSION_DOWNLOAD_URL =
     "https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest/download/vintrack-browser-sync-extension.zip";
-const FIREFOX_EXTENSION_DOWNLOAD_URL =
-    "https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest/download/vintrack-browser-sync-extension-firefox.xpi";
 
 function sessionStatusLabel(value?: string) {
     switch (value) {
@@ -151,14 +149,27 @@ function compareExtensionVersions(current: string, target: string) {
     return 0;
 }
 
+function extensionNotDetectedMessage() {
+    if (
+        typeof window !== "undefined" &&
+        (window.location.hostname === "localhost" ||
+            window.location.hostname === "127.0.0.1")
+    ) {
+        return "The public extension cannot access localhost. Load the unpacked chrome-development build and reload this page.";
+    }
+    return "Browser extension not detected. Install it, then reload this page.";
+}
+
 export function AccountClient({
     initialStatus,
     latestExtensionVersion,
     minimumExtensionVersion,
+    firefoxExtensionUrl,
 }: {
     initialStatus: AccountStatus;
     latestExtensionVersion: string;
     minimumExtensionVersion: string;
+    firefoxExtensionUrl: string;
 }) {
     const [status, setStatus] = useState<AccountStatus>(initialStatus);
     const [accessToken, setAccessToken] = useState("");
@@ -491,9 +502,7 @@ export function AccountClient({
             setBrowserSync(data);
             if (!extensionInstalled) {
                 setIsBrowserSyncStarting(false);
-                toast.error(
-                    "Browser extension not detected. Install it and try again.",
-                );
+                toast.error(extensionNotDetectedMessage());
                 return;
             }
 
@@ -520,7 +529,7 @@ export function AccountClient({
 
     const handleManualExtensionSync = () => {
         if (!extensionInstalled) {
-            toast.error("Browser extension not detected");
+            toast.error(extensionNotDetectedMessage());
             return;
         }
         if (extensionUpdateRequired) {
@@ -786,12 +795,12 @@ export function AccountClient({
                         </Button>
                         <Button asChild variant="outline" className="gap-2">
                             <a
-                                href={FIREFOX_EXTENSION_DOWNLOAD_URL}
+                                href={firefoxExtensionUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
                             >
                                 <Download className="h-4 w-4" />
-                                Firefox Extension
+                                Firefox Add-ons
                                 <ExternalLink className="h-3.5 w-3.5" />
                             </a>
                         </Button>
