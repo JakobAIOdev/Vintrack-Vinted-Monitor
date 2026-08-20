@@ -48,6 +48,7 @@ Shadow discovery also runs on a healthy shared free-proxy pool so its timing can
 | `TELEGRAM_GLOBAL_RATE_PER_SECOND`  |         `25` | Process-wide Telegram send rate. One bot token serves every member, so this budget is shared by all chats.         |
 | `TELEGRAM_GLOBAL_BURST`            |         `25` | Burst allowance for the Telegram send budget.                                                                      |
 | `ENRICHMENT_WORKERS`               |         `24` | Concurrent persistence and seller-enrichment workers. Effective throughput is capped by `SELLER_CLIENT_POOL_SIZE`. |
+| `SELLER_NEGATIVE_CACHE_TTL_MS`     |       `3000` | How long a definitive seller-fetch failure (401/403/429/5xx/decode/empty/no-region/no-client) is remembered before retrying; excludes timeouts and cancellations. Kept below the 5s strict-retry delay so a scheduled retry always attempts a fresh fetch. `0` disables it. |
 | `FREE_PROXY_HEALTH_CONCURRENCY`    |         `64` | Cluster-wide maximum parallel free-proxy validations in the isolated proxy-maintainer process.                     |
 | `FREE_PROXY_HEALTH_PER_REGION_CONCURRENCY` | `12` | Maximum parallel validations against one Vinted regional domain.                                                    |
 | `FREE_PROXY_HEALTH_BATCH_PER_REGION` |      `100` | Per-region cycle budget once the target reserve is available; work is claimed in bounded waves.                    |
@@ -55,6 +56,7 @@ Shadow discovery also runs on a healthy shared free-proxy pool so its timing can
 | `MONITOR_RUN_RETENTION_HOURS`      |         `24` | Retention for raw per-check monitor telemetry; hourly aggregates remain available separately.                      |
 | `MONITOR_RUN_STATS_RETENTION_DAYS` |         `90` | Retention for compact hourly monitor-run aggregates.                                                               |
 | `DETECTION_RETENTION_DAYS`         |         `14` | Retention for discovery/canonical comparison telemetry.                                                            |
+| `CATALOG_LATENCY_METRICS`          |        `true` | In-worker fetch/process latency aggregation (p50/p95 written to `app_settings`); set `false` to disable.           |
 
 Client selection favors low-latency, successful, idle sessions. HTTP 401/403/407/429 responses cool down the affected session, and hedged-request losers are canceled without being counted as failures. Free discovery uses its own stable client pool, so free-pool refreshes no longer restart the feed or disturb canonical catalog sessions.
 

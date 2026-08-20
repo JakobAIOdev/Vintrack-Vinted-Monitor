@@ -61,6 +61,7 @@ type Engine struct {
 	alertDeliveryInFlight  atomic.Int64
 	alertDeliveryMaxFlight int
 	enrichmentMetrics      *sellerEnrichmentMetrics
+	catalogLatency         *catalogLatencyMetrics
 	jobsWG                 sync.WaitGroup
 }
 
@@ -115,7 +116,17 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 		alertDeliveryMaxFlight: alertDeliveryWorkerCount() + alertDeliveryWorkerCount()/2,
 		enrichmentMetrics:      &sellerEnrichmentMetrics{},
 	}
+	// The catalog latency aggregate is opt-out rather than opt-in: it is a single
+	// bounded ring plus one app_settings row every 10s, and without it the worker
+	// has no view of fetch versus post-fetch cost at all.
+	if catalogLatencyMetricsEnabled() {
+		engine.catalogLatency = newCatalogLatencyMetrics()
+	}
 	engine.startPipelines()
+	if engine.catalogLatency != nil {
+		engine.jobsWG.Add(1)
+		go engine.catalogLatencyHeartbeat()
+	}
 	return engine
 }
 
@@ -584,6 +595,19 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 		checks = nextCheck
 		gotSuccess := result.err == nil && result.status == 200
+		// The fetch duration and attempt list were already measured by the hedged
+		// fetch and previously thrown away. postFetchStart splits the remaining
+		// cycle cost (filtering, diffing, building, enqueueing) away from it.
+		postFetchStart := time.Now()
+		recordCatalogCycle := func(itemCount int, newItemCount int) {
+			e.catalogLatency.recordCycle(catalogLatencySample{
+				fetchUS:   result.duration.Microseconds(),
+				processUS: time.Since(postFetchStart).Microseconds(),
+				attempts:  len(result.attempts),
+				itemCount: itemCount,
+				newItems:  newItemCount,
+			})
+		}
 		// Runtime failures only drive this process's ClientPool cooldowns and
 		// replacements. The regional maintainer is the sole authority for shared
 		// negative health transitions, while successful catalog evidence is
@@ -598,6 +622,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		if !gotSuccess {
+			e.catalogLatency.recordFailedFetch(len(result.attempts))
 			failureMessage := catalogFailureMessage(result)
 			failureCode := catalogFailureCode(result.status, result.err)
 			proxyLabel := clientProxyLabel(result.client, "")
@@ -675,6 +700,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			if checks%10 == 0 {
 				log.Printf("[%d] #%d | 0 items returned by Vinted", m.ID, checks)
 			}
+			recordCatalogCycle(0, 0)
 			e.db.RecordMonitorRun(model.MonitorRun{
 				MonitorID: m.ID, Status: "success", StatusCode: 200,
 				DurationMS: int(time.Since(cycleStart).Milliseconds()), ProxySource: proxySource,
@@ -721,6 +747,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			}
 			log.Printf("[%d] initial scan saw %d items; queued %d unpersisted seeds in background without notifications", m.ID, len(items), seeded)
 			initializedQueries[queryIndex] = true
+			recordCatalogCycle(len(items), 0)
 			e.db.RecordMonitorRun(model.MonitorRun{
 				MonitorID: m.ID, Status: "success", StatusCode: 200,
 				DurationMS: int(time.Since(cycleStart).Milliseconds()), ItemCount: len(items),
@@ -788,6 +815,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		if delivered > 0 {
 			log.Printf("[%d] #%d | %d items | %d claimed | %dms", m.ID, checks, len(items), delivered, time.Since(cycleStart).Milliseconds())
 		}
+		recordCatalogCycle(len(items), delivered)
 		e.db.RecordMonitorRun(model.MonitorRun{
 			MonitorID: m.ID, Status: "success", StatusCode: 200,
 			DurationMS: int(time.Since(cycleStart).Milliseconds()), ItemCount: len(items),
@@ -1094,7 +1122,7 @@ func (e *Engine) buildItems(m model.Monitor, vItems []model.VintedItem) []model.
 	for i, vItem := range vItems {
 		itemURL := vItem.Url
 		if !strings.HasPrefix(itemURL, "http") {
-			itemURL = fmt.Sprintf("https://%s%s", domain, itemURL)
+			itemURL = "https://" + domain + itemURL
 		}
 		size := vItem.SizeTitle
 		if size == "" {
@@ -1106,12 +1134,16 @@ func (e *Engine) buildItems(m model.Monitor, vItems []model.VintedItem) []model.
 		}
 
 		var extraImages []string
-		for idx, photo := range vItem.Photos {
-			if idx == 0 {
-				continue
+		if len(vItem.Photos) > 1 {
+			extraImages = make([]string, 0, len(vItem.Photos)-1)
+			for _, photo := range vItem.Photos[1:] {
+				if photo.Url != "" {
+					extraImages = append(extraImages, photo.Url)
+				}
 			}
-			if photo.Url != "" {
-				extraImages = append(extraImages, photo.Url)
+			if len(extraImages) == 0 {
+				// preserve the previous nil-on-empty behaviour
+				extraImages = nil
 			}
 		}
 
@@ -1146,15 +1178,27 @@ func (e *Engine) buildItems(m model.Monitor, vItems []model.VintedItem) []model.
 	return items
 }
 
+// buildSellerProfileURL runs once per built item. It is written with a single
+// strings.Builder rather than three fmt.Sprintf calls because the fmt path was
+// eight allocations per item.
 func buildSellerProfileURL(domain string, sellerID int64, sellerLogin string) string {
 	if sellerID == 0 {
 		return ""
 	}
-	sellerPath := fmt.Sprintf("%d", sellerID)
-	if strings.TrimSpace(sellerLogin) != "" {
-		sellerPath = fmt.Sprintf("%d-%s", sellerID, strings.TrimSpace(sellerLogin))
+	login := strings.TrimSpace(sellerLogin)
+	id := strconv.FormatInt(sellerID, 10)
+
+	var builder strings.Builder
+	builder.Grow(len("https://") + len(domain) + len("/member/") + len(id) + 1 + len(login))
+	builder.WriteString("https://")
+	builder.WriteString(domain)
+	builder.WriteString("/member/")
+	builder.WriteString(id)
+	if login != "" {
+		builder.WriteByte('-')
+		builder.WriteString(login)
 	}
-	return fmt.Sprintf("https://%s/member/%s", domain, sellerPath)
+	return builder.String()
 }
 
 func mockSellerMetadata(userID int64, itemID int64) SellerInfo {

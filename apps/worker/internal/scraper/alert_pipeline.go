@@ -2,7 +2,6 @@ package scraper
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -353,7 +352,7 @@ func (e *Engine) enrichAndPersist(job enrichmentJob) {
 		remoteStarted := time.Now()
 		info, fetchErr = e.fetchSellerInfo(fetchCtx, job.enricher, job.vintedItem.User.ID)
 		if e.enrichmentMetrics != nil {
-			e.enrichmentMetrics.recordRemote(time.Since(remoteStarted), errors.Is(fetchErr, context.DeadlineExceeded))
+			e.enrichmentMetrics.recordRemote(time.Since(remoteStarted), classifySellerFetchError(fetchErr))
 		}
 		cancel()
 	}

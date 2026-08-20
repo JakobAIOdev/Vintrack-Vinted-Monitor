@@ -149,6 +149,203 @@ func isSellerInfoComplete(info SellerInfo) bool {
 	return info.Region != "" && info.RatingAvailable
 }
 
+// sellerFetchFailureKind classifies why a remote seller lookup failed so
+// metrics and negative caching can distinguish causes instead of collapsing
+// every non-success into one counter.
+type sellerFetchFailureKind int
+
+const (
+	failureNone sellerFetchFailureKind = iota
+	failureTimeout
+	failureCanceled
+	failureAuth        // HTTP 401/403
+	failureRateLimited // HTTP 429
+	failureServerError // HTTP 5xx
+	failureDecodeError // malformed/undecodable JSON body
+	failureEmptyResponse
+	failureNoRegion // 200 with a valid user but no mappable country
+	failureNoClient // no healthy seller client available to dispatch the request
+	failureNetwork  // transport-level error (no HTTP response at all)
+	failureUnknown
+)
+
+func (k sellerFetchFailureKind) String() string {
+	switch k {
+	case failureNone:
+		return "none"
+	case failureTimeout:
+		return "timeout"
+	case failureCanceled:
+		return "canceled"
+	case failureAuth:
+		return "auth"
+	case failureRateLimited:
+		return "rate_limited"
+	case failureServerError:
+		return "server_error"
+	case failureDecodeError:
+		return "decode_error"
+	case failureEmptyResponse:
+		return "empty_response"
+	case failureNoRegion:
+		return "no_region"
+	case failureNoClient:
+		return "no_client"
+	case failureNetwork:
+		return "network"
+	default:
+		return "unknown"
+	}
+}
+
+// sellerFetchError carries a classification alongside the underlying error so
+// callers far from the HTTP call site (metrics, negative caching) can bucket
+// a failure without re-parsing status codes or error strings.
+type sellerFetchError struct {
+	kind   sellerFetchFailureKind
+	status int
+	err    error
+}
+
+func (e *sellerFetchError) Error() string {
+	if e.err != nil {
+		return e.err.Error()
+	}
+	return fmt.Sprintf("seller fetch failed (%s)", e.kind)
+}
+
+func (e *sellerFetchError) Unwrap() error { return e.err }
+
+// classifySellerFetchError buckets any error returned from the seller fetch
+// path, including plain context errors that are never wrapped in
+// sellerFetchError.
+func classifySellerFetchError(err error) sellerFetchFailureKind {
+	if err == nil {
+		return failureNone
+	}
+	var sfe *sellerFetchError
+	if errors.As(err, &sfe) {
+		return sfe.kind
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return failureTimeout
+	}
+	if errors.Is(err, context.Canceled) {
+		return failureCanceled
+	}
+	return failureUnknown
+}
+
+func classifyHTTPStatus(status int) sellerFetchFailureKind {
+	switch {
+	case status == 0:
+		return failureNetwork
+	case status == 401 || status == 403:
+		return failureAuth
+	case status == 429:
+		return failureRateLimited
+	case status >= 500:
+		return failureServerError
+	default:
+		return failureUnknown
+	}
+}
+
+// sellerNegativeCacheEntry remembers a recent, definitive fetch failure for a
+// seller so a burst of newly detected items from the same seller (arriving a
+// few seconds apart, after the request that discovered the failure already
+// completed and its single-flight closed) does not each pay for a fresh
+// remote round trip against a seller that just failed for a non-transient
+// reason. It deliberately never stores a SellerInfo value: callers still get
+// the same sentinel-failure shape as a fresh miss, so a negative-cache hit
+// can never be mistaken for a real "no rating" result downstream.
+type sellerNegativeCacheEntry struct {
+	err       error
+	kind      sellerFetchFailureKind
+	fetchedAt time.Time
+	counter   uint64
+}
+
+type sellerNegativeCacheStore struct {
+	mu      sync.Mutex
+	entries map[string]sellerNegativeCacheEntry
+	counter uint64
+	hits    atomic.Uint64
+}
+
+// sellerNegativeCache is process-global (like sellerCache) rather than
+// per-SellerEnricher: enrichers are keyed by domain+proxySource
+// (GetOrCreateEnricher), so two monitors on different proxy sources targeting
+// the same domain would otherwise each run their own failed fetch for the
+// same seller. A shared negative cache coalesces those the same way the
+// shared positive cache already does.
+var sellerNegativeCache = &sellerNegativeCacheStore{
+	entries: make(map[string]sellerNegativeCacheEntry, 1024),
+}
+
+func (c *sellerNegativeCacheStore) Get(domain string, userID int64, ttl time.Duration) (sellerNegativeCacheEntry, bool) {
+	if ttl <= 0 {
+		return sellerNegativeCacheEntry{}, false
+	}
+	key := sellerCacheKey(domain, userID)
+	c.mu.Lock()
+	entry, ok := c.entries[key]
+	if ok && time.Since(entry.fetchedAt) > ttl {
+		delete(c.entries, key)
+		ok = false
+	}
+	c.mu.Unlock()
+	if ok {
+		c.hits.Add(1)
+	}
+	return entry, ok
+}
+
+func (c *sellerNegativeCacheStore) Set(domain string, userID int64, err error, kind sellerFetchFailureKind) {
+	key := sellerCacheKey(domain, userID)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.counter++
+	n := c.counter
+	if len(c.entries) > 20000 {
+		minCounter := n
+		for _, e := range c.entries {
+			if e.counter < minCounter {
+				minCounter = e.counter
+			}
+		}
+		mid := minCounter + (n-minCounter)/2
+		for k, e := range c.entries {
+			if e.counter < mid {
+				delete(c.entries, k)
+			}
+		}
+	}
+	c.entries[key] = sellerNegativeCacheEntry{err: err, kind: kind, fetchedAt: time.Now(), counter: n}
+}
+
+func (c *sellerNegativeCacheStore) HitCount() uint64 { return c.hits.Load() }
+
+// negativeCacheMaxTTL keeps the negative cache strictly below
+// scheduleStrictSellerRetry's first retry delay (5s, alert_pipeline.go), so a
+// scheduled strict retry can never observe a stale cached failure instead of
+// making a fresh attempt. This is enforced here rather than left as
+// configuration guidance, because a misconfigured SELLER_NEGATIVE_CACHE_TTL_MS
+// would otherwise silently cause strict-filter alerts to run out their
+// deadline against a seller that had already recovered.
+const negativeCacheMaxTTL = 4 * time.Second
+
+func negativeCacheTTLFromEnv() time.Duration {
+	ttl := time.Duration(getEnvInt("SELLER_NEGATIVE_CACHE_TTL_MS", 3000)) * time.Millisecond
+	if ttl < 0 {
+		ttl = 0
+	}
+	if ttl > negativeCacheMaxTTL {
+		ttl = negativeCacheMaxTTL
+	}
+	return ttl
+}
+
 func normalizeSellerRating(feedbackCount int, feedbackReputation float64) (string, float64, int, bool) {
 	if feedbackCount > 0 &&
 		!math.IsNaN(feedbackReputation) &&
@@ -174,6 +371,7 @@ type SellerEnricher struct {
 	inflight        map[int64]*sellerFetchFlight
 	cacheTTL        time.Duration
 	hedgeDelay      time.Duration
+	negativeTTL     time.Duration
 	remoteFetch     func(context.Context, int64) (SellerInfo, error)
 }
 
@@ -200,9 +398,10 @@ func NewSellerEnricher(pm *proxy.Manager, db *database.Store, domain string, poo
 	pool.SetMaxInFlightPerClient(1)
 	s := &SellerEnricher{
 		pool: pool, pm: pm, db: db, domain: domain, trafficRecorder: trafficRecorder,
-		inflight:   make(map[int64]*sellerFetchFlight),
-		cacheTTL:   cacheTTL,
-		hedgeDelay: hedgeDelay,
+		inflight:    make(map[int64]*sellerFetchFlight),
+		cacheTTL:    cacheTTL,
+		hedgeDelay:  hedgeDelay,
+		negativeTTL: negativeCacheTTLFromEnv(),
 	}
 	return s
 }
@@ -263,6 +462,14 @@ func (s *SellerEnricher) FetchSellerInfo(ctx context.Context, userID int64) (Sel
 			return info, nil
 		}
 	}
+	// A recent, definitive failure short-circuits without a network call. This
+	// only ever returns the same sentinel-failure shape a fresh attempt would
+	// have produced, never a fabricated SellerInfo, and the TTL default (3s)
+	// stays well under the 5s minimum strict-retry delay so a scheduled retry
+	// always finds this expired and performs a genuine fresh fetch.
+	if entry, ok := sellerNegativeCache.Get(s.domain, userID, s.negativeTTL); ok {
+		return SellerInfo{Region: "NaN"}, entry.err
+	}
 
 	s.flightMu.Lock()
 	if s.inflight == nil {
@@ -299,6 +506,14 @@ func (s *SellerEnricher) FetchSellerInfo(ctx context.Context, userID int64) (Sel
 			if cacheErr != nil {
 				log.Printf("[seller-enrich] user=%d full cache write failed: %v", userID, cacheErr)
 			}
+		}
+	} else if err != nil {
+		// Timeouts and cancellations reflect the caller's own remaining budget
+		// (e.g. a strict retry racing the alert deadline), not a durable fact
+		// about the seller, so they are excluded to avoid poisoning a later
+		// caller that still has plenty of time left.
+		if kind := classifySellerFetchError(err); kind != failureTimeout && kind != failureCanceled {
+			sellerNegativeCache.Set(s.domain, userID, err, kind)
 		}
 	}
 
@@ -363,7 +578,7 @@ func (s *SellerEnricher) fetchHedged(ctx context.Context, userID int64) (SellerI
 		if err := ctx.Err(); err != nil {
 			return SellerInfo{Region: "NaN"}, err
 		}
-		return SellerInfo{Region: "NaN"}, errors.New("no healthy seller client available")
+		return SellerInfo{Region: "NaN"}, &sellerFetchError{kind: failureNoClient, err: errors.New("no healthy seller client available")}
 	}
 	timer := time.NewTimer(s.hedgeDelay)
 	defer timer.Stop()
@@ -399,14 +614,14 @@ func (s *SellerEnricher) fetchHedged(ctx context.Context, userID int64) (SellerI
 		}
 	}
 	if lastErr == nil {
-		lastErr = errors.New("seller info unavailable")
+		lastErr = &sellerFetchError{kind: failureUnknown, err: errors.New("seller info unavailable")}
 	}
 	return SellerInfo{Region: "NaN"}, lastErr
 }
 
 func (s *SellerEnricher) fetchFromAPI(ctx context.Context, client *Client, userID int64) (SellerInfo, int, error) {
 	if client == nil || userID <= 0 {
-		return SellerInfo{}, 0, errors.New("invalid seller request")
+		return SellerInfo{}, 0, &sellerFetchError{kind: failureUnknown, err: errors.New("invalid seller request")}
 	}
 
 	apiURL := fmt.Sprintf("https://%s/api/v2/users/%d", s.domain, userID)
@@ -439,21 +654,24 @@ func (s *SellerEnricher) fetchFromAPI(ctx context.Context, client *Client, userI
 				resp.User.CountryTitle,
 				resp.User.FeedbackCount,
 			)
+			return SellerInfo{}, status, &sellerFetchError{kind: failureNoRegion, status: status, err: errors.New("seller api response had no usable region")}
 		} else if err != nil {
 			logSellerEnrichmentFailure("seller-api", userID, "json decode error: %v", err)
-		} else {
-			logSellerEnrichmentFailure("seller-api", userID, "response did not contain a valid user")
+			return SellerInfo{}, status, &sellerFetchError{kind: failureDecodeError, status: status, err: fmt.Errorf("seller api decode error: %w", err)}
 		}
-	} else if status == 200 {
+		logSellerEnrichmentFailure("seller-api", userID, "response did not contain a valid user")
+		return SellerInfo{}, status, &sellerFetchError{kind: failureDecodeError, status: status, err: errors.New("seller api response missing user")}
+	}
+	if status == 200 {
 		logSellerEnrichmentFailure("seller-api", userID, "empty response body")
-	} else {
-		logSellerEnrichmentFailure("seller-api", userID, "http status=%d", status)
+		return SellerInfo{}, status, &sellerFetchError{kind: failureEmptyResponse, status: status, err: errors.New("seller api empty response")}
 	}
 
+	logSellerEnrichmentFailure("seller-api", userID, "http status=%d", status)
 	if fetchErr == nil {
 		fetchErr = fmt.Errorf("seller api status %d", status)
 	}
-	return SellerInfo{}, status, fetchErr
+	return SellerInfo{}, status, &sellerFetchError{kind: classifyHTTPStatus(status), status: status, err: fetchErr}
 }
 
 func (s *SellerEnricher) fetchAPIBody(ctx context.Context, client *Client, targetURL string, userID int64) ([]byte, int, error) {

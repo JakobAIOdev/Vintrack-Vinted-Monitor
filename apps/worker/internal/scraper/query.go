@@ -35,17 +35,44 @@ func monitorQueryForCheck(queries []string, check int) (int, string) {
 	return index, queries[index]
 }
 
-func matchesMonitorQuery(haystack string, rawQuery string) bool {
+// catalogQueryMatcher is the compiled form of a monitor query: one slice of
+// lowercased terms per comma-separated alternative. Compiling once per catalog
+// page instead of once per item removes an O(items) re-parse of a value that is
+// constant for the whole cycle.
+type catalogQueryMatcher struct {
+	terms [][]string
+}
+
+func compileCatalogQueryMatcher(rawQuery string) catalogQueryMatcher {
 	queries := parseMonitorQueries(rawQuery)
 	if len(queries) == 0 {
+		return catalogQueryMatcher{}
+	}
+	terms := make([][]string, 0, len(queries))
+	for _, query := range queries {
+		terms = append(terms, strings.Fields(strings.ToLower(query)))
+	}
+	return catalogQueryMatcher{terms: terms}
+}
+
+// matches lowercases the haystack before testing it.
+func (m catalogQueryMatcher) matches(haystack string) bool {
+	if len(m.terms) == 0 {
 		return true
 	}
+	return m.matchesLowered(strings.ToLower(haystack))
+}
 
-	normalizedHaystack := strings.ToLower(haystack)
-	for _, query := range queries {
+// matchesLowered skips the ToLower for callers that already normalized the
+// haystack, so a shared haystack is lowered once rather than once per check.
+func (m catalogQueryMatcher) matchesLowered(loweredHaystack string) bool {
+	if len(m.terms) == 0 {
+		return true
+	}
+	for _, terms := range m.terms {
 		matched := true
-		for _, term := range strings.Fields(strings.ToLower(query)) {
-			if !strings.Contains(normalizedHaystack, term) {
+		for _, term := range terms {
+			if !strings.Contains(loweredHaystack, term) {
 				matched = false
 				break
 			}
@@ -57,15 +84,20 @@ func matchesMonitorQuery(haystack string, rawQuery string) bool {
 	return false
 }
 
+func matchesMonitorQuery(haystack string, rawQuery string) bool {
+	return compileCatalogQueryMatcher(rawQuery).matches(haystack)
+}
+
 func filterTitleOnlyItems(items []model.VintedItem, rawQuery string, titleOnly bool) ([]model.VintedItem, int) {
 	if !titleOnly || len(items) == 0 {
 		return items, 0
 	}
 
+	matcher := compileCatalogQueryMatcher(rawQuery)
 	filtered := make([]model.VintedItem, 0, len(items))
 	blocked := 0
 	for _, item := range items {
-		if !matchesMonitorQuery(item.Title, rawQuery) {
+		if !matcher.matches(item.Title) {
 			blocked++
 			continue
 		}

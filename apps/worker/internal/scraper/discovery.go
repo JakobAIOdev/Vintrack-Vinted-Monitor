@@ -243,11 +243,13 @@ func (e *Engine) DiscoveryTask(ctx context.Context, spec DiscoverySpec) {
 		}
 
 		matchesByMonitor := make(map[int]int)
+		monitorMatchers := compileDiscoveryMonitorMatchers(spec.Monitors)
 		for _, vintedItem := range newItems {
-			for _, monitor := range spec.Monitors {
-				if !matchesDiscovery(vintedItem, monitor) {
+			for _, matcher := range monitorMatchers {
+				if !matcher.matches(vintedItem) {
 					continue
 				}
+				monitor := matcher.monitor
 				matchesByMonitor[monitor.ID]++
 				seenAt := time.Now()
 				e.db.RecordItemDetection(model.MonitorItemDetection{
@@ -282,25 +284,74 @@ func discoveryFailureBackoff(proxySource string, consecutiveFailures int) time.D
 	return backoff
 }
 
-func matchesDiscovery(item model.VintedItem, monitor model.Monitor) bool {
+// discoveryMonitorMatcher is the compiled per-cycle form of one monitor's
+// discovery filters. matchesDiscovery used to re-parse the monitor query,
+// re-parse the anti-keyword list, and rebuild the banned-seller lookup map for
+// every (item, monitor) pair, which made a shared discovery page cost
+// O(items x monitors) parses. Compiling once per cycle makes that O(monitors)
+// while leaving the accept/reject decision identical.
+type discoveryMonitorMatcher struct {
+	monitor       model.Monitor
+	query         catalogQueryMatcher
+	antiKeywords  []string
+	bannedSellers map[int64]struct{}
+}
+
+func compileDiscoveryMonitorMatcher(monitor model.Monitor) discoveryMonitorMatcher {
+	matcher := discoveryMonitorMatcher{
+		monitor:      monitor,
+		query:        compileCatalogQueryMatcher(monitor.Query),
+		antiKeywords: parseAntiKeywords(monitor.AntiKeywords),
+	}
+	if len(monitor.BannedSellerIDs) > 0 {
+		banned := make(map[int64]struct{}, len(monitor.BannedSellerIDs))
+		for _, sellerID := range monitor.BannedSellerIDs {
+			if sellerID != 0 {
+				banned[sellerID] = struct{}{}
+			}
+		}
+		if len(banned) > 0 {
+			matcher.bannedSellers = banned
+		}
+	}
+	return matcher
+}
+
+func compileDiscoveryMonitorMatchers(monitors []model.Monitor) []discoveryMonitorMatcher {
+	matchers := make([]discoveryMonitorMatcher, 0, len(monitors))
+	for _, monitor := range monitors {
+		matchers = append(matchers, compileDiscoveryMonitorMatcher(monitor))
+	}
+	return matchers
+}
+
+func (m discoveryMonitorMatcher) matches(item model.VintedItem) bool {
 	haystack := item.Title
-	if !monitor.TitleOnly {
+	if !m.monitor.TitleOnly {
 		haystack += "\n" + item.BrandTitle
 	}
 	haystack = strings.ToLower(haystack)
-	if !matchesMonitorQuery(haystack, monitor.Query) {
+	if !m.query.matchesLowered(haystack) {
 		return false
 	}
-	antiKeywordHaystack := haystack + "\n" + strings.ToLower(item.Description)
-	for _, keyword := range parseAntiKeywords(monitor.AntiKeywords) {
-		if strings.Contains(antiKeywordHaystack, keyword) {
+	if len(m.antiKeywords) > 0 {
+		antiKeywordHaystack := haystack + "\n" + strings.ToLower(item.Description)
+		for _, keyword := range m.antiKeywords {
+			if strings.Contains(antiKeywordHaystack, keyword) {
+				return false
+			}
+		}
+	}
+	if m.bannedSellers != nil && item.User.ID != 0 {
+		if _, banned := m.bannedSellers[item.User.ID]; banned {
 			return false
 		}
 	}
-	if _, blocked := filterBannedSellerItems([]model.VintedItem{item}, monitor.BannedSellerIDs); blocked > 0 {
-		return false
-	}
 	return true
+}
+
+func matchesDiscovery(item model.VintedItem, monitor model.Monitor) bool {
+	return compileDiscoveryMonitorMatcher(monitor).matches(item)
 }
 
 func hasDiscoveryOverlap(items []model.VintedItem, previous map[int64]struct{}) bool {

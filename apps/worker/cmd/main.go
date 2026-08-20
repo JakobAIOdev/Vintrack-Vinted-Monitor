@@ -1442,13 +1442,25 @@ func selectFreeProxyImportCandidates(
 	inventory map[string]database.FreeProxyInventoryRecord,
 	maxPoolSize int,
 ) ([]database.FreeProxyRecord, int) {
+	return selectFreeProxyImportCandidatesAt(sources, inventory, maxPoolSize, time.Now())
+}
+
+// selectFreeProxyImportCandidatesAt is the deterministic form of
+// selectFreeProxyImportCandidates. rotationNow drives the hourly
+// untested-candidate rotation bucket, so tests can pin it to a fixed instant
+// instead of depending on the wall clock.
+func selectFreeProxyImportCandidatesAt(
+	sources [][]freeProxyImportCandidate,
+	inventory map[string]database.FreeProxyInventoryRecord,
+	maxPoolSize int,
+	rotationNow time.Time,
+) ([]database.FreeProxyRecord, int) {
 	if maxPoolSize <= 0 {
 		return nil, 0
 	}
 
 	allSourcesByProxy := make(map[string][]string)
 	prioritizedSources := make([][]freeProxyImportCandidate, len(sources))
-	rotationNow := time.Now()
 	for sourceIndex, source := range sources {
 		prioritizedSources[sourceIndex] = append([]freeProxyImportCandidate(nil), source...)
 		for _, candidate := range source {
