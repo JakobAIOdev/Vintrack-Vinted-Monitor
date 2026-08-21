@@ -16,6 +16,7 @@ interface DashboardShellProps {
     announcement: MemberAnnouncement;
     maintenance: MonitorMaintenance;
     inactivityPausedCount: number;
+    inactivityPausedPriceWatchCount: number;
     user?: {
         name?: string | null;
         image?: string | null;
@@ -30,8 +31,21 @@ export function DashboardShell({
     announcement,
     maintenance,
     inactivityPausedCount,
+    inactivityPausedPriceWatchCount,
 }: DashboardShellProps) {
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const inactivitySummary = [
+        inactivityPausedCount > 0
+            ? `${inactivityPausedCount} monitor${inactivityPausedCount === 1 ? "" : "s"}`
+            : null,
+        inactivityPausedPriceWatchCount > 0
+            ? `${inactivityPausedPriceWatchCount} Price Watch${inactivityPausedPriceWatchCount === 1 ? "" : "es"}`
+            : null,
+    ]
+        .filter(Boolean)
+        .join(" and ");
+    const inactivityResourceCount =
+        inactivityPausedCount + inactivityPausedPriceWatchCount;
 
     return (
         <MonitorMaintenanceProvider initialMaintenance={maintenance}>
@@ -59,7 +73,8 @@ export function DashboardShell({
                                     initialAnnouncement={announcement}
                                     role={user?.role}
                                 />
-                                {inactivityPausedCount > 0 ? (
+                                {inactivityPausedCount > 0 ||
+                                inactivityPausedPriceWatchCount > 0 ? (
                                     <div
                                         className="mb-4 flex gap-3 rounded-xl border border-sky-500/25 bg-sky-500/8 px-4 py-3 text-sm"
                                         data-testid="inactivity-paused-notice"
@@ -67,17 +82,17 @@ export function DashboardShell({
                                         <Info className="mt-0.5 size-4 shrink-0 text-sky-500" />
                                         <div>
                                             <p className="font-semibold">
-                                                Monitors paused after inactivity
+                                                Tracking paused after inactivity
                                             </p>
                                             <p className="text-muted-foreground mt-0.5 leading-5">
-                                                {inactivityPausedCount} monitor
-                                                {inactivityPausedCount === 1
-                                                    ? " was"
-                                                    : "s were"}{" "}
-                                                paused because the dashboard had
-                                                not been used for a while.
-                                                Review and restart them manually
-                                                when you are ready.
+                                                {inactivitySummary}{" "}
+                                                {inactivityResourceCount === 1
+                                                    ? "was"
+                                                    : "were"}{" "}
+                                                paused because the dashboard had not
+                                                been used for a while. Review
+                                                and restart them manually when
+                                                you are ready.
                                             </p>
                                         </div>
                                     </div>

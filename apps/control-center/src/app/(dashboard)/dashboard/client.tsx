@@ -158,6 +158,7 @@ export type Monitor = {
     demo_expires_at: string | null;
     _count: { items: number };
     created_at: string;
+    status_changed_at: string;
 };
 
 export type FreePoolUsageSummary = {
@@ -625,12 +626,10 @@ export function DashboardClient({
 
     const sortedMonitors = useMemo(() => {
         return [...monitors].sort((a, b) => {
-            if (a.status === "active" && b.status !== "active") return -1;
-            if (a.status !== "active" && b.status === "active") return 1;
-            return (
-                new Date(b.created_at).getTime() -
-                new Date(a.created_at).getTime()
-            );
+            const statusChangeDifference =
+                new Date(b.status_changed_at).getTime() -
+                new Date(a.status_changed_at).getTime();
+            return statusChangeDifference || b.id - a.id;
         });
     }, [monitors]);
 
@@ -761,7 +760,18 @@ export function DashboardClient({
     };
 
     const handleStopAll = async () => {
-        setMonitors((prev) => prev.map((m) => ({ ...m, status: "paused" })));
+        const statusChangedAt = new Date().toISOString();
+        setMonitors((prev) =>
+            prev.map((monitor) =>
+                monitor.status === "active"
+                    ? {
+                          ...monitor,
+                          status: "paused",
+                          status_changed_at: statusChangedAt,
+                      }
+                    : monitor,
+            ),
+        );
         toast.promise(stopAllMonitors(), {
             loading: "Stopping all monitors...",
             success: "All monitors stopped",
@@ -783,6 +793,7 @@ export function DashboardClient({
                 return;
             }
             const startedIds = new Set(result.startedMonitorIds);
+            const statusChangedAt = new Date().toISOString();
             setMonitors((prev) =>
                 prev.map((m) =>
                     startedIds.has(m.id)
@@ -792,6 +803,7 @@ export function DashboardClient({
                               demo_expires_at:
                                   result.demoExpirations[m.id] ??
                                   m.demo_expires_at,
+                              status_changed_at: statusChangedAt,
                           }
                         : m,
                 ),
@@ -815,6 +827,7 @@ export function DashboardClient({
             newStatus === "active" && currentMonitor?.demo_expires_at
                 ? new Date(Date.now() + DEMO_MONITOR_DURATION_MS).toISOString()
                 : currentMonitor?.demo_expires_at;
+        const statusChangedAt = new Date().toISOString();
 
         setMonitors((prev) =>
             prev.map((m) =>
@@ -822,6 +835,7 @@ export function DashboardClient({
                     ? {
                           ...m,
                           status: newStatus,
+                          status_changed_at: statusChangedAt,
                           demo_expires_at:
                               optimisticDemoExpiry ?? m.demo_expires_at,
                       }
@@ -1171,95 +1185,102 @@ export function DashboardClient({
                 </div>
             </div>
 
-            <div
-                className={cn(
-                    "grid grid-cols-1 gap-4 sm:grid-cols-2",
-                    freePoolUsage ? "xl:grid-cols-4" : "xl:grid-cols-3",
-                )}
-            >
-                <div className="border-border/70 bg-card rounded-lg border px-5 py-4">
-                    <p className="text-muted-foreground text-[11px] font-medium tracking-wider uppercase">
-                        Total Monitors
-                    </p>
-                    <p className="text-foreground mt-1 text-2xl font-bold">
-                        {monitors.length}
-                    </p>
+            <div className="border-border/70 bg-card flex flex-wrap items-center gap-x-6 gap-y-3 rounded-xl border px-4 py-3 shadow-sm">
+                <div className="flex items-center gap-2 text-sm">
+                    <Radio className="text-primary h-4 w-4" />
+                    <span className="font-medium">
+                        {monitors.length} monitor
+                        {monitors.length === 1 ? "" : "s"}
+                    </span>
                 </div>
-                <div className="border-border/70 bg-card rounded-lg border px-5 py-4">
-                    <p className="text-muted-foreground text-[11px] font-medium tracking-wider uppercase">
-                        Active
-                    </p>
-                    <div className="mt-1 flex items-center gap-2">
-                        <p className="text-foreground text-2xl font-bold">
-                            {activeCount}
-                        </p>
+                <div className="flex items-center gap-2 text-sm">
+                    <span className="relative flex h-2 w-2">
                         {activeCount > 0 && (
-                            <span className="relative flex h-2 w-2">
-                                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-                            </span>
+                            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
                         )}
-                    </div>
+                        <span
+                            className={cn(
+                                "relative inline-flex h-2 w-2 rounded-full",
+                                activeCount > 0
+                                    ? "bg-emerald-500"
+                                    : "bg-muted-foreground/40",
+                            )}
+                        />
+                    </span>
+                    {activeCount} active
                 </div>
-                <div className="border-border/70 bg-card rounded-lg border px-5 py-4">
-                    <p className="text-muted-foreground text-[11px] font-medium tracking-wider uppercase">
-                        Items Found
-                    </p>
-                    <p className="text-foreground mt-1 text-2xl font-bold">
-                        {totalItems.toLocaleString()}
-                    </p>
+                <div className="flex items-center gap-2 text-sm">
+                    <PauseCircle className="h-4 w-4 text-amber-500" />
+                    {pausedCount} paused
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                    <Package className="h-4 w-4 text-blue-500" />
+                    {totalItems.toLocaleString()} items found
                 </div>
                 {freePoolUsage ? (
                     <Link
                         href="/account"
                         className={cn(
-                            "border-border/70 bg-card group hover:border-foreground/20 hover:bg-muted/25 rounded-lg border px-5 py-4 transition-colors",
-                            freePoolUsage.limitReached && "border-amber-500/30",
+                            "text-muted-foreground group flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors hover:bg-muted hover:text-foreground",
+                            freePoolUsage.limitReached &&
+                                "font-medium text-amber-700 dark:text-amber-300",
                         )}
                     >
-                        <div className="flex items-center justify-between gap-3">
-                            <p className="text-muted-foreground text-[11px] font-medium tracking-wider uppercase">
-                                Free Pool
-                            </p>
-                            <span className="text-muted-foreground flex items-center gap-1 text-[11px] font-medium">
-                                {freePoolUsage.tier}
-                                <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
-                            </span>
-                        </div>
-                        <div className="mt-1 flex items-end justify-between gap-3">
-                            <p className="text-foreground text-2xl font-bold tabular-nums">
-                                {freePoolUsage.activeCount}
-                                <span className="text-muted-foreground text-sm font-medium">
-                                    /{freePoolUsage.limit}
-                                </span>
-                            </p>
-                            <p
-                                className={cn(
-                                    "text-muted-foreground pb-0.5 text-[11px]",
-                                    freePoolUsage.limitReached &&
-                                        "font-medium text-amber-700 dark:text-amber-300",
-                                )}
-                            >
-                                {freePoolUsage.limitReached
-                                    ? "Limit reached"
-                                    : `${freePoolUsage.limit - freePoolUsage.activeCount} left`}
-                            </p>
-                        </div>
-                        <div className="bg-muted mt-2 h-1 overflow-hidden rounded-full">
-                            <div
-                                className={cn(
-                                    "h-full rounded-full transition-[width]",
-                                    freePoolUsage.limitReached
-                                        ? "bg-amber-500"
-                                        : "bg-foreground/70",
-                                )}
-                                style={{
-                                    width: `${Math.min(100, (freePoolUsage.activeCount / freePoolUsage.limit) * 100)}%`,
-                                }}
-                            />
-                        </div>
+                        <Globe className="h-3.5 w-3.5" />
+                        Free pool {freePoolUsage.activeCount}/{freePoolUsage.limit}
+                        <span className="opacity-70">· {freePoolUsage.tier}</span>
+                        <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
                     </Link>
                 ) : null}
+                {monitors.length > 0 && (
+                    <div className="border-border/70 flex w-full items-center gap-2 border-t pt-3 lg:ml-auto lg:w-auto lg:border-t-0 lg:border-l lg:pt-0 lg:pl-4">
+                        <Checkbox
+                            checked={allMonitorsSelected}
+                            onCheckedChange={toggleAllMonitorSelection}
+                            aria-label="Select all monitors"
+                        />
+                        <div className="mr-auto min-w-24 lg:mr-1">
+                            <p className="text-xs font-semibold">
+                                {selectedMonitorIds.length > 0
+                                    ? `${selectedMonitorIds.length} selected`
+                                    : "Your monitors"}
+                            </p>
+                            <p className="text-muted-foreground text-[10px]">
+                                {selectedMonitorIds.length > 0
+                                    ? "Ready to edit"
+                                    : `${monitors.length} total`}
+                            </p>
+                        </div>
+                        {selectedMonitorIds.length > 0 && (
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setSelectedMonitorIds([])}
+                                className="text-muted-foreground h-8 text-xs"
+                            >
+                                Clear
+                            </Button>
+                        )}
+                        <Button
+                            type="button"
+                            size="sm"
+                            variant={
+                                selectedMonitorIds.length > 0
+                                    ? "default"
+                                    : "outline"
+                            }
+                            disabled={selectedMonitorIds.length === 0}
+                            onClick={openBulkEditDialog}
+                            className="h-8 gap-1.5 text-xs"
+                        >
+                            <ListChecks className="size-3.5" />
+                            {selectedMonitorIds.length > 0
+                                ? "Edit selected"
+                                : "Bulk edit"}
+                        </Button>
+                    </div>
+                )}
             </div>
 
             {monitors.length === 0 ? (
@@ -1311,63 +1332,6 @@ export function DashboardClient({
                 </div>
             ) : (
                 <div className="space-y-4">
-                    <div
-                        className={`flex flex-col gap-3 rounded-lg border px-4 py-3 transition-colors sm:flex-row sm:items-center sm:justify-between ${
-                            selectedMonitorIds.length > 0
-                                ? "border-primary/30 bg-primary/[0.035]"
-                                : "border-border/70 bg-card"
-                        }`}
-                    >
-                        <div className="flex items-center gap-3">
-                            <Checkbox
-                                checked={allMonitorsSelected}
-                                onCheckedChange={toggleAllMonitorSelection}
-                                aria-label="Select all monitors"
-                            />
-                            <div>
-                                <h2 className="text-sm font-semibold">
-                                    {selectedMonitorIds.length > 0
-                                        ? `${selectedMonitorIds.length} selected`
-                                        : "Your monitors"}
-                                </h2>
-                                <p className="text-muted-foreground text-xs">
-                                    {selectedMonitorIds.length > 0
-                                        ? "Choose the settings to update together"
-                                        : `${monitors.length} total`}
-                                </p>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            {selectedMonitorIds.length > 0 && (
-                                <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => setSelectedMonitorIds([])}
-                                    className="text-muted-foreground h-8 text-xs"
-                                >
-                                    Clear
-                                </Button>
-                            )}
-                            <Button
-                                type="button"
-                                size="sm"
-                                variant={
-                                    selectedMonitorIds.length > 0
-                                        ? "default"
-                                        : "outline"
-                                }
-                                disabled={selectedMonitorIds.length === 0}
-                                onClick={openBulkEditDialog}
-                                className="h-8 gap-1.5 text-xs"
-                            >
-                                <ListChecks className="size-3.5" />
-                                {selectedMonitorIds.length > 0
-                                    ? "Edit selected"
-                                    : "Bulk edit"}
-                            </Button>
-                        </div>
-                    </div>
                     <div className="grid auto-rows-fr grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
                         {sortedMonitors.map((m) => (
                             <Card

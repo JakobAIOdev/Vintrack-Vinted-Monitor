@@ -212,6 +212,12 @@ func (e *Engine) processAlertDelivery(ctx context.Context, delivery model.AlertD
 
 func sendAlertDeliveryAttempt(ctx context.Context, delivery model.AlertDelivery) model.AlertDeliveryResult {
 	payload := delivery.Payload
+	if payload.PriceDrop != nil {
+		if delivery.Channel == "discord" {
+			return discord.SendPriceDropAttempt(ctx, delivery.Destination, *payload.PriceDrop, payload.DiscordStyle)
+		}
+		return telegram.SendPriceDropAttempt(ctx, delivery.Destination, *payload.PriceDrop, payload.TelegramStyle)
+	}
 	if payload.Item != nil {
 		if delivery.Channel == "discord" {
 			return discord.SendWebhookAttempt(ctx, delivery.Destination, *payload.Item, payload.MonitorName, payload.ProxySource, payload.DiscordStyle)

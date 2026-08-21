@@ -17,7 +17,13 @@ export default async function DashboardLayout({
         redirect("/login");
     }
 
-    const [dbUser, announcement, maintenance, inactivityPausedCount] =
+    const [
+        dbUser,
+        announcement,
+        maintenance,
+        inactivityPausedCount,
+        inactivityPausedPriceWatchCount,
+    ] =
         await Promise.all([
             db.user.findUnique({
                 where: { id: session.user.id },
@@ -29,6 +35,13 @@ export default async function DashboardLayout({
                 where: {
                     userId: session.user.id,
                     status: "inactivity_paused",
+                },
+            }),
+            db.price_watches.count({
+                where: {
+                    user_id: session.user.id,
+                    status: "paused",
+                    stopped_reason: "inactive_member",
                 },
             }),
         ]);
@@ -43,6 +56,9 @@ export default async function DashboardLayout({
                 announcement={announcement}
                 maintenance={maintenance}
                 inactivityPausedCount={inactivityPausedCount}
+                inactivityPausedPriceWatchCount={
+                    inactivityPausedPriceWatchCount
+                }
             >
                 {children}
             </DashboardShell>

@@ -4,6 +4,8 @@ import {
     MemberBrandLimitError,
     upsertVerifiedMemberBrand,
 } from "../../src/lib/member-brands.server";
+import { parsePriceWatchUrl } from "../../src/lib/price-watch";
+import { parseVintedSearchUrl } from "../../src/lib/vinted-url";
 
 const db = new PrismaClient();
 
@@ -11,7 +13,261 @@ test.afterAll(async () => {
     await db.$disconnect();
 });
 
-test.describe("dashboard overview", () => {
+test.describe("Vinted search URL import", () => {
+    test("parses supported regional catalog filters and ignores noise", () => {
+        const result = parseVintedSearchUrl(
+            "https://www.vinted.fr/catalog?search_text=nike%20air&price_from=10&price_to=80&catalog[]=257&catalog_ids[]=183&brand_ids[]=53&brand_ids[]=53&color_ids[]=1&status_ids[]=2&size_ids[]=208&material_ids[]=12&utm_source=e2e",
+        );
+
+        expect(result).toEqual({
+            ok: true,
+            value: {
+                region: "fr",
+                query: "nike air",
+                priceMin: "10",
+                priceMax: "80",
+                catalogIds: ["257", "183"],
+                brandIds: ["53"],
+                colorIds: ["1"],
+                statusIds: ["2"],
+                sizeIds: ["208"],
+                videoGamePlatformIds: [],
+                extraParams: "material_ids%5B%5D=12",
+                importedFields: [
+                    "region",
+                    "search",
+                    "price",
+                    "categories",
+                    "brands",
+                    "colors",
+                    "conditions",
+                    "sizes",
+                ],
+                preservedParameterNames: ["material_ids[]"],
+                ignoredMetadataNames: ["utm_source"],
+                ignoredValueCount: 0,
+            },
+        });
+    });
+
+    test("normalizes platform searches and rejects unsafe URLs", () => {
+        const platformResult = parseVintedSearchUrl(
+            "vinted.de/catalog?catalog[]=257&platform_ids[]=1277&video_game_platform_ids[]=1278",
+        );
+        expect(platformResult).toMatchObject({
+            ok: true,
+            value: {
+                region: "de",
+                catalogIds: ["3002"],
+                videoGamePlatformIds: ["1278", "1277"],
+            },
+        });
+
+        const metadataResult = parseVintedSearchUrl(
+            "https://www.vinted.de/catalog?search_text=ps5&search_id=1452073112&order=newest_first&brand_ids[]=272284&brand_ids[]=289223&page=1&time=1787317280",
+        );
+        expect(metadataResult).toMatchObject({
+            ok: true,
+            value: {
+                query: "ps5",
+                brandIds: ["272284", "289223"],
+                extraParams: "",
+                ignoredMetadataNames: ["search_id", "order", "page", "time"],
+                ignoredValueCount: 0,
+            },
+        });
+
+        expect(
+            parseVintedSearchUrl(
+                "https://www.vinted.de.evil.example/catalog?brand_ids[]=53",
+            ),
+        ).toEqual({
+            ok: false,
+            error: "Use a search URL from a supported Vinted country.",
+        });
+        expect(
+            parseVintedSearchUrl("https://www.vinted.de/items/123-test"),
+        ).toEqual({
+            ok: false,
+            error: "Paste a Vinted catalog search URL, not an item or profile URL.",
+        });
+        expect(
+            parseVintedSearchUrl(
+                "https://www.vinted.de/catalog?price_from=100&price_to=10",
+            ),
+        ).toEqual({
+            ok: false,
+            error: "The imported minimum price is higher than the maximum price.",
+        });
+    });
+});
+
+test.describe("Price Watch", () => {
+    test.setTimeout(60_000);
+
+    test("accepts only canonical regional Vinted item links and has role limits", async () => {
+        expect(
+            parsePriceWatchUrl(
+                "https://www.vinted.fr/items/7090190431-ralph-lauren?referrer=catalog",
+            ),
+        ).toEqual({
+            ok: true,
+            value: {
+                region: "fr",
+                domain: "www.vinted.fr",
+                itemId: BigInt("7090190431"),
+                canonicalUrl:
+                    "https://www.vinted.fr/items/7090190431-ralph-lauren",
+            },
+        });
+
+        for (const url of [
+            "http://www.vinted.de/items/123-test",
+            "https://www.vinted.de.evil.example/items/123-test",
+            "https://user:pass@www.vinted.de/items/123-test",
+            "https://www.vinted.de/catalog?item=123",
+        ]) {
+            expect(parsePriceWatchUrl(url).ok).toBe(false);
+        }
+
+        const roleLimits = await db.monitor_limits.findMany({
+            where: { scope: { in: ["role:free", "role:premium"] } },
+            select: { scope: true, price_watch_limit: true },
+        });
+        expect(Object.fromEntries(roleLimits.map((row) => [row.scope, row.price_watch_limit]))).toEqual({
+            "role:free": 3,
+            "role:premium": 50,
+        });
+    });
+
+    test("creates, pauses, resumes, edits, and deletes an individual watch", async ({
+        page,
+    }) => {
+        const itemId = BigInt("8999999901");
+        await db.price_watch_targets.deleteMany({
+            where: { region: "de", item_id: itemId },
+        });
+
+        try {
+            await page.goto("/price-watches");
+            await expect(
+                page.getByRole("heading", { name: "Price Watch" }),
+            ).toBeVisible();
+            await page.getByRole("button", { name: "Add watch" }).click();
+            await page
+                .getByLabel("Vinted item URL")
+                .fill(
+                    `https://www.vinted.de/items/${itemId}-e2e-price-watch`,
+                );
+            await page
+                .getByRole("switch", { name: "Notifications" })
+                .click();
+            await page.getByRole("button", { name: "Start watching" }).click();
+            await expect(
+                page.getByText("Price Watch created and queued for validation."),
+            ).toBeVisible();
+            await page.reload();
+
+            await expect(
+                page.getByText(`Vinted item ${itemId}`),
+            ).toBeVisible();
+            await expect(page.getByText("Alerts off")).toBeVisible();
+
+            await page.getByRole("button", { name: "Stop All" }).click();
+            await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+            await page.getByRole("button", { name: "Start All" }).click();
+            await expect(page.getByText(/^(Validating|Retrying)$/)).toBeVisible();
+
+            await page.getByRole("button", { name: "Price Watch actions" }).click();
+            await page.getByRole("button", { name: "Pause", exact: true }).click();
+            await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+            await page.getByRole("button", { name: "Price Watch actions" }).click();
+            await page.getByRole("button", { name: "Resume", exact: true }).click();
+            await expect(
+                page.getByText(/^(Validating|Retrying)$/),
+            ).toBeVisible();
+
+            await page.getByRole("button", { name: "Price Watch actions" }).click();
+            await page.getByRole("button", { name: "Edit watch" }).click();
+            await expect(
+                page.getByRole("heading", { name: "Edit Price Watch" }),
+            ).toBeVisible();
+            await page.getByLabel("Check every").selectOption("300");
+            await page.getByRole("button", { name: "Save changes" }).click();
+            await expect(
+                page.getByRole("heading", { name: "Edit Price Watch" }),
+            ).not.toBeVisible();
+
+            await page.getByRole("button", { name: "Price Watch actions" }).click();
+            await page.getByRole("button", { name: "Delete", exact: true }).click();
+            await page.getByRole("button", { name: "Delete watch" }).click();
+            await expect(
+                page.getByText(`Vinted item ${itemId}`),
+            ).not.toBeVisible();
+        } finally {
+            await db.price_watch_targets.deleteMany({
+                where: { region: "de", item_id: itemId },
+            });
+        }
+    });
+
+    test("offers 30-second polling only through a verified regional proxy group", async ({
+        page,
+    }) => {
+        const itemId = BigInt("8999999902");
+        const group = await db.proxy_groups.create({
+            data: {
+                userId: "e2e-user",
+                name: "E2E Fast DE",
+                proxies: "http://127.0.0.1:18080",
+                proxy_check_status: "completed",
+                proxy_check_region: "de",
+                proxy_check_total: 1,
+                proxy_check_checked: 1,
+                proxy_check_working: 1,
+                proxy_check_completed_at: new Date(),
+            },
+        });
+        try {
+            await page.goto("/price-watches");
+            await page.getByRole("button", { name: "Add watch" }).click();
+            await page
+                .getByLabel("Vinted item URL")
+                .fill(`https://www.vinted.de/items/${itemId}-fast-e2e`);
+
+            await expect(page.getByLabel("Check every").locator('option[value="30"]')).toHaveCount(0);
+            await page.getByLabel("Connection").selectOption(String(group.id));
+            await expect(page.getByLabel("Check every").locator('option[value="30"]')).toHaveCount(1);
+            await page.getByLabel("Check every").selectOption("30");
+            await page.getByRole("switch", { name: "Notifications" }).click();
+            await page.getByRole("button", { name: "Start watching" }).click();
+
+            await expect(page.getByText("30 sec", { exact: true })).toBeVisible();
+            await expect(page.getByText("E2E Fast DE", { exact: true })).toBeVisible();
+        } finally {
+            await db.price_watch_targets.deleteMany({
+                where: { region: "de", item_id: itemId },
+            });
+            await db.proxy_groups.deleteMany({ where: { id: group.id } });
+        }
+    });
+});
+
+test.describe("dashboard monitors", () => {
+    test("keeps monitor management on the main dashboard", async ({ page }) => {
+        await page.goto("/dashboard");
+        await expect(
+            page.getByRole("heading", { name: /Welcome back/ }),
+        ).toBeVisible();
+        await expect(page.getByTestId("monitor-card").first()).toBeVisible();
+        await expect(
+            page.locator("aside").getByRole("link", {
+                name: "Monitors",
+                exact: true,
+            }),
+        ).toHaveCount(0);
+    });
+
     test("personal brand persistence upserts, reactivates, and enforces its active limit", async () => {
         const userId = "e2e-member-brand-persistence";
         await db.user.upsert({
@@ -288,10 +544,47 @@ test.describe("dashboard overview", () => {
         await expect(page.locator('input[name="brand_ids"]')).toHaveValue("");
     });
 
+    test("imports a Vinted search URL into an existing monitor", async ({
+        page,
+    }) => {
+        await page.goto("/monitors/990001/edit");
+        await expect(
+            page.getByRole("heading", { name: "Edit Monitor" }),
+        ).toBeVisible();
+
+        await page
+            .getByLabel("Import Vinted search")
+            .fill(
+                "https://www.vinted.co.uk/catalog?search_text=barbour&price_from=20&price_to=120&catalog[]=123&brand_ids[]=456&color_ids[]=7&status_ids[]=2&size_ids[]=208&material_ids[]=12",
+            );
+        await page.getByTestId("import-vinted-url").click();
+
+        await expect(page.locator('input[name="region"]')).toHaveValue("uk");
+        await expect(page.locator('input[name="query"]')).toHaveValue(
+            "barbour",
+        );
+        await expect(page.locator('input[name="price_min"]')).toHaveValue("20");
+        await expect(page.locator('input[name="price_max"]')).toHaveValue(
+            "120",
+        );
+        await expect(page.locator('input[name="catalog_ids"]')).toHaveValue(
+            "123",
+        );
+        await expect(page.locator('input[name="brand_ids"]')).toHaveValue(
+            "456",
+        );
+        await expect(page.locator('input[name="color_ids"]')).toHaveValue("7");
+        await expect(page.locator('input[name="status_ids"]')).toHaveValue("2");
+        await expect(page.locator('input[name="size_id"]')).toHaveValue("208");
+        await expect(
+            page.locator('input[name="vinted_extra_params"]'),
+        ).toHaveValue("material_ids%5B%5D=12");
+    });
+
     test("renders seeded monitor summary and monitor card", async ({
         page,
     }) => {
-        await page.goto("/dashboard");
+        await page.goto("/monitors");
 
         await expect(page).toHaveTitle(/Vintrack/i);
         await expect(
@@ -469,7 +762,7 @@ test.describe("dashboard overview", () => {
             testInfo.project.name !== "chromium",
             "Global notification preference mutation is covered once.",
         );
-        await page.goto("/dashboard");
+        await page.goto("/monitors");
         await page.getByRole("button", { name: "Dashboard settings" }).click();
 
         const settings = page.getByRole("dialog", {
@@ -506,7 +799,7 @@ test.describe("dashboard overview", () => {
     });
 
     test("bulk edits query delay and quiet hours", async ({ page }) => {
-        await page.goto("/dashboard");
+        await page.goto("/monitors");
 
         const monitorCard = page
             .getByTestId("monitor-card")
@@ -551,7 +844,7 @@ test.describe("dashboard overview", () => {
             testInfo.project.name !== "chromium",
             "Notification mutation is covered once against the shared E2E database.",
         );
-        await page.goto("/dashboard");
+        await page.goto("/monitors");
 
         const monitorCard = page
             .getByTestId("monitor-card")

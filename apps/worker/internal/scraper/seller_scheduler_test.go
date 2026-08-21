@@ -90,4 +90,42 @@ func TestSellerEnrichmentSchedulerBackgroundInputCannotBlockNewAlert(t *testing.
 	}
 }
 
+// TestSellerEnrichmentSchedulerQueueAgeByPriority pins that QueueAge only
+// ever reflects the foreground lane (as documented), while the new
+// StrictRetryQueueAge/BackgroundQueueAge accessors independently surface the
+// other two priority classes instead of leaving them invisible.
+func TestSellerEnrichmentSchedulerQueueAgeByPriority(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// A single worker that never drains work lets all three submitted jobs
+	// sit in their lanes so their queue ages are observable.
+	scheduler := NewSellerEnrichmentScheduler(16, 1)
+	go scheduler.Run(ctx)
+
+	farFuture := time.Now().Add(time.Hour)
+	if !scheduler.Submit(ctx, enrichmentJob{proxySource: "server", item: itemWithID(1), backgroundOnly: true, readyAt: farFuture}) {
+		t.Fatal("background submit failed")
+	}
+	if !scheduler.Submit(ctx, enrichmentJob{proxySource: "server", item: itemWithID(2), strictAttempt: 1, readyAt: farFuture}) {
+		t.Fatal("strict-retry submit failed")
+	}
+	if !scheduler.Submit(ctx, enrichmentJob{proxySource: "server", item: itemWithID(3), readyAt: farFuture}) {
+		t.Fatal("foreground submit failed")
+	}
+
+	// Give the scheduler goroutine a moment to ingest the submissions and
+	// recompute the per-priority oldest timestamps.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		now := time.Now()
+		if scheduler.QueueAge(now) > 0 && scheduler.StrictRetryQueueAge(now) > 0 && scheduler.BackgroundQueueAge(now) > 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	now := time.Now()
+	t.Fatalf("expected all three queue ages to become positive; foreground=%v strict=%v background=%v",
+		scheduler.QueueAge(now), scheduler.StrictRetryQueueAge(now), scheduler.BackgroundQueueAge(now))
+}
+
 func itemWithID(id int64) model.Item { return model.Item{ID: id} }

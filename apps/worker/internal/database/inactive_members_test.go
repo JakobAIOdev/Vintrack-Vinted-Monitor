@@ -3,11 +3,11 @@ package database
 import "testing"
 
 func TestParseInactiveMemberPolicy(t *testing.T) {
-	policy, err := parseInactiveMemberPolicy(`{"enabled":true,"revision":"r1","duration":2,"durationUnit":"weeks","monitorScope":"free_proxy","roles":["free"],"enabledAt":"2026-08-12T10:00:00Z"}`)
+	policy, err := parseInactiveMemberPolicy(`{"enabled":true,"revision":"r1","duration":2,"durationUnit":"weeks","monitorScope":"free_proxy","includePriceWatches":true,"roles":["free"],"enabledAt":"2026-08-12T10:00:00Z"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if policy.DurationDays != 14 || !policy.Enabled {
+	if policy.DurationDays != 14 || !policy.Enabled || !policy.IncludePriceWatches {
 		t.Fatalf("unexpected policy: %#v", policy)
 	}
 }

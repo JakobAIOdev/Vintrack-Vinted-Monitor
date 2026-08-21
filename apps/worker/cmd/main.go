@@ -22,6 +22,7 @@ import (
 	"vintrack-worker/internal/cache"
 	"vintrack-worker/internal/database"
 	"vintrack-worker/internal/proxy"
+	"vintrack-worker/internal/publicurl"
 	"vintrack-worker/internal/scraper"
 
 	"github.com/joho/godotenv"
@@ -87,6 +88,15 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	publicURLHealth := publicurl.Resolve()
+	if payload, err := json.Marshal(publicURLHealth); err == nil {
+		if err := store.SetSettingValueContext(ctx, "public_app_url_health", string(payload)); err != nil {
+			log.Printf("Public app URL health write failed: %v", err)
+		}
+	}
+	if !publicURLHealth.OK {
+		log.Printf("Public app URL is unhealthy: %s", publicURLHealth.Error)
+	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -187,8 +197,13 @@ func evaluateInactiveMembers(ctx context.Context, store *database.Store) {
 		log.Printf("inactive member policy evaluation failed: %v", err)
 		return
 	}
-	if result.NewlyPausedMonitorCount > 0 {
-		log.Printf("inactive member policy paused %d monitor(s) across %d member(s)", result.NewlyPausedMonitorCount, result.NewlyPausedMemberCount)
+	if result.NewlyPausedMonitorCount > 0 || result.NewlyPausedPriceWatchCount > 0 {
+		log.Printf(
+			"inactive member policy paused %d monitor(s) and %d Price Watch(es) across %d member(s)",
+			result.NewlyPausedMonitorCount,
+			result.NewlyPausedPriceWatchCount,
+			result.NewlyPausedMemberCount,
+		)
 	}
 }
 
@@ -1442,13 +1457,25 @@ func selectFreeProxyImportCandidates(
 	inventory map[string]database.FreeProxyInventoryRecord,
 	maxPoolSize int,
 ) ([]database.FreeProxyRecord, int) {
+	return selectFreeProxyImportCandidatesAt(sources, inventory, maxPoolSize, time.Now())
+}
+
+// selectFreeProxyImportCandidatesAt is the deterministic form of
+// selectFreeProxyImportCandidates. rotationNow drives the hourly
+// untested-candidate rotation bucket, so tests can pin it to a fixed instant
+// instead of depending on the wall clock.
+func selectFreeProxyImportCandidatesAt(
+	sources [][]freeProxyImportCandidate,
+	inventory map[string]database.FreeProxyInventoryRecord,
+	maxPoolSize int,
+	rotationNow time.Time,
+) ([]database.FreeProxyRecord, int) {
 	if maxPoolSize <= 0 {
 		return nil, 0
 	}
 
 	allSourcesByProxy := make(map[string][]string)
 	prioritizedSources := make([][]freeProxyImportCandidate, len(sources))
-	rotationNow := time.Now()
 	for sourceIndex, source := range sources {
 		prioritizedSources[sourceIndex] = append([]freeProxyImportCandidate(nil), source...)
 		for _, candidate := range source {

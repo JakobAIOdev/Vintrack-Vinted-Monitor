@@ -369,6 +369,11 @@ func TestInterleaveFreeProxyImportCandidatesUsesProtocolQuotas(t *testing.T) {
 	}
 }
 
+// freeProxyImportRotationTestClock pins the hourly rotation bucket used to break
+// ties between equal-priority untested free-proxy candidates. Without a fixed
+// instant these assertions depend on the wall-clock hour.
+var freeProxyImportRotationTestClock = time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
+
 func TestSelectFreeProxyImportCandidatesIsStableAcrossFeedReordering(t *testing.T) {
 	now := time.Now()
 	inventory := map[string]database.FreeProxyInventoryRecord{
@@ -385,15 +390,17 @@ func TestSelectFreeProxyImportCandidatesIsStableAcrossFeedReordering(t *testing.
 	second := append([]freeProxyImportCandidate(nil), first...)
 	slices.Reverse(second)
 
-	gotFirst, _ := selectFreeProxyImportCandidates(
+	gotFirst, _ := selectFreeProxyImportCandidatesAt(
 		[][]freeProxyImportCandidate{first},
 		maps.Clone(inventory),
 		4,
+		freeProxyImportRotationTestClock,
 	)
-	gotSecond, _ := selectFreeProxyImportCandidates(
+	gotSecond, _ := selectFreeProxyImportCandidatesAt(
 		[][]freeProxyImportCandidate{second},
 		maps.Clone(inventory),
 		4,
+		freeProxyImportRotationTestClock,
 	)
 
 	if !reflect.DeepEqual(gotFirst, gotSecond) {
@@ -423,7 +430,7 @@ func TestSelectFreeProxyImportCandidatesHonorsRemainingPoolCapacity(t *testing.T
 		"http://existing-b:80": {ProxyURL: "http://existing-b:80"},
 	}
 
-	got, newCount := selectFreeProxyImportCandidates(sources, existing, 3)
+	got, newCount := selectFreeProxyImportCandidatesAt(sources, existing, 3, freeProxyImportRotationTestClock)
 	want := []database.FreeProxyRecord{
 		{ProxyURL: "http://existing-a:80", Source: "iplocate:de", Sources: []string{"iplocate:de"}},
 		{ProxyURL: "http://existing-b:80", Source: "iplocate", Sources: []string{"iplocate"}},
@@ -438,6 +445,43 @@ func TestSelectFreeProxyImportCandidatesHonorsRemainingPoolCapacity(t *testing.T
 	}
 	if len(existing) != 3 {
 		t.Fatalf("pool size after selection = %d, want 3", len(existing))
+	}
+}
+
+func TestSelectFreeProxyImportCandidatesRotatesUntestedCandidatesHourly(t *testing.T) {
+	sources := [][]freeProxyImportCandidate{{
+		{ProxyURL: "http://new-a:80", Source: "iplocate"},
+		{ProxyURL: "http://new-b:80", Source: "iplocate"},
+	}}
+	newInventory := func() map[string]database.FreeProxyInventoryRecord {
+		return map[string]database.FreeProxyInventoryRecord{}
+	}
+
+	// Same rotation bucket must always yield the same order.
+	first, _ := selectFreeProxyImportCandidatesAt(sources, newInventory(), 1, freeProxyImportRotationTestClock)
+	repeat, _ := selectFreeProxyImportCandidatesAt(
+		sources,
+		newInventory(),
+		1,
+		freeProxyImportRotationTestClock.Add(59*time.Minute),
+	)
+	if !reflect.DeepEqual(first, repeat) {
+		t.Fatalf("selection changed inside one rotation bucket: %#v != %#v", first, repeat)
+	}
+	if len(first) != 1 || first[0].ProxyURL != "http://new-a:80" {
+		t.Fatalf("selection at pinned bucket = %#v, want http://new-a:80", first)
+	}
+
+	// A later bucket must be able to promote the other untested candidate, so
+	// production rotation is preserved rather than frozen.
+	rotated, _ := selectFreeProxyImportCandidatesAt(
+		sources,
+		newInventory(),
+		1,
+		time.Date(2024, time.January, 19, 16, 0, 0, 0, time.UTC),
+	)
+	if len(rotated) != 1 || rotated[0].ProxyURL != "http://new-b:80" {
+		t.Fatalf("selection in rotated bucket = %#v, want http://new-b:80", rotated)
 	}
 }
 

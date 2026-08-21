@@ -8,6 +8,8 @@ GEMINI.md
 .codex
 .agents
 AGENTS.md
+CLAUDE.md
+.mcp.json
 codex-vinted-dev.md
 
 # --- Environment & Secrets ---

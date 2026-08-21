@@ -14,6 +14,14 @@ type SellerEnrichmentScheduler struct {
 	backgroundInput chan enrichmentJob
 	work            chan enrichmentJob
 	oldestNanos     atomic.Int64
+	// strictRetryOldestNanos and backgroundOldestNanos mirror oldestNanos for
+	// the other two priority classes so operators can tell a growing
+	// strict-retry backlog (seller data still missing near the alert
+	// deadline) apart from a growing background backlog (best-effort
+	// enrichment of unpersisted seed items), instead of only ever seeing the
+	// foreground age that QueueAge already reports.
+	strictRetryOldestNanos atomic.Int64
+	backgroundOldestNanos  atomic.Int64
 }
 
 func NewSellerEnrichmentScheduler(capacity int, workers int) *SellerEnrichmentScheduler {
@@ -51,7 +59,32 @@ func (s *SellerEnrichmentScheduler) Submit(ctx context.Context, job enrichmentJo
 func (s *SellerEnrichmentScheduler) Work() <-chan enrichmentJob { return s.work }
 
 func (s *SellerEnrichmentScheduler) QueueAge(now time.Time) time.Duration {
-	nanos := s.oldestNanos.Load()
+	return ageFromNanos(s.oldestNanos.Load(), now)
+}
+
+// StrictRetryQueueAge reports how long the oldest queued strict-filter retry
+// has been waiting. Strict retries already have their own bounded schedule
+// (5s/20s/60s, then the alert deadline); this is purely observability so a
+// growing backlog here is visible before it starts costing missed alerts.
+func (s *SellerEnrichmentScheduler) StrictRetryQueueAge(now time.Time) time.Duration {
+	return ageFromNanos(s.strictRetryOldestNanos.Load(), now)
+}
+
+// BackgroundQueueAge reports how long the oldest queued background
+// (best-effort, non-alerting) enrichment job has been waiting.
+func (s *SellerEnrichmentScheduler) BackgroundQueueAge(now time.Time) time.Duration {
+	return ageFromNanos(s.backgroundOldestNanos.Load(), now)
+}
+
+func storeOldestNanos(field *atomic.Int64, t time.Time) {
+	if t.IsZero() {
+		field.Store(0)
+	} else {
+		field.Store(t.UnixNano())
+	}
+}
+
+func ageFromNanos(nanos int64, now time.Time) time.Duration {
 	if nanos == 0 {
 		return 0
 	}
@@ -75,24 +108,30 @@ func (s *SellerEnrichmentScheduler) Run(ctx context.Context) {
 	defer close(s.work)
 
 	refreshOldest := func() {
-		var oldest time.Time
+		var oldestForeground, oldestStrict, oldestBackground time.Time
 		for i := range lanes {
-			if strings.HasPrefix(lanes[i].key, "strict-retry:") || strings.HasPrefix(lanes[i].key, "background:") {
-				continue
-			}
 			if len(lanes[i].jobs) == 0 {
 				continue
 			}
 			job := lanes[i].jobs[0]
-			if oldest.IsZero() || job.enqueuedAt.Before(oldest) {
-				oldest = job.enqueuedAt
+			switch {
+			case strings.HasPrefix(lanes[i].key, "background:"):
+				if oldestBackground.IsZero() || job.enqueuedAt.Before(oldestBackground) {
+					oldestBackground = job.enqueuedAt
+				}
+			case strings.HasPrefix(lanes[i].key, "strict-retry:"):
+				if oldestStrict.IsZero() || job.enqueuedAt.Before(oldestStrict) {
+					oldestStrict = job.enqueuedAt
+				}
+			default:
+				if oldestForeground.IsZero() || job.enqueuedAt.Before(oldestForeground) {
+					oldestForeground = job.enqueuedAt
+				}
 			}
 		}
-		if oldest.IsZero() {
-			s.oldestNanos.Store(0)
-		} else {
-			s.oldestNanos.Store(oldest.UnixNano())
-		}
+		storeOldestNanos(&s.oldestNanos, oldestForeground)
+		storeOldestNanos(&s.strictRetryOldestNanos, oldestStrict)
+		storeOldestNanos(&s.backgroundOldestNanos, oldestBackground)
 	}
 
 	add := func(job enrichmentJob) {

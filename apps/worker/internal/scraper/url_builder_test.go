@@ -182,6 +182,41 @@ func TestBuildVintedURL_WithStatusIDs(t *testing.T) {
 	}
 }
 
+func TestBuildVintedURL_WithAdditionalVintedFilters(t *testing.T) {
+	extraParams := "material_ids%5B%5D=12&material_ids%5B%5D=13&currency=EUR&search_id=temporary&order=price_high_to_low&page=9&auth_token=secret&brand_ids%5B%5D=999"
+	m := model.Monitor{
+		Query:             "linen",
+		Region:            "de",
+		VintedExtraParams: &extraParams,
+	}
+
+	parsed, err := url.Parse(BuildVintedURL(m))
+	if err != nil {
+		t.Fatalf("parse URL: %v", err)
+	}
+	query := parsed.Query()
+	if got := query["material_ids[]"]; len(got) != 2 || got[0] != "12" || got[1] != "13" {
+		t.Fatalf("material_ids = %v, want [12 13]", got)
+	}
+	if got := query.Get("currency"); got != "EUR" {
+		t.Fatalf("currency = %q, want EUR", got)
+	}
+	if got := query.Get("order"); got != "newest_first" {
+		t.Fatalf("order = %q, want worker-controlled newest_first", got)
+	}
+	for _, blocked := range []string{"search_id", "auth_token"} {
+		if got := query.Get(blocked); got != "" {
+			t.Fatalf("blocked parameter %s leaked with value %q", blocked, got)
+		}
+	}
+	if got := query.Get("page"); got != "" {
+		t.Fatalf("page = %q, want worker-controlled first page", got)
+	}
+	if got := query["brand_ids[]"]; len(got) != 0 {
+		t.Fatalf("extra brand_ids should be blocked, got %v", got)
+	}
+}
+
 func TestBuildVintedURL_WithVideoGamePlatformIDs(t *testing.T) {
 	platformIDs := "1277, 1278"
 	conflictingCatalogIDs := "100, 200"

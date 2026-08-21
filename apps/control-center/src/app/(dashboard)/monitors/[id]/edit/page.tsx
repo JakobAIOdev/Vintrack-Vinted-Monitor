@@ -31,6 +31,7 @@ import {
     type FreeProxyOption,
 } from "@/components/monitors/monitor-form-sections";
 import { QuietHoursSection } from "@/components/monitors/quiet-hours-section";
+import { VintedUrlImporter } from "@/components/monitors/vinted-url-importer";
 import { Switch } from "@/components/ui/switch";
 import { getStatusLocaleForRegionCodes } from "@/lib/regions";
 import {
@@ -38,7 +39,10 @@ import {
     MAX_QUERY_DELAY_MS,
     MIN_QUERY_DELAY_MS,
 } from "@/lib/monitor-delay";
-import { buildVintedMonitorUrl } from "@/lib/vinted-url";
+import {
+    buildVintedMonitorUrl,
+    type VintedSearchImport,
+} from "@/lib/vinted-url";
 import {
     MAX_MONITOR_QUERY_LENGTH,
     parseMonitorQueries,
@@ -97,6 +101,7 @@ type MonitorData = {
     color_ids: string | null;
     status_ids: string | null;
     video_game_platform_ids: string | null;
+    vinted_extra_params: string | null;
     region: string;
     allowed_countries: string | null;
     min_seller_rating: number | null;
@@ -125,6 +130,7 @@ export default function EditMonitorPage() {
     const [selectedColors, setSelectedColors] = useState<string[]>([]);
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
+    const [vintedExtraParams, setVintedExtraParams] = useState("");
     const [selectedRegion, setSelectedRegion] = useState<string>("de");
     const [selectedAllowedCountries, setSelectedAllowedCountries] = useState<
         string[]
@@ -205,6 +211,24 @@ export default function EditMonitorPage() {
         }
     }, []);
 
+    const handleVintedUrlImport = useCallback(
+        (imported: VintedSearchImport) => {
+            setQuery(imported.query);
+            setPriceMin(imported.priceMin);
+            setPriceMax(imported.priceMax);
+            setSelectedRegion(imported.region);
+            setSelectedSizes(imported.sizeIds);
+            setSelectedCategories(imported.catalogIds);
+            setSelectedCategoryLabels([]);
+            setSelectedBrands(imported.brandIds);
+            setSelectedColors(imported.colorIds);
+            setSelectedStatuses(imported.statusIds);
+            setSelectedPlatforms(imported.videoGamePlatformIds);
+            setVintedExtraParams(imported.extraParams);
+        },
+        [],
+    );
+
     const handleCategorySelectionMetaChange = useCallback(
         ({ selectedLabels }: { selectedLabels: string[] }) => {
             setSelectedCategoryLabels((current) => {
@@ -224,12 +248,15 @@ export default function EditMonitorPage() {
     );
 
     useEffect(() => {
+        let cancelled = false;
+
         Promise.all([
             fetch(`/api/monitors/${monitorId}`).then((r) => r.json()),
             fetch("/api/proxy-groups").then((r) => r.json()),
             fetch("/api/telegram/connection").then((r) => r.json()),
         ])
             .then(([monitorData, proxyData, telegramData]) => {
+                if (cancelled) return;
                 const m = monitorData.monitor;
                 if (m) {
                     setMonitor(m);
@@ -276,6 +303,7 @@ export default function EditMonitorPage() {
                                   .filter(Boolean)
                             : [],
                     );
+                    setVintedExtraParams(m.vinted_extra_params || "");
                     setSelectedRegion(m.region || "de");
                     setSelectedAllowedCountries(
                         m.allowed_countries
@@ -307,7 +335,13 @@ export default function EditMonitorPage() {
                 setHasTelegramConnection(Boolean(telegramData.connected));
                 setLoading(false);
             })
-            .catch(() => setLoading(false));
+            .catch(() => {
+                if (!cancelled) setLoading(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
     }, [monitorId]);
 
     const hasVideoGamePlatformContext =
@@ -326,6 +360,7 @@ export default function EditMonitorPage() {
         colorIds: selectedColors,
         statusIds: selectedStatuses,
         videoGamePlatformIds: activeVideoGamePlatformIds,
+        extraParams: vintedExtraParams,
     });
     const queryAlternativeCount = parseMonitorQueries(query).length;
     const selectedRegionFreeProxyHealth = getFreeProxyRegionHealth(
@@ -441,6 +476,17 @@ export default function EditMonitorPage() {
                             type="hidden"
                             name="return_to"
                             value={returnTo}
+                        />
+                        <VintedUrlImporter
+                            idPrefix="edit-monitor"
+                            extraParams={vintedExtraParams}
+                            onImport={handleVintedUrlImport}
+                            onClearExtraParams={() => setVintedExtraParams("")}
+                        />
+                        <input
+                            type="hidden"
+                            name="vinted_extra_params"
+                            value={vintedExtraParams}
                         />
                         <FormSection
                             title="Basics"

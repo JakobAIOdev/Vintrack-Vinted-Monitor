@@ -41,6 +41,18 @@ export type EffectiveFreeProxyMonitorLimit = {
     freeProxyLimitSource: FreeProxyLimitSource;
 };
 
+export type EffectivePriceWatchLimit = {
+    priceWatchLimit: number | null;
+    priceWatchLimitSource:
+        | "user"
+        | "donation"
+        | "github_star"
+        | "policy_default"
+        | "role"
+        | "global"
+        | null;
+};
+
 export function normalizeMonitorLimitInput(value: FormDataEntryValue | null) {
     const raw = String(value ?? "").trim();
     if (!raw) return null;
@@ -84,10 +96,29 @@ export async function setFreeProxyMonitorLimit(
     `;
 }
 
+export async function setPriceWatchLimit(
+    scope: string,
+    priceWatchLimit: number | null,
+) {
+    await db.$executeRaw`
+        INSERT INTO "monitor_limits" (
+            "scope",
+            "active_limit",
+            "free_proxy_active_limit",
+            "price_watch_limit",
+            "updated_at"
+        )
+        VALUES (${scope}, NULL, NULL, ${priceWatchLimit}, NOW())
+        ON CONFLICT ("scope") DO UPDATE
+        SET "price_watch_limit" = EXCLUDED."price_watch_limit",
+            "updated_at" = NOW()
+    `;
+}
+
 function resolveLimit(
     rows: Map<string, MonitorLimitRow>,
     scopes: string[],
-    field: "active_limit" | "free_proxy_active_limit",
+    field: "active_limit" | "free_proxy_active_limit" | "price_watch_limit",
 ) {
     const sources = ["user", "role", "global"] as const;
     for (let index = 0; index < scopes.length; index += 1) {
@@ -115,6 +146,8 @@ export async function getEffectiveMonitorLimits(
             source: null,
             freeProxyActiveLimit: null,
             freeProxyLimitSource: null,
+            priceWatchLimit: null,
+            priceWatchLimitSource: null,
         };
     }
 
@@ -131,6 +164,34 @@ export async function getEffectiveMonitorLimits(
     // active monitor limit keeps resolving through user → role → global so
     // enabling rewards never disables an administrator's global cap.
     const active = resolveLimit(limits, scopes, "active_limit");
+    const configuredPriceWatch = resolveLimit(
+        limits,
+        scopes,
+        "price_watch_limit",
+    );
+    const userPriceWatchOverride = limits.get(userLimitScope(userId))
+        ?.price_watch_limit;
+    const rewardPriceWatch =
+        reward.enabled &&
+        reward.policy.priceWatchRewardsEnabled &&
+        userPriceWatchOverride == null &&
+        reward.source !== "role_exempt"
+            ? {
+                  value:
+                      reward.source === "donation"
+                          ? reward.policy.priceWatchDonationLimit
+                          : reward.source === "github_star"
+                            ? reward.policy.priceWatchStarLimit
+                            : reward.policy.priceWatchDefaultLimit,
+                  source: reward.source,
+              }
+            : null;
+    const priceWatch =
+        userPriceWatchOverride != null
+            ? { value: userPriceWatchOverride, source: "user" as const }
+            : rewardPriceWatch != null
+              ? rewardPriceWatch
+              : configuredPriceWatch;
     const freeProxy = resolveFreeProxyLimit({
         userOverride: limits.get(userLimitScope(userId))
             ?.free_proxy_active_limit,
@@ -148,6 +209,8 @@ export async function getEffectiveMonitorLimits(
         source: active.source,
         freeProxyActiveLimit: freeProxy.limit,
         freeProxyLimitSource: freeProxy.source,
+        priceWatchLimit: priceWatch.value,
+        priceWatchLimitSource: priceWatch.source,
         reward:
             reward.enabled && "starred" in reward
                 ? {
@@ -170,6 +233,55 @@ export async function getEffectiveMonitorLimits(
                       hardLimitMessage: reward.policy.hardLimitMessage,
                   }
                 : null,
+    };
+}
+
+export async function getEffectivePriceWatchLimit(
+    userId: string,
+    client: MonitorLimitClient = db,
+): Promise<EffectivePriceWatchLimit> {
+    const user = await client.user.findUnique({
+        where: { id: userId },
+        select: { role: true },
+    });
+    if (!user) throw new Error("User not found");
+    if (user.role === "admin") {
+        return { priceWatchLimit: null, priceWatchLimitSource: null };
+    }
+
+    const scopes = [
+        userLimitScope(userId),
+        roleLimitScope(user.role),
+        GLOBAL_MONITOR_LIMIT_SCOPE,
+    ];
+    const [rows, reward] = await Promise.all([
+        getMonitorLimits(scopes, client),
+        getGithubRewardEntitlement(userId, user.role, client),
+    ]);
+    const userOverride = rows.get(userLimitScope(userId))?.price_watch_limit;
+    if (userOverride != null) {
+        return { priceWatchLimit: userOverride, priceWatchLimitSource: "user" };
+    }
+    if (
+        reward.enabled &&
+        reward.policy.priceWatchRewardsEnabled &&
+        reward.source !== "role_exempt"
+    ) {
+        const priceWatchLimit =
+            reward.source === "donation"
+                ? reward.policy.priceWatchDonationLimit
+                : reward.source === "github_star"
+                  ? reward.policy.priceWatchStarLimit
+                  : reward.policy.priceWatchDefaultLimit;
+        return {
+            priceWatchLimit,
+            priceWatchLimitSource: reward.source,
+        };
+    }
+    const limits = resolveLimit(rows, scopes, "price_watch_limit");
+    return {
+        priceWatchLimit: limits.value,
+        priceWatchLimitSource: limits.source,
     };
 }
 

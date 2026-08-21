@@ -70,10 +70,12 @@ Temporary extensions are removed by Firefox on restart by design.
 When the prepared release PR is merged, **Release and Deploy** compares the
 manifest version with marker tags such as `extension-v0.1.5`. A missing tag
 causes the workflow to validate and lint the extension, submit the listed build
-with `web-ext sign --channel=listed`, and create the marker tag after a
-successful submission. An unchanged extension version is skipped. After AMO
-approves the first version, set `BROWSER_EXTENSION_FIREFOX_URL` to the final
-listing URL if it differs from the configured slug.
+with `web-ext sign --channel=listed --approval-timeout=0`, and create the marker
+tag after AMO accepts the upload and validation. AMO review then continues
+asynchronously and never blocks the production deployment. An unchanged
+extension version is skipped. After AMO approves the first version, set
+`BROWSER_EXTENSION_FIREFOX_URL` to the final listing URL if it differs from the
+configured slug.
 
 ## Data disclosure
 

@@ -67,9 +67,18 @@ func NewClientPoolWithTimeout(pm *proxy.Manager, domain string, size int, traffi
 	if size < 1 {
 		size = 1
 	}
-	proxyCount := pm.Count()
-	if size > proxyCount {
+	proxyCount := 0
+	if pm != nil {
+		proxyCount = pm.Count()
+	}
+	requireProxy := proxyCount > 0
+	if requireProxy && size > proxyCount {
 		size = proxyCount
+	}
+	if !requireProxy {
+		// Multiple direct clients would share the same exit IP and add sockets
+		// without adding transport diversity.
+		size = 1
 	}
 	if requestTimeout <= 0 {
 		requestTimeout = 3 * time.Second
@@ -81,7 +90,7 @@ func NewClientPoolWithTimeout(pm *proxy.Manager, domain string, size int, traffi
 		domain:          domain,
 		trafficRecorder: trafficRecorder,
 		requestTimeout:  requestTimeout,
-		requireProxy:    proxyCount > 0,
+		requireProxy:    requireProxy,
 		quarantined:     make(map[string]proxyQuarantine),
 		reserved:        make(map[string]bool),
 		now:             time.Now,
@@ -116,7 +125,10 @@ func NewClientPoolWithTimeout(pm *proxy.Manager, domain string, size int, traffi
 }
 
 func newPoolClient(pm *proxy.Manager, trafficRecorder func(txBytes int64, rxBytes int64), requestTimeout time.Duration, requireProxy bool) (*Client, error) {
-	proxyURL := pm.Next()
+	proxyURL := ""
+	if pm != nil {
+		proxyURL = pm.Next()
+	}
 	if requireProxy && proxyURL == "" {
 		return nil, errors.New("proxy pool is empty")
 	}

@@ -64,7 +64,7 @@ test.describe("first monitor onboarding", () => {
                 },
             });
 
-            await page.goto("/dashboard");
+            await page.goto("/monitors");
             const quickStart = page.getByTestId("first-monitor-quick-start");
             await expect(quickStart).toBeVisible();
             await quickStart
@@ -115,7 +115,7 @@ test.describe("first monitor onboarding", () => {
             await db.app_settings.deleteMany({
                 where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
             });
-            await page.goto("/dashboard");
+            await page.goto("/monitors");
             const quickStart = page.getByTestId("first-monitor-quick-start");
             await quickStart
                 .getByTestId("monitor-preset-nike-dunk-low")
@@ -173,7 +173,7 @@ test.describe("first monitor onboarding", () => {
         page,
     }) => {
         await page.setViewportSize({ width: 390, height: 844 });
-        await page.goto("/dashboard");
+        await page.goto("/monitors");
 
         const quickStart = page.getByTestId("first-monitor-quick-start");
         await expect(quickStart).toBeVisible();
@@ -469,6 +469,69 @@ test.describe("first monitor onboarding", () => {
         ).toBeVisible();
         await quietHoursSwitch.click();
         await expect(quietHoursField).toHaveAttribute("data-state", "inactive");
+    });
+
+    test("imports all supported Vinted search filters into a new monitor", async ({
+        page,
+    }) => {
+        await page.goto("/monitors/new");
+        await expect(page.getByLabel("Import Vinted search")).toBeVisible();
+
+        await page
+            .getByLabel("Import Vinted search")
+            .fill(
+                "https://www.vinted.fr/catalog?search_text=playstation&price_from=12&price_to=85&catalog[]=257&brand_ids[]=53&color_ids[]=1&status_ids[]=2&size_ids[]=208&video_game_platform_ids[]=1277&material_ids[]=12&utm_source=e2e",
+            );
+        await page.getByTestId("import-vinted-url").click();
+
+        await expect(page.locator('input[name="region"]')).toHaveValue("fr");
+        await expect(page.locator('input[name="query"]')).toHaveValue(
+            "playstation",
+        );
+        await expect(page.locator('input[name="price_min"]')).toHaveValue("12");
+        await expect(page.locator('input[name="price_max"]')).toHaveValue("85");
+        await expect(page.locator('input[name="catalog_ids"]')).toHaveValue(
+            "3002",
+        );
+        await expect(page.locator('input[name="brand_ids"]')).toHaveValue("53");
+        await expect(page.locator('input[name="color_ids"]')).toHaveValue("1");
+        await expect(page.locator('input[name="status_ids"]')).toHaveValue("2");
+        await expect(page.locator('input[name="size_id"]')).toHaveValue("208");
+        await expect(
+            page.locator('input[name="video_game_platform_ids"]'),
+        ).toHaveValue("1277");
+        await expect(
+            page.locator('input[name="vinted_extra_params"]'),
+        ).toHaveValue("material_ids%5B%5D=12");
+        await expect(page.getByTestId("vinted-extra-params")).toContainText(
+            "material_ids[]=12",
+        );
+        await expect(
+            page.getByTestId("vinted-url-import-summary"),
+        ).toContainText("1 additional filter preserved");
+        await expect(
+            page.getByTestId("vinted-url-import-summary"),
+        ).toContainText("1 URL metadata field skipped");
+
+        await page.getByLabel("Monitor Name").fill("Imported extra filters");
+        const createButton = page.getByRole("button", {
+            name: "Create Monitor",
+        });
+        await expect(createButton).toBeEnabled();
+        await createButton.click();
+        await expect(page).toHaveURL(/\/monitors\/\d+$/);
+
+        const monitorId = Number(page.url().match(/\/monitors\/(\d+)$/)?.[1]);
+        expect(Number.isInteger(monitorId)).toBe(true);
+        await expect(
+            db.monitors.findUniqueOrThrow({
+                where: { id: monitorId },
+                select: { vinted_extra_params: true },
+            }),
+        ).resolves.toEqual({
+            vinted_extra_params: "material_ids%5B%5D=12",
+        });
+        await db.monitors.delete({ where: { id: monitorId } });
     });
 
     test("rejects more than 100 size filters before monitor creation", async ({

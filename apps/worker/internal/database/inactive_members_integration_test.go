@@ -49,6 +49,22 @@ func TestEvaluateInactiveMemberPolicyAgainstPostgres(t *testing.T) {
 	serverMonitorID := insertMonitor(freeUserID, "Inactive server", "active", "server")
 	manualPausedID := insertMonitor(freeUserID, "Manual pause", "paused", "free")
 	premiumMonitorID := insertMonitor(premiumUserID, "Premium free", "active", "free")
+	var targetID, scheduleID, priceWatchID int64
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO price_watch_targets (region, item_id, canonical_url)
+		VALUES ('de', $1, $2) RETURNING id`, suffix, fmt.Sprintf("https://www.vinted.de/items/%d-test", suffix)).Scan(&targetID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO price_watch_schedules (target_id, transport_key, transport_kind)
+		VALUES ($1, 'shared', 'shared') RETURNING id`, targetID).Scan(&scheduleID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO price_watches (user_id, target_id, schedule_id, status, notifications_enabled)
+		VALUES ($1, $2, $3, 'active', FALSE) RETURNING id`, freeUserID, targetID, scheduleID).Scan(&priceWatchID); err != nil {
+		t.Fatal(err)
+	}
 
 	var previousPolicy, previousRuntime sql.NullString
 	_ = db.QueryRowContext(ctx, `SELECT value FROM app_settings WHERE key = $1`, inactiveMemberPolicyKey).Scan(&previousPolicy)
@@ -56,6 +72,7 @@ func TestEvaluateInactiveMemberPolicyAgainstPostgres(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = db.Exec(`DELETE FROM audit_events WHERE action = 'system.inactive_member_monitors_paused' AND metadata->>'revision' = $1`, revision)
 		_, _ = db.Exec(`DELETE FROM "User" WHERE id IN ($1, $2)`, freeUserID, premiumUserID)
+		_, _ = db.Exec(`DELETE FROM price_watch_targets WHERE id = $1`, targetID)
 		restore := func(key string, previous sql.NullString) {
 			if previous.Valid {
 				_, _ = db.Exec(`INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, key, previous.String)
@@ -69,7 +86,7 @@ func TestEvaluateInactiveMemberPolicyAgainstPostgres(t *testing.T) {
 
 	policyJSON, _ := json.Marshal(InactiveMemberPolicy{
 		Enabled: true, Revision: revision, Duration: 1, DurationUnit: "weeks",
-		MonitorScope: "free_proxy", Roles: []string{"free"}, EnabledAt: oldActivity.Format(time.RFC3339Nano),
+		MonitorScope: "free_proxy", IncludePriceWatches: true, Roles: []string{"free"}, EnabledAt: oldActivity.Format(time.RFC3339Nano),
 	})
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO app_settings (key, value) VALUES ($1, $2)
@@ -82,8 +99,16 @@ func TestEvaluateInactiveMemberPolicyAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.NewlyPausedMonitorCount != 1 || result.NewlyPausedMemberCount != 1 {
-		t.Fatalf("newly paused = %d monitors / %d members", result.NewlyPausedMonitorCount, result.NewlyPausedMemberCount)
+	if result.NewlyPausedMonitorCount != 1 || result.NewlyPausedPriceWatchCount != 1 || result.NewlyPausedMemberCount != 1 {
+		t.Fatalf("newly paused = %d monitors / %d Price Watches / %d members", result.NewlyPausedMonitorCount, result.NewlyPausedPriceWatchCount, result.NewlyPausedMemberCount)
+	}
+	var watchStatus string
+	var stoppedReason sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT status, stopped_reason FROM price_watches WHERE id = $1`, priceWatchID).Scan(&watchStatus, &stoppedReason); err != nil {
+		t.Fatal(err)
+	}
+	if watchStatus != "paused" || stoppedReason.String != "inactive_member" {
+		t.Fatalf("Price Watch status = %q / %q", watchStatus, stoppedReason.String)
 	}
 	for id, want := range map[int]string{
 		freeMonitorID: "inactivity_paused", serverMonitorID: "active",

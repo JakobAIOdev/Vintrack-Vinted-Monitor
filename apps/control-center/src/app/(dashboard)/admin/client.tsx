@@ -89,9 +89,18 @@ import {
     previewInactiveMemberPolicy,
     updateInactiveMemberPolicy,
     type InactiveMemberPolicyAdminState,
+    updatePriceWatchRuntimeSettings,
+    setGlobalPriceWatchLimit,
+    setRolePriceWatchLimit,
+    setUserPriceWatchLimit,
+    type PriceWatchPollingAdminState,
 } from "@/actions/admin";
 import { getRegionLabel, REGIONS } from "@/lib/regions";
 import { getProxyErrorDetails } from "@/lib/proxy-errors";
+import {
+    ADMIN_SECTION_ROUTES,
+    type AdminSection,
+} from "@/lib/admin-sections";
 import { MemberAnnouncementBanner } from "@/components/announcements/member-announcement-banner";
 import {
     MEMBER_ANNOUNCEMENT_AUDIENCES,
@@ -112,7 +121,6 @@ import type {
 } from "@/lib/inactive-member-policy";
 import { GithubRewardsAdminPanel } from "@/components/admin/github-rewards-admin-panel";
 import type { GithubRewardsAdminState } from "@/actions/github-rewards";
-
 type UserMonitor = {
     id: number;
     name: string;
@@ -187,16 +195,7 @@ type UserRow = {
     runtimeDetails?: UserRuntimeDetails;
 };
 
-type AdminTab =
-    | "overview"
-    | "insights"
-    | "monitors"
-    | "users"
-    | "roles"
-    | "rewards"
-    | "logs"
-    | "announcements"
-    | "settings";
+type AdminTab = AdminSection;
 
 type AdminLogRow = {
     id: string;
@@ -302,6 +301,9 @@ type MonitorLimits = {
     freeProxyGlobal: number | null;
     freeProxyRoles: Record<string, number | null>;
     freeProxyUsers: Record<string, number | null>;
+    priceWatchGlobal: number | null;
+    priceWatchRoles: Record<string, number | null>;
+    priceWatchUsers: Record<string, number | null>;
 };
 
 type FreeProxyRow = {
@@ -549,6 +551,13 @@ const ADMIN_TABS: {
         icon: Monitor,
         description:
             "Monitor operations, maintenance controls, and active workloads.",
+    },
+    {
+        value: "price_watch",
+        label: "Price Watch",
+        icon: TimerReset,
+        description:
+            "Polling lanes, capacity, errors, delays, and runtime controls.",
     },
     {
         value: "users",
@@ -1113,6 +1122,7 @@ export function AdminClient({
     initialInactiveMemberPolicyState,
     freeProxyState: initialFreeProxyState,
     initialGithubRewardsState,
+    initialPriceWatchPollingState,
     monitorLimits: initialMonitorLimits,
 }: {
     users: UserRow[];
@@ -1125,6 +1135,7 @@ export function AdminClient({
     initialInactiveMemberPolicyState: InactiveMemberPolicyAdminState;
     freeProxyState: FreeProxyState;
     initialGithubRewardsState: GithubRewardsAdminState;
+    initialPriceWatchPollingState: PriceWatchPollingAdminState;
     monitorLimits: MonitorLimits;
 }) {
     const [users, setUsers] = useState<UserRow[]>(initialUsers);
@@ -1235,6 +1246,21 @@ export function AdminClient({
         ),
     );
     const [userFreeProxyLimitInput, setUserFreeProxyLimitInput] = useState("");
+    const [globalPriceWatchLimitInput, setGlobalPriceWatchLimitInput] =
+        useState(limitInputValue(initialMonitorLimits.priceWatchGlobal));
+    const [rolePriceWatchLimitInputs, setRolePriceWatchLimitInputs] = useState<
+        Record<string, string>
+    >(
+        Object.fromEntries(
+            LIMIT_ROLES.map((role) => [
+                role.value,
+                limitInputValue(
+                    initialMonitorLimits.priceWatchRoles[role.value],
+                ),
+            ]),
+        ),
+    );
+    const [userPriceWatchLimitInput, setUserPriceWatchLimitInput] = useState("");
     const [serverProxies, setServerProxies] = useState(initialServerProxies);
     const [isSavingServerProxies, setIsSavingServerProxies] = useState(false);
     const [memberAnnouncement, setMemberAnnouncement] = useState(
@@ -1266,12 +1292,29 @@ export function AdminClient({
         duration: initialInactiveMemberPolicyState.policy.duration,
         durationUnit: initialInactiveMemberPolicyState.policy.durationUnit,
         monitorScope: initialInactiveMemberPolicyState.policy.monitorScope,
+        includePriceWatches:
+            initialInactiveMemberPolicyState.policy.includePriceWatches,
         roles: initialInactiveMemberPolicyState.policy.roles,
     }));
     const [inactivePolicyPreview, setInactivePolicyPreview] = useState(
         initialInactiveMemberPolicyState.preview,
     );
     const [isSavingInactivePolicy, setIsSavingInactivePolicy] = useState(false);
+    const [priceWatchPollingState, setPriceWatchPollingState] = useState(
+        initialPriceWatchPollingState,
+    );
+    const [isSavingPriceWatchInterval, setIsSavingPriceWatchInterval] =
+        useState(false);
+    const [priceWatchRuntimeDraft, setPriceWatchRuntimeDraft] = useState(() => ({
+        enabled: initialPriceWatchPollingState.enabled,
+        sharedMinimumSeconds:
+            initialPriceWatchPollingState.sharedMinimumSeconds,
+        personalMinimumSeconds:
+            initialPriceWatchPollingState.personalMinimumSeconds,
+        sharedMaxRpm: initialPriceWatchPollingState.sharedMaxRpm,
+        personalMaxRpmPerProxy:
+            initialPriceWatchPollingState.personalMaxRpmPerProxy,
+    }));
     const [freeProxyState, setFreeProxyState] = useState(initialFreeProxyState);
     const [freeProxySettings, setFreeProxySettings] = useState(
         normalizeFreeProxySettings(initialFreeProxyState.settings),
@@ -1498,6 +1541,10 @@ export function AdminClient({
                         ...current.freeProxyUsers,
                         ...state.userFreeProxyLimits,
                     },
+                    priceWatchUsers: {
+                        ...current.priceWatchUsers,
+                        ...state.userPriceWatchLimits,
+                    },
                 }));
                 return true;
             })
@@ -1540,7 +1587,7 @@ export function AdminClient({
 
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
-        const tab = normalizeTab(params.get("tab"));
+        const tab = normalizeTab(initialTab ?? params.get("tab"));
         setActiveTab(tab);
         loadOverview();
         if (["users", "roles"].includes(tab)) void loadAdminUsers();
@@ -1555,9 +1602,7 @@ export function AdminClient({
 
     const switchTab = (tab: AdminTab) => {
         setActiveTab(tab);
-        const url = new URL(window.location.href);
-        url.searchParams.set("tab", tab);
-        window.history.replaceState(null, "", url.toString());
+        window.history.replaceState(null, "", ADMIN_SECTION_ROUTES[tab]);
 
         if (["users", "roles"].includes(tab)) {
             void loadAdminUsers();
@@ -1895,6 +1940,9 @@ export function AdminClient({
         setUserLimitInput(limitInputValue(monitorLimits.users[user.id]));
         setUserFreeProxyLimitInput(
             limitInputValue(monitorLimits.freeProxyUsers[user.id]),
+        );
+        setUserPriceWatchLimitInput(
+            limitInputValue(monitorLimits.priceWatchUsers[user.id]),
         );
         setIsDetailsOpen(true);
 
@@ -2257,6 +2305,106 @@ export function AdminClient({
         }
     };
 
+    const handleSaveGlobalPriceWatchLimit = async () => {
+        const previous = monitorLimits.priceWatchGlobal;
+        const input = globalPriceWatchLimitInput;
+        const next = input.trim() ? Number(input) : null;
+        setMonitorLimits((current) => ({
+            ...current,
+            priceWatchGlobal: next,
+        }));
+        try {
+            const result = await setGlobalPriceWatchLimit(input);
+            toast.success(
+                result.pausedCount > 0
+                    ? `Price Watch limit saved · ${result.pausedCount} newest watches paused`
+                    : "Global Price Watch limit saved",
+            );
+        } catch (error) {
+            setMonitorLimits((current) => ({
+                ...current,
+                priceWatchGlobal: previous,
+            }));
+            setGlobalPriceWatchLimitInput(limitInputValue(previous));
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save Price Watch limit",
+            );
+        }
+    };
+
+    const handleSaveRolePriceWatchLimit = async (role: string) => {
+        const previous = monitorLimits.priceWatchRoles[role] ?? null;
+        const input = rolePriceWatchLimitInputs[role] ?? "";
+        const next = input.trim() ? Number(input) : null;
+        setMonitorLimits((current) => ({
+            ...current,
+            priceWatchRoles: { ...current.priceWatchRoles, [role]: next },
+        }));
+        try {
+            const result = await setRolePriceWatchLimit(role, input);
+            toast.success(
+                result.pausedCount > 0
+                    ? `${role} Price Watch limit saved · ${result.pausedCount} paused`
+                    : `${role} Price Watch limit saved`,
+            );
+        } catch (error) {
+            setMonitorLimits((current) => ({
+                ...current,
+                priceWatchRoles: {
+                    ...current.priceWatchRoles,
+                    [role]: previous,
+                },
+            }));
+            setRolePriceWatchLimitInputs((current) => ({
+                ...current,
+                [role]: limitInputValue(previous),
+            }));
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save role Price Watch limit",
+            );
+        }
+    };
+
+    const handleSaveUserPriceWatchLimit = async () => {
+        if (!selected) return;
+        const previous = monitorLimits.priceWatchUsers[selected.id] ?? null;
+        const input = userPriceWatchLimitInput;
+        const next = input.trim() ? Number(input) : null;
+        setMonitorLimits((current) => ({
+            ...current,
+            priceWatchUsers: {
+                ...current.priceWatchUsers,
+                [selected.id]: next,
+            },
+        }));
+        try {
+            const result = await setUserPriceWatchLimit(selected.id, input);
+            toast.success(
+                result.pausedCount > 0
+                    ? `Price Watch override saved · ${result.pausedCount} paused`
+                    : "Price Watch override saved",
+            );
+        } catch (error) {
+            setMonitorLimits((current) => ({
+                ...current,
+                priceWatchUsers: {
+                    ...current.priceWatchUsers,
+                    [selected.id]: previous,
+                },
+            }));
+            setUserPriceWatchLimitInput(limitInputValue(previous));
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save Price Watch override",
+            );
+        }
+    };
+
     const handleStopUserMonitors = async () => {
         if (!selected) return;
 
@@ -2456,6 +2604,32 @@ export function AdminClient({
             );
         } finally {
             setIsSavingInactivePolicy(false);
+        }
+    };
+
+    const handleSavePriceWatchRuntime = async () => {
+        setIsSavingPriceWatchInterval(true);
+        try {
+            const next = await updatePriceWatchRuntimeSettings(
+                priceWatchRuntimeDraft,
+            );
+            setPriceWatchPollingState(next);
+            setPriceWatchRuntimeDraft({
+                enabled: next.enabled,
+                sharedMinimumSeconds: next.sharedMinimumSeconds,
+                personalMinimumSeconds: next.personalMinimumSeconds,
+                sharedMaxRpm: next.sharedMaxRpm,
+                personalMaxRpmPerProxy: next.personalMaxRpmPerProxy,
+            });
+            toast.success("Price Watch worker configuration saved");
+        } catch (error) {
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save Price Watch configuration",
+            );
+        } finally {
+            setIsSavingPriceWatchInterval(false);
         }
     };
 
@@ -2806,10 +2980,23 @@ export function AdminClient({
                 </div>
             </div>
 
+            <select
+                aria-label="Admin section"
+                value={activeTab}
+                onChange={(event) => switchTab(event.target.value as AdminTab)}
+                className="border-input bg-background h-10 w-full rounded-lg border px-3 text-sm md:hidden"
+            >
+                {ADMIN_TABS.map((tab) => (
+                    <option key={tab.value} value={tab.value}>
+                        {tab.label}
+                    </option>
+                ))}
+            </select>
+
             <div
                 role="tablist"
                 aria-label="Admin sections"
-                className="border-border/60 bg-card flex gap-1 overflow-x-auto rounded-xl border p-1"
+                className="border-border/60 bg-card hidden gap-1 overflow-x-auto rounded-xl border p-1 md:flex"
             >
                 {ADMIN_TABS.map((tab) => {
                     const Icon = tab.icon;
@@ -4092,6 +4279,33 @@ export function AdminClient({
 
             {activeTab === "monitors" ? (
                 <div className="space-y-4">
+                    <div className="border-border/60 bg-card rounded-lg border p-5">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="flex items-start gap-3">
+                                <div className="bg-emerald-500/10 text-emerald-600 flex size-10 shrink-0 items-center justify-center rounded-lg dark:text-emerald-400">
+                                    <Clock3 className="size-5" />
+                                </div>
+                                <div>
+                                    <p className="text-sm font-semibold">
+                                        Price Watch has its own operations area
+                                    </p>
+                                    <p className="text-muted-foreground mt-1 max-w-2xl text-xs leading-5">
+                                        Configure shared and personal lanes, capacity,
+                                        health metrics and limits without mixing them
+                                        into monitor operations.
+                                    </p>
+                                </div>
+                            </div>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => switchTab("price_watch")}
+                            >
+                                Open Price Watch Operations
+                            </Button>
+                        </div>
+                    </div>
+
                     <div
                         className="border-border/60 bg-card rounded-lg border p-5"
                         data-testid="inactive-member-automation"
@@ -4124,7 +4338,8 @@ export function AdminClient({
                                         </Badge>
                                     </div>
                                     <p className="text-muted-foreground mt-1 max-w-2xl text-xs leading-5">
-                                        Pause abandoned monitors without
+                                        Pause abandoned monitors and optionally
+                                        Price Watches without
                                         affecting members who keep Vintrack open
                                         and active. Admin accounts are always
                                         excluded.
@@ -4134,6 +4349,7 @@ export function AdminClient({
                             <label className="border-border/60 bg-background/50 flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-sm font-medium">
                                 <input
                                     type="checkbox"
+                                    disabled={isSavingPriceWatchInterval}
                                     checked={inactivePolicyDraft.enabled}
                                     onChange={(event) =>
                                         setInactivePolicyDraft((current) => ({
@@ -4205,6 +4421,22 @@ export function AdminClient({
                                     </option>
                                     <option value="all">All monitors</option>
                                 </select>
+                                <label className="border-input bg-background mt-2 flex h-9 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm">
+                                    <input
+                                        type="checkbox"
+                                        checked={
+                                            inactivePolicyDraft.includePriceWatches
+                                        }
+                                        onChange={(event) =>
+                                            setInactivePolicyDraft((current) => ({
+                                                ...current,
+                                                includePriceWatches:
+                                                    event.target.checked,
+                                            }))
+                                        }
+                                    />
+                                    Include Price Watches
+                                </label>
                             </div>
                             <div>
                                 <Label className="text-xs">Member roles</Label>
@@ -4262,11 +4494,20 @@ export function AdminClient({
                                     active monitor
                                     {inactivePolicyPreview.monitorCount === 1
                                         ? ""
-                                        : "s"}
+                                        : "s"}{" "}
+                                    · {inactivePolicyPreview.priceWatchCount}{" "}
+                                    active Price Watch
+                                    {inactivePolicyPreview.priceWatchCount === 1
+                                        ? ""
+                                        : "es"}
                                 </p>
                                 <p className="text-muted-foreground mt-1">
                                     {inactivePolicyState.inactivityPausedCount}{" "}
-                                    currently paused · Last evaluation:{" "}
+                                    monitors and{" "}
+                                    {
+                                        inactivePolicyState.inactivityPausedPriceWatchCount
+                                    }{" "}
+                                    Price Watches currently paused · Last evaluation:{" "}
                                     {inactivePolicyState.runtime
                                         ? formatMetricDate(
                                               new Date(
@@ -4979,6 +5220,231 @@ export function AdminClient({
                 </div>
             ) : null}
 
+            {activeTab === "price_watch" ? (
+                <div className="space-y-4">
+                    <div className="grid gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-2 xl:grid-cols-4">
+                        {[
+                            ["Active watches", priceWatchPollingState.activeWatches],
+                            ["Shared lanes", priceWatchPollingState.sharedSchedules],
+                            ["Personal lanes", priceWatchPollingState.personalSchedules],
+                            ["Expected RPM", priceWatchPollingState.expectedRpm.toFixed(1)],
+                            ["Checks · 24h", priceWatchPollingState.checks24h],
+                            [
+                                "Success rate",
+                                priceWatchPollingState.checks24h > 0
+                                    ? `${((priceWatchPollingState.successfulChecks24h / priceWatchPollingState.checks24h) * 100).toFixed(1)}%`
+                                    : "—",
+                            ],
+                            ["403 / 429", `${priceWatchPollingState.accessDenied24h} / ${priceWatchPollingState.rateLimited24h}`],
+                            [
+                                "p50 / p95 latency",
+                                priceWatchPollingState.p50DurationMs == null ||
+                                priceWatchPollingState.p95DurationMs == null
+                                    ? "—"
+                                    : `${Math.round(priceWatchPollingState.p50DurationMs)} / ${Math.round(priceWatchPollingState.p95DurationMs)} ms`,
+                            ],
+                            ["Queue lag", `${priceWatchPollingState.queueLagSeconds.toFixed(0)} sec`],
+                            ["Traffic · 24h", `${(priceWatchPollingState.trafficBytes24h / 1024 / 1024).toFixed(1)} MB`],
+                            [
+                                "Alert success",
+                                priceWatchPollingState.alertSuccessRate24h == null
+                                    ? "—"
+                                    : `${priceWatchPollingState.alertSuccessRate24h.toFixed(1)}%`,
+                            ],
+                        ].map(([label, value]) => (
+                            <div key={label} className="bg-card p-4">
+                                <p className="text-muted-foreground text-[10px] font-medium uppercase tracking-wide">
+                                    {label}
+                                </p>
+                                <p className="mt-1 text-xl font-semibold tabular-nums">
+                                    {value}
+                                </p>
+                            </div>
+                        ))}
+                    </div>
+
+                    {!priceWatchPollingState.publicUrlHealth.ok ? (
+                        <div className="rounded-lg border border-amber-500/30 bg-amber-500/[0.08] px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
+                            <div className="flex items-center gap-2 font-medium">
+                                <AlertTriangle className="h-4 w-4" />
+                                Webhook dashboard links unavailable
+                            </div>
+                            <p className="mt-1 text-xs opacity-80">
+                                {priceWatchPollingState.publicUrlHealth.error}.
+                                Dashboard buttons are suppressed until this is
+                                fixed.
+                            </p>
+                        </div>
+                    ) : null}
+
+                    <Card className="py-0">
+                        <CardHeader className="border-b p-5">
+                            <div className="flex items-start justify-between gap-4">
+                                <div>
+                                    <CardTitle>Runtime & capacity</CardTitle>
+                                    <CardDescription className="mt-1">
+                                        Applied by workers within about ten seconds. Every HTTP attempt consumes capacity.
+                                    </CardDescription>
+                                </div>
+                                <Badge
+                                    variant={priceWatchRuntimeDraft.enabled ? "default" : "destructive"}
+                                >
+                                    {priceWatchRuntimeDraft.enabled ? "Running" : "Paused"}
+                                </Badge>
+                            </div>
+                        </CardHeader>
+                        <CardContent className="space-y-5 p-5">
+                            <label className="border-border/60 bg-muted/20 flex items-center justify-between gap-4 rounded-lg border p-4">
+                                <span>
+                                    <span className="block text-sm font-semibold">Price Watch worker</span>
+                                    <span className="text-muted-foreground block text-xs">Pause all new Price Watch checks without a redeploy.</span>
+                                </span>
+                                <input
+                                    type="checkbox"
+                                    checked={priceWatchRuntimeDraft.enabled}
+                                    onChange={(event) =>
+                                        setPriceWatchRuntimeDraft((current) => ({
+                                            ...current,
+                                            enabled: event.target.checked,
+                                        }))
+                                    }
+                                    className="h-5 w-5 accent-current"
+                                />
+                            </label>
+                            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                                <div className="space-y-2">
+                                    <Label htmlFor="shared-minimum">Shared minimum</Label>
+                                    <select
+                                        id="shared-minimum"
+                                        disabled={isSavingPriceWatchInterval}
+                                        value={priceWatchRuntimeDraft.sharedMinimumSeconds}
+                                        onChange={(event) =>
+                                            setPriceWatchRuntimeDraft((current) => ({
+                                                ...current,
+                                                sharedMinimumSeconds: Number(event.target.value),
+                                            }))
+                                        }
+                                        className="border-input bg-background h-10 w-full rounded-md border px-3 text-sm"
+                                    >
+                                        {[120, 300, 600, 900, 1800, 3600].map((seconds) => (
+                                            <option key={seconds} value={seconds}>{seconds / 60} min</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label htmlFor="personal-minimum">Personal minimum</Label>
+                                    <select
+                                        id="personal-minimum"
+                                        disabled={isSavingPriceWatchInterval}
+                                        value={priceWatchRuntimeDraft.personalMinimumSeconds}
+                                        onChange={(event) =>
+                                            setPriceWatchRuntimeDraft((current) => ({
+                                                ...current,
+                                                personalMinimumSeconds: Number(event.target.value),
+                                            }))
+                                        }
+                                        className="border-input bg-background h-10 w-full rounded-md border px-3 text-sm"
+                                    >
+                                        {[30, 60, 120, 300, 600, 900, 1800, 3600].map((seconds) => (
+                                            <option key={seconds} value={seconds}>{seconds === 30 ? "30 sec" : `${seconds / 60} min`}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label htmlFor="shared-rpm">Shared max RPM</Label>
+                                    <Input
+                                        id="shared-rpm"
+                                        type="number"
+                                        min={1}
+                                        max={300}
+                                        disabled={isSavingPriceWatchInterval}
+                                        value={priceWatchRuntimeDraft.sharedMaxRpm}
+                                        onChange={(event) =>
+                                            setPriceWatchRuntimeDraft((current) => ({
+                                                ...current,
+                                                sharedMaxRpm: Number(event.target.value),
+                                            }))
+                                        }
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label htmlFor="personal-rpm">BYO RPM / working proxy</Label>
+                                    <Input
+                                        id="personal-rpm"
+                                        type="number"
+                                        min={1}
+                                        max={10}
+                                        disabled={isSavingPriceWatchInterval}
+                                        value={priceWatchRuntimeDraft.personalMaxRpmPerProxy}
+                                        onChange={(event) =>
+                                            setPriceWatchRuntimeDraft((current) => ({
+                                                ...current,
+                                                personalMaxRpmPerProxy: Number(event.target.value),
+                                            }))
+                                        }
+                                    />
+                                </div>
+                            </div>
+                            <div className="flex justify-end">
+                                <Button
+                                    onClick={handleSavePriceWatchRuntime}
+                                    disabled={isSavingPriceWatchInterval}
+                                >
+                                    {isSavingPriceWatchInterval ? "Saving…" : "Save worker settings"}
+                                </Button>
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    <div className="grid gap-4 xl:grid-cols-2">
+                        <Card className="py-0">
+                            <CardHeader className="border-b p-5">
+                                <CardTitle className="text-base">Problematic targets</CardTitle>
+                                <CardDescription>Active schedules with a concrete polling or parsing failure.</CardDescription>
+                            </CardHeader>
+                            <CardContent className="divide-y p-0">
+                                {priceWatchPollingState.problems.length ? (
+                                    priceWatchPollingState.problems.map((problem) => (
+                                        <div key={problem.scheduleId} className="p-4">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <p className="truncate text-sm font-medium">{problem.title}</p>
+                                                <Badge variant="outline">{problem.region.toUpperCase()} · {problem.transport}</Badge>
+                                            </div>
+                                            <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">{problem.errorCode}</p>
+                                            <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs">{problem.detail}</p>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <p className="text-muted-foreground p-5 text-sm">No problematic active targets.</p>
+                                )}
+                            </CardContent>
+                        </Card>
+                        <Card className="py-0">
+                            <CardHeader className="border-b p-5">
+                                <CardTitle className="text-base">Problematic proxy groups</CardTitle>
+                                <CardDescription>Personal lanes without usable regional capacity.</CardDescription>
+                            </CardHeader>
+                            <CardContent className="divide-y p-0">
+                                {priceWatchPollingState.proxyProblems.length ? (
+                                    priceWatchPollingState.proxyProblems.map((problem) => (
+                                        <div key={problem.id} className="p-4">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <p className="truncate text-sm font-medium">{problem.name}</p>
+                                                <Badge variant="outline">{problem.working} working · {problem.region.toUpperCase()}</Badge>
+                                            </div>
+                                            <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">{problem.status}</p>
+                                            <p className="text-muted-foreground mt-0.5 text-xs">{problem.error}</p>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <p className="text-muted-foreground p-5 text-sm">No proxy groups need attention.</p>
+                                )}
+                            </CardContent>
+                        </Card>
+                    </div>
+                </div>
+            ) : null}
+
             {activeTab === "roles" ? (
                 <>
                     <div className="grid gap-4 md:grid-cols-3">
@@ -5017,6 +5483,35 @@ export function AdminClient({
                                 </Card>
                             );
                         })}
+                    </div>
+
+                    <div className="border-border/60 bg-card rounded-lg border p-5">
+                        <div className="mb-4">
+                            <p className="text-foreground text-sm font-semibold">
+                                Active Price Watch Limits
+                            </p>
+                            <p className="text-muted-foreground text-xs">
+                                User override → reward tier → role → global. Lower limits pause newest excess watches.
+                            </p>
+                        </div>
+                        <div className="grid gap-3 lg:grid-cols-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="roles-global-price-watch-limit">Global default</Label>
+                                <div className="flex gap-2">
+                                    <Input id="roles-global-price-watch-limit" type="number" min={0} value={globalPriceWatchLimitInput} onChange={(event) => setGlobalPriceWatchLimitInput(event.target.value)} placeholder="Unlimited" />
+                                    <Button type="button" variant="outline" onClick={handleSaveGlobalPriceWatchLimit}>Save</Button>
+                                </div>
+                            </div>
+                            {LIMIT_ROLES.map((role) => (
+                                <div key={role.value} className="space-y-2">
+                                    <Label htmlFor={`roles-price-watch-${role.value}`}>{role.label}</Label>
+                                    <div className="flex gap-2">
+                                        <Input id={`roles-price-watch-${role.value}`} type="number" min={0} value={rolePriceWatchLimitInputs[role.value] ?? ""} onChange={(event) => setRolePriceWatchLimitInputs((current) => ({ ...current, [role.value]: event.target.value }))} placeholder="Reward/global" />
+                                        <Button type="button" variant="outline" onClick={() => handleSaveRolePriceWatchLimit(role.value)}>Save</Button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
                     </div>
 
                     <div className="border-border/60 bg-card rounded-lg border p-5">
@@ -7127,7 +7622,6 @@ export function AdminClient({
                     </div>
                 </div>
             ) : null}
-
             <Dialog
                 open={selectedFreeProxyRegion !== null}
                 onOpenChange={(open) => {
@@ -7707,6 +8201,51 @@ export function AdminClient({
                                                     onClick={
                                                         handleSaveUserFreeProxyLimit
                                                     }
+                                                >
+                                                    Save
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="border-border/60 bg-card rounded-lg border px-4 py-4 sm:px-5">
+                                <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(260px,320px)] md:items-center">
+                                    <div>
+                                        <p className="text-foreground text-sm font-semibold">
+                                            Active Price Watch Limit
+                                        </p>
+                                        <p className="text-muted-foreground mt-1 text-xs">
+                                            Empty override uses reward, role, then global. Lowering it pauses newest excess watches.
+                                        </p>
+                                    </div>
+                                    {selected.role === "admin" ? (
+                                        <div className="border-border/60 bg-muted/30 text-muted-foreground rounded-lg border px-3 py-2 text-xs">
+                                            Admin accounts are always unlimited.
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-2">
+                                            <Label htmlFor="user-price-watch-limit" className="text-xs">
+                                                User override
+                                            </Label>
+                                            <div className="flex gap-2">
+                                                <Input
+                                                    id="user-price-watch-limit"
+                                                    type="number"
+                                                    min={0}
+                                                    className="h-10"
+                                                    value={userPriceWatchLimitInput}
+                                                    onChange={(event) =>
+                                                        setUserPriceWatchLimitInput(event.target.value)
+                                                    }
+                                                    placeholder="Reward/role/global"
+                                                />
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    className="h-10 shrink-0 px-4"
+                                                    onClick={handleSaveUserPriceWatchLimit}
                                                 >
                                                     Save
                                                 </Button>

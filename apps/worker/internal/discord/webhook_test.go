@@ -2,6 +2,7 @@ package discord
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -98,6 +99,7 @@ func TestSendPayloadAttemptClassifiesMissingWebhookAsTerminal(t *testing.T) {
 }
 
 func TestBuildItemWebhookPayloadUsesStructuredEmbedAndGallery(t *testing.T) {
+	t.Setenv("APP_PUBLIC_URL", "http://localhost:3000")
 	foundAt := time.Unix(1_720_000_000, 0).UTC()
 	item := model.Item{
 		ID:          42,
@@ -160,6 +162,72 @@ func TestBuildItemWebhookPayloadUsesStructuredEmbedAndGallery(t *testing.T) {
 	}
 	if _, ok := embeds[1]["image"]; !ok {
 		t.Fatal("expected image in gallery embed")
+	}
+}
+
+func TestBuildPriceDropWebhookPayloadShowsOldNewAndSavings(t *testing.T) {
+	t.Setenv("DASHBOARD_URL", "https://dashboard.example.test")
+	drop := model.PriceDropAlert{
+		WatchID:            91,
+		ItemID:             123,
+		Region:             "de",
+		Title:              "PlayStation 5",
+		URL:                "https://www.vinted.de/items/123-playstation-5",
+		ImageURL:           "https://images.example/ps5.webp",
+		PreviousPriceMinor: 45000,
+		NewPriceMinor:      39999,
+		CurrencyCode:       "EUR",
+		ObservedAt:         time.Unix(1_720_000_000, 0).UTC(),
+	}
+	payload := buildPriceDropWebhookPayload(drop, model.NotificationMessageStyleRich)
+	embeds, ok := payload["embeds"].([]map[string]interface{})
+	if !ok || len(embeds) != 1 {
+		t.Fatalf("unexpected embeds: %#v", payload["embeds"])
+	}
+	embed := embeds[0]
+	if embed["title"] != drop.Title || embed["url"] != drop.URL {
+		t.Fatalf("unexpected price drop embed: %#v", embed)
+	}
+	fields, ok := embed["fields"].([]map[string]interface{})
+	if !ok || len(fields) != 6 {
+		t.Fatalf("unexpected fields: %#v", embed["fields"])
+	}
+	values := fmt.Sprint(fields)
+	for _, expected := range []string{"450.00 EUR", "399.99 EUR", "50.01 EUR", "−11.1%", "DE", "#123"} {
+		if !strings.Contains(values, expected) {
+			t.Fatalf("expected %q in fields: %s", expected, values)
+		}
+	}
+	components, ok := payload["components"].([]map[string]interface{})
+	if !ok || len(components) != 1 {
+		t.Fatalf("unexpected components: %#v", payload["components"])
+	}
+	buttons := components[0]["components"].([]map[string]interface{})
+	if len(buttons) != 2 || buttons[1]["url"] != "https://dashboard.example.test/price-watches?watch=91" {
+		t.Fatalf("unexpected price watch buttons: %#v", buttons)
+	}
+}
+
+func TestPriceDropWebhookEnablesLinkComponents(t *testing.T) {
+	var withComponents string
+	webhookURL := withDiscordServer(t, func(w http.ResponseWriter, r *http.Request) {
+		withComponents = r.URL.Query().Get("with_components")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	result := SendPriceDropAttempt(
+		context.Background(),
+		webhookURL+"?wait=true",
+		model.PriceDropAlert{
+			WatchID:            91,
+			URL:                "https://www.vinted.de/items/123-test",
+			PreviousPriceMinor: 2000,
+			NewPriceMinor:      1500,
+			CurrencyCode:       "EUR",
+		},
+		model.NotificationMessageStyleRich,
+	)
+	if !result.Success || withComponents != "true" {
+		t.Fatalf("components query missing: result=%#v query=%q", result, withComponents)
 	}
 }
 

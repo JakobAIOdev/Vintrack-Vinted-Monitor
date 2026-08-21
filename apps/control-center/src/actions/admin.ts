@@ -9,10 +9,12 @@ import { reconcileFreeProxyLimitsForUsers } from "@/lib/free-proxy-limit-reconci
 import {
     GLOBAL_MONITOR_LIMIT_SCOPE,
     getEffectiveMonitorLimits,
+    getEffectivePriceWatchLimit,
     normalizeMonitorLimitInput,
     roleLimitScope,
     setFreeProxyMonitorLimit,
     setMonitorLimit,
+    setPriceWatchLimit,
     USER_MONITOR_LIMIT_PREFIX,
     userLimitScope,
     withMonitorActivationLock,
@@ -53,6 +55,18 @@ import {
 } from "@/lib/inactive-member-policy.server";
 
 const SERVER_PROXIES_SETTING_KEY = "server_proxies";
+const PRICE_WATCH_INTERVAL_SETTING_KEY = "price_watch_interval_seconds";
+const PRICE_WATCH_ENABLED_SETTING_KEY = "price_watch_enabled";
+const PRICE_WATCH_SHARED_MIN_SETTING_KEY =
+    "price_watch_shared_min_interval_seconds";
+const PRICE_WATCH_PERSONAL_MIN_SETTING_KEY =
+    "price_watch_personal_min_interval_seconds";
+const PRICE_WATCH_SHARED_RPM_SETTING_KEY = "price_watch_shared_max_rpm";
+const PRICE_WATCH_PERSONAL_RPM_SETTING_KEY =
+    "price_watch_personal_max_rpm_per_proxy";
+const DEFAULT_PRICE_WATCH_INTERVAL_MINUTES = 5;
+const MIN_PRICE_WATCH_INTERVAL_MINUTES = 2;
+const MAX_PRICE_WATCH_INTERVAL_MINUTES = 60;
 const FREE_PROXY_ENABLED_KEY = "free_proxy_enabled";
 const FREE_PROXY_AUTO_IMPORT_ENABLED_KEY = "free_proxy_auto_import_enabled";
 const FREE_PROXY_IMPORT_SOURCE_KEY = "free_proxy_import_source";
@@ -1211,6 +1225,406 @@ async function requireAdmin() {
     return session.user.id;
 }
 
+export type PriceWatchPollingAdminState = {
+    intervalMinutes: number;
+    minMinutes: number;
+    maxMinutes: number;
+    uniqueActiveTargets: number;
+    enabled: boolean;
+    sharedMinimumSeconds: number;
+    personalMinimumSeconds: number;
+    sharedMaxRpm: number;
+    personalMaxRpmPerProxy: number;
+    activeWatches: number;
+    sharedSchedules: number;
+    personalSchedules: number;
+    expectedRpm: number;
+    checks24h: number;
+    successfulChecks24h: number;
+    accessDenied24h: number;
+    rateLimited24h: number;
+    serverErrors24h: number;
+    averageDurationMs: number | null;
+    p50DurationMs: number | null;
+    p95DurationMs: number | null;
+    queueLagSeconds: number;
+    trafficBytes24h: number;
+    alertSuccessRate24h: number | null;
+    problems: Array<{
+        scheduleId: string;
+        itemId: string;
+        title: string;
+        region: string;
+        transport: string;
+        errorCode: string;
+        detail: string;
+    }>;
+    proxyProblems: Array<{
+        id: number;
+        name: string;
+        region: string;
+        working: number;
+        status: string;
+        error: string;
+    }>;
+    publicUrlHealth: {
+        ok: boolean;
+        origin: string | null;
+        source: string | null;
+        error: string | null;
+    };
+};
+
+export async function getPriceWatchPollingAdminState(): Promise<PriceWatchPollingAdminState> {
+    await requireAdmin();
+    const [settings, uniqueActiveTargets, scheduleStats, telemetry, alertStats, problemSchedules, problemProxyGroups] = await Promise.all([
+        db.app_settings.findMany({
+            where: {
+                key: {
+                    in: [
+                        PRICE_WATCH_INTERVAL_SETTING_KEY,
+                        PRICE_WATCH_ENABLED_SETTING_KEY,
+                        PRICE_WATCH_SHARED_MIN_SETTING_KEY,
+                        PRICE_WATCH_PERSONAL_MIN_SETTING_KEY,
+                        PRICE_WATCH_SHARED_RPM_SETTING_KEY,
+                        PRICE_WATCH_PERSONAL_RPM_SETTING_KEY,
+                        "public_app_url_health",
+                    ],
+                },
+            },
+            select: { key: true, value: true },
+        }),
+        db.price_watch_targets.count({
+            where: { watches: { some: { status: "active" } } },
+        }),
+        db.$queryRaw<
+            Array<{
+                active_watches: bigint;
+                shared_schedules: bigint;
+                personal_schedules: bigint;
+                expected_rpm: number;
+                queue_lag_seconds: number;
+                p50_duration_ms: number | null;
+                p95_duration_ms: number | null;
+            }>
+        >`
+            WITH active AS (
+                SELECT schedule.id, schedule.transport_kind,
+                    MIN(watch.poll_interval_seconds)::float8 AS interval_seconds,
+                    COUNT(*)::bigint AS watches
+                FROM price_watch_schedules schedule
+                JOIN price_watches watch ON watch.schedule_id = schedule.id
+                WHERE watch.status = 'active'
+                GROUP BY schedule.id, schedule.transport_kind
+            )
+            SELECT COALESCE(SUM(watches), 0)::bigint AS active_watches,
+                COUNT(*) FILTER (WHERE active.transport_kind = 'shared')::bigint AS shared_schedules,
+                COUNT(*) FILTER (WHERE active.transport_kind = 'proxy_group')::bigint AS personal_schedules,
+                COALESCE(SUM(60.0 / interval_seconds), 0)::float8 AS expected_rpm
+                ,COALESCE(MAX(EXTRACT(EPOCH FROM (NOW() - schedule.next_check_at)))
+                    FILTER (WHERE schedule.next_check_at < NOW()), 0)::float8 AS queue_lag_seconds
+                ,percentile_cont(0.5) WITHIN GROUP (ORDER BY schedule.last_duration_ms)
+                    FILTER (WHERE schedule.last_duration_ms IS NOT NULL)::float8 AS p50_duration_ms
+                ,percentile_cont(0.95) WITHIN GROUP (ORDER BY schedule.last_duration_ms)
+                    FILTER (WHERE schedule.last_duration_ms IS NOT NULL)::float8 AS p95_duration_ms
+            FROM active
+            JOIN price_watch_schedules schedule ON schedule.id = active.id
+        `,
+        db.$queryRaw<
+            Array<{
+                checks: bigint;
+                successes: bigint;
+                access_denied: bigint;
+                rate_limited: bigint;
+                server_errors: bigint;
+                duration_total: bigint;
+                duration_samples: bigint;
+                tx_bytes: bigint;
+                rx_bytes: bigint;
+            }>
+        >`
+            SELECT COALESCE(SUM(check_count), 0)::bigint AS checks,
+                COALESCE(SUM(successful_check_count), 0)::bigint AS successes,
+                COALESCE(SUM(access_denied_count), 0)::bigint AS access_denied,
+                COALESCE(SUM(rate_limited_count), 0)::bigint AS rate_limited,
+                COALESCE(SUM(server_error_count), 0)::bigint AS server_errors,
+                COALESCE(SUM(duration_total_ms), 0)::bigint AS duration_total,
+                COALESCE(SUM(duration_sample_count), 0)::bigint AS duration_samples
+                ,COALESCE(SUM(tx_bytes), 0)::bigint AS tx_bytes
+                ,COALESCE(SUM(rx_bytes), 0)::bigint AS rx_bytes
+            FROM price_watch_check_hourly_stats
+            WHERE bucket_hour >= NOW() - INTERVAL '24 hours'
+        `,
+        db.$queryRaw<Array<{ total: bigint; sent: bigint }>>`
+            SELECT COUNT(*)::bigint AS total,
+                COUNT(*) FILTER (WHERE delivery.status = 'sent')::bigint AS sent
+            FROM alert_deliveries delivery
+            JOIN alert_notifications notification ON notification.id = delivery.notification_id
+            WHERE notification.kind = 'price_drop'
+              AND delivery.created_at >= NOW() - INTERVAL '24 hours'
+        `,
+        db.price_watch_schedules.findMany({
+            where: {
+                watches: { some: { status: "active" } },
+                OR: [
+                    { last_error_code: { not: null } },
+                    { availability: "unavailable" },
+                ],
+            },
+            select: {
+                id: true,
+                transport_kind: true,
+                last_error_code: true,
+                last_error_detail: true,
+                target: {
+                    select: {
+                        item_id: true,
+                        title: true,
+                        region: true,
+                    },
+                },
+            },
+            orderBy: { updated_at: "desc" },
+            take: 10,
+        }),
+        db.proxy_groups.findMany({
+            where: {
+                price_watch_schedules: {
+                    some: { watches: { some: { status: "active" } } },
+                },
+                OR: [
+                    { proxy_check_status: { not: "completed" } },
+                    { proxy_check_working: 0 },
+                    { proxy_check_error: { not: null } },
+                ],
+            },
+            select: {
+                id: true,
+                name: true,
+                proxy_check_region: true,
+                proxy_check_working: true,
+                proxy_check_status: true,
+                proxy_check_error: true,
+            },
+            orderBy: { proxy_check_completed_at: "desc" },
+            take: 10,
+        }),
+    ]);
+    const settingMap = new Map(settings.map((setting) => [setting.key, setting.value]));
+    const setting = settingMap.get(PRICE_WATCH_INTERVAL_SETTING_KEY);
+    const configuredSeconds = Number(setting);
+    const configuredMinutes = configuredSeconds / 60;
+    const intervalMinutes =
+        Number.isInteger(configuredMinutes) &&
+        configuredMinutes >= MIN_PRICE_WATCH_INTERVAL_MINUTES &&
+        configuredMinutes <= MAX_PRICE_WATCH_INTERVAL_MINUTES
+            ? configuredMinutes
+            : DEFAULT_PRICE_WATCH_INTERVAL_MINUTES;
+    const runtime = scheduleStats[0];
+    const health = telemetry[0];
+    const alertHealth = alertStats[0];
+    const durationSamples = Number(health?.duration_samples ?? 0);
+    let publicUrlHealth: PriceWatchPollingAdminState["publicUrlHealth"] = {
+        ok: false,
+        origin: null,
+        source: null,
+        error: "Worker has not reported URL health yet",
+    };
+    try {
+        const parsed = JSON.parse(
+            settingMap.get("public_app_url_health") ?? "{}",
+        ) as { OK?: boolean; Origin?: string; Source?: string; Error?: string };
+        publicUrlHealth = {
+            ok: parsed.OK === true,
+            origin: parsed.Origin || null,
+            source: parsed.Source || null,
+            error: parsed.Error || null,
+        };
+    } catch {
+        publicUrlHealth.error = "Worker reported invalid URL health data";
+    }
+    return {
+        intervalMinutes,
+        minMinutes: MIN_PRICE_WATCH_INTERVAL_MINUTES,
+        maxMinutes: MAX_PRICE_WATCH_INTERVAL_MINUTES,
+        uniqueActiveTargets,
+        enabled: settingMap.get(PRICE_WATCH_ENABLED_SETTING_KEY) !== "false",
+        sharedMinimumSeconds: Math.max(
+            120,
+            Number(settingMap.get(PRICE_WATCH_SHARED_MIN_SETTING_KEY)) || 120,
+        ),
+        personalMinimumSeconds: Math.max(
+            30,
+            Number(settingMap.get(PRICE_WATCH_PERSONAL_MIN_SETTING_KEY)) || 30,
+        ),
+        sharedMaxRpm:
+            Number(settingMap.get(PRICE_WATCH_SHARED_RPM_SETTING_KEY)) || 30,
+        personalMaxRpmPerProxy:
+            Number(settingMap.get(PRICE_WATCH_PERSONAL_RPM_SETTING_KEY)) || 2,
+        activeWatches: Number(runtime?.active_watches ?? 0),
+        sharedSchedules: Number(runtime?.shared_schedules ?? 0),
+        personalSchedules: Number(runtime?.personal_schedules ?? 0),
+        expectedRpm: Number(runtime?.expected_rpm ?? 0),
+        checks24h: Number(health?.checks ?? 0),
+        successfulChecks24h: Number(health?.successes ?? 0),
+        accessDenied24h: Number(health?.access_denied ?? 0),
+        rateLimited24h: Number(health?.rate_limited ?? 0),
+        serverErrors24h: Number(health?.server_errors ?? 0),
+        averageDurationMs:
+            durationSamples > 0
+                ? Number(health?.duration_total ?? 0) / durationSamples
+                : null,
+        p50DurationMs:
+            runtime?.p50_duration_ms == null
+                ? null
+                : Number(runtime.p50_duration_ms),
+        p95DurationMs:
+            runtime?.p95_duration_ms == null
+                ? null
+                : Number(runtime.p95_duration_ms),
+        queueLagSeconds: Math.max(
+            0,
+            Number(runtime?.queue_lag_seconds ?? 0),
+        ),
+        trafficBytes24h:
+            Number(health?.tx_bytes ?? 0) + Number(health?.rx_bytes ?? 0),
+        alertSuccessRate24h:
+            Number(alertHealth?.total ?? 0) > 0
+                ? (Number(alertHealth?.sent ?? 0) /
+                      Number(alertHealth?.total ?? 0)) *
+                  100
+                : null,
+        problems: problemSchedules.map((schedule) => ({
+            scheduleId: schedule.id.toString(),
+            itemId: schedule.target.item_id.toString(),
+            title:
+                schedule.target.title ||
+                `Vinted item ${schedule.target.item_id.toString()}`,
+            region: schedule.target.region,
+            transport: schedule.transport_kind,
+            errorCode:
+                schedule.last_error_code ||
+                (schedule.transport_kind === "proxy_group"
+                    ? "proxy_unavailable"
+                    : "item_unavailable"),
+            detail:
+                schedule.last_error_detail ||
+                "No successful observation is currently available.",
+        })),
+        proxyProblems: problemProxyGroups.map((group) => ({
+            id: group.id,
+            name: group.name,
+            region: group.proxy_check_region || "unknown",
+            working: group.proxy_check_working,
+            status: group.proxy_check_status,
+            error:
+                group.proxy_check_error ||
+                (group.proxy_check_working === 0
+                    ? "No working proxies"
+                    : "Regional verification required"),
+        })),
+        publicUrlHealth,
+    };
+}
+
+export type PriceWatchRuntimeSettingsInput = {
+    enabled: boolean;
+    sharedMinimumSeconds: number;
+    personalMinimumSeconds: number;
+    sharedMaxRpm: number;
+    personalMaxRpmPerProxy: number;
+};
+
+export async function updatePriceWatchRuntimeSettings(
+    input: PriceWatchRuntimeSettingsInput,
+) {
+    const adminUserId = await requireAdmin();
+    if (![120, 300, 600, 900, 1800, 3600].includes(input.sharedMinimumSeconds)) {
+        throw new Error("Shared minimum must be a supported interval from 2 to 60 minutes.");
+    }
+    if (![30, 60, 120, 300, 600, 900, 1800, 3600].includes(input.personalMinimumSeconds)) {
+        throw new Error("Personal minimum must be a supported interval from 30 seconds to 60 minutes.");
+    }
+    if (!Number.isInteger(input.sharedMaxRpm) || input.sharedMaxRpm < 1 || input.sharedMaxRpm > 300) {
+        throw new Error("Shared request budget must be between 1 and 300 RPM.");
+    }
+    if (!Number.isInteger(input.personalMaxRpmPerProxy) || input.personalMaxRpmPerProxy < 1 || input.personalMaxRpmPerProxy > 10) {
+        throw new Error("Personal proxy budget must be between 1 and 10 RPM.");
+    }
+    const values: Array<[string, string]> = [
+        [PRICE_WATCH_ENABLED_SETTING_KEY, String(input.enabled)],
+        [PRICE_WATCH_SHARED_MIN_SETTING_KEY, String(input.sharedMinimumSeconds)],
+        [PRICE_WATCH_PERSONAL_MIN_SETTING_KEY, String(input.personalMinimumSeconds)],
+        [PRICE_WATCH_SHARED_RPM_SETTING_KEY, String(input.sharedMaxRpm)],
+        [PRICE_WATCH_PERSONAL_RPM_SETTING_KEY, String(input.personalMaxRpmPerProxy)],
+    ];
+    await db.$transaction(
+        values.map(([key, value]) =>
+            db.app_settings.upsert({
+                where: { key },
+                create: { key, value },
+                update: { value },
+            }),
+        ),
+    );
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.price_watch_runtime_updated",
+        targetType: "app_setting",
+        targetId: "price_watch_runtime",
+        metadata: input,
+    });
+    revalidatePath("/admin");
+    revalidatePath("/price-watches");
+    return getPriceWatchPollingAdminState();
+}
+
+export async function updatePriceWatchPollingInterval(intervalMinutes: number) {
+    const adminUserId = await requireAdmin();
+    if (
+        !Number.isInteger(intervalMinutes) ||
+        intervalMinutes < MIN_PRICE_WATCH_INTERVAL_MINUTES ||
+        intervalMinutes > MAX_PRICE_WATCH_INTERVAL_MINUTES
+    ) {
+        throw new Error(
+            `Price Watch interval must be a whole number from ${MIN_PRICE_WATCH_INTERVAL_MINUTES} to ${MAX_PRICE_WATCH_INTERVAL_MINUTES} minutes.`,
+        );
+    }
+    await db.$transaction([
+        db.app_settings.upsert({
+            where: { key: PRICE_WATCH_INTERVAL_SETTING_KEY },
+            create: {
+                key: PRICE_WATCH_INTERVAL_SETTING_KEY,
+                value: String(intervalMinutes * 60),
+            },
+            update: { value: String(intervalMinutes * 60) },
+        }),
+        db.$executeRaw`
+            UPDATE price_watch_schedules schedule
+            SET next_check_at = LEAST(
+                schedule.next_check_at,
+                NOW() + (${intervalMinutes} * INTERVAL '1 minute')
+            )
+            WHERE EXISTS (
+                SELECT 1
+                FROM price_watches watch
+                WHERE watch.schedule_id = schedule.id
+                  AND watch.status = 'active'
+            )
+        `,
+    ]);
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.price_watch_interval_updated",
+        targetType: "app_setting",
+        targetId: PRICE_WATCH_INTERVAL_SETTING_KEY,
+        metadata: { intervalMinutes },
+    });
+    revalidatePath("/admin");
+    revalidatePath("/price-watches");
+    return getPriceWatchPollingAdminState();
+}
+
 export type MonitorMaintenanceAdminState = {
     maintenance: MonitorMaintenance;
     runtime: Awaited<ReturnType<typeof getMonitorWorkerRuntime>>;
@@ -1477,15 +1891,28 @@ export type InactiveMemberPolicyAdminState = {
     policy: InactiveMemberPolicy;
     runtime: Awaited<ReturnType<typeof getInactiveMemberRuntime>>;
     status: ReturnType<typeof inactivePolicyRuntimeStatus>;
-    preview: { memberCount: number; monitorCount: number };
+    preview: {
+        memberCount: number;
+        monitorCount: number;
+        priceWatchCount: number;
+    };
     inactivityPausedCount: number;
+    inactivityPausedPriceWatchCount: number;
 };
 
 async function loadInactiveMemberPolicyAdminState(): Promise<InactiveMemberPolicyAdminState> {
-    const [policy, runtime, inactivityPausedCount] = await Promise.all([
+    const [
+        policy,
+        runtime,
+        inactivityPausedCount,
+        inactivityPausedPriceWatchCount,
+    ] = await Promise.all([
         getInactiveMemberPolicy(),
         getInactiveMemberRuntime().catch(() => null),
         db.monitors.count({ where: { status: "inactivity_paused" } }),
+        db.price_watches.count({
+            where: { status: "paused", stopped_reason: "inactive_member" },
+        }),
     ]);
     return {
         policy,
@@ -1493,6 +1920,7 @@ async function loadInactiveMemberPolicyAdminState(): Promise<InactiveMemberPolic
         status: inactivePolicyRuntimeStatus(policy, runtime),
         preview: await countInactivePolicyMatches(policy),
         inactivityPausedCount,
+        inactivityPausedPriceWatchCount,
     };
 }
 
@@ -1532,6 +1960,7 @@ export async function updateInactiveMemberPolicy(
             existing.duration !== normalized.duration ||
             existing.durationUnit !== normalized.durationUnit ||
             existing.monitorScope !== normalized.monitorScope ||
+            existing.includePriceWatches !== normalized.includePriceWatches ||
             existing.roles.join(",") !== normalized.roles.join(",");
         if (!changed) return { changed: false, revision: existing.revision };
 
@@ -1567,6 +1996,7 @@ export async function updateInactiveMemberPolicy(
                 enabled: normalized.enabled,
                 durationDays: normalized.durationDays,
                 monitorScope: normalized.monitorScope,
+                includePriceWatches: normalized.includePriceWatches,
                 roles: normalized.roles,
             },
         });
@@ -2887,6 +3317,7 @@ export async function getAdminUsersPage(input?: {
                       scope: true,
                       active_limit: true,
                       free_proxy_active_limit: true,
+                      price_watch_limit: true,
                   },
               })
             : [];
@@ -2930,6 +3361,12 @@ export async function getAdminUsersPage(input?: {
                 row.free_proxy_active_limit,
             ]),
         ),
+        userPriceWatchLimits: Object.fromEntries(
+            userLimitRows.map((row) => [
+                row.scope.slice(USER_MONITOR_LIMIT_PREFIX.length),
+                row.price_watch_limit,
+            ]),
+        ),
     };
 }
 
@@ -2959,6 +3396,7 @@ export async function getAdminUsersState() {
                 scope: true,
                 active_limit: true,
                 free_proxy_active_limit: true,
+                price_watch_limit: true,
             },
         }),
     ]);
@@ -2980,6 +3418,12 @@ export async function getAdminUsersState() {
             userLimitRows.map((row) => [
                 row.scope.slice(USER_MONITOR_LIMIT_PREFIX.length),
                 row.free_proxy_active_limit,
+            ]),
+        ),
+        userPriceWatchLimits: Object.fromEntries(
+            userLimitRows.map((row) => [
+                row.scope.slice(USER_MONITOR_LIMIT_PREFIX.length),
+                row.price_watch_limit,
             ]),
         ),
     };
@@ -3713,6 +4157,110 @@ export async function setUserActiveMonitorLimit(userId: string, value: string) {
     );
 
     revalidatePath("/admin");
+}
+
+async function reconcilePriceWatchLimits(
+    userIds: string[],
+    reason: string,
+) {
+    let pausedCount = 0;
+    for (const userId of userIds) {
+        pausedCount += await db.$transaction(async (tx) => {
+            const { priceWatchLimit } = await getEffectivePriceWatchLimit(
+                userId,
+                tx,
+            );
+            if (priceWatchLimit === null) return 0;
+            const active = await tx.price_watches.findMany({
+                where: { user_id: userId, status: "active" },
+                orderBy: [{ created_at: "desc" }, { id: "desc" }],
+                select: { id: true },
+            });
+            const excess = active.slice(0, Math.max(0, active.length - priceWatchLimit));
+            if (excess.length === 0) return 0;
+            const result = await tx.price_watches.updateMany({
+                where: { id: { in: excess.map((watch) => watch.id) } },
+                data: {
+                    status: "paused",
+                    stopped_reason: "limit_reduced",
+                    armed_at: null,
+                },
+            });
+            return result.count;
+        });
+    }
+    return { pausedCount, reason };
+}
+
+export async function setGlobalPriceWatchLimit(value: string) {
+    const adminUserId = await requireAdmin();
+    const limit = normalizeMonitorLimitInput(value);
+    await setPriceWatchLimit(GLOBAL_MONITOR_LIMIT_SCOPE, limit);
+    const users = await db.user.findMany({
+        where: { role: { not: "admin" } },
+        select: { id: true },
+    });
+    const reconciliation = await reconcilePriceWatchLimits(
+        users.map((user) => user.id),
+        GLOBAL_MONITOR_LIMIT_SCOPE,
+    );
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.price_watch_limit_updated",
+        targetType: "monitor_limit",
+        targetId: GLOBAL_MONITOR_LIMIT_SCOPE,
+        metadata: { limit, pausedCount: reconciliation.pausedCount },
+    });
+    revalidatePath("/admin");
+    revalidatePath("/price-watches");
+    return reconciliation;
+}
+
+export async function setRolePriceWatchLimit(role: string, value: string) {
+    const adminUserId = await requireAdmin();
+    if (!["free", "premium"].includes(role)) throw new Error("Invalid role");
+    const limit = normalizeMonitorLimitInput(value);
+    const scope = roleLimitScope(role);
+    await setPriceWatchLimit(scope, limit);
+    const users = await db.user.findMany({ where: { role }, select: { id: true } });
+    const reconciliation = await reconcilePriceWatchLimits(
+        users.map((user) => user.id),
+        scope,
+    );
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.price_watch_limit_updated",
+        targetType: "monitor_limit",
+        targetId: scope,
+        metadata: { limit, pausedCount: reconciliation.pausedCount },
+    });
+    revalidatePath("/admin");
+    revalidatePath("/price-watches");
+    return reconciliation;
+}
+
+export async function setUserPriceWatchLimit(userId: string, value: string) {
+    const adminUserId = await requireAdmin();
+    const user = await db.user.findUnique({
+        where: { id: userId },
+        select: { role: true },
+    });
+    if (!user) throw new Error("User not found");
+    if (user.role === "admin") throw new Error("Admins are always unlimited");
+    const limit = normalizeMonitorLimitInput(value);
+    const scope = userLimitScope(userId);
+    await setPriceWatchLimit(scope, limit);
+    const reconciliation = await reconcilePriceWatchLimits([userId], scope);
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.price_watch_limit_updated",
+        targetType: "monitor_limit",
+        targetId: scope,
+        metadata: { memberUserId: userId, limit, pausedCount: reconciliation.pausedCount },
+    });
+    revalidatePath("/admin");
+    revalidatePath("/price-watches");
+    return reconciliation;
 }
 
 export async function setGlobalFreeProxyMonitorLimit(value: string) {

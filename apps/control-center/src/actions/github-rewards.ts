@@ -24,6 +24,7 @@ import { runGithubRewardsSync } from "@/lib/github-rewards-sync.server";
 import { logAuditEvent } from "@/lib/audit";
 import {
     getEffectiveMonitorLimits,
+    getEffectivePriceWatchLimit,
     getMonitorActivationState,
     withMonitorActivationLock,
 } from "@/lib/monitor-limits";
@@ -450,10 +451,20 @@ export async function previewGithubRewardsEnforcement(
         by: ["userId"],
         where: { status: "active", proxy_source: "free" },
     });
+    const activePriceWatchCounts = await db.price_watches.groupBy({
+        by: ["user_id"],
+        where: { status: "active" },
+    });
+    const activeUserIds = Array.from(
+        new Set([
+            ...activeFreeCounts.map((row) => row.userId),
+            ...activePriceWatchCounts.map((row) => row.user_id),
+        ]),
+    );
     const users = await db.user.findMany({
         where: {
             role: { not: "admin" },
-            id: { in: activeFreeCounts.map((row) => row.userId) },
+            id: { in: activeUserIds },
         },
         select: { id: true, name: true, email: true, role: true },
         orderBy: { createdAt: "asc" },
@@ -463,14 +474,18 @@ export async function previewGithubRewardsEnforcement(
         ...new Set(users.map((user) => roleLimitScope(user.role))),
     ]);
     const affected = [];
+    const priceWatchAffected = [];
     for (const user of users) {
-        const [status, current, override, activeFreeMonitors] =
+        const [status, current, override, activeFreeMonitors, activePriceWatches] =
             await Promise.all([
                 getMemberGithubRewardStatus(user.id),
                 getEffectiveMonitorLimits(user.id),
                 db.monitor_limits.findUnique({
                     where: { scope: userLimitScope(user.id) },
-                    select: { free_proxy_active_limit: true },
+                    select: {
+                        free_proxy_active_limit: true,
+                        price_watch_limit: true,
+                    },
                 }),
                 db.monitors.findMany({
                     where: {
@@ -483,6 +498,15 @@ export async function previewGithubRewardsEnforcement(
                         { id: "desc" },
                     ],
                     select: { id: true, name: true, created_at: true },
+                }),
+                db.price_watches.findMany({
+                    where: { user_id: user.id, status: "active" },
+                    orderBy: [{ created_at: "desc" }, { id: "desc" }],
+                    select: {
+                        id: true,
+                        created_at: true,
+                        target: { select: { title: true, item_id: true } },
+                    },
                 }),
             ]);
         const projected = !policy.enforcementEnabled
@@ -511,32 +535,83 @@ export async function previewGithubRewardsEnforcement(
             projected.limit === null
                 ? 0
                 : Math.max(activeFreeMonitors.length - projected.limit, 0);
-        if (excess === 0) continue;
-        affected.push({
-            userId: user.id,
-            member: user.name || user.email || user.id,
-            role: user.role,
-            currentLimit: current.freeProxyActiveLimit,
-            currentSource: current.freeProxyLimitSource,
-            projectedLimit: projected.limit,
-            projectedSource: projected.source,
-            activeFreeCount: activeFreeMonitors.length,
-            monitorsToPause: activeFreeMonitors
-                .slice(0, excess)
-                .map((monitor) => ({
-                    id: monitor.id,
-                    name: monitor.name,
-                    createdAt: monitor.created_at?.toISOString() ?? null,
-                })),
-        });
+        if (excess > 0) {
+            affected.push({
+                userId: user.id,
+                member: user.name || user.email || user.id,
+                role: user.role,
+                currentLimit: current.freeProxyActiveLimit,
+                currentSource: current.freeProxyLimitSource,
+                projectedLimit: projected.limit,
+                projectedSource: projected.source,
+                activeFreeCount: activeFreeMonitors.length,
+                monitorsToPause: activeFreeMonitors
+                    .slice(0, excess)
+                    .map((monitor) => ({
+                        id: monitor.id,
+                        name: monitor.name,
+                        createdAt: monitor.created_at?.toISOString() ?? null,
+                    })),
+            });
+        }
+
+        const rolePriceWatchLimit =
+            roleLimits.get(roleLimitScope(user.role))?.price_watch_limit ??
+            roleLimits.get(GLOBAL_MONITOR_LIMIT_SCOPE)?.price_watch_limit ??
+            null;
+        const projectedPriceWatchLimit =
+            override?.price_watch_limit != null
+                ? override.price_watch_limit
+                : policy.enforcementEnabled &&
+                    policy.priceWatchRewardsEnabled &&
+                    policy.eligibleRoles.includes(user.role)
+                  ? status.donated
+                      ? policy.priceWatchDonationLimit
+                      : status.starred
+                        ? policy.priceWatchStarLimit
+                        : policy.priceWatchDefaultLimit
+                  : rolePriceWatchLimit;
+        const priceWatchExcess =
+            projectedPriceWatchLimit === null
+                ? 0
+                : Math.max(
+                      activePriceWatches.length - projectedPriceWatchLimit,
+                      0,
+                  );
+        if (priceWatchExcess > 0) {
+            priceWatchAffected.push({
+                userId: user.id,
+                member: user.name || user.email || user.id,
+                role: user.role,
+                projectedLimit: projectedPriceWatchLimit,
+                activeCount: activePriceWatches.length,
+                watchesToPause: activePriceWatches
+                    .slice(0, priceWatchExcess)
+                    .map((watch) => ({
+                        id: watch.id.toString(),
+                        title:
+                            watch.target.title ||
+                            `Vinted item ${watch.target.item_id.toString()}`,
+                        createdAt: watch.created_at.toISOString(),
+                    })),
+            });
+        }
     }
     return {
-        affectedMembers: affected.length,
+        affectedMembers: new Set([
+            ...affected.map((row) => row.userId),
+            ...priceWatchAffected.map((row) => row.userId),
+        ]).size,
         monitorsToPause: affected.reduce(
             (total, row) => total + row.monitorsToPause.length,
             0,
         ),
+        priceWatchesToPause: priceWatchAffected.reduce(
+            (total, row) => total + row.watchesToPause.length,
+            0,
+        ),
         affected,
+        priceWatchAffected,
     };
 }
 
@@ -696,19 +771,62 @@ export async function saveGithubRewardsPolicy(input: GithubRewardsPolicy) {
         update: { value: JSON.stringify(policy) },
     });
     const requiresReconciliation =
-        policy.enforcementEnabled &&
-        (!previous.enforcementEnabled ||
+        policy.enforcementEnabled !== previous.enforcementEnabled ||
+        (policy.enforcementEnabled &&
+            (
             policy.defaultLimit < previous.defaultLimit ||
             policy.starLimit < previous.starLimit ||
             policy.donationLimit < previous.donationLimit ||
+            policy.priceWatchDefaultLimit <
+                previous.priceWatchDefaultLimit ||
+            policy.priceWatchStarLimit < previous.priceWatchStarLimit ||
+            policy.priceWatchDonationLimit <
+                previous.priceWatchDonationLimit ||
+            policy.priceWatchRewardsEnabled !==
+                previous.priceWatchRewardsEnabled ||
             policy.eligibleRoles.join(",") !==
-                previous.eligibleRoles.join(","));
+                previous.eligibleRoles.join(",")));
     // Reconciliation reads the policy through a transaction client, which
     // bypasses the request-scoped policy cache — it therefore sees the value
     // just written above rather than the one read into `previous`.
     const reconciliation = requiresReconciliation
         ? await reconcileAllRewardEligibleUsers("github-policy-update")
         : { pausedCount: 0, pausedMonitorIds: [] as number[] };
+    let pausedPriceWatchCount = 0;
+    if (requiresReconciliation) {
+        const members = await db.user.findMany({
+            where: { role: { not: "admin" } },
+            select: { id: true },
+        });
+        for (const member of members) {
+            pausedPriceWatchCount += await db.$transaction(async (tx) => {
+                const { priceWatchLimit } = await getEffectivePriceWatchLimit(
+                    member.id,
+                    tx,
+                );
+                if (priceWatchLimit === null) return 0;
+                const active = await tx.price_watches.findMany({
+                    where: { user_id: member.id, status: "active" },
+                    orderBy: [{ created_at: "desc" }, { id: "desc" }],
+                    select: { id: true },
+                });
+                const excess = active.slice(
+                    0,
+                    Math.max(0, active.length - priceWatchLimit),
+                );
+                if (excess.length === 0) return 0;
+                const result = await tx.price_watches.updateMany({
+                    where: { id: { in: excess.map((watch) => watch.id) } },
+                    data: {
+                        status: "paused",
+                        stopped_reason: "reward_limit_reduced",
+                        armed_at: null,
+                    },
+                });
+                return result.count;
+            });
+        }
+    }
     await logAuditEvent({
         userId: adminUserId,
         action: "admin.github_rewards_policy_updated",
@@ -723,12 +841,17 @@ export async function saveGithubRewardsPolicy(input: GithubRewardsPolicy) {
                 donation: policy.donationLimit,
             },
             pausedCount: reconciliation.pausedCount,
+            pausedPriceWatchCount,
         },
     });
     revalidatePath("/admin");
     revalidatePath("/dashboard");
     revalidatePath("/account");
-    return { success: true, policy, reconciliation };
+    return {
+        success: true,
+        policy,
+        reconciliation: { ...reconciliation, pausedPriceWatchCount },
+    };
 }
 
 export async function runGithubRewardsSyncAction() {

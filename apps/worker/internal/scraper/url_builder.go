@@ -10,6 +10,36 @@ import (
 
 const videoGamePlatformCatalogID = "3002"
 
+const maxVintedExtraParamsLength = 2000
+
+var reservedVintedParams = map[string]struct{}{
+	"_":                         {},
+	"brand_ids":                 {},
+	"brand_ids[]":               {},
+	"catalog":                   {},
+	"catalog[]":                 {},
+	"catalog_ids":               {},
+	"catalog_ids[]":             {},
+	"color_ids":                 {},
+	"color_ids[]":               {},
+	"order":                     {},
+	"page":                      {},
+	"per_page":                  {},
+	"platform_ids":              {},
+	"platform_ids[]":            {},
+	"price_from":                {},
+	"price_to":                  {},
+	"search_id":                 {},
+	"search_text":               {},
+	"size_ids":                  {},
+	"size_ids[]":                {},
+	"status_ids":                {},
+	"status_ids[]":              {},
+	"time":                      {},
+	"video_game_platform_ids":   {},
+	"video_game_platform_ids[]": {},
+}
+
 func BuildVintedURL(m model.Monitor) string {
 	_, query := monitorQueryForCheck(parseMonitorQueries(m.Query), 1)
 	return BuildVintedURLForQuery(m, query)
@@ -121,5 +151,67 @@ func buildVintedURL(m model.Monitor, perPage string, includeQuery bool, page int
 		params.Add("video_game_platform_ids[]", platform)
 	}
 
+	appendVintedExtraParams(params, m.VintedExtraParams)
+
 	return fmt.Sprintf("%s?%s", baseURL, params.Encode())
+}
+
+func appendVintedExtraParams(params url.Values, raw *string) {
+	if raw == nil {
+		return
+	}
+	normalized := strings.TrimSpace(*raw)
+	if normalized == "" || len(normalized) > maxVintedExtraParamsLength {
+		return
+	}
+
+	extraParams, err := url.ParseQuery(normalized)
+	if err != nil {
+		return
+	}
+
+	accepted := 0
+	for key, values := range extraParams {
+		key = strings.ToLower(strings.TrimSpace(key))
+		if !isSafeVintedExtraParamKey(key) {
+			continue
+		}
+		if _, reserved := reservedVintedParams[key]; reserved {
+			continue
+		}
+
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value == "" || len(value) > 256 || accepted >= 50 {
+				continue
+			}
+			params.Add(key, value)
+			accepted++
+		}
+	}
+}
+
+func isSafeVintedExtraParamKey(key string) bool {
+	if key == "" || len(key) > 64 {
+		return false
+	}
+	if strings.HasPrefix(key, "utm_") || key == "fbclid" || key == "gclid" {
+		return false
+	}
+	base := strings.TrimSuffix(key, "[]")
+	if base == "" {
+		return false
+	}
+	for index, char := range base {
+		if (char >= 'a' && char <= 'z') || (index > 0 && char >= '0' && char <= '9') || (index > 0 && char == '_') {
+			continue
+		}
+		return false
+	}
+	for _, sensitive := range []string{"auth", "bearer", "cookie", "credential", "csrf", "password", "redirect", "session", "token", "url"} {
+		if strings.Contains(base, sensitive) {
+			return false
+		}
+	}
+	return true
 }

@@ -6,6 +6,7 @@ import {
     getFreeProxyAdminState,
     getMonitorMaintenanceAdminState,
     getInactiveMemberPolicyAdminState,
+    getPriceWatchPollingAdminState,
 } from "@/actions/admin";
 import {
     DEFAULT_FREE_PROXY_ACTIVE_LIMIT,
@@ -15,6 +16,11 @@ import {
 } from "@/lib/monitor-limits";
 import { getMemberAnnouncement } from "@/lib/member-announcement.server";
 import { getGithubRewardsAdminState } from "@/actions/github-rewards";
+import {
+    ADMIN_SECTION_ROUTES,
+    isAdminSection,
+    type AdminSection,
+} from "@/lib/admin-sections";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +29,12 @@ export default async function AdminPage({
 }: {
     searchParams?: Promise<{ tab?: string }>;
 }) {
+    const tab = (await searchParams)?.tab;
+    if (isAdminSection(tab)) redirect(ADMIN_SECTION_ROUTES[tab]);
+    return renderAdminSection("overview");
+}
+
+export async function renderAdminSection(initialTab: AdminSection) {
     const session = await auth();
     if (!session?.user?.id) redirect("/login");
 
@@ -37,7 +49,7 @@ export default async function AdminPage({
         monitorMaintenanceState,
         inactiveMemberPolicyState,
         githubRewardsState,
-        params,
+        priceWatchPollingState,
     ] = await Promise.all([
         getMonitorLimits([
             GLOBAL_MONITOR_LIMIT_SCOPE,
@@ -54,14 +66,14 @@ export default async function AdminPage({
         getMonitorMaintenanceAdminState(),
         getInactiveMemberPolicyAdminState(),
         getGithubRewardsAdminState(),
-        searchParams,
+        getPriceWatchPollingAdminState(),
     ]);
 
     return (
         <AdminClient
             users={[]}
             logs={[]}
-            initialTab={params?.tab}
+            initialTab={initialTab}
             currentUserId={session.user.id}
             serverProxies={serverProxyRows[0]?.value ?? ""}
             memberAnnouncement={memberAnnouncement}
@@ -69,6 +81,7 @@ export default async function AdminPage({
             initialInactiveMemberPolicyState={inactiveMemberPolicyState}
             freeProxyState={freeProxyState}
             initialGithubRewardsState={githubRewardsState}
+            initialPriceWatchPollingState={priceWatchPollingState}
             monitorLimits={{
                 global:
                     limits.get(GLOBAL_MONITOR_LIMIT_SCOPE)?.active_limit ??
@@ -92,6 +105,17 @@ export default async function AdminPage({
                     ]),
                 ),
                 freeProxyUsers: {},
+                priceWatchGlobal:
+                    limits.get(GLOBAL_MONITOR_LIMIT_SCOPE)
+                        ?.price_watch_limit ?? 3,
+                priceWatchRoles: Object.fromEntries(
+                    roles.map((role) => [
+                        role,
+                        limits.get(roleLimitScope(role))?.price_watch_limit ??
+                            (role === "premium" ? 50 : null),
+                    ]),
+                ),
+                priceWatchUsers: {},
             }}
         />
     );
