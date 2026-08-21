@@ -207,7 +207,7 @@ export async function deleteProxyGroup(id: number) {
     if (!session?.user?.id) throw new Error("Unauthorized");
     const userId = session.user.id;
 
-    const [group, user] = await Promise.all([
+    const [group, user, priceWatchSchedules] = await Promise.all([
         db.proxy_groups.findFirst({
             where: { id, userId },
             include: { _count: { select: { monitors: true } } },
@@ -216,6 +216,14 @@ export async function deleteProxyGroup(id: number) {
             where: { id: userId },
             select: { role: true },
         }),
+        db.price_watch_schedules.findMany({
+            where: { proxy_group_id: id, proxy_group: { userId } },
+            select: {
+                id: true,
+                target_id: true,
+                _count: { select: { watches: true } },
+            },
+        }),
     ]);
 
     if (!group) throw new Error("Not found");
@@ -223,6 +231,10 @@ export async function deleteProxyGroup(id: number) {
     const canUseServerProxies =
         user?.role === "premium" || user?.role === "admin";
     const affectedMonitorCount = group._count.monitors;
+    const affectedPriceWatchCount = priceWatchSchedules.reduce(
+        (total, schedule) => total + schedule._count.watches,
+        0,
+    );
 
     await db.$transaction(async (tx) => {
         if (affectedMonitorCount > 0) {
@@ -235,6 +247,36 @@ export async function deleteProxyGroup(id: number) {
             });
         }
 
+        for (const schedule of priceWatchSchedules) {
+            const sharedSchedule = await tx.price_watch_schedules.upsert({
+                where: {
+                    target_id_transport_key: {
+                        target_id: schedule.target_id,
+                        transport_key: "shared",
+                    },
+                },
+                create: {
+                    target_id: schedule.target_id,
+                    transport_key: "shared",
+                    transport_kind: "shared",
+                },
+                update: {},
+            });
+            await tx.price_watches.updateMany({
+                where: { schedule_id: schedule.id },
+                data: {
+                    schedule_id: sharedSchedule.id,
+                    status: "paused",
+                    stopped_reason: "proxy_group_deleted",
+                    armed_at: null,
+                    poll_interval_seconds: 120,
+                },
+            });
+            await tx.price_watch_schedules.delete({
+                where: { id: schedule.id },
+            });
+        }
+
         await tx.proxy_groups.delete({
             where: { id },
         });
@@ -242,10 +284,12 @@ export async function deleteProxyGroup(id: number) {
 
     revalidatePath("/proxies");
     revalidatePath("/monitors");
+    revalidatePath("/price-watches");
 
     return {
         affectedMonitorCount,
         pausedMonitorCount: canUseServerProxies ? 0 : affectedMonitorCount,
+        affectedPriceWatchCount,
     };
 }
 

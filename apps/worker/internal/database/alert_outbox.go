@@ -32,16 +32,28 @@ func (s *Store) EnqueueAlertNotification(ctx context.Context, request model.Aler
 	if request.Kind == "" || request.IdempotencyKey == "" || request.ExpiresAt.IsZero() {
 		return false, errors.New("invalid alert notification request")
 	}
-	payload, err := json.Marshal(request.Payload)
-	if err != nil {
-		return false, fmt.Errorf("marshal alert payload: %w", err)
-	}
 
 	tx, err := s.alertPool().BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback()
+
+	created, err := enqueueAlertNotificationTx(ctx, tx, request)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return created, nil
+}
+
+func enqueueAlertNotificationTx(ctx context.Context, tx *sql.Tx, request model.AlertNotificationRequest) (bool, error) {
+	payload, err := json.Marshal(request.Payload)
+	if err != nil {
+		return false, fmt.Errorf("marshal alert payload: %w", err)
+	}
 
 	if request.DedupeUserItem && request.UserID != "" && request.ItemID > 0 {
 		// The claim starts provisional and is promoted to its full lifetime only
@@ -64,13 +76,10 @@ func (s *Store) EnqueueAlertNotification(ctx context.Context, request model.Aler
 			RETURNING TRUE`, request.UserID, request.ItemID).Scan(&claimed)
 		if err == sql.ErrNoRows {
 			if err := insertAlertEventTx(ctx, tx, model.AlertEvent{
-				UserID: request.UserID, MonitorID: request.MonitorID, ItemID: request.ItemID,
+				UserID: request.UserID, MonitorID: request.MonitorID, PriceWatchID: request.PriceWatchID, ItemID: request.ItemID,
 				Channel: "all", Status: "deduplicated", NotificationKind: request.Kind,
 				ReasonCode: "duplicate_user_item_alert", FailureReason: "duplicate_user_item_alert",
 			}); err != nil {
-				return false, err
-			}
-			if err := tx.Commit(); err != nil {
 				return false, err
 			}
 			return false, nil
@@ -83,13 +92,13 @@ func (s *Store) EnqueueAlertNotification(ctx context.Context, request model.Aler
 	var notificationID int64
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO alert_notifications (
-			user_id, monitor_id, item_id, kind, payload_version, payload,
+			user_id, monitor_id, price_watch_id, item_id, kind, payload_version, payload,
 			idempotency_key, expires_at
 		)
-		VALUES (NULLIF($1, ''), NULLIF($2, 0), NULLIF($3, 0::bigint), $4, $5, $6::jsonb, $7, $8)
+		VALUES (NULLIF($1, ''), NULLIF($2, 0), NULLIF($3, 0::bigint), NULLIF($4, 0::bigint), $5, $6, $7::jsonb, $8, $9)
 		ON CONFLICT (idempotency_key) DO NOTHING
 		RETURNING id`,
-		request.UserID, request.MonitorID, request.ItemID, request.Kind,
+		request.UserID, request.MonitorID, request.PriceWatchID, request.ItemID, request.Kind,
 		request.Payload.Version, string(payload), request.IdempotencyKey, request.ExpiresAt.UTC(),
 	).Scan(&notificationID)
 	if err == sql.ErrNoRows {
@@ -121,7 +130,7 @@ func (s *Store) EnqueueAlertNotification(ctx context.Context, request model.Aler
 			return false, err
 		}
 		if err := insertAlertEventTx(ctx, tx, model.AlertEvent{
-			UserID: request.UserID, MonitorID: request.MonitorID, ItemID: request.ItemID,
+			UserID: request.UserID, MonitorID: request.MonitorID, PriceWatchID: request.PriceWatchID, ItemID: request.ItemID,
 			NotificationID: notificationID, DeliveryID: deliveryID,
 			Channel: destination.channel, Status: "queued", NotificationKind: request.Kind,
 		}); err != nil {
@@ -134,9 +143,6 @@ func (s *Store) EnqueueAlertNotification(ctx context.Context, request model.Aler
 		if _, err := tx.ExecContext(ctx, `DELETE FROM alert_notifications WHERE id = $1`, notificationID); err != nil {
 			return false, err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return false, err
 	}
 	return deliveryCount > 0, nil
 }
@@ -213,23 +219,36 @@ func (s *Store) ClaimAlertDeliveries(ctx context.Context, claimToken string, lim
 		)
 		SELECT
 			claimed.id, claimed.notification_id, COALESCE(n.user_id, ''),
-			COALESCE(n.monitor_id, 0), COALESCE(n.item_id, 0), n.kind,
+			COALESCE(n.monitor_id, 0), COALESCE(n.price_watch_id, 0), COALESCE(n.item_id, 0), n.kind,
 			n.payload, n.expires_at, claimed.channel,
 			CASE claimed.channel
-				WHEN 'discord' THEN COALESCE(m.discord_webhook, '')
+				WHEN 'discord' THEN CASE
+					WHEN n.price_watch_id IS NOT NULL THEN COALESCE(pw.discord_webhook, '')
+					ELSE COALESCE(m.discord_webhook, '')
+				END
 				WHEN 'telegram' THEN COALESCE(tc.chat_id, '')
 				ELSE ''
 			END AS destination,
 			claimed.destination_fingerprint, claimed.attempt_count, claimed.claim_token,
-			COALESCE(m.notifications_enabled, FALSE),
+			CASE
+				WHEN n.price_watch_id IS NOT NULL THEN COALESCE(pw.notifications_enabled, FALSE)
+				ELSE COALESCE(m.notifications_enabled, FALSE)
+			END,
 			CASE claimed.channel
-				WHEN 'discord' THEN COALESCE(m.webhook_active, FALSE)
-				WHEN 'telegram' THEN COALESCE(m.telegram_active, FALSE)
+				WHEN 'discord' THEN CASE
+					WHEN n.price_watch_id IS NOT NULL THEN COALESCE(pw.webhook_active, FALSE)
+					ELSE COALESCE(m.webhook_active, FALSE)
+				END
+				WHEN 'telegram' THEN CASE
+					WHEN n.price_watch_id IS NOT NULL THEN COALESCE(pw.telegram_active, FALSE)
+					ELSE COALESCE(m.telegram_active, FALSE)
+				END
 				ELSE FALSE
 			END AS channel_enabled
 		FROM claimed
 		JOIN alert_notifications n ON n.id = claimed.notification_id
 		LEFT JOIN monitors m ON m.id = n.monitor_id
+		LEFT JOIN price_watches pw ON pw.id = n.price_watch_id
 		LEFT JOIN telegram_connections tc ON tc."userId" = n.user_id`,
 		claimToken, fmt.Sprintf("%d seconds", int(alertDeliveryLeaseDuration.Seconds())), limit,
 	)
@@ -244,7 +263,7 @@ func (s *Store) ClaimAlertDeliveries(ctx context.Context, claimToken string, lim
 		var payload []byte
 		if err := rows.Scan(
 			&delivery.ID, &delivery.NotificationID, &delivery.UserID,
-			&delivery.MonitorID, &delivery.ItemID, &delivery.Kind,
+			&delivery.MonitorID, &delivery.PriceWatchID, &delivery.ItemID, &delivery.Kind,
 			&payload, &delivery.ExpiresAt, &delivery.Channel, &delivery.Destination,
 			&delivery.DestinationFingerprint, &delivery.AttemptCount, &delivery.ClaimToken,
 			&delivery.NotificationsEnabled, &delivery.ChannelEnabled,
@@ -335,7 +354,7 @@ func (s *Store) finishAlertDelivery(
 			delivery.ID, delivery.Channel, status,
 		)
 		if err := insertAlertEventTx(ctx, tx, model.AlertEvent{
-			UserID: delivery.UserID, MonitorID: delivery.MonitorID, ItemID: delivery.ItemID,
+			UserID: delivery.UserID, MonitorID: delivery.MonitorID, PriceWatchID: delivery.PriceWatchID, ItemID: delivery.ItemID,
 			NotificationID: delivery.NotificationID, DeliveryID: delivery.ID,
 			Channel: delivery.Channel, Status: "failed", NotificationKind: delivery.Kind,
 			ReasonCode: "lease_lost", AttemptNumber: delivery.AttemptCount,
@@ -350,7 +369,7 @@ func (s *Store) finishAlertDelivery(
 	}
 
 	if err := insertAlertEventTx(ctx, tx, model.AlertEvent{
-		UserID: delivery.UserID, MonitorID: delivery.MonitorID, ItemID: delivery.ItemID,
+		UserID: delivery.UserID, MonitorID: delivery.MonitorID, PriceWatchID: delivery.PriceWatchID, ItemID: delivery.ItemID,
 		NotificationID: delivery.NotificationID, DeliveryID: delivery.ID,
 		Channel: delivery.Channel, Status: status, NotificationKind: delivery.Kind,
 		ReasonCode: reasonCode, AttemptNumber: delivery.AttemptCount, FailureReason: detail,
@@ -412,7 +431,7 @@ func (s *Store) RetryAlertDelivery(
 		return false, err
 	}
 	if err := insertAlertEventTx(ctx, tx, model.AlertEvent{
-		UserID: delivery.UserID, MonitorID: delivery.MonitorID, ItemID: delivery.ItemID,
+		UserID: delivery.UserID, MonitorID: delivery.MonitorID, PriceWatchID: delivery.PriceWatchID, ItemID: delivery.ItemID,
 		NotificationID: delivery.NotificationID, DeliveryID: delivery.ID,
 		Channel: delivery.Channel, Status: "retry_scheduled", NotificationKind: delivery.Kind,
 		ReasonCode: reasonCode, AttemptNumber: delivery.AttemptCount, FailureReason: detail,
@@ -432,16 +451,16 @@ func insertAlertEventTx(ctx context.Context, tx *sql.Tx, event model.AlertEvent)
 	}
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO alert_events (
-			"userId", monitor_id, item_id, notification_id, delivery_id,
+			"userId", monitor_id, price_watch_id, item_id, notification_id, delivery_id,
 			channel, status, notification_kind, reason_code, attempt_number,
 			failure_reason, metadata
 		)
 		VALUES (
-			NULLIF($1, ''), NULLIF($2, 0), NULLIF($3, 0::bigint),
-			NULLIF($4, 0::bigint), NULLIF($5, 0::bigint), $6, $7, $8,
-			NULLIF($9, ''), NULLIF($10, 0), NULLIF($11, ''), $12::jsonb
+			NULLIF($1, ''), NULLIF($2, 0), NULLIF($3, 0::bigint), NULLIF($4, 0::bigint),
+			NULLIF($5, 0::bigint), NULLIF($6, 0::bigint), $7, $8, $9,
+			NULLIF($10, ''), NULLIF($11, 0), NULLIF($12, ''), $13::jsonb
 		)`,
-		event.UserID, event.MonitorID, event.ItemID, event.NotificationID, event.DeliveryID,
+		event.UserID, event.MonitorID, event.PriceWatchID, event.ItemID, event.NotificationID, event.DeliveryID,
 		event.Channel, event.Status, defaultAlertKind(event.NotificationKind),
 		event.ReasonCode, event.AttemptNumber, event.FailureReason, metadata,
 	)
@@ -495,10 +514,10 @@ func (s *Store) ExpireAlertDeliveries(ctx context.Context) error {
 			RETURNING d.id, d.notification_id, d.channel, d.attempt_count
 		)
 		INSERT INTO alert_events (
-			"userId", monitor_id, item_id, notification_id, delivery_id,
+			"userId", monitor_id, price_watch_id, item_id, notification_id, delivery_id,
 			channel, status, notification_kind, reason_code, attempt_number, failure_reason
 		)
-		SELECT n.user_id, n.monitor_id, n.item_id, n.id, failed.id, failed.channel,
+		SELECT n.user_id, n.monitor_id, n.price_watch_id, n.item_id, n.id, failed.id, failed.channel,
 			'failed', n.kind, 'expired', NULLIF(failed.attempt_count, 0),
 			'delivery expired before provider accepted it'
 		FROM failed

@@ -66,6 +66,7 @@ func (e *Engine) startPipelines() {
 		e.jobsWG.Add(1)
 		go e.alertWorker()
 	}
+	e.startPriceWatchPipeline()
 	e.jobsWG.Add(1)
 	go func() {
 		defer e.jobsWG.Done()

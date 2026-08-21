@@ -133,11 +133,12 @@ export function GithubRewardsAdminPanel({
                 const signature = JSON.stringify(policy);
                 const enforcementPreview = await loadPreview();
                 if (
-                    enforcementPreview.monitorsToPause > 0 &&
+                    (enforcementPreview.monitorsToPause > 0 ||
+                        enforcementPreview.priceWatchesToPause > 0) &&
                     preview?.signature !== signature
                 ) {
                     toast.warning(
-                        `Review the preview first: ${enforcementPreview.monitorsToPause} monitors would be paused. Save again to confirm.`,
+                        `Review first: ${enforcementPreview.monitorsToPause} monitors and ${enforcementPreview.priceWatchesToPause} watches would be paused. Save again to confirm.`,
                     );
                     return;
                 }
@@ -147,9 +148,12 @@ export function GithubRewardsAdminPanel({
                 });
                 setPolicy(result.policy);
                 setPreview(null);
+                const totalPaused =
+                    result.reconciliation.pausedCount +
+                    result.reconciliation.pausedPriceWatchCount;
                 toast.success(
-                    result.reconciliation.pausedCount > 0
-                        ? `Policy saved; ${result.reconciliation.pausedCount} excess monitors paused`
+                    totalPaused > 0
+                        ? `Policy saved; ${result.reconciliation.pausedCount} monitors and ${result.reconciliation.pausedPriceWatchCount} watches paused`
                         : "Reward policy saved",
                 );
             } catch (error) {
@@ -165,7 +169,7 @@ export function GithubRewardsAdminPanel({
             try {
                 const result = await loadPreview();
                 toast.info(
-                    `${result.affectedMembers} members affected; ${result.monitorsToPause} monitors would be paused`,
+                    `${result.affectedMembers} monitor members affected; ${result.monitorsToPause} monitors and ${result.priceWatchesToPause} watches would be paused`,
                 );
             } catch (error) {
                 toast.error(
@@ -499,6 +503,63 @@ export function GithubRewardsAdminPanel({
                                             />
                                             <span className="text-muted-foreground pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[10px] uppercase">
                                                 monitors
+                                            </span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="border-border/70 rounded-xl border p-4">
+                            <div className="mb-4 flex items-center justify-between gap-4">
+                                <div>
+                                    <p className="text-sm font-semibold">
+                                        Price Watch reward slots
+                                    </p>
+                                    <p className="text-muted-foreground mt-0.5 text-xs">
+                                        Separate limits for active item watches. User overrides always win.
+                                    </p>
+                                </div>
+                                <Switch
+                                    checked={policy.priceWatchRewardsEnabled}
+                                    onCheckedChange={(checked) =>
+                                        setPolicy((current) => ({
+                                            ...current,
+                                            priceWatchRewardsEnabled: checked,
+                                        }))
+                                    }
+                                />
+                            </div>
+                            <div className="grid gap-3 sm:grid-cols-3">
+                                {(
+                                    [
+                                        { label: "Default", key: "priceWatchDefaultLimit", icon: ShieldCheck },
+                                        { label: "GitHub Star", key: "priceWatchStarLimit", icon: Star },
+                                        { label: "Sponsor", key: "priceWatchDonationLimit", icon: Heart },
+                                    ] as const
+                                ).map(({ label, key, icon: Icon }) => (
+                                    <div key={key} className="bg-muted/20 rounded-lg p-3">
+                                        <Label htmlFor={`reward-${key}`} className="flex items-center gap-2 text-xs">
+                                            <Icon className="h-3.5 w-3.5" />
+                                            {label}
+                                        </Label>
+                                        <div className="relative mt-2">
+                                            <Input
+                                                id={`reward-${key}`}
+                                                type="number"
+                                                min={0}
+                                                disabled={!policy.priceWatchRewardsEnabled}
+                                                value={policy[key]}
+                                                onChange={(event) =>
+                                                    setPolicy((current) => ({
+                                                        ...current,
+                                                        [key]: Number(event.target.value),
+                                                    }))
+                                                }
+                                                className="pr-16 font-semibold tabular-nums"
+                                            />
+                                            <span className="text-muted-foreground pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[10px] uppercase">
+                                                watches
                                             </span>
                                         </div>
                                     </div>

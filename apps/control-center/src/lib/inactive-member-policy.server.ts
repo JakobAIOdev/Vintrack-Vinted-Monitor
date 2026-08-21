@@ -31,27 +31,54 @@ export async function countInactivePolicyMatches(
     client: Client = db,
 ) {
     if (!policy.enabled || !policy.enabledAt || policy.roles.length === 0) {
-        return { memberCount: 0, monitorCount: 0 };
+        return { memberCount: 0, monitorCount: 0, priceWatchCount: 0 };
     }
     const rows = await client.$queryRaw<
-        { member_count: bigint; monitor_count: bigint }[]
+        {
+            member_count: bigint;
+            monitor_count: bigint;
+            price_watch_count: bigint;
+        }[]
     >(Prisma.sql`
-        SELECT COUNT(DISTINCT u.id)::bigint AS member_count,
-               COUNT(m.id)::bigint AS monitor_count
-        FROM "User" u
-        JOIN monitors m ON m."userId" = u.id
-        WHERE m.status = 'active'
-          AND u.role IN (${Prisma.join(policy.roles)})
-          AND ${policy.monitorScope === "all" ? Prisma.sql`TRUE` : Prisma.sql`m.proxy_source = 'free'`}
-          AND GREATEST(
-                COALESCE(u.last_dashboard_seen_at, '-infinity'::timestamp),
-                COALESCE(u."createdAt", '-infinity'::timestamp),
-                ${new Date(policy.enabledAt)}::timestamp
-              ) <= NOW() - (${policy.durationDays} * INTERVAL '1 day')
+        WITH inactive_users AS (
+            SELECT u.id
+            FROM "User" u
+            WHERE u.role IN (${Prisma.join(policy.roles)})
+              AND GREATEST(
+                    COALESCE(u.last_dashboard_seen_at, '-infinity'::timestamp),
+                    COALESCE(u."createdAt", '-infinity'::timestamp),
+                    ${new Date(policy.enabledAt)}::timestamp
+                  ) <= NOW() - (${policy.durationDays} * INTERVAL '1 day')
+        ), eligible_monitors AS (
+            SELECT m."userId" AS user_id, COUNT(*)::bigint AS resource_count
+            FROM monitors m
+            JOIN inactive_users u ON u.id = m."userId"
+            WHERE m.status = 'active'
+              AND ${policy.monitorScope === "all" ? Prisma.sql`TRUE` : Prisma.sql`m.proxy_source = 'free'`}
+            GROUP BY m."userId"
+        ), eligible_watches AS (
+            SELECT pw.user_id, COUNT(*)::bigint AS resource_count
+            FROM price_watches pw
+            JOIN inactive_users u ON u.id = pw.user_id
+            WHERE pw.status = 'active'
+              AND ${policy.includePriceWatches}
+            GROUP BY pw.user_id
+        )
+        SELECT (
+                   SELECT COUNT(DISTINCT user_id)::bigint
+                   FROM (
+                       SELECT user_id FROM eligible_monitors
+                       UNION ALL
+                       SELECT user_id FROM eligible_watches
+                   ) resources
+               ) AS member_count,
+               COALESCE((SELECT SUM(resource_count) FROM eligible_monitors), 0)::bigint AS monitor_count,
+               COALESCE((SELECT SUM(resource_count) FROM eligible_watches), 0)::bigint AS price_watch_count
     `);
     return {
         memberCount: Number(rows[0]?.member_count ?? 0),
         monitorCount: Number(rows[0]?.monitor_count ?? 0),
+        priceWatchCount: Number(rows[0]?.price_watch_count ?? 0),
     };
 }
 

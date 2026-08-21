@@ -10,13 +10,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"vintrack-worker/internal/httpclient"
 	"vintrack-worker/internal/model"
+	"vintrack-worker/internal/publicurl"
 )
 
 var httpClient = httpclient.New(5 * time.Second)
@@ -50,6 +50,100 @@ func SendStatusAttempt(ctx context.Context, webhookURL string, title string, mes
 		}},
 	}
 	return SendPayloadAttempt(ctx, webhookURL, payload)
+}
+
+func SendPriceDropAttempt(
+	ctx context.Context,
+	webhookURL string,
+	drop model.PriceDropAlert,
+	style model.NotificationMessageStyle,
+) model.AlertDeliveryResult {
+	return SendPayloadAttempt(ctx, webhookURLWithComponents(webhookURL), buildPriceDropWebhookPayload(drop, style))
+}
+
+func webhookURLWithComponents(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	query := parsed.Query()
+	query.Set("with_components", "true")
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func buildPriceDropWebhookPayload(drop model.PriceDropAlert, style model.NotificationMessageStyle) map[string]interface{} {
+	oldPrice := formatPriceMinor(drop.PreviousPriceMinor, drop.CurrencyCode)
+	newPrice := formatPriceMinor(drop.NewPriceMinor, drop.CurrencyCode)
+	saved := formatPriceMinor(drop.PreviousPriceMinor-drop.NewPriceMinor, drop.CurrencyCode)
+	percentage := priceDropPercentage(drop.PreviousPriceMinor, drop.NewPriceMinor)
+	fields := []map[string]interface{}{
+		{"name": "Previous price", "value": oldPrice, "inline": true},
+		{"name": "New price", "value": newPrice, "inline": true},
+		{"name": "You save", "value": saved, "inline": true},
+		{"name": "Price change", "value": percentage, "inline": true},
+		{"name": "Region", "value": strings.ToUpper(fallbackText(drop.Region, "unknown")), "inline": true},
+		{"name": "Vinted item", "value": fmt.Sprintf("#%d", drop.ItemID), "inline": true},
+	}
+	dashboardURL := priceWatchDashboardURL(drop.WatchID)
+	embed := map[string]interface{}{
+		"author":    map[string]string{"name": "Price drop detected"},
+		"title":     fallbackText(drop.Title, "Watched Vinted item"),
+		"url":       drop.URL,
+		"color":     0x00A86B,
+		"fields":    fields,
+		"timestamp": drop.ObservedAt.UTC().Format(time.RFC3339),
+	}
+	if model.NormalizeNotificationMessageStyle(style) == model.NotificationMessageStyleRich {
+		description := fmt.Sprintf("**[View on Vinted](%s)**", drop.URL)
+		if dashboardURL != "" {
+			description += fmt.Sprintf("  •  [Open this Price Watch](%s)", dashboardURL)
+		}
+		embed["description"] = description
+		embed["footer"] = map[string]string{"text": "Vintrack Price Watch"}
+		if imageURL := absoluteDashboardURL(drop.ImageURL); imageURL != "" {
+			embed["image"] = map[string]string{"url": imageURL}
+		}
+	} else if imageURL := absoluteDashboardURL(drop.ImageURL); imageURL != "" {
+		embed["thumbnail"] = map[string]string{"url": imageURL}
+	}
+	payload := map[string]interface{}{
+		"username": "Vintrack",
+		"embeds":   []map[string]interface{}{embed},
+	}
+	buttons := make([]map[string]interface{}, 0, 2)
+	if isHTTPURL(drop.URL) {
+		buttons = append(buttons, map[string]interface{}{
+			"type": 2, "style": 5, "label": "View on Vinted", "url": drop.URL,
+		})
+	}
+	if isHTTPURL(dashboardURL) {
+		buttons = append(buttons, map[string]interface{}{
+			"type": 2, "style": 5, "label": "Open Price Watch", "url": dashboardURL,
+		})
+	}
+	if len(buttons) > 0 {
+		payload["components"] = []map[string]interface{}{{"type": 1, "components": buttons}}
+	}
+	return payload
+}
+
+func priceDropPercentage(previous int64, current int64) string {
+	if previous <= 0 || current >= previous {
+		return "0.0%"
+	}
+	return fmt.Sprintf("−%.1f%%", float64(previous-current)/float64(previous)*100)
+}
+
+func priceWatchDashboardURL(watchID int64) string {
+	return publicurl.Link(fmt.Sprintf("/price-watches?watch=%d", watchID))
+}
+
+func formatPriceMinor(value int64, currencyCode string) string {
+	if value < 0 {
+		value = 0
+	}
+	return fmt.Sprintf("%d.%02d %s", value/100, value%100, strings.ToUpper(strings.TrimSpace(currencyCode)))
 }
 
 func SendPayloadAttempt(ctx context.Context, webhookURL string, payload interface{}) model.AlertDeliveryResult {
@@ -192,13 +286,12 @@ func buildCompactFields(item model.Item) []map[string]interface{} {
 }
 
 func buildRichItemWebhookPayload(item model.Item, monitorName string, proxySource string) map[string]interface{} {
-	baseURL := os.Getenv("DASHBOARD_URL")
-	if baseURL == "" {
-		baseURL = "http://localhost:3000"
-	}
-	dashLink := fmt.Sprintf("%s/monitors/%d", baseURL, item.MonitorID)
+	dashLink := publicurl.Link(fmt.Sprintf("/monitors/%d", item.MonitorID))
 
-	links := fmt.Sprintf("**[View item](%s)**  •  [Dashboard](%s)", item.URL, dashLink)
+	links := fmt.Sprintf("**[View item](%s)**", item.URL)
+	if dashLink != "" {
+		links += fmt.Sprintf("  •  [Dashboard](%s)", dashLink)
+	}
 	if item.SellerURL != "" {
 		links = fmt.Sprintf("%s  •  [Seller](%s)", links, item.SellerURL)
 	}
@@ -253,14 +346,10 @@ func absoluteDashboardURL(rawURL string) string {
 	if strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://") {
 		return rawURL
 	}
-	baseURL := os.Getenv("DASHBOARD_URL")
-	if baseURL == "" {
-		baseURL = "http://localhost:3000"
-	}
 	if strings.HasPrefix(rawURL, "/") {
-		return strings.TrimRight(baseURL, "/") + rawURL
+		return publicurl.Link(rawURL)
 	}
-	return strings.TrimRight(baseURL, "/") + "/" + rawURL
+	return publicurl.Link("/" + rawURL)
 }
 
 func SendStartupWebhook(webhookURL string, monitorName string) {

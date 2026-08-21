@@ -22,6 +22,7 @@ import (
 	"vintrack-worker/internal/cache"
 	"vintrack-worker/internal/database"
 	"vintrack-worker/internal/proxy"
+	"vintrack-worker/internal/publicurl"
 	"vintrack-worker/internal/scraper"
 
 	"github.com/joho/godotenv"
@@ -87,6 +88,15 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	publicURLHealth := publicurl.Resolve()
+	if payload, err := json.Marshal(publicURLHealth); err == nil {
+		if err := store.SetSettingValueContext(ctx, "public_app_url_health", string(payload)); err != nil {
+			log.Printf("Public app URL health write failed: %v", err)
+		}
+	}
+	if !publicURLHealth.OK {
+		log.Printf("Public app URL is unhealthy: %s", publicURLHealth.Error)
+	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -187,8 +197,13 @@ func evaluateInactiveMembers(ctx context.Context, store *database.Store) {
 		log.Printf("inactive member policy evaluation failed: %v", err)
 		return
 	}
-	if result.NewlyPausedMonitorCount > 0 {
-		log.Printf("inactive member policy paused %d monitor(s) across %d member(s)", result.NewlyPausedMonitorCount, result.NewlyPausedMemberCount)
+	if result.NewlyPausedMonitorCount > 0 || result.NewlyPausedPriceWatchCount > 0 {
+		log.Printf(
+			"inactive member policy paused %d monitor(s) and %d Price Watch(es) across %d member(s)",
+			result.NewlyPausedMonitorCount,
+			result.NewlyPausedPriceWatchCount,
+			result.NewlyPausedMemberCount,
+		)
 	}
 }
 

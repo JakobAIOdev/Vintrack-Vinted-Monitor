@@ -18,6 +18,7 @@ import (
 
 	"vintrack-worker/internal/httpclient"
 	"vintrack-worker/internal/model"
+	"vintrack-worker/internal/publicurl"
 )
 
 var httpClient = httpclient.New(20 * time.Second)
@@ -175,6 +176,86 @@ func SendStatusAttempt(ctx context.Context, chatID string, title string, message
 	return sendAttempt(ctx, "sendMessage", map[string]interface{}{
 		"chat_id": chatID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": true,
 	})
+}
+
+func SendPriceDropAttempt(
+	ctx context.Context,
+	chatID string,
+	drop model.PriceDropAlert,
+	style model.NotificationMessageStyle,
+) model.AlertDeliveryResult {
+	if strings.TrimSpace(chatID) == "" {
+		return model.AlertDeliveryResult{ReasonCode: "invalid_destination", Detail: "telegram chat is not configured"}
+	}
+	text := priceDropText(drop, style)
+	payload := map[string]interface{}{
+		"chat_id":                  chatID,
+		"text":                     text,
+		"parse_mode":               "HTML",
+		"disable_web_page_preview": true,
+	}
+	if isTelegramButtonURL(drop.URL) {
+		buttons := []map[string]string{{"text": "View on Vinted", "url": drop.URL}}
+		if dashboardURL := priceWatchDashboardURL(drop.WatchID); isTelegramButtonURL(dashboardURL) {
+			buttons = append(buttons, map[string]string{"text": "Open Price Watch", "url": dashboardURL})
+		}
+		payload["reply_markup"] = map[string]interface{}{
+			"inline_keyboard": [][]map[string]string{buttons},
+		}
+	}
+	if model.NormalizeNotificationMessageStyle(style) == model.NotificationMessageStyleRich && drop.ImageURL != "" {
+		photoPayload := map[string]interface{}{
+			"chat_id":    chatID,
+			"photo":      absoluteDashboardURL(drop.ImageURL),
+			"caption":    text,
+			"parse_mode": "HTML",
+		}
+		if keyboard, ok := payload["reply_markup"]; ok {
+			photoPayload["reply_markup"] = keyboard
+		}
+		result := sendAttempt(ctx, "sendPhoto", photoPayload)
+		if result.Success || result.Retryable || result.ReasonCode == "invalid_destination" {
+			return result
+		}
+	}
+	return sendAttempt(ctx, "sendMessage", payload)
+}
+
+func priceDropText(drop model.PriceDropAlert, style model.NotificationMessageStyle) string {
+	oldPrice := formatPriceMinor(drop.PreviousPriceMinor, drop.CurrencyCode)
+	newPrice := formatPriceMinor(drop.NewPriceMinor, drop.CurrencyCode)
+	saved := formatPriceMinor(drop.PreviousPriceMinor-drop.NewPriceMinor, drop.CurrencyCode)
+	percentage := priceDropPercentage(drop.PreviousPriceMinor, drop.NewPriceMinor)
+	if model.NormalizeNotificationMessageStyle(style) == model.NotificationMessageStyleCompact {
+		return fmt.Sprintf(
+			"<b>Price drop: %s</b>\n<s>%s</s> → <b>%s</b> (−%s · %s)",
+			escape(drop.Title), escape(oldPrice), escape(newPrice), escape(saved), escape(percentage),
+		)
+	}
+	return fmt.Sprintf(
+		"📉 <b>Price drop detected</b>\n\n<b>%s</b>\n<s>%s</s> → <b>%s</b>\nYou save <b>%s</b> (%s)\n\n🌍 Region: <b>%s</b>\n🏷 Item: <code>%d</code>\n🕒 Detected: %s",
+		escape(drop.Title), escape(oldPrice), escape(newPrice), escape(saved), escape(percentage),
+		escape(strings.ToUpper(defaultValue(drop.Region, "unknown"))), drop.ItemID,
+		escape(drop.ObservedAt.UTC().Format("02 Jan 2006 · 15:04 UTC")),
+	)
+}
+
+func priceDropPercentage(previous int64, current int64) string {
+	if previous <= 0 || current >= previous {
+		return "0.0%"
+	}
+	return fmt.Sprintf("−%.1f%%", float64(previous-current)/float64(previous)*100)
+}
+
+func priceWatchDashboardURL(watchID int64) string {
+	return publicurl.Link(fmt.Sprintf("/price-watches?watch=%d", watchID))
+}
+
+func formatPriceMinor(value int64, currencyCode string) string {
+	if value < 0 {
+		value = 0
+	}
+	return fmt.Sprintf("%d.%02d %s", value/100, value%100, strings.ToUpper(strings.TrimSpace(currencyCode)))
 }
 
 func sendAttempt(ctx context.Context, method string, payload map[string]interface{}) model.AlertDeliveryResult {
@@ -500,11 +581,7 @@ func itemKeyboard(item model.Item) map[string]interface{} {
 }
 
 func dashboardItemURL(item model.Item) string {
-	baseURL := os.Getenv("DASHBOARD_URL")
-	if strings.TrimSpace(baseURL) == "" {
-		baseURL = "http://localhost:3000"
-	}
-	return fmt.Sprintf("%s/monitors/%d", strings.TrimRight(baseURL, "/"), item.MonitorID)
+	return publicurl.Link(fmt.Sprintf("/monitors/%d", item.MonitorID))
 }
 
 func absoluteDashboardURL(rawURL string) string {
@@ -514,14 +591,10 @@ func absoluteDashboardURL(rawURL string) string {
 	if strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://") {
 		return rawURL
 	}
-	baseURL := os.Getenv("DASHBOARD_URL")
-	if strings.TrimSpace(baseURL) == "" {
-		baseURL = "http://localhost:3000"
-	}
 	if strings.HasPrefix(rawURL, "/") {
-		return strings.TrimRight(baseURL, "/") + rawURL
+		return publicurl.Link(rawURL)
 	}
-	return strings.TrimRight(baseURL, "/") + "/" + rawURL
+	return publicurl.Link("/" + rawURL)
 }
 
 func isTelegramButtonURL(rawURL string) bool {

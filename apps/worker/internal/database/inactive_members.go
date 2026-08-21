@@ -17,31 +17,35 @@ const (
 )
 
 type InactiveMemberPolicy struct {
-	Enabled      bool     `json:"enabled"`
-	Revision     string   `json:"revision"`
-	Duration     int      `json:"duration"`
-	DurationUnit string   `json:"durationUnit"`
-	DurationDays int      `json:"durationDays"`
-	MonitorScope string   `json:"monitorScope"`
-	Roles        []string `json:"roles"`
-	EnabledAt    string   `json:"enabledAt"`
+	Enabled             bool     `json:"enabled"`
+	Revision            string   `json:"revision"`
+	Duration            int      `json:"duration"`
+	DurationUnit        string   `json:"durationUnit"`
+	DurationDays        int      `json:"durationDays"`
+	MonitorScope        string   `json:"monitorScope"`
+	IncludePriceWatches bool     `json:"includePriceWatches"`
+	Roles               []string `json:"roles"`
+	EnabledAt           string   `json:"enabledAt"`
 }
 
 type InactiveMemberEvaluation struct {
-	PolicyRevision          string
-	PausedMemberCount       int
-	PausedMonitorCount      int
-	NewlyPausedMemberCount  int
-	NewlyPausedMonitorCount int
-	EvaluatedAt             time.Time
+	PolicyRevision             string
+	PausedMemberCount          int
+	PausedMonitorCount         int
+	NewlyPausedMemberCount     int
+	NewlyPausedMonitorCount    int
+	PausedPriceWatchCount      int
+	NewlyPausedPriceWatchCount int
+	EvaluatedAt                time.Time
 }
 
 type inactiveMemberRuntime struct {
-	HeartbeatAt        string `json:"heartbeatAt"`
-	PolicyRevision     string `json:"policyRevision"`
-	LastEvaluatedAt    string `json:"lastEvaluatedAt"`
-	PausedMemberCount  int    `json:"pausedMemberCount"`
-	PausedMonitorCount int    `json:"pausedMonitorCount"`
+	HeartbeatAt           string `json:"heartbeatAt"`
+	PolicyRevision        string `json:"policyRevision"`
+	LastEvaluatedAt       string `json:"lastEvaluatedAt"`
+	PausedMemberCount     int    `json:"pausedMemberCount"`
+	PausedMonitorCount    int    `json:"pausedMonitorCount"`
+	PausedPriceWatchCount int    `json:"pausedPriceWatchCount"`
 }
 
 func parseInactiveMemberPolicy(value string) (InactiveMemberPolicy, error) {
@@ -160,13 +164,44 @@ func (s *Store) EvaluateInactiveMemberPolicy(ctx context.Context) (InactiveMembe
 		if err := rows.Close(); err != nil {
 			return result, err
 		}
+		if policy.IncludePriceWatches {
+			watchRows, watchErr := tx.QueryContext(ctx, `
+				UPDATE price_watches pw
+				SET status = 'paused', stopped_reason = 'inactive_member', updated_at = NOW()
+				FROM "User" u
+				WHERE pw.user_id = u.id
+				  AND pw.status = 'active'
+				  AND (($1 AND u.role = 'free') OR ($2 AND u.role = 'premium'))
+				  AND GREATEST(
+					COALESCE(u.last_dashboard_seen_at, '-infinity'::timestamp),
+					COALESCE(u."createdAt", '-infinity'::timestamp),
+					$3::timestamp
+				  ) <= $4::timestamp
+				RETURNING pw.user_id`, freeRole, premiumRole, enabledAt, cutoff)
+			if watchErr != nil {
+				return result, fmt.Errorf("pause inactive Price Watches: %w", watchErr)
+			}
+			for watchRows.Next() {
+				var userID string
+				if err := watchRows.Scan(&userID); err != nil {
+					watchRows.Close()
+					return result, err
+				}
+				pausedMembers[userID] = struct{}{}
+				result.NewlyPausedPriceWatchCount++
+			}
+			if err := watchRows.Close(); err != nil {
+				return result, err
+			}
+		}
 		result.NewlyPausedMemberCount = len(pausedMembers)
-		if result.NewlyPausedMonitorCount > 0 {
+		if result.NewlyPausedMonitorCount > 0 || result.NewlyPausedPriceWatchCount > 0 {
 			metadata, _ := json.Marshal(map[string]any{
-				"revision":     policy.Revision,
-				"memberCount":  result.NewlyPausedMemberCount,
-				"monitorCount": result.NewlyPausedMonitorCount,
-				"monitorScope": policy.MonitorScope,
+				"revision":        policy.Revision,
+				"memberCount":     result.NewlyPausedMemberCount,
+				"monitorCount":    result.NewlyPausedMonitorCount,
+				"priceWatchCount": result.NewlyPausedPriceWatchCount,
+				"monitorScope":    policy.MonitorScope,
 			})
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO audit_events (action, target_type, target_id, metadata)
@@ -177,14 +212,25 @@ func (s *Store) EvaluateInactiveMemberPolicy(ctx context.Context) (InactiveMembe
 	}
 
 	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(DISTINCT "userId"), COUNT(*)
-		FROM monitors WHERE status = 'inactivity_paused'`).Scan(&result.PausedMemberCount, &result.PausedMonitorCount); err != nil {
+		WITH paused_resources AS (
+			SELECT "userId" AS user_id, COUNT(*)::bigint AS monitor_count, 0::bigint AS watch_count
+			FROM monitors WHERE status = 'inactivity_paused' GROUP BY "userId"
+			UNION ALL
+			SELECT user_id, 0::bigint AS monitor_count, COUNT(*)::bigint AS watch_count
+			FROM price_watches
+			WHERE status = 'paused' AND stopped_reason = 'inactive_member'
+			GROUP BY user_id
+		)
+		SELECT COUNT(DISTINCT user_id),
+		       COALESCE(SUM(monitor_count), 0),
+		       COALESCE(SUM(watch_count), 0)
+		FROM paused_resources`).Scan(&result.PausedMemberCount, &result.PausedMonitorCount, &result.PausedPriceWatchCount); err != nil {
 		return result, fmt.Errorf("count inactivity paused monitors: %w", err)
 	}
 	runtimeJSON, _ := json.Marshal(inactiveMemberRuntime{
 		HeartbeatAt: now.Format(time.RFC3339Nano), PolicyRevision: policy.Revision,
 		LastEvaluatedAt: now.Format(time.RFC3339Nano), PausedMemberCount: result.PausedMemberCount,
-		PausedMonitorCount: result.PausedMonitorCount,
+		PausedMonitorCount: result.PausedMonitorCount, PausedPriceWatchCount: result.PausedPriceWatchCount,
 	})
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO app_settings (key, value, updated_at)

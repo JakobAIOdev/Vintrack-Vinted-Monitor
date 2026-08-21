@@ -435,7 +435,7 @@ export default function NewMonitorPage() {
                             </div>
                         </div>
                         <Button asChild variant="outline" className="shrink-0">
-                            <Link href="/dashboard">Back to dashboard</Link>
+                            <Link href="/dashboard">Back to monitors</Link>
                         </Button>
                     </CardContent>
                 </Card>

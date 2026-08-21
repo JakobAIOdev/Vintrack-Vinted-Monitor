@@ -18,6 +18,10 @@ export type GithubRewardsPolicy = {
     defaultLimit: number;
     starLimit: number;
     donationLimit: number;
+    priceWatchRewardsEnabled: boolean;
+    priceWatchDefaultLimit: number;
+    priceWatchStarLimit: number;
+    priceWatchDonationLimit: number;
     repositoryOwner: string;
     repositoryName: string;
     sponsorsLogin: string;
@@ -41,6 +45,10 @@ export const DEFAULT_GITHUB_REWARDS_POLICY: GithubRewardsPolicy = {
     defaultLimit: 3,
     starLimit: 5,
     donationLimit: 15,
+    priceWatchRewardsEnabled: true,
+    priceWatchDefaultLimit: 3,
+    priceWatchStarLimit: 5,
+    priceWatchDonationLimit: 15,
     repositoryOwner: "JakobAIOdev",
     repositoryName: "Vintrack-Vinted-Monitor",
     sponsorsLogin: "JakobAIOdev",
@@ -112,7 +120,25 @@ export function parseGithubRewardsPolicy(
             value.donationLimit,
             DEFAULT_GITHUB_REWARDS_POLICY.donationLimit,
         );
+        const priceWatchDefaultLimit = integer(
+            value.priceWatchDefaultLimit,
+            DEFAULT_GITHUB_REWARDS_POLICY.priceWatchDefaultLimit,
+        );
+        const priceWatchStarLimit = integer(
+            value.priceWatchStarLimit,
+            DEFAULT_GITHUB_REWARDS_POLICY.priceWatchStarLimit,
+        );
+        const priceWatchDonationLimit = integer(
+            value.priceWatchDonationLimit,
+            DEFAULT_GITHUB_REWARDS_POLICY.priceWatchDonationLimit,
+        );
         if (defaultLimit > starLimit || starLimit > donationLimit) {
+            return DEFAULT_GITHUB_REWARDS_POLICY;
+        }
+        if (
+            priceWatchDefaultLimit > priceWatchStarLimit ||
+            priceWatchStarLimit > priceWatchDonationLimit
+        ) {
             return DEFAULT_GITHUB_REWARDS_POLICY;
         }
         return {
@@ -136,6 +162,13 @@ export function parseGithubRewardsPolicy(
             defaultLimit,
             starLimit,
             donationLimit,
+            priceWatchRewardsEnabled: boolean(
+                value.priceWatchRewardsEnabled,
+                DEFAULT_GITHUB_REWARDS_POLICY.priceWatchRewardsEnabled,
+            ),
+            priceWatchDefaultLimit,
+            priceWatchStarLimit,
+            priceWatchDonationLimit,
             repositoryOwner: string(
                 value.repositoryOwner,
                 DEFAULT_GITHUB_REWARDS_POLICY.repositoryOwner,
@@ -220,6 +253,18 @@ export function validateGithubRewardsPolicy(value: GithubRewardsPolicy) {
     ) {
         throw new Error(
             "Limits must be non-negative and ordered default ≤ star ≤ donation",
+        );
+    }
+    if (
+        !Number.isInteger(value.priceWatchDefaultLimit) ||
+        !Number.isInteger(value.priceWatchStarLimit) ||
+        !Number.isInteger(value.priceWatchDonationLimit) ||
+        value.priceWatchDefaultLimit < 0 ||
+        value.priceWatchDefaultLimit > value.priceWatchStarLimit ||
+        value.priceWatchStarLimit > value.priceWatchDonationLimit
+    ) {
+        throw new Error(
+            "Price Watch limits must be ordered default ≤ star ≤ donation",
         );
     }
     if (

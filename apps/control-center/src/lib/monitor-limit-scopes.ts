@@ -9,6 +9,7 @@ export type MonitorLimitRow = {
     scope: string;
     active_limit: number | null;
     free_proxy_active_limit: number | null;
+    price_watch_limit: number | null;
 };
 
 export type MonitorLimitClient = Prisma.TransactionClient | typeof db;
@@ -28,7 +29,7 @@ export async function getMonitorLimits(
     if (scopes.length === 0) return new Map<string, MonitorLimitRow>();
 
     const rows = await client.$queryRaw<MonitorLimitRow[]>`
-        SELECT scope, active_limit, free_proxy_active_limit
+        SELECT scope, active_limit, free_proxy_active_limit, price_watch_limit
         FROM "monitor_limits"
         WHERE scope IN (${Prisma.join(scopes)})
     `;

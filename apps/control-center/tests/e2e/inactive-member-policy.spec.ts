@@ -31,6 +31,7 @@ test.describe("inactive member monitor policy", () => {
                 duration: 0,
                 durationUnit: "days",
                 monitorScope: "free_proxy",
+                includePriceWatches: false,
                 roles: ["free"],
             }),
         ).toThrow(/positive/);
@@ -40,6 +41,7 @@ test.describe("inactive member monitor policy", () => {
                 duration: 61,
                 durationUnit: "months",
                 monitorScope: "all",
+                includePriceWatches: false,
                 roles: ["premium"],
             }),
         ).toThrow(/5 years/);
@@ -49,6 +51,7 @@ test.describe("inactive member monitor policy", () => {
                 duration: 1,
                 durationUnit: "weeks",
                 monitorScope: "all",
+                includePriceWatches: true,
                 roles: [],
             }),
         ).toThrow(/role/);
@@ -98,6 +101,9 @@ test.describe("inactive member monitor policy", () => {
         ).toBeVisible();
         await expect(
             page.getByRole("button", { name: "Preview impact" }),
+        ).toBeVisible();
+        await expect(
+            page.getByRole("checkbox", { name: "Include Price Watches" }),
         ).toBeVisible();
     });
 

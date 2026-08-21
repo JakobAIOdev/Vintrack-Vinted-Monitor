@@ -64,7 +64,7 @@ test.describe("first monitor onboarding", () => {
                 },
             });
 
-            await page.goto("/dashboard");
+            await page.goto("/monitors");
             const quickStart = page.getByTestId("first-monitor-quick-start");
             await expect(quickStart).toBeVisible();
             await quickStart
@@ -115,7 +115,7 @@ test.describe("first monitor onboarding", () => {
             await db.app_settings.deleteMany({
                 where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
             });
-            await page.goto("/dashboard");
+            await page.goto("/monitors");
             const quickStart = page.getByTestId("first-monitor-quick-start");
             await quickStart
                 .getByTestId("monitor-preset-nike-dunk-low")
@@ -173,7 +173,7 @@ test.describe("first monitor onboarding", () => {
         page,
     }) => {
         await page.setViewportSize({ width: 390, height: 844 });
-        await page.goto("/dashboard");
+        await page.goto("/monitors");
 
         const quickStart = page.getByTestId("first-monitor-quick-start");
         await expect(quickStart).toBeVisible();

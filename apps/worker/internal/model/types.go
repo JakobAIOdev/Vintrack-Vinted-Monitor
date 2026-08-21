@@ -175,6 +175,7 @@ type MonitorEvent struct {
 type AlertEvent struct {
 	UserID           string
 	MonitorID        int
+	PriceWatchID     int64
 	ItemID           int64
 	NotificationID   int64
 	DeliveryID       int64
@@ -187,6 +188,19 @@ type AlertEvent struct {
 	Metadata         string
 }
 
+type PriceDropAlert struct {
+	WatchID            int64     `json:"watchId"`
+	ItemID             int64     `json:"itemId"`
+	Region             string    `json:"region"`
+	Title              string    `json:"title"`
+	URL                string    `json:"url"`
+	ImageURL           string    `json:"imageUrl,omitempty"`
+	PreviousPriceMinor int64     `json:"previousPriceMinor"`
+	NewPriceMinor      int64     `json:"newPriceMinor"`
+	CurrencyCode       string    `json:"currencyCode"`
+	ObservedAt         time.Time `json:"observedAt"`
+}
+
 type AlertNotificationPayload struct {
 	Version       int                      `json:"version"`
 	Kind          string                   `json:"kind"`
@@ -197,11 +211,13 @@ type AlertNotificationPayload struct {
 	Title         string                   `json:"title,omitempty"`
 	Message       string                   `json:"message,omitempty"`
 	Item          *Item                    `json:"item,omitempty"`
+	PriceDrop     *PriceDropAlert          `json:"priceDrop,omitempty"`
 }
 
 type AlertNotificationRequest struct {
 	UserID         string
 	MonitorID      int
+	PriceWatchID   int64
 	ItemID         int64
 	Kind           string
 	IdempotencyKey string
@@ -217,6 +233,7 @@ type AlertDelivery struct {
 	NotificationID         int64
 	UserID                 string
 	MonitorID              int
+	PriceWatchID           int64
 	ItemID                 int64
 	Kind                   string
 	Payload                AlertNotificationPayload
@@ -229,6 +246,29 @@ type AlertDelivery struct {
 	ClaimToken             string
 	NotificationsEnabled   bool
 	ChannelEnabled         bool
+}
+
+type PriceWatchTarget struct {
+	ID                     int64
+	TargetID               int64
+	Region                 string
+	ItemID                 int64
+	CanonicalURL           string
+	CurrentPriceMinor      sql.NullInt64
+	CurrencyCode           sql.NullString
+	Availability           string
+	ConsecutiveUnavailable int
+	ConsecutiveErrors      int
+	ClaimToken             string
+	TransportKind          string
+	ProxyGroupID           *int
+	ProxyGroupName         string
+	Proxies                string
+	WorkingProxyCount      int
+	ProxyGroupLimitBytes   sql.NullInt64
+	ProxyGroupRxBytes      int64
+	ProxyGroupTxBytes      int64
+	PollIntervalSeconds    int
 }
 
 type AlertDeliveryResult struct {

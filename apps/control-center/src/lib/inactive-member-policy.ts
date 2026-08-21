@@ -18,6 +18,7 @@ export type InactiveMemberPolicy = {
     durationUnit: InactivityDurationUnit;
     durationDays: number;
     monitorScope: InactivityMonitorScope;
+    includePriceWatches: boolean;
     roles: InactivityRole[];
     enabledAt: string | null;
     updatedAt: string | null;
@@ -30,11 +31,17 @@ export type InactiveMemberRuntime = {
     lastEvaluatedAt: string;
     pausedMemberCount: number;
     pausedMonitorCount: number;
+    pausedPriceWatchCount: number;
 };
 
 export type InactiveMemberPolicyInput = Pick<
     InactiveMemberPolicy,
-    "enabled" | "duration" | "durationUnit" | "monitorScope" | "roles"
+    | "enabled"
+    | "duration"
+    | "durationUnit"
+    | "monitorScope"
+    | "includePriceWatches"
+    | "roles"
 >;
 
 export const DEFAULT_INACTIVE_MEMBER_POLICY: InactiveMemberPolicy = {
@@ -44,6 +51,7 @@ export const DEFAULT_INACTIVE_MEMBER_POLICY: InactiveMemberPolicy = {
     durationUnit: "weeks",
     durationDays: 7,
     monitorScope: "free_proxy",
+    includePriceWatches: false,
     roles: ["free"],
     enabledAt: null,
     updatedAt: null,
@@ -79,6 +87,9 @@ export function validateInactiveMemberPolicyInput(
     if (!INACTIVITY_MONITOR_SCOPES.includes(input.monitorScope)) {
         throw new Error("Invalid monitor scope");
     }
+    if (typeof input.includePriceWatches !== "boolean") {
+        throw new Error("Invalid Price Watch scope");
+    }
     const roles = [...new Set(input.roles)].filter((role) =>
         INACTIVITY_ROLES.includes(role),
     );
@@ -106,6 +117,7 @@ export function parseInactiveMemberPolicy(
             duration: raw.duration as number,
             durationUnit: raw.durationUnit as InactivityDurationUnit,
             monitorScope: raw.monitorScope as InactivityMonitorScope,
+            includePriceWatches: raw.includePriceWatches === true,
             roles: raw.roles as InactivityRole[],
         });
         if (typeof raw.revision !== "string" || !raw.revision.trim()) {
@@ -141,7 +153,12 @@ export function parseInactiveMemberRuntime(
         ) {
             return null;
         }
-        return raw as InactiveMemberRuntime;
+        return {
+            ...(raw as InactiveMemberRuntime),
+            pausedPriceWatchCount: Number.isInteger(raw.pausedPriceWatchCount)
+                ? raw.pausedPriceWatchCount!
+                : 0,
+        };
     } catch {
         return null;
     }

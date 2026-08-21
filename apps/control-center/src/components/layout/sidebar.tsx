@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
     LayoutDashboard,
     PlusCircle,
@@ -16,10 +16,10 @@ import {
     X,
     Heart,
     MessageCircle,
-    ExternalLink,
     Store,
     Link2,
     FlaskConical,
+    TrendingDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -27,22 +27,28 @@ import { CreateMonitorLink } from "@/components/maintenance/create-monitor-link"
 
 const ACCOUNT_SEEN_KEY = "vintrack:account-tab-seen";
 const GITHUB_SPONSORS_URL = "https://github.com/sponsors/JakobAIOdev";
-const SNEAKERDEV_REVIEW_URL =
-    "https://www.sneakerdev.com/services/e9c9ec35-71a2-43b0-b93b-2c1e8bf2f84d-vintrack";
 
-const navItems = [
-    { href: "/dashboard", label: "Monitors", icon: LayoutDashboard },
+const primaryNavItems = [
+    { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { href: "/price-watches", label: "Price Watch", icon: TrendingDown },
     { href: "/feed", label: "Live Feed", icon: Radio },
-    { href: "/proxies", label: "Proxy Groups", icon: Globe },
+];
+
+const accountNavItems = [
     { href: "/account", label: "Account", icon: User },
     { href: "/your-listings", label: "Your Listings", icon: Store },
     { href: "/liked", label: "Liked Items", icon: Heart },
     { href: "/chats", label: "Chats", icon: MessageCircle },
-    { href: "/guide", label: "Guide", icon: BookOpen },
 ];
 
-const experimentalNavItems = [
-    { href: "/checkout-links", label: "Checkout Links", icon: Link2 },
+const moreNavItems = [
+    { href: "/guide", label: "Guide", icon: BookOpen },
+    {
+        href: "/checkout-links",
+        label: "Checkout Links",
+        icon: Link2,
+        experimental: true,
+    },
 ];
 
 const adminNavItems = [{ href: "/admin", label: "Admin Panel", icon: Shield }];
@@ -60,13 +66,13 @@ interface SidebarProps {
 
 export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
     const pathname = usePathname();
-    const [showAccountBadge, setShowAccountBadge] = useState(() => {
-        if (typeof window === "undefined") {
-            return false;
-        }
-
-        return !localStorage.getItem(ACCOUNT_SEEN_KEY);
-    });
+    const [showAccountBadge, setShowAccountBadge] = useState(false);
+    useEffect(() => {
+        const frame = window.requestAnimationFrame(() => {
+            setShowAccountBadge(!localStorage.getItem(ACCOUNT_SEEN_KEY));
+        });
+        return () => window.cancelAnimationFrame(frame);
+    }, []);
 
     const initials = user?.name
         ? user.name
@@ -103,12 +109,12 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
                 </button>
             </div>
 
-            <nav className="flex-1 space-y-0.5 px-3 pt-4">
+            <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
                 <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
-                    Navigation
+                    Track
                 </p>
 
-                {navItems.map((item) => {
+                {primaryNavItems.map((item) => {
                     const isActive =
                         pathname === item.href ||
                         pathname.startsWith(item.href + "/");
@@ -116,16 +122,7 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
                         <Link
                             key={item.href}
                             href={item.href}
-                            onClick={() => {
-                                if (
-                                    item.href === "/account" &&
-                                    showAccountBadge
-                                ) {
-                                    localStorage.setItem(ACCOUNT_SEEN_KEY, "1");
-                                    setShowAccountBadge(false);
-                                }
-                                onClose?.();
-                            }}
+                            onClick={onClose}
                             className={cn(
                                 "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                 isActive
@@ -142,16 +139,25 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
                                 )}
                             />
                             {item.label}
-                            {item.href === "/account" && showAccountBadge && (
-                                <span className="ml-auto rounded-full bg-blue-500 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-white uppercase">
-                                    New
-                                </span>
-                            )}
                         </Link>
                     );
                 })}
 
-                <div className="pt-4">
+                <Link
+                    href="/proxies"
+                    onClick={onClose}
+                    className={cn(
+                        "mt-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
+                        pathname === "/proxies" || pathname.startsWith("/proxies/")
+                            ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
+                            : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                    )}
+                >
+                    <Globe className="h-4 w-4" />
+                    Proxy Groups
+                </Link>
+
+                <div className="py-3">
                     <CreateMonitorLink
                         onClick={onClose}
                         className="border-sidebar-border/80 text-sidebar-foreground/68 hover:border-sidebar-foreground/20 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground flex items-center gap-2.5 rounded-lg border border-dashed px-3 py-2 text-[13px] font-medium transition-colors"
@@ -161,11 +167,11 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
                     </CreateMonitorLink>
                 </div>
 
-                <div className="pt-4">
+                <div className="border-sidebar-border/60 border-t pt-3">
                     <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
-                        Experimental
+                        Account
                     </p>
-                    {experimentalNavItems.map((item) => {
+                    {accountNavItems.map((item) => {
                         const isActive =
                             pathname === item.href ||
                             pathname.startsWith(item.href + "/");
@@ -173,7 +179,16 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
                             <Link
                                 key={item.href}
                                 href={item.href}
-                                onClick={onClose}
+                                onClick={() => {
+                                    if (
+                                        item.href === "/account" &&
+                                        showAccountBadge
+                                    ) {
+                                        localStorage.setItem(ACCOUNT_SEEN_KEY, "1");
+                                        setShowAccountBadge(false);
+                                    }
+                                    onClose?.();
+                                }}
                                 className={cn(
                                     "mb-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                     isActive
@@ -190,65 +205,54 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
                                     )}
                                 />
                                 {item.label}
-                                <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-amber-600 uppercase dark:text-amber-400">
-                                    <FlaskConical className="h-2.5 w-2.5" />
-                                    Exp
-                                </span>
+                                {item.href === "/account" &&
+                                    showAccountBadge && (
+                                        <span className="ml-auto rounded-full bg-blue-500 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-white uppercase">
+                                            New
+                                        </span>
+                                    )}
                             </Link>
                         );
                     })}
                 </div>
 
-                <div className="pt-4">
+                <div className="border-sidebar-border/60 mt-3 border-t pt-3">
                     <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
-                        Community
+                        Tools
                     </p>
-                    <a
-                        href="https://discord.gg/WbEpEjaWjP"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="mb-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium text-blue-700 transition-colors hover:bg-blue-50 hover:text-blue-800 dark:text-blue-500 dark:hover:bg-blue-500/12 dark:hover:text-blue-400"
-                    >
-                        <MessageCircle className="h-4 w-4" />
-                        Join Discord
-                        <span className="rounded-full bg-blue-500 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-white uppercase">
-                            New
-                        </span>
-                        <ExternalLink className="ml-auto h-3.5 w-3.5 opacity-70" />
-                    </a>
-                    <a
-                        href={SNEAKERDEV_REVIEW_URL}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="mb-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium text-emerald-700 transition-colors hover:bg-emerald-50 hover:text-emerald-800 dark:text-emerald-500 dark:hover:bg-emerald-500/12 dark:hover:text-emerald-400"
-                    >
-                        <Star className="h-4 w-4" />
-                        Review us
-                        <ExternalLink className="ml-auto h-3.5 w-3.5 opacity-70" />
-                    </a>
-                    <a
-                        href={GITHUB_SPONSORS_URL}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="mb-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium text-pink-700 transition-colors hover:bg-pink-50 hover:text-pink-800 dark:text-pink-500 dark:hover:bg-pink-500/12 dark:hover:text-pink-400"
-                    >
-                        <Heart className="h-4 w-4" />
-                        Sponsor Vintrack
-                        <ExternalLink className="ml-auto h-3.5 w-3.5 opacity-70" />
-                    </a>
-                    <a
-                        href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium text-amber-700 transition-colors hover:bg-amber-50 hover:text-amber-800 dark:text-amber-500 dark:hover:bg-amber-500/12 dark:hover:text-amber-400"
-                    >
-                        <Star className="h-4 w-4" />
-                        Star on GitHub
-                    </a>
+                    <div className="space-y-0.5">
+                        {moreNavItems.map((item) => {
+                            const isActive =
+                                pathname === item.href ||
+                                pathname.startsWith(item.href + "/");
+                            return (
+                                <Link
+                                    key={item.href}
+                                    href={item.href}
+                                    onClick={onClose}
+                                    className={cn(
+                                        "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
+                                        isActive
+                                            ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
+                                            : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                                    )}
+                                >
+                                    <item.icon className="h-4 w-4 opacity-60" />
+                                    {item.label}
+                                    {item.experimental && (
+                                        <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-amber-600 uppercase dark:text-amber-400">
+                                            <FlaskConical className="h-2.5 w-2.5" />
+                                            Exp
+                                        </span>
+                                    )}
+                                </Link>
+                            );
+                        })}
+                    </div>
                 </div>
 
                 {user?.role === "admin" && (
-                    <div className="pt-4">
+                    <div className="pt-3">
                         <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
                             Admin
                         </p>
@@ -282,6 +286,41 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
                         })}
                     </div>
                 )}
+
+                <div className="border-sidebar-border/60 mt-3 border-t pt-3">
+                    <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
+                        Community
+                    </p>
+                    <div className="space-y-0.5">
+                        <a
+                            href="https://discord.gg/WbEpEjaWjP"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium text-blue-700 transition-colors hover:bg-blue-50 hover:text-blue-800 dark:text-blue-500 dark:hover:bg-blue-500/12 dark:hover:text-blue-400"
+                        >
+                            <MessageCircle className="h-4 w-4" />
+                            Join Discord
+                        </a>
+                        <a
+                            href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium text-amber-700 transition-colors hover:bg-amber-50 hover:text-amber-800 dark:text-amber-500 dark:hover:bg-amber-500/12 dark:hover:text-amber-400"
+                        >
+                            <Star className="h-4 w-4" />
+                            Star on GitHub
+                        </a>
+                        <a
+                            href={GITHUB_SPONSORS_URL}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium text-pink-700 transition-colors hover:bg-pink-50 hover:text-pink-800 dark:text-pink-500 dark:hover:bg-pink-500/12 dark:hover:text-pink-400"
+                        >
+                            <Heart className="h-4 w-4" />
+                            Sponsor Vintrack
+                        </a>
+                    </div>
+                </div>
             </nav>
 
             <div className="border-sidebar-border/80 border-t p-3">

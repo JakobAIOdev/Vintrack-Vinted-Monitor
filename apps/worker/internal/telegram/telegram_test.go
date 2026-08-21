@@ -30,6 +30,63 @@ func TestSendAttemptReturnsTelegramRetryAfterWithoutSleeping(t *testing.T) {
 	}
 }
 
+func TestPriceDropTextShowsOldNewAndSavings(t *testing.T) {
+	drop := model.PriceDropAlert{
+		ItemID:             123,
+		Region:             "de",
+		Title:              "PS5 <Slim>",
+		PreviousPriceMinor: 45000,
+		NewPriceMinor:      39999,
+		CurrencyCode:       "EUR",
+	}
+	text := priceDropText(drop, model.NotificationMessageStyleRich)
+	for _, expected := range []string{"PS5 &lt;Slim&gt;", "450.00 EUR", "399.99 EUR", "50.01 EUR", "−11.1%", "DE", "123"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("expected %q in %q", expected, text)
+		}
+	}
+}
+
+func TestSendPriceDropIncludesVintedAndDashboardButtons(t *testing.T) {
+	var payload map[string]interface{}
+	withTelegramServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bottest-token/sendMessage" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	os.Setenv("DASHBOARD_URL", "https://dashboard.example.test")
+
+	result := SendPriceDropAttempt(context.Background(), "-1001", model.PriceDropAlert{
+		WatchID:            91,
+		ItemID:             123,
+		Region:             "de",
+		Title:              "PS5",
+		URL:                "https://www.vinted.de/items/123-ps5",
+		PreviousPriceMinor: 45000,
+		NewPriceMinor:      39999,
+		CurrencyCode:       "EUR",
+		ObservedAt:         time.Unix(1_720_000_000, 0).UTC(),
+	}, model.NotificationMessageStyleRich)
+	if !result.Success {
+		t.Fatalf("price drop send failed: %#v", result)
+	}
+	keyboard := payload["reply_markup"].(map[string]interface{})
+	rows := keyboard["inline_keyboard"].([]interface{})
+	buttons := rows[0].([]interface{})
+	if len(buttons) != 2 {
+		t.Fatalf("expected vinted and price watch buttons, got %d", len(buttons))
+	}
+	dashboardButton := buttons[1].(map[string]interface{})
+	if dashboardButton["url"] != "https://dashboard.example.test/price-watches?watch=91" {
+		t.Fatalf("unexpected price watch url: %v", dashboardButton)
+	}
+}
+
 func TestSendAttemptClassifiesTelegramProviderFailures(t *testing.T) {
 	withTelegramServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "unavailable") {

@@ -23,6 +23,8 @@ test.describe("admin running monitors", () => {
         await expect(
             page.getByText("Running Free Proxy Monitor Limits"),
         ).toBeVisible();
+        await expect(page.getByText("Active Price Watch Limits")).toBeVisible();
+        await expect(page.locator("#roles-global-price-watch-limit")).toHaveValue("3");
         await expect(page.getByLabel("Global default").last()).toHaveValue("");
         await expect(page.getByLabel("Global default").last()).toHaveAttribute(
             "placeholder",
@@ -113,6 +115,26 @@ test.describe("admin running monitors", () => {
         await expect(
             page.getByText("No running monitors match your search"),
         ).toBeVisible();
+    });
+
+    test("updates Price Watch runtime floors and capacity without redeploy", async ({
+        page,
+        isMobile,
+    }) => {
+        test.skip(isMobile, "The shared setting mutation runs once on desktop");
+        await page.goto("/admin?tab=price_watch");
+
+        await expect(page.getByText("Runtime & capacity")).toBeVisible();
+        await page.getByLabel("Shared minimum").selectOption("300");
+        await page.getByLabel("Shared max RPM").fill("24");
+        await page.getByRole("button", { name: "Save worker settings" }).click();
+        await expect(page.getByLabel("Shared minimum")).toHaveValue("300");
+        await expect(page.getByLabel("Shared max RPM")).toHaveValue("24");
+
+        await page.getByLabel("Shared minimum").selectOption("120");
+        await page.getByLabel("Shared max RPM").fill("30");
+        await page.getByRole("button", { name: "Save worker settings" }).click();
+        await expect(page.getByLabel("Shared max RPM")).toHaveValue("30");
     });
 
     test("shows member growth and demo insights", async ({ page }) => {

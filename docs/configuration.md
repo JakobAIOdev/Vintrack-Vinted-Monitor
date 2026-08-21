@@ -31,19 +31,23 @@ openssl rand -base64 32
 | Variable | Default in `.env.example` | Purpose |
 | --- | --- | --- |
 | `AUTH_URL` | `http://localhost:3000` | Canonical URL used by the authentication layer |
-| `DASHBOARD_URL` | `http://localhost:3000` | Dashboard links included in notifications |
+| `APP_PUBLIC_URL` | `http://localhost:3000` | Canonical origin used by Discord and Telegram links |
+| `DASHBOARD_URL` | `http://localhost:3000` | Legacy notification-link fallback |
 | `VINTRACK_SITE_ADDRESS` | `http://localhost` | Caddy site address or public hostname |
 
 For production:
 
 ```env
 AUTH_URL=https://vintrack.example.com
+APP_PUBLIC_URL=https://vintrack.example.com
 DASHBOARD_URL=https://vintrack.example.com
 VINTRACK_SITE_ADDRESS=vintrack.example.com
 ```
 
-`DASHBOARD_URL` must be public HTTPS for Telegram dashboard buttons. Telegram
-rejects local URLs, so Vintrack omits that button when configured for localhost.
+The worker resolves `APP_PUBLIC_URL`, then `AUTH_URL`, then the legacy
+`DASHBOARD_URL`. Values must be absolute origins and must agree when several are
+configured. Production requires HTTPS and rejects local or temporary tunnel
+origins; Vintrack omits dashboard buttons while configuration health is red.
 
 ## Authentication
 
@@ -148,7 +152,7 @@ For an enabled bot:
 
 1. Create a bot with [@BotFather](https://t.me/BotFather).
 2. Set the bot token, public username without `@`, and a random webhook secret.
-3. Ensure `DASHBOARD_URL` is public HTTPS.
+3. Ensure `APP_PUBLIC_URL` is the canonical public HTTPS origin.
 4. Register the webhook without exposing the command in shared shell history or
    logs.
 5. Verify it with Telegram's `getWebhookInfo` endpoint.
@@ -206,6 +210,38 @@ entirely optional.
 The [Proxy6 checker](https://proxy6.net/checker) can be used for a basic
 connectivity check. It is a third-party service: review its privacy policy and
 do not submit reusable proxy credentials unless you trust its handling.
+
+## Price Watch polling
+
+Price Watch separates canonical targets from polling schedules. Shared watches
+deduplicate by `(region, item)` and use the fastest booked interval; personal
+proxy schedules are isolated by `(item, proxy group)`. Shared presets are 2–60
+minutes, while a region-verified group with working proxies unlocks presets from
+30 seconds. Runtime floors and request budgets live under **Admin → Price Watch**
+and are reloaded by workers about every 10 seconds.
+
+```env
+PRICE_WATCH_ENABLED=true
+PRICE_WATCH_WORKERS=4
+PRICE_WATCH_TRANSPORT_MODE=auto
+PRICE_WATCH_CLIENT_POOL_SIZE=4
+PRICE_WATCH_TIMEOUT_MS=6000
+PRICE_WATCH_HTML_LIMIT_BYTES=3145728
+```
+
+Transport modes:
+
+- `auto` uses the health-aware server proxy pool; only development installs may
+  fall back to the server's direct connection;
+- `direct` is a development option and is overridden in production;
+- `proxy` strictly requires the server proxy pool and never exposes direct
+  egress as a fallback.
+
+Production shared polling always requires reliable server proxies. Personal
+schedules use only the selected verified group and never fall back to server or
+direct traffic. Free public proxies are not used for Price Watch polling. Set
+`APP_PUBLIC_URL` to the public HTTPS origin so Discord and Telegram alerts can
+link directly to the corresponding Price Watch.
 
 ## Worker behavior
 

@@ -333,7 +333,7 @@ test.describe("monitor maintenance", () => {
                 timeout: 8_000,
             });
 
-            await page.goto("/dashboard");
+            await page.goto("/monitors");
             await page.evaluate(() => window.localStorage.clear());
             await page.reload();
             const maintenanceBanner = page.getByRole("status").filter({
@@ -438,7 +438,7 @@ test.describe("monitor maintenance", () => {
                 "Worker confirmation pending",
             );
 
-            await page.goto("/dashboard");
+            await page.goto("/monitors");
             await expect(
                 page.getByRole("status").filter({ hasText: updatedMessage }),
             ).toBeVisible();
@@ -504,7 +504,7 @@ test.describe("monitor maintenance", () => {
                 "admin.monitor_maintenance_updated",
             ]);
 
-            await page.goto("/dashboard");
+            await page.goto("/monitors");
             await expect(
                 page.getByText(
                     "Help keep the free demo fast and accessible with as few limits as possible.",
@@ -574,7 +574,7 @@ test.describe("monitor maintenance", () => {
                 });
 
             const dashboardPage = await context.newPage();
-            await dashboardPage.goto("/dashboard");
+            await dashboardPage.goto("/monitors");
             const startAll = dashboardPage.getByRole("button", {
                 name: "Start All",
             });

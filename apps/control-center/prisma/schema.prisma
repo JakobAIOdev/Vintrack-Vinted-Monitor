@@ -67,6 +67,7 @@ model User {
   github_reward_account        github_reward_accounts?
   member_reward_prompts        member_reward_prompts[]
   assigned_github_sponsorships github_sponsorships[]
+  price_watches                price_watches[]
 
   @@index([name])
   @@index([createdAt])
@@ -170,6 +171,7 @@ model monitor_limits {
   scope                   String   @id @db.VarChar(255)
   active_limit            Int?
   free_proxy_active_limit Int?
+  price_watch_limit       Int?
   created_at              DateTime @default(now()) @db.Timestamp(6)
   updated_at              DateTime @updatedAt @db.Timestamp(6)
 }
@@ -466,6 +468,8 @@ model alert_events {
   user              User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
   monitor_id        Int?
   monitor           monitors?            @relation(fields: [monitor_id], references: [id], onDelete: SetNull)
+  price_watch_id    BigInt?
+  price_watch       price_watches?       @relation(fields: [price_watch_id], references: [id], onDelete: SetNull)
   item_id           BigInt?
   notification_id   BigInt?
   notification      alert_notifications? @relation(fields: [notification_id], references: [id], onDelete: SetNull)
@@ -482,6 +486,7 @@ model alert_events {
 
   @@index([userId, created_at])
   @@index([monitor_id, created_at])
+  @@index([price_watch_id, created_at])
   @@index([item_id])
   @@index([notification_id])
   @@index([delivery_id])
@@ -507,6 +512,8 @@ model alert_notifications {
   user            User?              @relation(fields: [user_id], references: [id], onDelete: SetNull)
   monitor_id      Int?
   monitor         monitors?          @relation(fields: [monitor_id], references: [id], onDelete: SetNull)
+  price_watch_id  BigInt?
+  price_watch     price_watches?     @relation(fields: [price_watch_id], references: [id], onDelete: SetNull)
   item_id         BigInt?
   kind            String             @db.VarChar(50)
   payload_version Int                @default(1)
@@ -519,6 +526,124 @@ model alert_notifications {
 
   @@index([user_id, created_at])
   @@index([monitor_id, created_at])
+  @@index([price_watch_id, created_at])
+}
+
+model price_watch_targets {
+  id                  BigInt                  @id @default(autoincrement())
+  region              String                  @db.VarChar(10)
+  item_id             BigInt
+  canonical_url       String                  @db.Text
+  title               String?                 @db.VarChar(500)
+  image_url           String?                 @db.Text
+  current_price_minor BigInt?
+  currency_code       String?                 @db.VarChar(3)
+  created_at          DateTime                @default(now()) @db.Timestamp(6)
+  updated_at          DateTime                @updatedAt @db.Timestamp(6)
+  watches             price_watches[]
+  schedules           price_watch_schedules[]
+  events              price_watch_events[]
+
+  @@unique([region, item_id])
+}
+
+model price_watch_schedules {
+  id                      BigInt                           @id @default(autoincrement())
+  target_id               BigInt
+  target                  price_watch_targets              @relation(fields: [target_id], references: [id], onDelete: Cascade)
+  transport_key           String                           @db.VarChar(80)
+  transport_kind          String                           @db.VarChar(20)
+  proxy_group_id          Int?
+  proxy_group             proxy_groups?                    @relation(fields: [proxy_group_id], references: [id], onDelete: Restrict)
+  current_price_minor     BigInt?
+  currency_code           String?                          @db.VarChar(3)
+  availability            String                           @default("pending") @db.VarChar(30)
+  consecutive_unavailable Int                              @default(0)
+  consecutive_errors      Int                              @default(0)
+  last_error_code         String?                          @db.VarChar(50)
+  last_error_detail       String?                          @db.Text
+  last_status_code        Int?
+  last_duration_ms        Int?
+  last_checked_at         DateTime?                        @db.Timestamp(6)
+  last_success_at         DateTime?                        @db.Timestamp(6)
+  next_check_at           DateTime                         @default(now()) @db.Timestamp(6)
+  lease_until             DateTime?                        @db.Timestamp(6)
+  claim_token             String?                          @db.VarChar(64)
+  created_at              DateTime                         @default(now()) @db.Timestamp(6)
+  updated_at              DateTime                         @updatedAt @db.Timestamp(6)
+  watches                 price_watches[]
+  events                  price_watch_events[]
+  hourly_stats            price_watch_check_hourly_stats[]
+
+  @@unique([target_id, transport_key])
+  @@index([availability, next_check_at])
+  @@index([lease_until])
+  @@index([proxy_group_id])
+}
+
+model price_watches {
+  id                    BigInt                @id @default(autoincrement())
+  user_id               String
+  user                  User                  @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  target_id             BigInt
+  target                price_watch_targets   @relation(fields: [target_id], references: [id], onDelete: Cascade)
+  schedule_id           BigInt
+  schedule              price_watch_schedules @relation(fields: [schedule_id], references: [id], onDelete: Restrict)
+  poll_interval_seconds Int                   @default(300)
+  status                String                @default("active") @db.VarChar(20)
+  notifications_enabled Boolean               @default(true)
+  discord_webhook       String?               @db.Text
+  webhook_active        Boolean               @default(false)
+  telegram_active       Boolean               @default(false)
+  initial_price_minor   BigInt?
+  armed_at              DateTime?             @db.Timestamp(6)
+  stopped_reason        String?               @db.VarChar(50)
+  created_at            DateTime              @default(now()) @db.Timestamp(6)
+  updated_at            DateTime              @updatedAt @db.Timestamp(6)
+  notifications         alert_notifications[]
+  alert_events          alert_events[]
+
+  @@unique([user_id, target_id])
+  @@index([user_id, status])
+  @@index([target_id, status])
+  @@index([schedule_id, status])
+}
+
+model price_watch_events {
+  id                   BigInt              @id @default(autoincrement())
+  target_id            BigInt
+  target               price_watch_targets @relation(fields: [target_id], references: [id], onDelete: Cascade)
+  schedule_id          BigInt
+  schedule             price_watch_schedules @relation(fields: [schedule_id], references: [id], onDelete: Cascade)
+  previous_price_minor BigInt
+  new_price_minor      BigInt
+  currency_code        String              @db.VarChar(3)
+  observed_at          DateTime            @default(now()) @db.Timestamp(6)
+
+  @@index([target_id, observed_at])
+  @@index([schedule_id, observed_at])
+}
+
+model price_watch_check_hourly_stats {
+  schedule_id             BigInt
+  schedule                price_watch_schedules @relation(fields: [schedule_id], references: [id], onDelete: Cascade)
+  bucket_hour             DateTime              @db.Timestamp(6)
+  check_count             BigInt                @default(0)
+  successful_check_count  BigInt                @default(0)
+  failed_check_count      BigInt                @default(0)
+  access_denied_count     BigInt                @default(0)
+  rate_limited_count      BigInt                @default(0)
+  server_error_count      BigInt                @default(0)
+  duration_total_ms       BigInt                @default(0)
+  duration_sample_count   BigInt                @default(0)
+  tx_bytes                BigInt                @default(0)
+  rx_bytes                BigInt                @default(0)
+  latest_status_code      Int?
+  latest_error_code       String?               @db.VarChar(50)
+  last_checked_at         DateTime              @db.Timestamp(6)
+
+  @@id([schedule_id, bucket_hour])
+  @@index([bucket_hour])
 }
 
 model alert_deliveries {
@@ -681,6 +806,7 @@ model proxy_groups {
   proxy_check_completed_at DateTime?  @db.Timestamp(6)
   created_at               DateTime?  @default(now()) @db.Timestamp(6)
   monitors                 monitors[]
+  price_watch_schedules    price_watch_schedules[]
 
   @@index([userId])
   @@index([proxy_check_status, proxy_check_requested_at])

@@ -2979,17 +2979,18 @@ func (s *Store) RecordAlertEvent(event model.AlertEvent) {
 	// pool rather than queueing behind monitor and telemetry traffic.
 	_, err := s.alertPool().Exec(`
 		INSERT INTO alert_events (
-			"userId", monitor_id, item_id, notification_id, delivery_id,
+			"userId", monitor_id, price_watch_id, item_id, notification_id, delivery_id,
 			channel, status, notification_kind, reason_code, attempt_number,
 			failure_reason, metadata
 		)
 		VALUES (
-			NULLIF($1, ''), NULLIF($2, 0), NULLIF($3, 0::bigint),
-			NULLIF($4, 0::bigint), NULLIF($5, 0::bigint), $6, $7, $8,
-			NULLIF($9, ''), NULLIF($10, 0), NULLIF($11, ''), $12::jsonb
+			NULLIF($1, ''), NULLIF($2, 0), NULLIF($3, 0::bigint), NULLIF($4, 0::bigint),
+			NULLIF($5, 0::bigint), NULLIF($6, 0::bigint), $7, $8, $9,
+			NULLIF($10, ''), NULLIF($11, 0), NULLIF($12, ''), $13::jsonb
 		)`,
 		event.UserID,
 		event.MonitorID,
+		event.PriceWatchID,
 		event.ItemID,
 		event.NotificationID,
 		event.DeliveryID,
