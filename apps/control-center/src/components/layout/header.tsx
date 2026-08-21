@@ -6,8 +6,10 @@ import {
     Bell,
     ChevronRight,
     ExternalLink,
+    Github,
     Loader2,
     Menu,
+    Star,
     Volume1,
     Volume2,
     VolumeX,
@@ -379,6 +381,16 @@ export function Header({ onMenuClick }: HeaderProps) {
                 </button>
                 <NotificationBell />
                 <ThemeToggle compact className="hidden sm:inline-flex" />
+                <a
+                    href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="border-border/80 bg-card/70 text-muted-foreground hidden items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800 sm:flex dark:hover:border-amber-500/30 dark:hover:bg-amber-500/10 dark:hover:text-amber-400"
+                >
+                    <Github className="h-3.5 w-3.5" />
+                    <span className="hidden md:inline">Star on GitHub</span>
+                    <Star className="h-3.5 w-3.5" />
+                </a>
                 <div className="text-muted-foreground flex items-center gap-1.5 text-[11px]">
                     <span className="relative flex h-2 w-2">
                         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
