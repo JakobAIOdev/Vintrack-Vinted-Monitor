@@ -6,7 +6,9 @@ test.describe("admin running monitors", () => {
     }) => {
         await page.goto("/admin?tab=overview");
 
-        await expect(page.getByText("Runtime Snapshot")).toBeVisible();
+        await expect(
+            page.getByRole("main").getByText("Runtime Snapshot"),
+        ).toBeVisible();
         await expect(page.getByText("Total runtime")).toBeVisible();
         await expect(page.getByText("Active source mix")).toBeVisible();
     });
@@ -124,7 +126,9 @@ test.describe("admin running monitors", () => {
         test.skip(isMobile, "The shared setting mutation runs once on desktop");
         await page.goto("/admin?tab=price_watch");
 
-        await expect(page.getByText("Runtime & capacity")).toBeVisible();
+        await expect(
+            page.getByRole("main").getByText("Runtime & capacity"),
+        ).toBeVisible();
         await page.getByLabel("Shared minimum").selectOption("300");
         await page.getByLabel("Shared max RPM").fill("24");
         await page.getByRole("button", { name: "Save worker settings" }).click();
