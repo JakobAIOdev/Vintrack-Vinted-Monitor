@@ -123,8 +123,9 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.app }}
 
   publish-firefox:
-    name: Publish Firefox extension if needed
+    name: Submit Firefox extension if needed
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: version
     if: needs.version.outputs.tag_exists == 'false'
     permissions:
@@ -168,7 +169,7 @@ jobs:
         if: needs.version.outputs.extension_tag_exists == 'false'
         run: npx --yes web-ext@10 lint --source-dir apps/vintrack-browser-sync-extension/dist/firefox
 
-      - name: Publish listed extension to AMO
+      - name: Submit listed extension to AMO
         if: needs.version.outputs.extension_tag_exists == 'false'
         env:
           AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
@@ -178,12 +179,13 @@ jobs:
           test -n "$AMO_JWT_SECRET"
           npx --yes web-ext@10 sign \
             --channel=listed \
+            --approval-timeout=0 \
             --source-dir apps/vintrack-browser-sync-extension/dist/firefox \
             --amo-metadata apps/vintrack-browser-sync-extension/amo-metadata.json \
             --api-key "$AMO_JWT_ISSUER" \
             --api-secret "$AMO_JWT_SECRET"
 
-      - name: Mark extension version as published
+      - name: Mark extension version as submitted
         if: needs.version.outputs.extension_tag_exists == 'false'
         env:
           EXTENSION_TAG: ${{ needs.version.outputs.extension_tag }}
@@ -191,7 +193,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$EXTENSION_TAG" "$GITHUB_SHA" -m "Publish Firefox extension v$EXTENSION_VERSION"
+          git tag -a "$EXTENSION_TAG" "$GITHUB_SHA" -m "Submit Firefox extension v$EXTENSION_VERSION"
           git push origin "$EXTENSION_TAG"
 
   deploy:
@@ -200,7 +202,6 @@ jobs:
     needs:
       - version
       - build-and-push
-      - publish-firefox
     if: needs.version.outputs.tag_exists == 'false'
 
     steps:
