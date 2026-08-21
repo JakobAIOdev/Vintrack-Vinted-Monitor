@@ -16,6 +16,7 @@ func TestMonitorConfigFingerprintIncludesRuntimeFilters(t *testing.T) {
 	colorIDs := "50,60"
 	statusIDs := "1,4"
 	platformIDs := "1277,1278"
+	extraParams := "material_ids%5B%5D=12"
 	allowedCountries := "de,fr"
 	antiKeywords := "fake,replica"
 	minSellerRating := 4.5
@@ -34,6 +35,7 @@ func TestMonitorConfigFingerprintIncludesRuntimeFilters(t *testing.T) {
 		ColorIDs:             &colorIDs,
 		StatusIDs:            &statusIDs,
 		VideoGamePlatformIDs: &platformIDs,
+		VintedExtraParams:    &extraParams,
 		Region:               "de",
 		AllowedCountries:     &allowedCountries,
 		MinSellerRating:      &minSellerRating,
@@ -67,6 +69,7 @@ func TestMonitorConfigFingerprintIncludesRuntimeFilters(t *testing.T) {
 		{name: "color", mutate: func(m *model.Monitor) { v := "51,61"; m.ColorIDs = &v }},
 		{name: "status", mutate: func(m *model.Monitor) { v := "2,5"; m.StatusIDs = &v }},
 		{name: "platform", mutate: func(m *model.Monitor) { v := "1280,1281"; m.VideoGamePlatformIDs = &v }},
+		{name: "extra Vinted filters", mutate: func(m *model.Monitor) { v := "material_ids%5B%5D=13"; m.VintedExtraParams = &v }},
 		{name: "region", mutate: func(m *model.Monitor) { m.Region = "fr" }},
 		{name: "allowed countries", mutate: func(m *model.Monitor) { v := "it"; m.AllowedCountries = &v }},
 		{name: "minimum seller rating", mutate: func(m *model.Monitor) { v := 4.8; m.MinSellerRating = &v }},
@@ -147,5 +150,20 @@ func TestDiscoveryStructuralKeyIncludesVideoGamePlatforms(t *testing.T) {
 
 	if discoveryStructuralKey(base) == discoveryStructuralKey(updated) {
 		t.Fatal("discovery key did not change for video game platforms")
+	}
+}
+
+func TestDiscoveryStructuralKeyIncludesAdditionalVintedFilters(t *testing.T) {
+	firstExtra := "material_ids%5B%5D=12"
+	secondExtra := "material_ids%5B%5D=13"
+	base := model.Monitor{
+		Region:            "de",
+		VintedExtraParams: &firstExtra,
+	}
+	updated := base
+	updated.VintedExtraParams = &secondExtra
+
+	if discoveryStructuralKey(base) == discoveryStructuralKey(updated) {
+		t.Fatal("discovery key did not change for additional Vinted filters")
 	}
 }

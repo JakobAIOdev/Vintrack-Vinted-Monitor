@@ -36,6 +36,7 @@ import {
 } from "@/lib/monitor-anti-keywords";
 import { touchDashboardActivity } from "@/lib/dashboard-activity";
 import { normalizeSizeIdsForRegion } from "@/lib/sizes.server";
+import { normalizeVintedExtraParams } from "@/lib/vinted-url";
 
 function normalizeSellerQualityFilter(formData: FormData) {
     const rawRating = String(formData.get("min_seller_rating") ?? "").trim();
@@ -175,6 +176,8 @@ export async function createMonitor(
     const statusIds = (formData.get("status_ids") as string) || null;
     const videoGamePlatformIds =
         (formData.get("video_game_platform_ids") as string) || null;
+    const vintedExtraParams =
+        normalizeVintedExtraParams(formData.get("vinted_extra_params")) || null;
     const catalogIds = videoGamePlatformIds
         ? VIDEO_GAME_PLATFORM_CATALOG_ID
         : requestedCatalogIds;
@@ -263,6 +266,7 @@ export async function createMonitor(
                 color_ids: colorIds || null,
                 status_ids: statusIds || null,
                 video_game_platform_ids: videoGamePlatformIds || null,
+                vinted_extra_params: vintedExtraParams,
                 region,
                 allowed_countries: allowedCountries || null,
                 min_seller_rating: minSellerRating,
@@ -772,6 +776,8 @@ export async function updateMonitor(id: number, formData: FormData) {
     const statusIds = (formData.get("status_ids") as string) || null;
     const videoGamePlatformIds =
         (formData.get("video_game_platform_ids") as string) || null;
+    const vintedExtraParams =
+        normalizeVintedExtraParams(formData.get("vinted_extra_params")) || null;
     const catalogIds = videoGamePlatformIds
         ? VIDEO_GAME_PLATFORM_CATALOG_ID
         : requestedCatalogIds;
@@ -870,6 +876,7 @@ export async function updateMonitor(id: number, formData: FormData) {
                     color_ids: colorIds || null,
                     status_ids: statusIds || null,
                     video_game_platform_ids: videoGamePlatformIds || null,
+                    vinted_extra_params: vintedExtraParams,
                     region,
                     allowed_countries: allowedCountries || null,
                     min_seller_rating: minSellerRating,
@@ -939,6 +946,8 @@ export async function updateMonitorAndReturn(
     const statusIds = (formData.get("status_ids") as string) || null;
     const videoGamePlatformIds =
         (formData.get("video_game_platform_ids") as string) || null;
+    const vintedExtraParams =
+        normalizeVintedExtraParams(formData.get("vinted_extra_params")) || null;
     const catalogIds = videoGamePlatformIds
         ? VIDEO_GAME_PLATFORM_CATALOG_ID
         : requestedCatalogIds;
@@ -1048,6 +1057,7 @@ export async function updateMonitorAndReturn(
                 color_ids: colorIds || null,
                 status_ids: statusIds || null,
                 video_game_platform_ids: videoGamePlatformIds || null,
+                vinted_extra_params: vintedExtraParams,
                 region,
                 allowed_countries: allowedCountries || null,
                 min_seller_rating: minSellerRating,

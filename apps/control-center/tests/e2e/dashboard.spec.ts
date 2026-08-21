@@ -4,11 +4,101 @@ import {
     MemberBrandLimitError,
     upsertVerifiedMemberBrand,
 } from "../../src/lib/member-brands.server";
+import { parseVintedSearchUrl } from "../../src/lib/vinted-url";
 
 const db = new PrismaClient();
 
 test.afterAll(async () => {
     await db.$disconnect();
+});
+
+test.describe("Vinted search URL import", () => {
+    test("parses supported regional catalog filters and ignores noise", () => {
+        const result = parseVintedSearchUrl(
+            "https://www.vinted.fr/catalog?search_text=nike%20air&price_from=10&price_to=80&catalog[]=257&catalog_ids[]=183&brand_ids[]=53&brand_ids[]=53&color_ids[]=1&status_ids[]=2&size_ids[]=208&material_ids[]=12&utm_source=e2e",
+        );
+
+        expect(result).toEqual({
+            ok: true,
+            value: {
+                region: "fr",
+                query: "nike air",
+                priceMin: "10",
+                priceMax: "80",
+                catalogIds: ["257", "183"],
+                brandIds: ["53"],
+                colorIds: ["1"],
+                statusIds: ["2"],
+                sizeIds: ["208"],
+                videoGamePlatformIds: [],
+                extraParams: "material_ids%5B%5D=12",
+                importedFields: [
+                    "region",
+                    "search",
+                    "price",
+                    "categories",
+                    "brands",
+                    "colors",
+                    "conditions",
+                    "sizes",
+                ],
+                preservedParameterNames: ["material_ids[]"],
+                ignoredMetadataNames: ["utm_source"],
+                ignoredValueCount: 0,
+            },
+        });
+    });
+
+    test("normalizes platform searches and rejects unsafe URLs", () => {
+        const platformResult = parseVintedSearchUrl(
+            "vinted.de/catalog?catalog[]=257&platform_ids[]=1277&video_game_platform_ids[]=1278",
+        );
+        expect(platformResult).toMatchObject({
+            ok: true,
+            value: {
+                region: "de",
+                catalogIds: ["3002"],
+                videoGamePlatformIds: ["1278", "1277"],
+            },
+        });
+
+        const metadataResult = parseVintedSearchUrl(
+            "https://www.vinted.de/catalog?search_text=ps5&search_id=1452073112&order=newest_first&brand_ids[]=272284&brand_ids[]=289223&page=1&time=1787317280",
+        );
+        expect(metadataResult).toMatchObject({
+            ok: true,
+            value: {
+                query: "ps5",
+                brandIds: ["272284", "289223"],
+                extraParams: "",
+                ignoredMetadataNames: ["search_id", "order", "page", "time"],
+                ignoredValueCount: 0,
+            },
+        });
+
+        expect(
+            parseVintedSearchUrl(
+                "https://www.vinted.de.evil.example/catalog?brand_ids[]=53",
+            ),
+        ).toEqual({
+            ok: false,
+            error: "Use a search URL from a supported Vinted country.",
+        });
+        expect(
+            parseVintedSearchUrl("https://www.vinted.de/items/123-test"),
+        ).toEqual({
+            ok: false,
+            error: "Paste a Vinted catalog search URL, not an item or profile URL.",
+        });
+        expect(
+            parseVintedSearchUrl(
+                "https://www.vinted.de/catalog?price_from=100&price_to=10",
+            ),
+        ).toEqual({
+            ok: false,
+            error: "The imported minimum price is higher than the maximum price.",
+        });
+    });
 });
 
 test.describe("dashboard overview", () => {
@@ -286,6 +376,43 @@ test.describe("dashboard overview", () => {
             })
             .click();
         await expect(page.locator('input[name="brand_ids"]')).toHaveValue("");
+    });
+
+    test("imports a Vinted search URL into an existing monitor", async ({
+        page,
+    }) => {
+        await page.goto("/monitors/990001/edit");
+        await expect(
+            page.getByRole("heading", { name: "Edit Monitor" }),
+        ).toBeVisible();
+
+        await page
+            .getByLabel("Import Vinted search")
+            .fill(
+                "https://www.vinted.co.uk/catalog?search_text=barbour&price_from=20&price_to=120&catalog[]=123&brand_ids[]=456&color_ids[]=7&status_ids[]=2&size_ids[]=208&material_ids[]=12",
+            );
+        await page.getByTestId("import-vinted-url").click();
+
+        await expect(page.locator('input[name="region"]')).toHaveValue("uk");
+        await expect(page.locator('input[name="query"]')).toHaveValue(
+            "barbour",
+        );
+        await expect(page.locator('input[name="price_min"]')).toHaveValue("20");
+        await expect(page.locator('input[name="price_max"]')).toHaveValue(
+            "120",
+        );
+        await expect(page.locator('input[name="catalog_ids"]')).toHaveValue(
+            "123",
+        );
+        await expect(page.locator('input[name="brand_ids"]')).toHaveValue(
+            "456",
+        );
+        await expect(page.locator('input[name="color_ids"]')).toHaveValue("7");
+        await expect(page.locator('input[name="status_ids"]')).toHaveValue("2");
+        await expect(page.locator('input[name="size_id"]')).toHaveValue("208");
+        await expect(
+            page.locator('input[name="vinted_extra_params"]'),
+        ).toHaveValue("material_ids%5B%5D=12");
     });
 
     test("renders seeded monitor summary and monitor card", async ({

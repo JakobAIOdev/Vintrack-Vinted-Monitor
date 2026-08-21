@@ -42,6 +42,7 @@ type Monitor struct {
 	ColorIDs              *string
 	StatusIDs             *string
 	VideoGamePlatformIDs  *string
+	VintedExtraParams     *string
 	Region                string
 	AllowedCountries      *string
 	MinSellerRating       *float64

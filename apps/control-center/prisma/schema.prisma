@@ -214,6 +214,7 @@ model monitors {
   color_ids                String?   @db.VarChar(500)
   status_ids               String?   @db.VarChar(500)
   video_game_platform_ids  String?   @db.VarChar(500)
+  vinted_extra_params      String?   @db.VarChar(2000)
   region                   String    @default("de") @db.VarChar(10)
   allowed_countries        String?   @db.VarChar(500)
   min_seller_rating        Float?

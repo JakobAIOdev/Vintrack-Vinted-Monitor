@@ -28,6 +28,7 @@ import {
     type FreeProxyOption,
 } from "@/components/monitors/monitor-form-sections";
 import { QuietHoursSection } from "@/components/monitors/quiet-hours-section";
+import { VintedUrlImporter } from "@/components/monitors/vinted-url-importer";
 import { Switch } from "@/components/ui/switch";
 import { getStatusLocaleForRegionCodes } from "@/lib/regions";
 import {
@@ -35,7 +36,10 @@ import {
     MAX_QUERY_DELAY_MS,
     MIN_QUERY_DELAY_MS,
 } from "@/lib/monitor-delay";
-import { buildVintedMonitorUrl } from "@/lib/vinted-url";
+import {
+    buildVintedMonitorUrl,
+    type VintedSearchImport,
+} from "@/lib/vinted-url";
 import {
     MAX_MONITOR_QUERY_LENGTH,
     parseMonitorQueries,
@@ -97,6 +101,7 @@ export default function NewMonitorPage() {
     const [selectedColors, setSelectedColors] = useState<string[]>([]);
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
+    const [vintedExtraParams, setVintedExtraParams] = useState("");
     const [selectedRegion, setSelectedRegion] = useState<string>("de");
     const [selectedAllowedCountries, setSelectedAllowedCountries] = useState<
         string[]
@@ -167,6 +172,25 @@ export default function NewMonitorPage() {
         setMinSellerRatingCount(5);
         setAntiKeywordResetKey((current) => current + 1);
     };
+
+    const handleVintedUrlImport = useCallback(
+        (imported: VintedSearchImport) => {
+            setSelectedPreset(null);
+            setQuery(imported.query);
+            setPriceMin(imported.priceMin);
+            setPriceMax(imported.priceMax);
+            setSelectedRegion(imported.region);
+            setSelectedSizes(imported.sizeIds);
+            setSelectedCategories(imported.catalogIds);
+            setSelectedCategoryLabels([]);
+            setSelectedBrands(imported.brandIds);
+            setSelectedColors(imported.colorIds);
+            setSelectedStatuses(imported.statusIds);
+            setSelectedPlatforms(imported.videoGamePlatformIds);
+            setVintedExtraParams(imported.extraParams);
+        },
+        [],
+    );
 
     const handleRegionChange = (nextRegion: string) => {
         setSelectedAllowedCountries((current) =>
@@ -330,6 +354,7 @@ export default function NewMonitorPage() {
         colorIds: selectedColors,
         statusIds: selectedStatuses,
         videoGamePlatformIds: activeVideoGamePlatformIds,
+        extraParams: vintedExtraParams,
     });
     const queryAlternativeCount = parseMonitorQueries(query).length;
     const selectedRegionFreeProxyHealth = getFreeProxyRegionHealth(
@@ -499,6 +524,17 @@ export default function NewMonitorPage() {
                                 />
                             </div>
                         </details>
+                        <VintedUrlImporter
+                            idPrefix="new-monitor"
+                            extraParams={vintedExtraParams}
+                            onImport={handleVintedUrlImport}
+                            onClearExtraParams={() => setVintedExtraParams("")}
+                        />
+                        <input
+                            type="hidden"
+                            name="vinted_extra_params"
+                            value={vintedExtraParams}
+                        />
                         <FormSection
                             title="Basics"
                             description="Name, keywords, polling delay, and target Vinted region."
