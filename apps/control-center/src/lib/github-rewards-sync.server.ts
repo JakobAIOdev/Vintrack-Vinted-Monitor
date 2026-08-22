@@ -55,10 +55,15 @@ function isIgnorableSponsorsGraphqlError(error: {
     ) {
         return true;
     }
-    return (
-        error.message === "Resource not accessible by personal access token" &&
-        error.path?.at(-1) === "tier"
-    );
+    if (error.message !== "Resource not accessible by personal access token") {
+        return false;
+    }
+    // Fine-grained tokens can be valid while lacking access to these
+    // sponsorship-detail fields on sponsorships they don't directly own
+    // (e.g. tier pricing, payment source, or privacy level of another
+    // maintainer's sponsorship). Losing one field must not fail the sync.
+    const field = error.path?.at(-1);
+    return field === "tier" || field === "paymentSource" || field === "privacyLevel";
 }
 
 const SPONSORSHIPS_QUERY = `
