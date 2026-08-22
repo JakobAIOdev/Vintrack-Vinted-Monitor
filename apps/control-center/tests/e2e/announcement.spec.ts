@@ -233,20 +233,21 @@ test.describe("member announcements", () => {
                 placements: ["admin", "monitors"],
                 startsAt: null,
             });
-            await page.goto("/admin?tab=announcements");
+            await page.goto("/admin/announcements");
+            const admin = page.getByRole("main");
             await expect(
-                page.getByText("Member Announcement", { exact: true }),
+                admin.getByText("Member Announcement", { exact: true }),
             ).toBeVisible();
-            await page.getByLabel("Title").fill("");
-            await page
+            await admin.getByLabel("Title").fill("");
+            await admin
                 .getByRole("button", { name: "Publish Announcement" })
                 .click();
             await expect(page.getByText("Title is required")).toBeVisible();
 
-            await page.getByLabel("Title").fill("E2E edited announcement");
-            await page.getByLabel("Message").fill("Saved from the admin UI.");
-            await page.getByLabel("Variant").selectOption("critical");
-            await page
+            await admin.getByLabel("Title").fill("E2E edited announcement");
+            await admin.getByLabel("Message").fill("Saved from the admin UI.");
+            await admin.getByLabel("Variant").selectOption("critical");
+            await admin
                 .getByRole("button", { name: "Publish Announcement" })
                 .click();
             await expect(
@@ -264,8 +265,8 @@ test.describe("member announcements", () => {
             expect(stored.variant).toBe("critical");
             expect(stored.revision).not.toBe("e2e-admin-editor");
 
-            await page.getByLabel("Enable member announcement").uncheck();
-            await page
+            await admin.getByLabel("Enable member announcement").uncheck();
+            await admin
                 .getByRole("button", { name: "Publish Announcement" })
                 .click();
             await expect(

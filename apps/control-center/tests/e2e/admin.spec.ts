@@ -1,45 +1,66 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+function getAdminMain(page: Page) {
+    return page.getByRole("main");
+}
 
 test.describe("admin running monitors", () => {
     test("shows the cached runtime snapshot without opening insights", async ({
         page,
     }) => {
-        await page.goto("/admin?tab=overview");
+        await page.goto("/admin/overview");
 
         await expect(
-            page.getByRole("main").getByText("Runtime Snapshot"),
+            getAdminMain(page).getByText("Runtime Snapshot"),
         ).toBeVisible();
-        await expect(page.getByText("Total runtime")).toBeVisible();
-        await expect(page.getByText("Active source mix")).toBeVisible();
+        await expect(
+            getAdminMain(page).getByText("Total runtime"),
+        ).toBeVisible();
+        await expect(
+            getAdminMain(page).getByText("Active source mix"),
+        ).toBeVisible();
     });
 
     test("shows global and role Free Proxy Pool monitor limits", async ({
         page,
+        isMobile,
     }) => {
-        await page.goto("/admin?tab=roles");
+        await page.goto("/admin/roles-limits");
 
-        await expect(page.getByRole("tab", { name: "Roles" })).toHaveAttribute(
-            "aria-selected",
-            "true",
-        );
+        if (isMobile) {
+            await expect(
+                getAdminMain(page).getByRole("combobox", {
+                    name: "Admin section",
+                }),
+            ).toHaveValue("roles");
+        } else {
+            await expect(
+                getAdminMain(page).getByRole("tab", { name: "Roles" }),
+            ).toHaveAttribute("aria-selected", "true");
+        }
         await expect(
-            page.getByText("Running Free Proxy Monitor Limits"),
+            page
+                .getByRole("main")
+                .getByText("Running Free Proxy Monitor Limits"),
         ).toBeVisible();
-        await expect(page.getByText("Active Price Watch Limits")).toBeVisible();
-        await expect(page.locator("#roles-global-price-watch-limit")).toHaveValue("3");
-        await expect(page.getByLabel("Global default").last()).toHaveValue("");
-        await expect(page.getByLabel("Global default").last()).toHaveAttribute(
-            "placeholder",
-            "Unlimited",
-        );
-        await expect(page.getByLabel("Free").last()).toHaveAttribute(
-            "placeholder",
-            "Global",
-        );
-        await expect(page.getByLabel("Premium").last()).toHaveAttribute(
-            "placeholder",
-            "Global",
-        );
+        await expect(
+            getAdminMain(page).getByText("Active Price Watch Limits"),
+        ).toBeVisible();
+        await expect(
+            getAdminMain(page).locator("#roles-global-price-watch-limit"),
+        ).toHaveValue("3");
+        await expect(
+            getAdminMain(page).getByLabel("Global default").last(),
+        ).toHaveValue("");
+        await expect(
+            getAdminMain(page).getByLabel("Global default").last(),
+        ).toHaveAttribute("placeholder", "Unlimited");
+        await expect(
+            getAdminMain(page).getByLabel("Free").last(),
+        ).toHaveAttribute("placeholder", "Global");
+        await expect(
+            getAdminMain(page).getByLabel("Premium").last(),
+        ).toHaveAttribute("placeholder", "Global");
     });
 
     test("pauses the newest excess free proxy monitors for a user override", async ({
@@ -50,14 +71,18 @@ test.describe("admin running monitors", () => {
             isMobile,
             "The shared database mutation runs once on desktop",
         );
-        await page.goto("/admin?tab=users");
-        const search = page.getByPlaceholder(
+        await page.goto("/admin/members");
+        const search = getAdminMain(page).getByPlaceholder(
             "Search by name, email or role...",
         );
         await search.fill("E2E Limit User");
-        await page.getByRole("row", { name: /E2E Limit User/ }).click();
+        await getAdminMain(page)
+            .getByRole("row", { name: /E2E Limit User/ })
+            .click();
 
-        const input = page.locator("#user-free-proxy-monitor-limit");
+        const dialog = page.getByRole("dialog", { name: "User Details" });
+        await expect(dialog).toBeVisible();
+        const input = dialog.locator("#user-free-proxy-monitor-limit");
         await expect(input).toBeVisible();
         await input.fill("1");
         await input
@@ -65,10 +90,9 @@ test.describe("admin running monitors", () => {
             .getByRole("button", { name: "Save" })
             .click();
 
-        await expect(page.getByText("Running Free Pool: 1")).toBeVisible();
-        await expect(page.getByText("Monitor Runtime")).toBeVisible();
-        const runningSection = page
-            .getByRole("dialog", { name: "User Details" })
+        await expect(dialog.getByText("Running Free Pool: 1")).toBeVisible();
+        await expect(dialog.getByText("Monitor Runtime")).toBeVisible();
+        const runningSection = dialog
             .getByText("Running Monitors", { exact: true })
             .locator("xpath=../../..");
         await expect(runningSection).toContainText("E2E Free Limit 1");
@@ -77,17 +101,28 @@ test.describe("admin running monitors", () => {
 
     test("groups active monitors by member and filters the list", async ({
         page,
+        isMobile,
     }) => {
-        await page.goto("/admin?tab=monitors");
+        await page.goto("/admin/monitors");
 
         await expect(
-            page.getByRole("heading", { name: "Admin Panel" }),
+            getAdminMain(page).getByRole("heading", { name: "Admin Panel" }),
         ).toBeVisible();
-        await expect(
-            page.getByRole("tab", { name: "Running Monitors" }),
-        ).toHaveAttribute("aria-selected", "true");
+        if (isMobile) {
+            await expect(
+                getAdminMain(page).getByRole("combobox", {
+                    name: "Admin section",
+                }),
+            ).toHaveValue("monitors");
+        } else {
+            await expect(
+                getAdminMain(page).getByRole("tab", {
+                    name: "Running Monitors",
+                }),
+            ).toHaveAttribute("aria-selected", "true");
+        }
 
-        const memberSection = page
+        const memberSection = getAdminMain(page)
             .getByTestId("active-monitor-member")
             .filter({ hasText: "E2E User" });
         const memberToggle = memberSection.getByTestId(
@@ -104,7 +139,7 @@ test.describe("admin running monitors", () => {
         await memberToggle.click();
         await expect(memberToggle).toHaveAttribute("aria-expanded", "false");
 
-        const search = page.getByRole("textbox", {
+        const search = getAdminMain(page).getByRole("textbox", {
             name: "Search running monitors",
         });
         await search.fill("E2E Mock Feed");
@@ -115,7 +150,9 @@ test.describe("admin running monitors", () => {
 
         await search.fill("monitor that does not exist");
         await expect(
-            page.getByText("No running monitors match your search"),
+            getAdminMain(page).getByText(
+                "No running monitors match your search",
+            ),
         ).toBeVisible();
     });
 
@@ -124,67 +161,119 @@ test.describe("admin running monitors", () => {
         isMobile,
     }) => {
         test.skip(isMobile, "The shared setting mutation runs once on desktop");
-        await page.goto("/admin?tab=price_watch");
+        await page.goto("/admin/price-watch");
 
         await expect(
-            page.getByRole("main").getByText("Runtime & capacity"),
+            getAdminMain(page).getByText("Runtime & capacity"),
         ).toBeVisible();
-        await page.getByLabel("Shared minimum").selectOption("300");
-        await page.getByLabel("Shared max RPM").fill("24");
-        await page.getByRole("button", { name: "Save worker settings" }).click();
-        await expect(page.getByLabel("Shared minimum")).toHaveValue("300");
-        await expect(page.getByLabel("Shared max RPM")).toHaveValue("24");
+        await getAdminMain(page)
+            .getByLabel("Shared minimum")
+            .selectOption("300");
+        await getAdminMain(page).getByLabel("Shared max RPM").fill("24");
+        await getAdminMain(page)
+            .getByRole("button", { name: "Save worker settings" })
+            .click();
+        await expect(
+            getAdminMain(page).getByLabel("Shared minimum"),
+        ).toHaveValue("300");
+        await expect(
+            getAdminMain(page).getByLabel("Shared max RPM"),
+        ).toHaveValue("24");
 
-        await page.getByLabel("Shared minimum").selectOption("120");
-        await page.getByLabel("Shared max RPM").fill("30");
-        await page.getByRole("button", { name: "Save worker settings" }).click();
-        await expect(page.getByLabel("Shared max RPM")).toHaveValue("30");
+        await getAdminMain(page)
+            .getByLabel("Shared minimum")
+            .selectOption("120");
+        await getAdminMain(page).getByLabel("Shared max RPM").fill("30");
+        await getAdminMain(page)
+            .getByRole("button", { name: "Save worker settings" })
+            .click();
+        await expect(
+            getAdminMain(page).getByLabel("Shared max RPM"),
+        ).toHaveValue("30");
     });
 
-    test("shows member growth and demo insights", async ({ page }) => {
-        await page.goto("/admin?tab=insights");
+    test("shows member growth and demo insights", async ({
+        page,
+        isMobile,
+    }) => {
+        await page.goto("/admin/member-insights");
 
+        if (isMobile) {
+            await expect(
+                getAdminMain(page).getByRole("combobox", {
+                    name: "Admin section",
+                }),
+            ).toHaveValue("insights");
+        } else {
+            await expect(
+                getAdminMain(page).getByRole("tab", {
+                    name: "Member Insights",
+                }),
+            ).toHaveAttribute("aria-selected", "true");
+        }
         await expect(
-            page.getByRole("tab", { name: "Member Insights" }),
-        ).toHaveAttribute("aria-selected", "true");
-        await expect(
-            page.getByText("Member growth", { exact: true }),
+            getAdminMain(page).getByText("Member growth", { exact: true }),
         ).toBeVisible();
-        await expect(page.getByText("Runtime by proxy source")).toBeVisible();
         await expect(
-            page.getByRole("img", {
+            getAdminMain(page).getByText("Runtime by proxy source"),
+        ).toBeVisible();
+        await expect(
+            getAdminMain(page).getByRole("img", {
                 name: "Monitor runtime by proxy source over the last 30 days",
             }),
         ).toBeVisible();
         await expect(
-            page.getByRole("img", {
+            getAdminMain(page).getByRole("img", {
                 name: "Member signups over the last 90 days",
             }),
         ).toBeVisible();
-        await expect(page.getByText("Activation funnel")).toBeVisible();
-        await expect(page.getByText("Account mix")).toBeVisible();
-        await expect(page.getByText("Newest members")).toBeVisible();
         await expect(
-            page.getByRole("main").getByText("E2E User").last(),
+            getAdminMain(page).getByText("Activation funnel"),
+        ).toBeVisible();
+        await expect(getAdminMain(page).getByText("Account mix")).toBeVisible();
+        await expect(
+            getAdminMain(page).getByText("Newest members"),
+        ).toBeVisible();
+        await expect(
+            getAdminMain(page).getByText("E2E User").last(),
         ).toBeVisible();
     });
 
     test("separates delivery health from important operations", async ({
         page,
+        isMobile,
     }) => {
-        await page.goto("/admin?tab=overview");
-        await page.getByRole("tab", { name: "Logs" }).click();
+        await page.goto("/admin/overview");
+        if (isMobile) {
+            await getAdminMain(page)
+                .getByRole("combobox", { name: "Admin section" })
+                .selectOption("logs");
+        } else {
+            await getAdminMain(page).getByRole("tab", { name: "Logs" }).click();
+        }
 
-        await expect(page.getByText("Delivered (24h)")).toBeVisible();
-        await expect(page.getByText("Pending / retrying")).toBeVisible();
-        await expect(page.getByText("Deduplicated (24h)")).toBeVisible();
-        await expect(page.getByText("Terminal failures only")).toBeVisible();
         await expect(
-            page.getByText("Expected duplicate suppression"),
+            getAdminMain(page).getByText("Delivered (24h)"),
         ).toBeVisible();
         await expect(
-            page.getByText("successful-delivery noise", { exact: false }),
+            getAdminMain(page).getByText("Pending / retrying"),
         ).toBeVisible();
-        await expect(page.getByText(/alert issues/i)).toHaveCount(0);
+        await expect(
+            getAdminMain(page).getByText("Deduplicated (24h)"),
+        ).toBeVisible();
+        await expect(
+            getAdminMain(page).getByText("Terminal failures only"),
+        ).toBeVisible();
+        await expect(
+            getAdminMain(page).getByText("Expected duplicate suppression"),
+        ).toBeVisible();
+        await expect(
+            getAdminMain(page).getByText("successful-delivery noise", {
+                exact: false,
+            }),
+        ).toBeVisible();
+        await expect(getAdminMain(page).getByText(/alert issues/i)).toHaveCount(
+            0,
+        );
     });
 });
