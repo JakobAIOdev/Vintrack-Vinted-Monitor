@@ -1185,7 +1185,10 @@ export function DashboardClient({
                 </div>
             </div>
 
-            <div className="border-border/70 bg-card flex flex-wrap items-center gap-x-6 gap-y-3 rounded-xl border px-4 py-3 shadow-sm">
+            <div
+                className="border-border/70 bg-card flex flex-wrap items-center gap-x-6 gap-y-3 rounded-xl border px-4 py-3 shadow-sm"
+                data-testid="monitor-summary"
+            >
                 <div className="flex items-center gap-2 text-sm">
                     <Radio className="text-primary h-4 w-4" />
                     <span className="font-medium">

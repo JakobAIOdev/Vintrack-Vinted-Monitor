@@ -232,7 +232,7 @@ test.describe("monitor maintenance", () => {
                 }),
             ]);
 
-            await page.goto("/admin?tab=monitors");
+            await page.goto("/admin/monitors");
             const systemControl = page.getByTestId(
                 "maintenance-system-control",
             );
@@ -393,7 +393,7 @@ test.describe("monitor maintenance", () => {
                 page.getByRole("button", { name: "Create Monitor" }),
             ).toHaveCount(0);
 
-            await page.goto("/admin?tab=monitors");
+            await page.goto("/admin/monitors");
             await systemControl
                 .getByRole("button", { name: "Edit notice" })
                 .click();
@@ -446,7 +446,7 @@ test.describe("monitor maintenance", () => {
                 "Estimated completion",
             );
 
-            await page.goto("/admin?tab=monitors");
+            await page.goto("/admin/monitors");
             await systemControl
                 .getByRole("button", { name: "End maintenance" })
                 .click();
@@ -560,7 +560,7 @@ test.describe("monitor maintenance", () => {
             });
             await db.monitors.updateMany({ data: { status: "paused" } });
 
-            await page.goto("/admin?tab=monitors");
+            await page.goto("/admin/monitors");
             const systemControl = page.getByTestId(
                 "maintenance-system-control",
             );
@@ -648,7 +648,7 @@ test.describe("monitor maintenance", () => {
             });
             await expect(submitCreate).toBeEnabled();
 
-            await page.goto("/admin?tab=monitors");
+            await page.goto("/admin/monitors");
             const systemControl = page.getByTestId(
                 "maintenance-system-control",
             );

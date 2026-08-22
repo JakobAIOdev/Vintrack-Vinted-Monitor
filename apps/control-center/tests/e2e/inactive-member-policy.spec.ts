@@ -92,18 +92,19 @@ test.describe("inactive member monitor policy", () => {
     });
 
     test("shows the admin policy editor", async ({ page }) => {
-        await page.goto("/admin?tab=monitors");
+        await page.goto("/admin/monitors");
+        const card = page
+            .getByRole("main")
+            .getByTestId("inactive-member-automation");
+        await expect(card).toBeVisible();
         await expect(
-            page.getByTestId("inactive-member-automation"),
+            card.getByText("Inactive Member Automation", { exact: true }),
         ).toBeVisible();
         await expect(
-            page.getByText("Inactive Member Automation", { exact: true }),
+            card.getByRole("button", { name: "Preview impact" }),
         ).toBeVisible();
         await expect(
-            page.getByRole("button", { name: "Preview impact" }),
-        ).toBeVisible();
-        await expect(
-            page.getByRole("checkbox", { name: "Include Price Watches" }),
+            card.getByRole("checkbox", { name: "Include Price Watches" }),
         ).toBeVisible();
     });
 
@@ -116,8 +117,10 @@ test.describe("inactive member monitor policy", () => {
             where: { key: "inactive_member_monitor_policy" },
         });
         try {
-            await page.goto("/admin?tab=monitors");
-            const card = page.getByTestId("inactive-member-automation");
+            await page.goto("/admin/monitors");
+            const card = page
+                .getByRole("main")
+                .getByTestId("inactive-member-automation");
             const enabledCheckbox = card.getByRole("checkbox").first();
             await enabledCheckbox.check();
             await expect(enabledCheckbox).toBeChecked();
@@ -125,7 +128,7 @@ test.describe("inactive member monitor policy", () => {
             await expect(
                 card.getByRole("button", { name: "Save automation" }),
             ).toBeEnabled();
-            await expect(page.getByText("Confirmation pending")).toBeVisible();
+            await expect(card.getByText("Confirmation pending")).toBeVisible();
 
             const enabled = parseInactiveMemberPolicy(
                 (

@@ -591,11 +591,19 @@ test.describe("dashboard monitors", () => {
             page.getByRole("heading", { name: /Welcome back, E2E User/i }),
         ).toBeVisible();
         await expect(
-            page.getByText("Total Monitors", { exact: true }),
+            page.getByTestId("monitor-summary").getByText("1 monitor", {
+                exact: true,
+            }),
         ).toBeVisible();
-        await expect(page.getByText("Active", { exact: true })).toBeVisible();
         await expect(
-            page.getByText("Items Found", { exact: true }),
+            page.getByTestId("monitor-summary").getByText("1 active", {
+                exact: true,
+            }),
+        ).toBeVisible();
+        await expect(
+            page.getByTestId("monitor-summary").getByText("2 items found", {
+                exact: true,
+            }),
         ).toBeVisible();
         await expect(
             page.getByRole("link", { name: "Sponsor Vintrack" }),
