@@ -14,6 +14,10 @@ import { redirect } from "next/navigation";
 export const metadata: Metadata = {
     title: "Logout | Vintrack",
     description: "Sign out from your Vintrack dashboard session.",
+    robots: {
+        index: false,
+        follow: false,
+    },
 };
 
 async function signOutFromDashboard() {

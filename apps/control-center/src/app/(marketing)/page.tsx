@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { LogoMark, MarketingCta } from "@/components/marketing/marketing-shell";
 import { Button } from "@/components/ui/button";
+import { absoluteMarketingUrl, buildMarketingMetadata } from "@/lib/seo";
 import {
     ArrowRight,
     Bell,
@@ -21,28 +22,26 @@ import {
     ShieldCheck,
     ShoppingCart,
     SlidersHorizontal,
-    Star,
     Timer,
     User,
     Webhook,
-    Zap,
     RefreshCw,
     type LucideIcon,
 } from "lucide-react";
-import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
-export const metadata: Metadata = {
-    title: "Vintrack | Vinted monitoring control center",
-    description:
-        "Start Vinted monitors with health-checked free proxy pools in available regions, live feeds, Discord and Telegram alerts, and linked-account actions.",
-};
+export function generateMetadata() {
+    return buildMarketingMetadata({
+        title: "Vintrack – Open-Source Vinted Monitor & Fast Alerts",
+        description:
+            "Monitor new Vinted listings with precise filters, a live dashboard, Discord and Telegram alerts, price watches, or your own self-hosted stack.",
+        path: "/",
+    });
+}
 
 const appVersion = process.env.NEXT_PUBLIC_APP_VERSION;
-const sneakerDevReviewUrl =
-    "https://www.sneakerdev.com/services/e9c9ec35-71a2-43b0-b93b-2c1e8bf2f84d-vintrack";
 
 const navItems: Array<{ label: string; icon: LucideIcon }> = [
     { label: "Dashboard", icon: LayoutDashboard },
@@ -122,16 +121,6 @@ const workflow = [
         copy: "Discord, Telegram, Vinted links, likes, offers, and messages stay close to the find.",
     },
 ];
-
-function LogoMark({ className = "" }: { className?: string }) {
-    return (
-        <span
-            className={`bg-foreground text-background inline-flex items-center justify-center rounded-md shadow-sm ${className}`}
-        >
-            <span className="text-xs font-black">V</span>
-        </span>
-    );
-}
 
 function SectionHeader({
     kicker,
@@ -946,73 +935,24 @@ export default async function Home() {
         redirect("/dashboard");
     }
 
+    const websiteJsonLd = {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        name: "Vintrack",
+        url: absoluteMarketingUrl("/"),
+    };
+
     return (
-        <main className="bg-background text-foreground min-h-screen overflow-x-hidden">
-            <header className="border-border bg-background/82 sticky top-0 z-50 border-b backdrop-blur-xl">
-                <div className="relative mx-auto flex h-16 max-w-7xl items-center px-4 sm:px-6 lg:px-8">
-                    <Link href="/" className="flex items-center gap-2.5">
-                        <LogoMark className="size-7" />
-                        <span className="text-sm font-semibold tracking-tight">
-                            Vintrack
-                        </span>
-                    </Link>
-
-                    <nav className="text-muted-foreground absolute left-1/2 hidden -translate-x-1/2 items-center gap-7 text-sm md:flex">
-                        <a
-                            className="hover:text-foreground transition-colors"
-                            href="#free-proxies"
-                        >
-                            Free proxies
-                        </a>
-                        <a
-                            className="hover:text-foreground transition-colors"
-                            href="#product"
-                        >
-                            Product
-                        </a>
-                        <a
-                            className="hover:text-foreground transition-colors"
-                            href="#workflow"
-                        >
-                            Workflow
-                        </a>
-                        <a
-                            className="hover:text-foreground transition-colors"
-                            href="#actions"
-                        >
-                            Actions
-                        </a>
-                    </nav>
-
-                    <div className="ml-auto flex items-center gap-2">
-                        <ThemeToggle compact />
-                        <Button
-                            asChild
-                            variant="outline"
-                            size="sm"
-                            className="hidden sm:inline-flex"
-                        >
-                            <a
-                                href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor"
-                                target="_blank"
-                                rel="noreferrer"
-                            >
-                                <Github />
-                                GitHub
-                            </a>
-                        </Button>
-                        <Button asChild size="sm" className="px-2.5 sm:px-3">
-                            <Link href="/login">
-                                <span className="hidden min-[380px]:inline">
-                                    Launch app
-                                </span>
-                                <span className="min-[380px]:hidden">App</span>
-                                <ArrowRight />
-                            </Link>
-                        </Button>
-                    </div>
-                </div>
-            </header>
+        <main className="overflow-x-hidden">
+            <script
+                type="application/ld+json"
+                dangerouslySetInnerHTML={{
+                    __html: JSON.stringify(websiteJsonLd).replace(
+                        /</g,
+                        "\\u003c",
+                    ),
+                }}
+            />
 
             <section className="border-border relative isolate overflow-hidden border-b">
                 <div className="landing-grid pointer-events-none absolute inset-0 -z-20 opacity-45" />
@@ -1028,14 +968,14 @@ export default async function Home() {
                             <Globe2 className="size-3.5 text-emerald-600" />
                             Free proxy pools in available regions
                         </div>
-                        <h1 className="text-foreground text-5xl leading-none font-semibold sm:text-7xl">
-                            Vintrack
+                        <h1 className="text-foreground text-5xl leading-[0.98] font-semibold tracking-tight sm:text-7xl">
+                            The open-source Vinted monitor for faster finds.
                         </h1>
                         <p className="text-muted-foreground mt-6 max-w-md text-base leading-8 sm:text-lg">
-                            Monitor Vinted from one focused control center.
-                            Start with health-checked shared proxies in ready
-                            regions, then receive live dashboard, Discord, and
-                            Telegram alerts.
+                            Create precise searches, watch fresh listings in a
+                            live dashboard, and route matches to Discord or
+                            Telegram. Try the hosted demo or run the complete
+                            stack yourself.
                         </p>
                         <div className="mt-7 flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
                             <Button asChild size="lg">
@@ -1046,12 +986,12 @@ export default async function Home() {
                             </Button>
                             <Button asChild variant="outline" size="lg">
                                 <a
-                                    href="https://discord.gg/WbEpEjaWjP"
+                                    href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor"
                                     target="_blank"
                                     rel="noreferrer"
                                 >
-                                    Join Discord
-                                    <MessageCircle />
+                                    Self-host Vintrack
+                                    <Github />
                                 </a>
                             </Button>
                         </div>
@@ -1065,6 +1005,15 @@ export default async function Home() {
                                 Bring your own proxies anytime
                             </span>
                         </div>
+                        <a
+                            href="https://discord.gg/WbEpEjaWjP"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-muted-foreground hover:text-foreground mt-5 inline-flex items-center gap-2 text-xs font-medium transition-colors"
+                        >
+                            <MessageCircle className="size-3.5" />
+                            Questions? Join the Vintrack Discord
+                        </a>
                         <div className="mt-8 md:hidden">
                             <MobileHeroMockup />
                         </div>
@@ -1248,69 +1197,65 @@ export default async function Home() {
                 </div>
             </section>
 
-            <section className="px-4 py-20 sm:px-6 lg:px-8">
-                <div className="mx-auto flex max-w-5xl flex-col items-center gap-6 text-center">
-                    <div className="border-border bg-card flex size-11 items-center justify-center rounded-md border">
-                        <Zap className="size-5" />
-                    </div>
-                    <div className="max-w-2xl">
-                        <h2 className="text-3xl leading-tight font-semibold sm:text-4xl">
-                            Start with one monitor.
-                        </h2>
-                        <p className="text-muted-foreground mt-4 text-sm leading-7 sm:text-base">
-                            Sign in, connect alerts, choose a proxy source, and
-                            let Vintrack keep the feed moving.
-                        </p>
-                    </div>
-                    <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
-                        <Button asChild size="lg">
-                            <Link href="/login">
-                                Launch app
-                                <ArrowRight />
-                            </Link>
-                        </Button>
-                        <Button asChild variant="outline" size="lg">
-                            <a
-                                href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor"
-                                target="_blank"
-                                rel="noreferrer"
+            <section className="border-border bg-muted/18 border-b px-4 py-20 sm:px-6 lg:px-8">
+                <div className="mx-auto max-w-6xl">
+                    <SectionHeader
+                        kicker="Choose your workflow"
+                        title="One monitor, three focused ways to use it."
+                        copy="Explore the Vintrack capability that matches what you need now, without losing the option to move between the hosted demo and your own infrastructure."
+                    />
+                    <div className="mt-10 grid gap-5 md:grid-cols-3">
+                        {[
+                            {
+                                icon: Bell,
+                                title: "New-listing alerts",
+                                copy: "Send filtered finds to Discord, Telegram, and the live dashboard.",
+                                href: "/vinted-alerts",
+                            },
+                            {
+                                icon: Timer,
+                                title: "Price drop tracking",
+                                copy: "Watch individual Vinted items and get notified when their price changes.",
+                                href: "/vinted-price-tracker",
+                            },
+                            {
+                                icon: Github,
+                                title: "Self-hosted control",
+                                copy: "Run the open-source Docker stack with your own data and proxy setup.",
+                                href: "/self-hosted-vinted-monitor",
+                            },
+                        ].map((useCase) => (
+                            <Link
+                                key={useCase.href}
+                                href={useCase.href}
+                                className="border-border bg-card hover:border-foreground/25 group rounded-lg border p-6 transition-colors"
                             >
-                                <Star />
-                                Star on GitHub
-                            </a>
-                        </Button>
+                                <useCase.icon className="size-5" />
+                                <h3 className="mt-5 text-lg font-semibold">
+                                    {useCase.title}
+                                </h3>
+                                <p className="text-muted-foreground mt-3 text-sm leading-6">
+                                    {useCase.copy}
+                                </p>
+                                <span className="mt-6 inline-flex items-center gap-2 text-sm font-semibold">
+                                    Explore
+                                    <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
+                                </span>
+                            </Link>
+                        ))}
                     </div>
                 </div>
             </section>
 
-            <footer className="border-border border-t px-4 py-8 sm:px-6 lg:px-8">
-                <div className="text-muted-foreground mx-auto flex max-w-7xl flex-col gap-4 text-sm sm:flex-row sm:items-center sm:justify-between">
-                    <Link
-                        href="/"
-                        className="text-foreground flex items-center gap-2.5"
-                    >
-                        <LogoMark className="size-7" />
-                        <span className="font-semibold">Vintrack</span>
-                    </Link>
-                    <div className="flex flex-wrap items-center gap-4">
-                        <span>Built for fast Vinted monitoring.</span>
-                        <a
-                            href={sneakerDevReviewUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="hover:text-foreground inline-flex items-center gap-1.5 transition-colors"
-                        >
-                            <Star className="size-4 text-emerald-500" />
-                            Review on SneakerDev
-                        </a>
-                        <span className="inline-flex items-center gap-1.5">
-                            <CheckCircle2 className="size-4 text-emerald-500" />
-                            MIT licensed
-                        </span>
-                        {appVersion ? <span>v{appVersion}</span> : null}
-                    </div>
-                </div>
-            </footer>
+            <MarketingCta
+                title="Start with one monitor."
+                copy="Sign in to the hosted demo or inspect the full open-source stack before choosing where Vintrack should run."
+                primary={{ label: "Start monitoring", href: "/login" }}
+                secondary={{
+                    label: "Self-host Vintrack",
+                    href: "https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor",
+                }}
+            />
         </main>
     );
 }

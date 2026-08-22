@@ -7,8 +7,13 @@ import { ThemeProvider } from "@/components/theme-provider";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
+    metadataBase: new URL("http://localhost:3000"),
     title: "Vintrack",
-    description: "High-Performance Vinted Monitoring",
+    description: "Open-source Vinted monitoring and fast listing alerts.",
+    robots: {
+        index: false,
+        follow: false,
+    },
 };
 
 export default function RootLayout({

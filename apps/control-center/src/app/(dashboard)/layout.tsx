@@ -5,6 +5,14 @@ import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
 import { getMemberAnnouncement } from "@/lib/member-announcement.server";
 import { getMonitorMaintenance } from "@/lib/monitor-maintenance.server";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    robots: {
+        index: false,
+        follow: false,
+    },
+};
 
 export default async function DashboardLayout({
     children,
