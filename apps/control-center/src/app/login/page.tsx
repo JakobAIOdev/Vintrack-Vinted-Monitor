@@ -18,6 +18,10 @@ import { oidcConfigured, oidcName } from "@/lib/auth-provider";
 export const metadata: Metadata = {
     title: "Login | Vintrack",
     description: "Sign in to access the Vintrack dashboard.",
+    robots: {
+        index: false,
+        follow: false,
+    },
 };
 
 async function signInWithDiscord() {

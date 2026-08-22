@@ -118,6 +118,7 @@ services:
       - AUTH_TRUST_HOST=true
       - AUTH_URL=${AUTH_URL:-http://localhost:3000}
       - APP_PUBLIC_URL=${APP_PUBLIC_URL:-http://localhost:3000}
+      - SEO_INDEXING_ENABLED=${SEO_INDEXING_ENABLED:-false}
       - DASHBOARD_URL=${DASHBOARD_URL:-http://localhost:3000}
       - VINTED_SERVICE_URL=http://vinted-service:4000
       - BROWSER_EXTENSION_LATEST_VERSION=${BROWSER_EXTENSION_LATEST_VERSION:-0.1.5}

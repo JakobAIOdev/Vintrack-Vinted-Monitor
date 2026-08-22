@@ -32,6 +32,7 @@ openssl rand -base64 32
 | --- | --- | --- |
 | `AUTH_URL` | `http://localhost:3000` | Canonical URL used by the authentication layer |
 | `APP_PUBLIC_URL` | `http://localhost:3000` | Canonical origin used by Discord and Telegram links |
+| `SEO_INDEXING_ENABLED` | `false` | Opt in to public marketing-page indexing, canonicals, and sitemap output |
 | `DASHBOARD_URL` | `http://localhost:3000` | Legacy notification-link fallback |
 | `VINTRACK_SITE_ADDRESS` | `http://localhost` | Caddy site address or public hostname |
 
@@ -40,6 +41,7 @@ For production:
 ```env
 AUTH_URL=https://vintrack.example.com
 APP_PUBLIC_URL=https://vintrack.example.com
+SEO_INDEXING_ENABLED=true
 DASHBOARD_URL=https://vintrack.example.com
 VINTRACK_SITE_ADDRESS=vintrack.example.com
 ```
@@ -48,6 +50,10 @@ The worker resolves `APP_PUBLIC_URL`, then `AUTH_URL`, then the legacy
 `DASHBOARD_URL`. Values must be absolute origins and must agree when several are
 configured. Production requires HTTPS and rejects local or temporary tunnel
 origins; Vintrack omits dashboard buttons while configuration health is red.
+
+Search indexing is disabled by default so self-hosted instances do not compete
+with identical marketing content accidentally. Enable `SEO_INDEXING_ENABLED`
+only for a deliberately public deployment with a valid `APP_PUBLIC_URL`.
 
 ## Authentication
 

@@ -39,7 +39,7 @@ export default defineConfig({
         ? undefined
         : {
               command: webServerCommand,
-              url: baseURL,
+              url: `${baseURL}/robots.txt`,
               env: {
                   ...process.env,
                   ...(useProductionBuild
@@ -50,6 +50,9 @@ export default defineConfig({
                       : { NEXT_DIST_DIR: `.next-e2e-${port}` }),
                   E2E_TEST_MODE: process.env.E2E_TEST_MODE ?? "",
                   E2E_TEST_USER_ID: process.env.E2E_TEST_USER_ID ?? "e2e-user",
+                  APP_PUBLIC_URL: process.env.APP_PUBLIC_URL ?? baseURL,
+                  SEO_INDEXING_ENABLED:
+                      process.env.SEO_INDEXING_ENABLED ?? "true",
               },
               reuseExistingServer:
                   !useProductionBuild &&
