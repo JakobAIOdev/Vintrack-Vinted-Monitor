@@ -180,11 +180,18 @@ make init
 creates the local proxy file. It never replaces an existing `.env` or changes
 non-placeholder secrets; missing or template secret values are filled in.
 
-Add your Discord OAuth or OIDC credentials to `.env`, then start the stack:
+Start the low-power local stack (Discord OAuth or OIDC credentials are not
+required for this development mode):
 
 ```bash
-docker compose up -d --build
+make dev
 ```
+
+This uses an automatically signed-in local admin, synthetic free-proxy pools,
+safe test monitors, isolated development data, a deterministic mock catalog,
+serial cached builds, and resource-capped containers. Run `make up` only when
+you intentionally need the full live/production-like worker stack and normal
+authentication.
 
 Open [http://localhost:3000](http://localhost:3000), which matches the default
 `AUTH_URL`. Caddy also exposes [http://localhost](http://localhost); if you use

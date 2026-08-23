@@ -7,7 +7,7 @@ COPY package.json package-lock.json* ./
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssl \
     && rm -rf /var/lib/apt/lists/*
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 
 # --- Builder ---
 FROM deps AS builder
@@ -15,8 +15,10 @@ WORKDIR /app
 COPY . .
 ENV NODE_OPTIONS="--max-old-space-size=1536"
 ENV NEXT_DISABLE_TURBOPACK=1
+ARG NEXT_BUILD_CPUS
+ENV NEXT_BUILD_CPUS=$NEXT_BUILD_CPUS
 RUN npx prisma generate
-RUN npm run build
+RUN --mount=type=cache,target=/app/.next/cache npm run build
 
 # --- Runtime ---
 FROM base AS runner

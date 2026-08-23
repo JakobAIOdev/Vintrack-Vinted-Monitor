@@ -234,8 +234,8 @@ async function getAuthSession(): Promise<Session | null> {
         return {
             user: {
                 id: userId,
-                name: "E2E User",
-                email: "e2e@vintrack.test",
+                name: process.env.E2E_TEST_USER_NAME ?? "E2E User",
+                email: process.env.E2E_TEST_USER_EMAIL ?? "e2e@vintrack.test",
                 image: null,
                 role: "admin",
             },

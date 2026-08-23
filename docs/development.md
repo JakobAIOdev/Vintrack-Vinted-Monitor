@@ -20,24 +20,58 @@ cd vintrack
 make init
 ```
 
-Complete local authentication values in `.env`.
+Complete local authentication values in `.env` when using the full live stack.
+The low-power `make dev` workflow supplies its own local admin session.
 
-## Full stack
-
-```bash
-docker compose up -d --build
-docker compose ps
-docker compose logs -f control-center worker vinted-service
-```
-
-Stop containers without removing persistent volumes:
+## Low-power local stack
 
 ```bash
-docker compose down
+make dev
 ```
 
-Do not add `--volumes` unless you explicitly intend to delete the development
-database, Redis data, and Caddy state.
+This is the default local workflow. It builds changed images with reusable
+caches and serial service builds, starts a resource-capped stack, and applies
+idempotent development fixtures with:
+
+- an automatically signed-in local admin at `http://localhost:3000`;
+- synthetic healthy free-proxy pools for DE, FR, IT, ES, NL, BE, and AT;
+- safe example members, monitors, feed items, and a personal proxy group;
+- a separate, persistent development database and Redis volume;
+- the deterministic mock catalog worker;
+- no Caddy, GitHub rewards scheduler, proxy maintainer, live discovery, price
+  watch scanner, or pre-index scanner.
+
+`make dev` explicitly ignores `COMPOSE_PROFILES` from `.env`, so an old
+`COMPOSE_PROFILES=preindex` setting cannot start the scanner accidentally.
+Follow logs or inspect status with `make dev-logs` and `make dev-ps`.
+Run `make dev-seed` to refresh only the fixtures without rebuilding images.
+
+All seeded proxy addresses are loopback-only fixtures and all seeded monitor
+notifications are disabled. The worker stays in mock mode, so this workflow
+does not validate real Vinted access or real proxy connectivity. The automatic
+admin session is defined only in `docker-compose.dev.yml`; `make up` keeps the
+normal authentication flow.
+
+Stop containers without removing development data:
+
+```bash
+make dev-down
+```
+
+Do not add `--volumes` unless you explicitly intend to delete the isolated
+development database and Redis data.
+
+## Full live stack
+
+Only use the live/production-like stack when validating real catalog behavior:
+
+```bash
+make up
+```
+
+This can consume substantially more CPU, network, and battery because it starts
+the live monitor worker and proxy maintainer. Enable the pre-index scanner only
+for an intentional experiment; it is not part of ordinary development.
 
 ## Control center
 
@@ -94,17 +128,14 @@ inside `internal/`.
 
 ## Mock catalog development
 
-Use the mock overlay for repeatable dashboard and notification development
-without live Vinted traffic:
+The standard `make dev` command already enables repeatable mock catalog data.
+To select a different scenario for one run:
 
 ```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.dev-mock.yml \
-  up -d --build
+VINTED_MOCK_SCENARIO=empty make dev
 ```
 
-The overlay:
+The development overlay:
 
 - switches the monitor worker to `VINTED_FETCH_MODE=mock`;
 - disables live seller enrichment;
