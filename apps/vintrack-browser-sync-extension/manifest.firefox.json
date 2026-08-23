@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
     "name": "Vintrack Browser Sync",
-    "version": "0.1.5",
-    "description": "Keeps the Vintrack Vinted session synced automatically.",
+    "version": "0.2",
+    "description": "Vintrack companion for linked sessions, monitors, feeds, and Price Watches.",
     "permissions": ["alarms", "cookies", "storage", "tabs"],
     "host_permissions": [
         "https://vintrack.jakobaio.dev/*",
@@ -80,13 +80,13 @@
                 "https://*.vinted.se/*",
                 "https://*.vinted.sk/*"
             ],
-            "js": ["content-script.js"],
+            "js": ["companion.js", "content-script.js"],
             "run_at": "document_start"
         }
     ],
     "web_accessible_resources": [
         {
-            "resources": ["page-bridge.js"],
+            "resources": ["page-bridge.js", "companion.css"],
             "matches": [
                 "https://*.vinted.at/*",
                 "https://*.vinted.be/*",

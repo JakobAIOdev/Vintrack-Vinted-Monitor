@@ -3,6 +3,18 @@
 Browser extension for automatic Vintrack/Vinted session sync. Chrome and
 Firefox use the same source and must always carry the same manifest version.
 
+The popup also provides a Vintrack companion with linked-account status, recent
+monitor finds, and Price Watch controls. Inline Vinted actions are enabled by
+default. New installations show native Vintrack buttons on catalog and item
+pages; users who explicitly select popup-only mode keep that preference.
+Buttons open an isolated companion drawer. `Option + Shift + V` toggles it on
+Apple devices and `Alt + Shift + V` on other platforms. Context actions can
+copy a server-normalized clean Vinted link. The platform-aware shortcut is shown
+in the Companion footer and in the Vintrack header button tooltip.
+While the Feed tab is open, recent finds refresh every 12 seconds. Monitor and
+Price Watch handoffs still require a separate confirmation in the Vintrack
+form.
+
 ## Public downloads
 
 - Chrome ZIP: <https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases/latest/download/vintrack-browser-sync-extension.zip>
@@ -39,8 +51,7 @@ The build writes:
 6. Open Vintrack, go to **Account**, and click **Link With Installed Extension**.
 
 For local development on `http://localhost:3000`, run the build script and
-select `apps/vintrack-browser-sync-extension/dist/chrome-development` in step
-5. The public ZIP intentionally cannot connect to localhost.
+select `apps/vintrack-browser-sync-extension/dist/chrome-development` in step 5. The public ZIP intentionally cannot connect to localhost.
 
 ## Install in Firefox
 
@@ -68,7 +79,7 @@ Temporary extensions are removed by Firefox on restart by design.
    **Prepare Release** workflow.
 
 When the prepared release PR is merged, **Release and Deploy** compares the
-manifest version with marker tags such as `extension-v0.1.5`. A missing tag
+manifest version with marker tags such as `extension-v0.2`. A missing tag
 causes the workflow to validate and lint the extension, submit the listed build
 with `web-ext sign --channel=listed --approval-timeout=0`, and create the marker
 tag after AMO accepts the upload and validation. AMO review then continues
@@ -82,8 +93,11 @@ configured slug.
 The extension transmits the Vinted web access token, selected Vinted domain,
 and Vinted account ID/display name needed for account-mismatch protection. On
 Firefox, the browser user-agent is transmitted only with the optional technical
-data permission. The theme is stored locally and mirrored between approved
-Vintrack and Vinted pages.
+data permission. When the companion is opened on a supported Vinted page, that
+page URL is sent to Vintrack to identify an existing monitor or Price Watch and
+to build a sanitized form handoff. Vintrack account status, recent monitor
+finds, and Price Watches are returned only after authenticating the stored
+browser-link token. The theme and inline-mode preference are stored locally.
 
 It does not transmit the complete cookie jar, browser refresh token, Vinted
 password, or payment-card data. See the

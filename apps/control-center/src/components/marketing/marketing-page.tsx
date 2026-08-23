@@ -228,7 +228,7 @@ export function AlertPreview() {
                             NEW
                         </span>
                     </div>
-                    <div className="bg-muted mt-5 aspect-[4/3] rounded-md p-4">
+                    <div className="bg-muted mt-5 aspect-4/3 rounded-md p-4">
                         <div className="from-muted-foreground/15 to-muted-foreground/5 h-full rounded bg-linear-to-br" />
                     </div>
                     <p className="mt-4 text-sm font-semibold">

@@ -59,6 +59,8 @@ export interface AccountStatus {
     invalid_reason?: string;
     has_refresh_token?: boolean;
     requires_browser_reauth?: boolean;
+    requires_browser_sync?: boolean;
+    browser_link_connected?: boolean;
     has_browser_session?: boolean;
     browser_linked?: boolean;
     last_browser_sync?: string;
@@ -71,7 +73,8 @@ type BrowserSyncState = {
     installed?: boolean;
     configured?: boolean;
     created_at: string;
-    expires_at: string;
+    expires_at?: string | null;
+    persistent?: boolean;
     last_used_at?: string;
     syncedDomains?: string[];
     error?: string;
@@ -97,7 +100,9 @@ function sessionStatusLabel(value?: string) {
         case "degraded":
             return "Retrying";
         case "needs_browser_reauth":
-            return "Browser re-auth needed";
+            return "Session update needed";
+        case "needs_browser_sync":
+            return "Browser sync needed";
         case "missing_refresh_token":
             return "Refresh token missing";
         case "refreshing":
@@ -859,12 +864,15 @@ export function AccountClient({
                     </CardHeader>
                     <CardContent className="space-y-4 p-5">
                         {status.requires_browser_reauth ||
+                        status.requires_browser_sync ||
                         status.status === "degraded" ? (
                             <div className="border-border/80 bg-muted/40 rounded-md border p-3 text-sm">
                                 <p className="font-medium">
-                                    {status.requires_browser_reauth
-                                        ? "Open Vinted in the connected browser and sync the extension."
-                                        : "Vintrack is retrying session validation automatically."}
+                                    {status.requires_browser_sync
+                                        ? "Vintrack is still linked. The browser extension is refreshing the Vinted session automatically; sign in to Vinted in this browser if requested."
+                                        : status.requires_browser_reauth
+                                          ? "Update the saved Vinted session to restore account access."
+                                          : "Vintrack is retrying session validation automatically."}
                                 </p>
                                 {status.invalid_reason ? (
                                     <p className="text-muted-foreground mt-1 text-xs">
@@ -909,6 +917,16 @@ export function AccountClient({
                                           : "missing"}
                                 </strong>
                             </span>
+                            {status.browser_linked ? (
+                                <span>
+                                    Browser grant:{" "}
+                                    <strong className="text-foreground font-medium">
+                                        {status.browser_link_connected
+                                            ? "connected"
+                                            : "reconnect extension"}
+                                    </strong>
+                                </span>
+                            ) : null}
                             <span>
                                 Phone:{" "}
                                 <strong className="text-foreground font-medium">

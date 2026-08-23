@@ -38,6 +38,7 @@ import {
 } from "@/lib/monitor-delay";
 import {
     buildVintedMonitorUrl,
+    parseVintedSearchUrl,
     type VintedSearchImport,
 } from "@/lib/vinted-url";
 import {
@@ -191,6 +192,34 @@ export default function NewMonitorPage() {
         },
         [],
     );
+
+    useEffect(() => {
+        const fragment = new URLSearchParams(window.location.hash.slice(1));
+        const handoffUrl = fragment.get("vintrack-vinted-search");
+        if (!handoffUrl) return;
+
+        const parsed = parseVintedSearchUrl(handoffUrl);
+        const cleanUrl = `${window.location.pathname}${window.location.search}`;
+        window.history.replaceState(window.history.state, "", cleanUrl);
+        if (!parsed.ok) {
+            toast.error(parsed.error);
+            return;
+        }
+
+        const timer = window.setTimeout(() => {
+            handleVintedUrlImport(parsed.value);
+            setName(
+                (current) =>
+                    current ||
+                    `${parsed.value.query || "Vinted catalog"} ${parsed.value.region.toUpperCase()}`,
+            );
+            setPresetsOpen(false);
+            toast.success(
+                "Vinted search imported. Review the settings before creating.",
+            );
+        }, 0);
+        return () => window.clearTimeout(timer);
+    }, [handleVintedUrlImport]);
 
     const handleRegionChange = (nextRegion: string) => {
         setSelectedAllowedCountries((current) =>

@@ -1,11 +1,17 @@
 import { expect, test } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
+import { createHash } from "node:crypto";
 import {
     MemberBrandLimitError,
     upsertVerifiedMemberBrand,
 } from "../../src/lib/member-brands.server";
 import { parsePriceWatchUrl } from "../../src/lib/price-watch";
 import { parseVintedSearchUrl } from "../../src/lib/vinted-url";
+import {
+    prepareGithubAccountLink,
+    unlinkGithubAccountForUser,
+} from "../../src/lib/github-account-linking.server";
+import { getMemberGithubRewardStatus } from "../../src/lib/github-rewards.server";
 
 const db = new PrismaClient();
 
@@ -100,6 +106,37 @@ test.describe("Vinted search URL import", () => {
             error: "The imported minimum price is higher than the maximum price.",
         });
     });
+
+    test("prefills a new monitor from an extension handoff without creating it", async ({
+        page,
+    }) => {
+        const vintedUrl =
+            "https://www.vinted.fr/catalog?search_text=nike%20air&price_from=10&price_to=80&catalog[]=257&brand_ids[]=53&color_ids[]=1&status_ids[]=2&size_ids[]=208&material_ids[]=12";
+        await page.goto(
+            `/monitors/new#vintrack-vinted-search=${encodeURIComponent(vintedUrl)}`,
+        );
+
+        await expect(
+            page.getByRole("heading", { name: "Create Monitor" }),
+        ).toBeVisible();
+        await expect(page.locator('input[name="region"]')).toHaveValue("fr");
+        await expect(page.locator('input[name="query"]')).toHaveValue(
+            "nike air",
+        );
+        await expect(page.locator('input[name="price_min"]')).toHaveValue("10");
+        await expect(page.locator('input[name="price_max"]')).toHaveValue("80");
+        await expect(page.locator('input[name="catalog_ids"]')).toHaveValue(
+            "257",
+        );
+        await expect(page.locator('input[name="brand_ids"]')).toHaveValue("53");
+        await expect(page.locator('input[name="color_ids"]')).toHaveValue("1");
+        await expect(page.locator('input[name="status_ids"]')).toHaveValue("2");
+        await expect(page.locator('input[name="size_id"]')).toHaveValue("208");
+        await expect(
+            page.locator('input[name="vinted_extra_params"]'),
+        ).toHaveValue("material_ids%5B%5D=12");
+        await expect(page).toHaveURL(/\/monitors\/new$/);
+    });
 });
 
 test.describe("Price Watch", () => {
@@ -134,10 +171,30 @@ test.describe("Price Watch", () => {
             where: { scope: { in: ["role:free", "role:premium"] } },
             select: { scope: true, price_watch_limit: true },
         });
-        expect(Object.fromEntries(roleLimits.map((row) => [row.scope, row.price_watch_limit]))).toEqual({
+        expect(
+            Object.fromEntries(
+                roleLimits.map((row) => [row.scope, row.price_watch_limit]),
+            ),
+        ).toEqual({
             "role:free": 3,
             "role:premium": 50,
         });
+    });
+
+    test("opens a prefilled Price Watch dialog from an extension handoff", async ({
+        page,
+    }) => {
+        const itemUrl =
+            "https://www.vinted.de/items/7090190431-extension-handoff";
+        await page.goto(
+            `/price-watches#vintrack-vinted-item=${encodeURIComponent(itemUrl)}`,
+        );
+
+        await expect(
+            page.getByRole("heading", { name: "Add Price Watch" }),
+        ).toBeVisible();
+        await expect(page.getByLabel("Vinted item URL")).toHaveValue(itemUrl);
+        await expect(page).toHaveURL(/\/price-watches$/);
     });
 
     test("creates, pauses, resumes, edits, and deletes an individual watch", async ({
@@ -156,38 +213,50 @@ test.describe("Price Watch", () => {
             await page.getByRole("button", { name: "Add watch" }).click();
             await page
                 .getByLabel("Vinted item URL")
-                .fill(
-                    `https://www.vinted.de/items/${itemId}-e2e-price-watch`,
-                );
-            await page
-                .getByRole("switch", { name: "Notifications" })
-                .click();
+                .fill(`https://www.vinted.de/items/${itemId}-e2e-price-watch`);
+            await page.getByRole("switch", { name: "Notifications" }).click();
             await page.getByRole("button", { name: "Start watching" }).click();
             await expect(
-                page.getByText("Price Watch created and queued for validation."),
+                page.getByText(
+                    "Price Watch created and queued for validation.",
+                ),
             ).toBeVisible();
             await page.reload();
 
-            await expect(
-                page.getByText(`Vinted item ${itemId}`),
-            ).toBeVisible();
+            await expect(page.getByText(`Vinted item ${itemId}`)).toBeVisible();
             await expect(page.getByText("Alerts off")).toBeVisible();
 
             await page.getByRole("button", { name: "Stop All" }).click();
-            await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+            await expect(
+                page.getByText("Paused", { exact: true }),
+            ).toBeVisible();
             await page.getByRole("button", { name: "Start All" }).click();
-            await expect(page.getByText(/^(Validating|Retrying)$/)).toBeVisible();
-
-            await page.getByRole("button", { name: "Price Watch actions" }).click();
-            await page.getByRole("button", { name: "Pause", exact: true }).click();
-            await expect(page.getByText("Paused", { exact: true })).toBeVisible();
-            await page.getByRole("button", { name: "Price Watch actions" }).click();
-            await page.getByRole("button", { name: "Resume", exact: true }).click();
             await expect(
                 page.getByText(/^(Validating|Retrying)$/),
             ).toBeVisible();
 
-            await page.getByRole("button", { name: "Price Watch actions" }).click();
+            await page
+                .getByRole("button", { name: "Price Watch actions" })
+                .click();
+            await page
+                .getByRole("button", { name: "Pause", exact: true })
+                .click();
+            await expect(
+                page.getByText("Paused", { exact: true }),
+            ).toBeVisible();
+            await page
+                .getByRole("button", { name: "Price Watch actions" })
+                .click();
+            await page
+                .getByRole("button", { name: "Resume", exact: true })
+                .click();
+            await expect(
+                page.getByText(/^(Validating|Retrying)$/),
+            ).toBeVisible();
+
+            await page
+                .getByRole("button", { name: "Price Watch actions" })
+                .click();
             await page.getByRole("button", { name: "Edit watch" }).click();
             await expect(
                 page.getByRole("heading", { name: "Edit Price Watch" }),
@@ -198,8 +267,12 @@ test.describe("Price Watch", () => {
                 page.getByRole("heading", { name: "Edit Price Watch" }),
             ).not.toBeVisible();
 
-            await page.getByRole("button", { name: "Price Watch actions" }).click();
-            await page.getByRole("button", { name: "Delete", exact: true }).click();
+            await page
+                .getByRole("button", { name: "Price Watch actions" })
+                .click();
+            await page
+                .getByRole("button", { name: "Delete", exact: true })
+                .click();
             await page.getByRole("button", { name: "Delete watch" }).click();
             await expect(
                 page.getByText(`Vinted item ${itemId}`),
@@ -235,20 +308,452 @@ test.describe("Price Watch", () => {
                 .getByLabel("Vinted item URL")
                 .fill(`https://www.vinted.de/items/${itemId}-fast-e2e`);
 
-            await expect(page.getByLabel("Check every").locator('option[value="30"]')).toHaveCount(0);
+            await expect(
+                page.getByLabel("Check every").locator('option[value="30"]'),
+            ).toHaveCount(0);
             await page.getByLabel("Connection").selectOption(String(group.id));
-            await expect(page.getByLabel("Check every").locator('option[value="30"]')).toHaveCount(1);
+            await expect(
+                page.getByLabel("Check every").locator('option[value="30"]'),
+            ).toHaveCount(1);
             await page.getByLabel("Check every").selectOption("30");
             await page.getByRole("switch", { name: "Notifications" }).click();
             await page.getByRole("button", { name: "Start watching" }).click();
 
-            await expect(page.getByText("30 sec", { exact: true })).toBeVisible();
-            await expect(page.getByText("E2E Fast DE", { exact: true })).toBeVisible();
+            await expect(
+                page.getByText("30 sec", { exact: true }),
+            ).toBeVisible();
+            await expect(
+                page.getByText("E2E Fast DE", { exact: true }),
+            ).toBeVisible();
         } finally {
             await db.price_watch_targets.deleteMany({
                 where: { region: "de", item_id: itemId },
             });
             await db.proxy_groups.deleteMany({ where: { id: group.id } });
+        }
+    });
+});
+
+test.describe("Extension companion API", () => {
+    test.setTimeout(60_000);
+
+    test("authenticates browser links and isolates Price Watch mutations", async ({
+        request,
+    }) => {
+        const userId = "e2e-user";
+        const otherUserId = "e2e-limit-user";
+        const token = "0123456789abcdef0123456789abcdef";
+        const tokenHash = createHash("sha256").update(token).digest("hex");
+        const targetItemId = BigInt("9090909090");
+        let targetId: bigint | null = null;
+
+        try {
+            await db.$executeRaw`
+                INSERT INTO "vinted_browser_links"
+                    ("user_id", "token_hash", "created_at", "updated_at")
+                VALUES (${userId}, ${tokenHash}, NOW(), NOW())
+                ON CONFLICT ("user_id") DO UPDATE
+                SET "token_hash" = EXCLUDED."token_hash", "updated_at" = NOW()
+            `;
+
+            const target = await db.price_watch_targets.upsert({
+                where: {
+                    region_item_id: {
+                        region: "de",
+                        item_id: targetItemId,
+                    },
+                },
+                create: {
+                    region: "de",
+                    item_id: targetItemId,
+                    canonical_url:
+                        "https://www.vinted.de/items/9090909090-extension-api",
+                    title: "Extension API fixture",
+                },
+                update: {},
+            });
+            targetId = target.id;
+            const schedule = await db.price_watch_schedules.upsert({
+                where: {
+                    target_id_transport_key: {
+                        target_id: target.id,
+                        transport_key: "shared",
+                    },
+                },
+                create: {
+                    target_id: target.id,
+                    transport_key: "shared",
+                    transport_kind: "shared",
+                },
+                update: {},
+            });
+            const ownWatch = await db.price_watches.create({
+                data: {
+                    user_id: userId,
+                    target_id: target.id,
+                    schedule_id: schedule.id,
+                    status: "active",
+                },
+            });
+            const otherWatch = await db.price_watches.create({
+                data: {
+                    user_id: otherUserId,
+                    target_id: target.id,
+                    schedule_id: schedule.id,
+                    status: "active",
+                },
+            });
+
+            const preflight = await request.fetch(
+                "/api/extension/price-watches",
+                { method: "OPTIONS" },
+            );
+            expect(preflight.status()).toBe(204);
+            expect(preflight.headers()["access-control-allow-origin"]).toBe(
+                "*",
+            );
+            expect(
+                preflight.headers()["access-control-allow-headers"],
+            ).toContain("Authorization");
+            expect(preflight.headers()["cache-control"]).toBe("no-store");
+
+            const feedPreflight = await request.fetch("/api/extension/feed", {
+                method: "OPTIONS",
+            });
+            expect(feedPreflight.status()).toBe(204);
+            expect(feedPreflight.headers()["access-control-allow-origin"]).toBe(
+                "*",
+            );
+            expect(feedPreflight.headers()["cache-control"]).toBe("no-store");
+
+            const unauthorizedFeed = await request.get("/api/extension/feed");
+            expect(unauthorizedFeed.status()).toBe(401);
+            await expect(unauthorizedFeed.json()).resolves.toEqual({
+                error: "Unauthorized",
+            });
+
+            for (const authorization of [
+                undefined,
+                "Bearer malformed",
+                "Bearer ffffffffffffffffffffffffffffffff",
+            ]) {
+                const response = await request.get(
+                    "/api/extension/price-watches",
+                    {
+                        headers: authorization
+                            ? { Authorization: authorization }
+                            : {},
+                    },
+                );
+                expect(response.status()).toBe(401);
+                await expect(response.json()).resolves.toEqual({
+                    error: "Unauthorized",
+                });
+            }
+
+            const headers = { Authorization: `Bearer ${token}` };
+            const overview = await request.get("/api/extension/overview", {
+                headers,
+            });
+            expect(overview.ok()).toBe(true);
+            await expect(overview.json()).resolves.toMatchObject({
+                monitors: { total: 1 },
+                recentFeed: expect.any(Array),
+            });
+
+            const liveFeed = await request.get("/api/extension/feed", {
+                headers,
+            });
+            expect(liveFeed.ok()).toBe(true);
+            expect(liveFeed.headers()["cache-control"]).toContain("no-store");
+            await expect(liveFeed.json()).resolves.toMatchObject({
+                items: expect.any(Array),
+                updatedAt: expect.any(String),
+            });
+
+            const list = await request.get(
+                "/api/extension/price-watches?limit=10",
+                { headers },
+            );
+            expect(list.ok()).toBe(true);
+            const listData = (await list.json()) as {
+                items: Array<{ id: string }>;
+            };
+            expect(listData.items.map((watch) => watch.id)).toContain(
+                ownWatch.id.toString(),
+            );
+            expect(listData.items.map((watch) => watch.id)).not.toContain(
+                otherWatch.id.toString(),
+            );
+
+            const catalogContext = await request.post(
+                "/api/extension/context/inspect",
+                {
+                    headers,
+                    data: {
+                        url: "https://www.vinted.de/catalog?search_text=extension%20fixture&brand_ids[]=53&material_ids[]=12&utm_source=e2e&auth_token=secret",
+                    },
+                },
+            );
+            expect(catalogContext.ok()).toBe(true);
+            const catalogData = (await catalogContext.json()) as {
+                kind: string;
+                handoffUrl: string;
+                parsed: { query: string; brandIds: string[] };
+            };
+            expect(catalogData).toMatchObject({
+                kind: "catalog",
+                parsed: { query: "extension fixture", brandIds: ["53"] },
+            });
+            expect(catalogData.handoffUrl).toContain("material_ids%5B%5D=12");
+            expect(catalogData.handoffUrl).not.toContain("utm_source");
+            expect(catalogData.handoffUrl).not.toContain("auth_token");
+            expect(catalogData.handoffUrl).not.toContain("secret");
+
+            const context = await request.post(
+                "/api/extension/context/inspect",
+                {
+                    headers,
+                    data: {
+                        url: "https://www.vinted.de/items/9090909090-extension-api?referrer=catalog",
+                    },
+                },
+            );
+            expect(context.ok()).toBe(true);
+            await expect(context.json()).resolves.toMatchObject({
+                kind: "item",
+                priceWatch: { id: ownWatch.id.toString(), status: "active" },
+            });
+
+            const forbiddenPatch = await request.patch(
+                `/api/extension/price-watches/${otherWatch.id}`,
+                { headers, data: { status: "paused" } },
+            );
+            expect(forbiddenPatch.status()).toBe(404);
+
+            const paused = await request.patch(
+                `/api/extension/price-watches/${ownWatch.id}`,
+                { headers, data: { status: "paused" } },
+            );
+            expect(paused.ok()).toBe(true);
+            await expect(
+                db.price_watches.findUnique({
+                    where: { id: ownWatch.id },
+                    select: { status: true },
+                }),
+            ).resolves.toEqual({ status: "paused" });
+
+            const forbiddenDelete = await request.delete(
+                `/api/extension/price-watches/${otherWatch.id}`,
+                { headers },
+            );
+            expect(forbiddenDelete.status()).toBe(404);
+
+            const deleted = await request.delete(
+                `/api/extension/price-watches/${ownWatch.id}`,
+                { headers },
+            );
+            expect(deleted.ok()).toBe(true);
+            await expect(
+                db.price_watches.findUnique({ where: { id: ownWatch.id } }),
+            ).resolves.toBeNull();
+        } finally {
+            if (targetId) {
+                await db.price_watches.deleteMany({
+                    where: { target_id: targetId },
+                });
+                await db.price_watch_schedules.deleteMany({
+                    where: { target_id: targetId },
+                });
+                await db.price_watch_targets.deleteMany({
+                    where: { id: targetId },
+                });
+            }
+            await db.$executeRaw`
+                DELETE FROM "vinted_browser_links"
+                WHERE "user_id" = ${userId} AND "token_hash" = ${tokenHash}
+            `;
+        }
+    });
+});
+
+test.describe("account connections", () => {
+    test("keeps Vinted and GitHub in equal connection views", async ({
+        page,
+    }) => {
+        await page.goto("/account");
+
+        const connections = page.getByRole("navigation", {
+            name: "Account connections",
+        });
+        const vinted = connections.getByRole("link", { name: /^Vinted/ });
+        const github = connections.getByRole("link", {
+            name: /^GitHub Rewards/,
+        });
+
+        const connectionLinks = connections.getByRole("link");
+        await expect(connectionLinks.nth(0)).toContainText("GitHub Rewards");
+        await expect(connectionLinks.nth(1)).toContainText("Vinted");
+
+        await expect(vinted).toHaveAttribute("aria-current", "page");
+        await expect(
+            page.getByRole("heading", { name: "Vinted connection" }),
+        ).toBeVisible();
+
+        await github.click();
+        await expect(page).toHaveURL(/\/account\?connection=github/);
+        await expect(github).toHaveAttribute("aria-current", "page");
+        await expect(
+            page.getByRole("heading", { name: "GitHub rewards" }),
+        ).toBeVisible();
+
+        await vinted.click();
+        await expect(page).toHaveURL(/\/account\?connection=vinted/);
+        await expect(vinted).toHaveAttribute("aria-current", "page");
+
+        await page.goto(
+            "/account?connection=github&github=error&reason=OAuthAccountNotLinked",
+        );
+        await expect(
+            page.getByRole("alert").filter({
+                hasText: "already connected to another Vintrack account",
+            }),
+        ).toBeVisible();
+
+        await page.goto("/login?error=AccessDenied");
+        await expect(page).toHaveURL(
+            /\/account\?connection=github&github=error&reason=AccessDenied/,
+        );
+        await expect(
+            page
+                .getByRole("alert")
+                .filter({
+                    hasText: "GitHub could not complete the connection",
+                }),
+        ).toBeVisible();
+
+        await page.goto(
+            "/account?connection=github&github=error&reason=session_missing",
+        );
+        await expect(
+            page
+                .getByRole("alert")
+                .filter({ hasText: "Vintrack session could not be verified" }),
+        ).toBeVisible();
+    });
+
+    test("requires a real provider link for star rewards and repairs legacy orphan links", async () => {
+        const suffix = Date.now().toString();
+        const userId = `e2e-github-owner-${suffix}`;
+        const orphanUserId = `e2e-github-orphan-${suffix}`;
+        const githubId = BigInt(`8${suffix.slice(-9).padStart(9, "0")}`);
+        const providerAccountId = githubId.toString();
+
+        try {
+            await db.user.createMany({
+                data: [
+                    {
+                        id: userId,
+                        email: `${userId}@vintrack.test`,
+                        role: "free",
+                    },
+                    {
+                        id: orphanUserId,
+                        email: `${orphanUserId}@vintrack.test`,
+                        role: "free",
+                    },
+                ],
+            });
+            await db.account.createMany({
+                data: [
+                    {
+                        userId,
+                        type: "oauth",
+                        provider: "discord",
+                        providerAccountId: `discord-${suffix}`,
+                    },
+                    {
+                        userId: orphanUserId,
+                        type: "oauth",
+                        provider: "github",
+                        providerAccountId,
+                    },
+                ],
+            });
+            await db.session.create({
+                data: {
+                    userId: orphanUserId,
+                    sessionToken: `github-orphan-${suffix}`,
+                    expires: new Date(Date.now() + 60_000),
+                },
+            });
+            await db.github_reward_accounts.create({
+                data: {
+                    github_id: githubId,
+                    login: `fixture-${suffix}`,
+                    claimed_user_id: userId,
+                    star_status: "starred",
+                    star_verified_at: new Date(),
+                },
+            });
+
+            await expect(
+                getMemberGithubRewardStatus(userId),
+            ).resolves.toMatchObject({
+                githubConnected: false,
+                starred: false,
+            });
+
+            await expect(
+                prepareGithubAccountLink(userId, githubId),
+            ).resolves.toEqual({ ok: true, recovered: true });
+            await expect(
+                db.account.findUnique({
+                    where: {
+                        provider_providerAccountId: {
+                            provider: "github",
+                            providerAccountId,
+                        },
+                    },
+                    select: { userId: true },
+                }),
+            ).resolves.toEqual({ userId });
+            await expect(
+                db.session.count({ where: { userId: orphanUserId } }),
+            ).resolves.toBe(0);
+            await expect(
+                getMemberGithubRewardStatus(userId),
+            ).resolves.toMatchObject({
+                githubConnected: true,
+                starred: true,
+            });
+
+            await unlinkGithubAccountForUser(userId);
+            await expect(
+                getMemberGithubRewardStatus(userId),
+            ).resolves.toMatchObject({
+                githubConnected: false,
+                starred: false,
+            });
+            await expect(
+                db.github_reward_accounts.findUnique({
+                    where: { github_id: githubId },
+                    select: { claimed_user_id: true },
+                }),
+            ).resolves.toEqual({ claimed_user_id: null });
+        } finally {
+            await db.session.deleteMany({
+                where: { userId: { in: [userId, orphanUserId] } },
+            });
+            await db.account.deleteMany({
+                where: { userId: { in: [userId, orphanUserId] } },
+            });
+            await db.github_reward_accounts.deleteMany({
+                where: { github_id: githubId },
+            });
+            await db.user.deleteMany({
+                where: { id: { in: [userId, orphanUserId] } },
+            });
         }
     });
 });

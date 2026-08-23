@@ -1,0 +1,112 @@
+# Low-power, deterministic local development overlay.
+# Use through `make dev` so COMPOSE_PROFILES from .env cannot enable production
+# or pre-index services accidentally.
+services:
+  caddy:
+    profiles: ["production"]
+
+  github-rewards-scheduler:
+    profiles: ["production"]
+
+  proxy-maintainer:
+    profiles: ["production"]
+
+  id-scanner:
+    profiles: ["preindex"]
+    environment:
+      - ID_SCANNER_ENABLED=false
+
+  postgres:
+    cpus: ${DEV_POSTGRES_CPUS:-1.0}
+
+  redis:
+    cpus: ${DEV_REDIS_CPUS:-0.25}
+    command: redis-server --appendonly yes --maxmemory ${DEV_REDIS_MAXMEMORY:-96mb} --maxmemory-policy allkeys-lru --stop-writes-on-bgsave-error no
+    mem_limit: ${DEV_REDIS_MEM_LIMIT:-160m}
+
+  control-center:
+    build:
+      args:
+        NEXT_BUILD_CPUS: ${DEV_NEXT_BUILD_CPUS:-2}
+    cpus: ${DEV_CONTROL_CENTER_CPUS:-1.0}
+    mem_limit: ${DEV_CONTROL_CENTER_MEM_LIMIT:-384m}
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=${DEV_CONTROL_CENTER_HEAP_MB:-256}
+      - E2E_TEST_MODE=true
+      - E2E_TEST_USER_ID=dev-admin
+      - E2E_TEST_USER_NAME=Local Dev Admin
+      - E2E_TEST_USER_EMAIL=admin@vintrack.test
+
+  control-center-migrate:
+    build:
+      args:
+        NEXT_BUILD_CPUS: ${DEV_NEXT_BUILD_CPUS:-2}
+    cpus: ${DEV_MIGRATE_CPUS:-1.0}
+
+  vinted-service:
+    build:
+      args:
+        GO_BUILD_CPUS: ${DEV_GO_BUILD_CPUS:-2}
+    cpus: ${DEV_VINTED_SERVICE_CPUS:-0.5}
+    mem_limit: ${DEV_VINTED_SERVICE_MEM_LIMIT:-96m}
+
+  webhook-catcher:
+    image: ghcr.io/jakobaiodev/vintrack-vinted-monitor/control-center:latest
+    container_name: vintrack_webhook_catcher
+    command:
+      - node
+      - -e
+      - |
+        const http = require("http");
+        http.createServer((req, res) => {
+          let body = "";
+          req.on("data", (chunk) => body += chunk);
+          req.on("end", () => {
+            console.log("[webhook-catcher] " + req.method + " " + req.url);
+            if (body) console.log(body);
+            res.writeHead(204);
+            res.end();
+          });
+        }).listen(8080, "0.0.0.0", () => console.log("[webhook-catcher] listening on :8080"));
+    ports:
+      - "127.0.0.1:8088:8080"
+    cpus: ${DEV_WEBHOOK_CATCHER_CPUS:-0.1}
+    mem_limit: ${DEV_WEBHOOK_CATCHER_MEM_LIMIT:-48m}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  worker:
+    build:
+      args:
+        GO_BUILD_CPUS: ${DEV_GO_BUILD_CPUS:-2}
+    cpus: ${DEV_WORKER_CPUS:-0.75}
+    mem_limit: ${DEV_WORKER_MEM_LIMIT:-192m}
+    environment:
+      - VINTED_FETCH_MODE=mock
+      - VINTED_MOCK_SCENARIO=${VINTED_MOCK_SCENARIO:-new-items}
+      - VINTED_MOCK_DROP_INTERVAL_MS=${VINTED_MOCK_DROP_INTERVAL_MS:-5000}
+      - VINTED_MOCK_DISCORD_WEBHOOK_URL=${VINTED_MOCK_DISCORD_WEBHOOK_URL:-http://webhook-catcher:8080/api/webhooks/mock/token}
+      - ENRICH_SELLER_INFO=false
+      - DISCOVERY_MODE=off
+      - DISCOVERY_ALLOW_FREE_ACTIVE=false
+      - PRICE_WATCH_ENABLED=false
+      - CLIENT_POOL_SIZE=1
+      - FREE_PROXY_CLIENT_POOL_SIZE=1
+      - ALERT_WORKERS=2
+      - ALERT_DELIVERY_WORKERS=2
+      - ENRICHMENT_WORKERS=2
+      - DB_MAX_OPEN_CONNS=6
+      - ALERT_DB_POOL_SIZE=2
+      - GOMEMLIMIT=${DEV_WORKER_GOMEMLIMIT:-160MiB}
+    depends_on:
+      webhook-catcher:
+        condition: service_started
+
+volumes:
+  postgres_data:
+    name: vintrack_dev_postgres_data
+  redis_data:
+    name: vintrack_dev_redis_data

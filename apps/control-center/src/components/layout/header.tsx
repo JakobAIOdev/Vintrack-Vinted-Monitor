@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
     Bell,
@@ -43,8 +44,48 @@ function formatNotificationTime(value?: string) {
     }).format(date);
 }
 
+type NotificationsPayload = {
+    notifications?: NotificationEntry[];
+    error?: string;
+    code?: string;
+};
+
+async function requestBrowserSessionSync(
+    preferredDomain: string | null,
+): Promise<boolean> {
+    if (typeof window === "undefined") return false;
+
+    return new Promise((resolve) => {
+        const timeout = window.setTimeout(() => {
+            window.removeEventListener("message", handleMessage);
+            resolve(false);
+        }, 45_000);
+
+        function handleMessage(event: MessageEvent) {
+            if (
+                event.source !== window ||
+                event.data?.type !== "VINTRACK_EXTENSION_MANUAL_SYNC_RESULT"
+            ) {
+                return;
+            }
+            window.clearTimeout(timeout);
+            window.removeEventListener("message", handleMessage);
+            resolve(Boolean(event.data.payload?.ok));
+        }
+
+        window.addEventListener("message", handleMessage);
+        window.postMessage(
+            {
+                type: "VINTRACK_EXTENSION_MANUAL_SYNC",
+                payload: { preferredDomain: preferredDomain || "" },
+            },
+            window.location.origin,
+        );
+    });
+}
+
 function NotificationBell() {
-    const { linked, loading } = useVintedAccount();
+    const { linked, loading, domain } = useVintedAccount();
     const [open, setOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [notifications, setNotifications] = useState<NotificationEntry[]>([]);
@@ -64,16 +105,32 @@ function NotificationBell() {
             return;
         }
 
+        const requestNotifications = async () => {
+            const response = await fetch(
+                "/api/notifications?page=1&per_page=5",
+                { cache: "no-store" },
+            );
+            const data = (await response.json()) as NotificationsPayload;
+            return { response, data };
+        };
+
         setIsLoading(true);
         setLoadError(null);
         try {
-            const res = await fetch("/api/notifications?page=1&per_page=5", {
-                cache: "no-store",
-            });
-            const data = await res.json();
-            if (!res.ok) {
+            let result = await requestNotifications();
+            if (
+                !result.response.ok &&
+                result.data.code === "vinted_session_refresh_required"
+            ) {
+                const synced = await requestBrowserSessionSync(domain);
+                if (synced) {
+                    result = await requestNotifications();
+                }
+            }
+
+            if (!result.response.ok) {
                 setLoadError(
-                    data.error ||
+                    result.data.error ||
                         "Vinted notifications are temporarily unavailable.",
                 );
                 setNotifications([]);
@@ -82,7 +139,9 @@ function NotificationBell() {
             }
 
             setNotifications(
-                Array.isArray(data.notifications) ? data.notifications : [],
+                Array.isArray(result.data.notifications)
+                    ? result.data.notifications
+                    : [],
             );
             setHasLoaded(true);
         } catch {
@@ -92,12 +151,28 @@ function NotificationBell() {
         } finally {
             setIsLoading(false);
         }
-    }, [linked]);
+    }, [domain, linked]);
 
     useEffect(() => {
         if (!loading && linked) {
             void fetchNotifications();
         }
+    }, [fetchNotifications, linked, loading]);
+
+    useEffect(() => {
+        if (loading || !linked) return;
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("notifications") !== "1") return;
+
+        params.delete("notifications");
+        const query = params.toString();
+        window.history.replaceState(
+            window.history.state,
+            "",
+            `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`,
+        );
+        setOpen(true);
+        void fetchNotifications();
     }, [fetchNotifications, linked, loading]);
 
     useEffect(() => {
@@ -199,6 +274,12 @@ function NotificationBell() {
                                 <p className="text-muted-foreground mt-1 text-xs">
                                     {loadError}
                                 </p>
+                                <Link
+                                    href="/account"
+                                    className="text-primary mt-3 text-xs font-medium hover:underline"
+                                >
+                                    Open account settings
+                                </Link>
                             </div>
                         ) : notifications.length > 0 ? (
                             notifications.map((notification) => (

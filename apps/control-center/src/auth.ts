@@ -19,6 +19,7 @@ import {
     claimGithubAccountForUser,
     updateGithubStarFromToken,
 } from "@/lib/github-rewards.server";
+import { prepareGithubAccountLink } from "@/lib/github-account-linking.server";
 import { reconcileUserFreeProxyMonitorLimit } from "@/lib/free-proxy-limit-reconciliation.server";
 
 export const githubAuthConfigured = Boolean(
@@ -59,18 +60,10 @@ function githubProfileString(profile: unknown, key: string) {
     return typeof value === "string" ? value : null;
 }
 
-/**
- * Resolves the member who is currently signed in, straight from the database
- * session cookie.
- *
- * The `signIn` callback cannot use its own `user` argument for this: Auth.js
- * passes `userByAccount ?? userFromProvider`, so on a *first* link — the case
- * that matters here — `user.id` is the provider's own id (for GitHub the
- * numeric account id), not a Vintrack user id. Auth.js itself only resolves the
- * real member later, in `handleLoginOrRegister`, via `getSessionAndUser`.
- *
- * The cookie carries the `__Secure-` prefix over HTTPS, hence the suffix match.
- */
+function githubLinkErrorUrl(reason: string) {
+    return `/account?connection=github&github=error&reason=${encodeURIComponent(reason)}`;
+}
+
 async function signedInUserId() {
     const store = await cookies();
     const sessionToken = store
@@ -128,35 +121,23 @@ const authResult = NextAuth({
             // account that permanently reserves this GitHub id and locks the
             // member's real account out of ever linking it.
             let memberId: string | null = null;
-            let memberResolved = true;
             try {
                 memberId = await signedInUserId();
             } catch (error) {
-                // Never let an infrastructure hiccup block linking: the
-                // reservation check below is the protection that matters, and
-                // GitHub is not offered as a login provider.
-                memberResolved = false;
                 console.error(
                     "[github-rewards] could not resolve the signed-in member",
                     error,
                 );
+                return true;
             }
-            if (memberResolved && !memberId) return false;
-            const claimed = await db.github_reward_accounts.findUnique({
-                where: { github_id: githubId },
-                select: { claimed_user_id: true },
-            });
-            if (
-                claimed?.claimed_user_id &&
-                memberId &&
-                claimed.claimed_user_id !== memberId
-            ) {
-                return false;
+            if (!memberId) return githubLinkErrorUrl("session_missing");
+            const preparation = await prepareGithubAccountLink(
+                memberId,
+                githubId,
+            );
+            if (!preparation.ok) {
+                return githubLinkErrorUrl(preparation.reason);
             }
-            // Everything below is a best-effort refresh. The authoritative
-            // claim and reconciliation happen in the linkAccount event, which
-            // Auth.js calls with the properly resolved member.
-            if (!memberId) return true;
             if (account.access_token) {
                 try {
                     await updateGithubStarFromToken({
@@ -253,8 +234,8 @@ async function getAuthSession(): Promise<Session | null> {
         return {
             user: {
                 id: userId,
-                name: "E2E User",
-                email: "e2e@vintrack.test",
+                name: process.env.E2E_TEST_USER_NAME ?? "E2E User",
+                email: process.env.E2E_TEST_USER_EMAIL ?? "e2e@vintrack.test",
                 image: null,
                 role: "admin",
             },
