@@ -119,7 +119,7 @@ export function GithubRewardStatusCard({
             : Math.max(0, effectiveLimit - status.freeProxyActiveCount);
     const suppressRewardCta =
         placement === "dashboard" && status.source === "user_override";
-    const githubReady = status.githubConnected || status.githubIdentityKnown;
+    const githubReady = status.githubConnected;
 
     const trackCta = () => {
         if (prompt) void recordRewardPrompt(prompt.type, "cta");
@@ -181,7 +181,8 @@ export function GithubRewardStatusCard({
     };
     const resume = async () => {
         try {
-            const { startedCount } = await resumeFreeProxyMonitorsAfterUpgrade();
+            const { startedCount } =
+                await resumeFreeProxyMonitorsAfterUpgrade();
             toast.success(
                 startedCount === 0
                     ? "No paused Free Pool monitors to start."

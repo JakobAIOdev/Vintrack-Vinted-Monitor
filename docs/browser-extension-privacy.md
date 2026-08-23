@@ -1,6 +1,6 @@
 # Vintrack Browser Sync Privacy Policy
 
-Effective date: August 18, 2026
+Effective date: August 23, 2026
 
 Vintrack Browser Sync links a Vinted account that the user is already signed in
 to with the Vintrack service. The extension runs only on the public Vintrack
@@ -18,14 +18,33 @@ values to the configured public Vintrack service:
 - the browser user-agent string, only when the Firefox user has granted the
   optional technical-data permission.
 
+When the user opens the companion on a supported Vinted catalog or item page,
+the extension sends that active page URL to Vintrack. Vintrack validates the
+regional Vinted domain, removes tracking and sensitive parameters, and uses the
+remaining item ID or catalog filters only to show existing Vintrack state and
+prepare a form handoff. No monitor or Price Watch is created by inspecting a
+page.
+
+After authenticating the locally stored browser-link token, Vintrack may return
+the linked-account status, six recent monitor finds, and the user's Price Watch
+list for display in the popup or inline drawer. The inline companion is enabled
+by default on supported Vinted pages and can be disabled in the popup. Pausing,
+resuming, and deleting a Price Watch requires a deliberate click; deletion also
+requires confirmation. Recent finds refresh every 12 seconds only while the
+Feed tab is open.
+
 The extension stores the Vintrack light or dark theme locally and mirrors that
 preference between the approved Vintrack page and supported Vinted pages. It
-also stores the short-lived Vintrack link token and local sync state required
-to maintain the connection.
+also stores a random, revocable Vintrack browser-link token and local sync state
+required to maintain the connection, plus the user's popup-only or inline
+companion preference.
 
 The extension does **not** transmit the complete browser cookie jar, the Vinted
 browser refresh token, the Vinted password, payment-card data, or browsing
 history outside the supported Vintrack and Vinted pages.
+
+The companion does not automate checkout, purchase confirmation, likes, offers,
+or messages.
 
 ## Purpose, storage, and deletion
 

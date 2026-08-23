@@ -64,8 +64,7 @@ async function requestBrowserSessionSync(
         function handleMessage(event: MessageEvent) {
             if (
                 event.source !== window ||
-                event.data?.type !==
-                    "VINTRACK_EXTENSION_MANUAL_SYNC_RESULT"
+                event.data?.type !== "VINTRACK_EXTENSION_MANUAL_SYNC_RESULT"
             ) {
                 return;
             }
@@ -158,6 +157,22 @@ function NotificationBell() {
         if (!loading && linked) {
             void fetchNotifications();
         }
+    }, [fetchNotifications, linked, loading]);
+
+    useEffect(() => {
+        if (loading || !linked) return;
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("notifications") !== "1") return;
+
+        params.delete("notifications");
+        const query = params.toString();
+        window.history.replaceState(
+            window.history.state,
+            "",
+            `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`,
+        );
+        setOpen(true);
+        void fetchNotifications();
     }, [fetchNotifications, linked, loading]);
 
     useEffect(() => {

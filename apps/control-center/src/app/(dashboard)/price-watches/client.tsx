@@ -428,6 +428,22 @@ export function PriceWatchesClient({
             .getElementById(`price-watch-${focusedWatchId}`)
             ?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, [focusedWatchId]);
+    useEffect(() => {
+        const fragment = new URLSearchParams(window.location.hash.slice(1));
+        const handoffUrl = fragment.get("vintrack-vinted-item");
+        if (!handoffUrl) return;
+
+        const cleanUrl = `${window.location.pathname}${window.location.search}`;
+        window.history.replaceState(window.history.state, "", cleanUrl);
+        const timer = window.setTimeout(() => {
+            setItemUrl(handoffUrl);
+            setAddOpen(true);
+            toast.success(
+                "Vinted item imported. Review the settings before adding it.",
+            );
+        }, 0);
+        return () => window.clearTimeout(timer);
+    }, []);
 
     const limitReached = activeLimit !== null && activeCount >= activeLimit;
     const totalDrops = initialWatches.reduce(

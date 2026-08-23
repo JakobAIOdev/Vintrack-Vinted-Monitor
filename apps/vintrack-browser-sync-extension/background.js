@@ -9,6 +9,7 @@ const STORAGE_KEYS = {
   autoRecoveryNextAt: "vintrackAutoRecoveryNextAt",
   checkoutLinks: "vintrackCheckoutLinks",
   theme: "vintrackTheme",
+  companionMode: "vintrackCompanionMode",
 };
 const PERIODIC_SYNC_ALARM = "vintrackPeriodicSync";
 const PERIODIC_SYNC_MINUTES = 10;
@@ -63,8 +64,9 @@ function isVintedDomain(domain) {
 }
 
 function manifestAllowsAppOrigin(url) {
-  const matches = (extensionApi.runtime.getManifest().content_scripts || [])
-    .flatMap((entry) => entry.matches || []);
+  const matches = (
+    extensionApi.runtime.getManifest().content_scripts || []
+  ).flatMap((entry) => entry.matches || []);
   return matches.some((pattern) => {
     if (pattern.includes("*.vinted.")) {
       return false;
@@ -112,6 +114,11 @@ function isExtensionPageSender(sender) {
 function isAllowedAppSender(sender, expectedOrigin = "") {
   const origin = allowedAppOrigin(senderOrigin(sender));
   return Boolean(origin && (!expectedOrigin || origin === expectedOrigin));
+}
+
+function isSupportedVintedSender(sender) {
+  const domain = domainFromUrl(sender?.url || sender?.tab?.url || "");
+  return Boolean(domain && isVintedDomain(domain));
 }
 
 function domainFromUrl(value) {
@@ -441,9 +448,11 @@ async function selectAccessCookieForTab(
   const targetDomain = tabDomain || sanitizeDomain(preferredDomain);
   const storeId =
     typeof tab?.cookieStoreId === "string" ? tab.cookieStoreId : "";
-  const cookies = (await extensionApi.cookies.getAll({
-    name: "access_token_web",
-  })).filter((cookie) => {
+  const cookies = (
+    await extensionApi.cookies.getAll({
+      name: "access_token_web",
+    })
+  ).filter((cookie) => {
     const cookieStoreId =
       typeof cookie?.storeId === "string" ? cookie.storeId : "";
     return (
@@ -463,7 +472,9 @@ async function selectAccessCookieForTab(
     const rightDomain = sanitizeDomain(right?.domain || "");
     if (leftDomain === targetDomain && rightDomain !== targetDomain) return -1;
     if (rightDomain === targetDomain && leftDomain !== targetDomain) return 1;
-    return Number(right?.expirationDate || 0) - Number(left?.expirationDate || 0);
+    return (
+      Number(right?.expirationDate || 0) - Number(left?.expirationDate || 0)
+    );
   })[0];
 }
 
@@ -491,7 +502,8 @@ async function refreshOpenVintedBrowserSessions(
           ok: false,
           reason: "auto-recovery-cooldown",
           retryable: false,
-          error: "Automatic Vinted session recovery is cooling down after a previous failure.",
+          error:
+            "Automatic Vinted session recovery is cooling down after a previous failure.",
         },
       ];
     }
@@ -588,9 +600,7 @@ async function refreshOpenVintedBrowserSessions(
     }
 
     if (results.some((result) => result.ok)) {
-      await extensionApi.storage.local.remove(
-        STORAGE_KEYS.autoRecoveryNextAt,
-      );
+      await extensionApi.storage.local.remove(STORAGE_KEYS.autoRecoveryNextAt);
       await new Promise((resolve) => setTimeout(resolve, 500));
     } else if (recoveryTabId) {
       await extensionApi.storage.local.set({
@@ -660,6 +670,8 @@ function formatRuntimeState(storage) {
     installed: true,
     version: extensionApi.runtime.getManifest().version || "",
     configured: Boolean(storage.browserLinkToken && storage.vintrackAppOrigin),
+    companionMode:
+      storage.vintrackCompanionMode === "popup" ? "popup" : "inline",
     theme,
     syncedDomains: Array.isArray(storage.vintrackSyncedDomains)
       ? storage.vintrackSyncedDomains
@@ -932,8 +944,7 @@ async function syncPreferredOpenTab(preferredDomain, options = {}) {
         ok: false,
         domain,
         reason: "missing-browser-token",
-        error:
-          `No session token matched ${browserAccount.accountName ? `@${browserAccount.accountName}` : "the account"} open in the selected Vinted tab. Reload that tab and try again.`,
+        error: `No session token matched ${browserAccount.accountName ? `@${browserAccount.accountName}` : "the account"} open in the selected Vinted tab. Reload that tab and try again.`,
       },
     ];
   }
@@ -1383,6 +1394,194 @@ async function scheduleSyncForTab(tab) {
   });
 }
 
+async function companionActiveUrl(sender) {
+  if (isSupportedVintedSender(sender)) {
+    return String(sender?.tab?.url || sender?.url || "");
+  }
+  const tabs = await extensionApi.tabs.query({
+    active: true,
+    currentWindow: true,
+  });
+  return String(tabs[0]?.url || "");
+}
+
+function companionErrorMessage(status, data) {
+  if (status === 401) {
+    return "Reconnect this browser from Vintrack Account.";
+  }
+  if (typeof data?.error === "string" && data.error.trim()) {
+    return data.error.trim();
+  }
+  return `Vintrack request failed (${status || "network"})`;
+}
+
+async function companionApiRequest(path, options = {}) {
+  const config = await getConfig();
+  const appOrigin = allowedAppOrigin(config[STORAGE_KEYS.appOrigin]);
+  const token = String(config[STORAGE_KEYS.token] || "").trim();
+  if (!appOrigin || !token) {
+    return {
+      ok: false,
+      status: 401,
+      error: "Connect this browser once from Vintrack Account.",
+    };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(`${appOrigin}${path}`, {
+      method: options.method || "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const contentType = response.headers.get("content-type") || "";
+    const data = contentType.includes("application/json")
+      ? await response.json().catch(() => ({}))
+      : {};
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        error: companionErrorMessage(response.status, data),
+      };
+    }
+    return { ok: true, status: response.status, data };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      error:
+        error?.name === "AbortError"
+          ? "Vintrack companion request timed out."
+          : "Vintrack companion is temporarily unreachable.",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function inspectCompanionContext(activeUrl) {
+  if (!isVintedDomain(domainFromUrl(activeUrl))) {
+    return { ok: true, data: { kind: "unsupported" } };
+  }
+  return companionApiRequest("/api/extension/context/inspect", {
+    method: "POST",
+    body: { url: activeUrl },
+  });
+}
+
+async function companionState(sender) {
+  const [config, activeUrl] = await Promise.all([
+    getConfig(),
+    companionActiveUrl(sender),
+  ]);
+  const runtimeState = formatRuntimeState(config);
+  if (!runtimeState.configured) {
+    return {
+      ok: true,
+      ...runtimeState,
+      activeUrl,
+      appOrigin: allowedAppOrigin(config[STORAGE_KEYS.appOrigin]),
+      overview: null,
+      context: { kind: "unsupported" },
+    };
+  }
+
+  const [overview, context] = await Promise.all([
+    companionApiRequest("/api/extension/overview"),
+    inspectCompanionContext(activeUrl),
+  ]);
+  return {
+    ok: overview.ok,
+    ...runtimeState,
+    activeUrl,
+    appOrigin: allowedAppOrigin(config[STORAGE_KEYS.appOrigin]),
+    overview: overview.ok ? overview.data : null,
+    context: context.ok ? context.data : { kind: "unsupported" },
+    error: overview.ok ? "" : overview.error,
+    contextError: context.ok ? "" : context.error,
+  };
+}
+
+const COMPANION_DESTINATIONS = {
+  dashboard: "/dashboard",
+  monitors: "/monitors",
+  newMonitor: "/monitors/new",
+  notifications: "/dashboard?notifications=1",
+  feed: "/feed",
+  priceWatches: "/price-watches",
+  account: "/account",
+  chats: "/chats",
+  favorites: "/liked",
+};
+
+async function openVintrackPath(path) {
+  const config = await getConfig();
+  const appOrigin = allowedAppOrigin(config[STORAGE_KEYS.appOrigin]);
+  if (!appOrigin) {
+    return { ok: false, error: "Vintrack is not connected." };
+  }
+  await extensionApi.tabs.create({ url: `${appOrigin}${path}` });
+  return { ok: true };
+}
+
+async function openCompanionDestination(destination, id) {
+  if (destination === "monitor" && /^\d+$/.test(String(id || ""))) {
+    return openVintrackPath(`/monitors/${id}`);
+  }
+  if (destination === "priceWatch" && /^\d+$/.test(String(id || ""))) {
+    return openVintrackPath(`/price-watches?watch=${id}`);
+  }
+  const path = COMPANION_DESTINATIONS[destination];
+  return path
+    ? openVintrackPath(path)
+    : { ok: false, error: "Unsupported Vintrack destination." };
+}
+
+async function openCompanionHandoff(sender, kind) {
+  const activeUrl = await companionActiveUrl(sender);
+  const context = await inspectCompanionContext(activeUrl);
+  if (!context.ok) return context;
+  if (kind === "monitor" && context.data?.kind === "catalog") {
+    return openVintrackPath(
+      `/monitors/new#vintrack-vinted-search=${encodeURIComponent(
+        context.data.handoffUrl,
+      )}`,
+    );
+  }
+  if (kind === "priceWatch" && context.data?.kind === "item") {
+    return openVintrackPath(
+      `/price-watches#vintrack-vinted-item=${encodeURIComponent(
+        context.data.handoffUrl,
+      )}`,
+    );
+  }
+  return { ok: false, error: "This Vinted page cannot be imported." };
+}
+
+async function notifyCompanionMode(mode) {
+  const tabs = await extensionApi.tabs.query({});
+  await Promise.all(
+    tabs
+      .filter((tab) => isVintedDomain(domainFromUrl(tab.url || "")))
+      .map((tab) =>
+        extensionApi.tabs
+          .sendMessage(tab.id, {
+            type: "VINTRACK_COMPANION_MODE_CHANGED",
+            payload: { mode },
+          })
+          .catch(() => {}),
+      ),
+  );
+}
+
 extensionApi.cookies.onChanged.addListener(({ cookie }) => {
   if (!cookie || cookie.name !== "access_token_web") {
     return;
@@ -1425,6 +1624,148 @@ extensionApi.alarms.onAlarm.addListener((alarm) => {
 
 extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
+    const companionSender =
+      isExtensionPageSender(sender) || isSupportedVintedSender(sender);
+
+    if (message?.type === "VINTRACK_COMPANION_MODE") {
+      if (!companionSender) {
+        sendResponse({ ok: false, error: "Unauthorized extension sender" });
+        return;
+      }
+      const config = await getConfig();
+      sendResponse({
+        ok: true,
+        companionMode:
+          config[STORAGE_KEYS.companionMode] === "popup" ? "popup" : "inline",
+      });
+      return;
+    }
+
+    if (message?.type === "VINTRACK_COMPANION_STATE") {
+      if (!companionSender) {
+        sendResponse({ ok: false, error: "Unauthorized extension sender" });
+        return;
+      }
+      sendResponse(await companionState(sender));
+      return;
+    }
+
+    if (message?.type === "VINTRACK_COMPANION_FEED") {
+      if (!companionSender) {
+        sendResponse({ ok: false, error: "Unauthorized extension sender" });
+        return;
+      }
+      const result = await companionApiRequest("/api/extension/feed");
+      sendResponse(result.ok ? { ok: true, ...result.data } : result);
+      return;
+    }
+
+    if (message?.type === "VINTRACK_COMPANION_PRICE_WATCHES") {
+      if (!companionSender) {
+        sendResponse({ ok: false, error: "Unauthorized extension sender" });
+        return;
+      }
+      const cursor = String(message?.payload?.cursor || "").trim();
+      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+      const result = await companionApiRequest(
+        `/api/extension/price-watches?limit=10${suffix}`,
+      );
+      sendResponse(result.ok ? { ok: true, ...result.data } : result);
+      return;
+    }
+
+    if (message?.type === "VINTRACK_COMPANION_WATCH_MUTATION") {
+      if (!companionSender) {
+        sendResponse({ ok: false, error: "Unauthorized extension sender" });
+        return;
+      }
+      const id = String(message?.payload?.id || "");
+      const operation = message?.payload?.operation;
+      if (!/^\d+$/.test(id)) {
+        sendResponse({ ok: false, error: "Invalid Price Watch." });
+        return;
+      }
+      if (operation === "delete") {
+        const result = await companionApiRequest(
+          `/api/extension/price-watches/${id}`,
+          { method: "DELETE" },
+        );
+        sendResponse(result.ok ? { ok: true } : result);
+        return;
+      }
+      if (operation === "active" || operation === "paused") {
+        const result = await companionApiRequest(
+          `/api/extension/price-watches/${id}`,
+          { method: "PATCH", body: { status: operation } },
+        );
+        sendResponse(result.ok ? { ok: true, ...result.data } : result);
+        return;
+      }
+      sendResponse({ ok: false, error: "Unsupported Price Watch action." });
+      return;
+    }
+
+    if (message?.type === "VINTRACK_COMPANION_OPEN") {
+      if (!companionSender) {
+        sendResponse({ ok: false, error: "Unauthorized extension sender" });
+        return;
+      }
+      sendResponse(
+        await openCompanionDestination(
+          message?.payload?.destination,
+          message?.payload?.id,
+        ),
+      );
+      return;
+    }
+
+    if (message?.type === "VINTRACK_COMPANION_HANDOFF") {
+      if (!companionSender) {
+        sendResponse({ ok: false, error: "Unauthorized extension sender" });
+        return;
+      }
+      sendResponse(await openCompanionHandoff(sender, message?.payload?.kind));
+      return;
+    }
+
+    if (message?.type === "VINTRACK_COMPANION_SET_MODE") {
+      if (!companionSender) {
+        sendResponse({ ok: false, error: "Unauthorized extension sender" });
+        return;
+      }
+      const mode = message?.payload?.mode === "popup" ? "popup" : "inline";
+      await extensionApi.storage.local.set({
+        [STORAGE_KEYS.companionMode]: mode,
+      });
+      await notifyCompanionMode(mode);
+      sendResponse({ ok: true, companionMode: mode });
+      return;
+    }
+
+    if (message?.type === "VINTRACK_COMPANION_MANUAL_SYNC") {
+      if (!companionSender) {
+        sendResponse({ ok: false, error: "Unauthorized extension sender" });
+        return;
+      }
+      const results = await syncAndPersistPreferredOrAllDomains("", {
+        bypassAutoRecoveryCooldown: true,
+        preferOpenTab: true,
+        allowAccountSwitch: true,
+      });
+      const config = await getConfig();
+      const successful = results.some(isCompletedSyncResult);
+      const failedResult = results.find((result) => !result.ok);
+      sendResponse({
+        ok: successful,
+        ...formatRuntimeState(config),
+        error: successful
+          ? ""
+          : syncResultError(failedResult) ||
+            "Open a logged-in Vinted tab, then sync again.",
+      });
+      return;
+    }
+
     if (message?.type === "VINTRACK_EXTENSION_PING") {
       if (!isExtensionPageSender(sender) && !isAllowedAppSender(sender)) {
         sendResponse({ ok: false, error: "Unauthorized extension sender" });
@@ -1442,7 +1783,10 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
         message?.payload?.preferredDomain || "",
       ).trim();
       if (!token || !appOrigin || !isAllowedAppSender(sender, appOrigin)) {
-        sendResponse({ ok: false, error: "Invalid Vintrack connection origin" });
+        sendResponse({
+          ok: false,
+          error: "Invalid Vintrack connection origin",
+        });
         return;
       }
 
@@ -1536,13 +1880,8 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       const config = await getConfig();
-      const configuredOrigin = allowedAppOrigin(
-        config[STORAGE_KEYS.appOrigin],
-      );
-      if (
-        !configuredOrigin ||
-        !isAllowedAppSender(sender, configuredOrigin)
-      ) {
+      const configuredOrigin = allowedAppOrigin(config[STORAGE_KEYS.appOrigin]);
+      if (!configuredOrigin || !isAllowedAppSender(sender, configuredOrigin)) {
         sendResponse({ ok: false, ignored: true });
         return;
       }
@@ -1554,13 +1893,8 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (message?.type === "VINTRACK_EXTENSION_BUY") {
       const config = await getConfig();
-      const configuredOrigin = allowedAppOrigin(
-        config[STORAGE_KEYS.appOrigin],
-      );
-      if (
-        !configuredOrigin ||
-        !isAllowedAppSender(sender, configuredOrigin)
-      ) {
+      const configuredOrigin = allowedAppOrigin(config[STORAGE_KEYS.appOrigin]);
+      if (!configuredOrigin || !isAllowedAppSender(sender, configuredOrigin)) {
         sendResponse({ ok: false, error: "Unauthorized extension sender" });
         return;
       }

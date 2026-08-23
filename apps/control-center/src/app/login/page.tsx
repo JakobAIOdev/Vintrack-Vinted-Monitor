@@ -62,6 +62,11 @@ export default async function LoginPage({
     const session = await auth();
     const error = (await searchParams)?.error;
 
+    if (session?.user && error) {
+        redirect(
+            `/account?connection=github&github=error&reason=${encodeURIComponent(error)}`,
+        );
+    }
     if (session?.user) {
         redirect("/dashboard");
     }

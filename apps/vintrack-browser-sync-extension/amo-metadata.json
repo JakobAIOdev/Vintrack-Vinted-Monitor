@@ -4,10 +4,10 @@
         "en-US": "Vintrack Browser Sync"
     },
     "summary": {
-        "en-US": "Securely links your signed-in Vinted browser session to Vintrack."
+        "en-US": "Links Vinted to Vintrack and adds an optional monitor and Price Watch companion."
     },
     "description": {
-        "en-US": "Vintrack Browser Sync connects a Vinted account you are already signed in to with Vintrack. It transmits the Vinted web access token, selected Vinted domain, Vinted account ID and display name for account-mismatch protection, and, with optional Firefox consent, the browser user agent. The Vintrack theme is stored locally and mirrored between the approved Vintrack and Vinted pages. The extension never transmits the complete cookie jar, the browser refresh token, or your Vinted password. Privacy policy: https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/blob/main/docs/browser-extension-privacy.md Support: https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/issues"
+        "en-US": "Vintrack Browser Sync connects a Vinted account you are already signed in to with Vintrack. Its popup shows linked-account status, recent finds, and Price Watches. Optional inline Vinted buttons prepare monitor and Price Watch forms but never create them automatically. When the companion is opened, the supported Vinted page URL is sent to Vintrack for validated context inspection. The extension also transmits the Vinted web access token, selected Vinted domain, Vinted account ID and display name for account-mismatch protection, and, with optional Firefox consent, the browser user agent. It never transmits the complete cookie jar, browser refresh token, Vinted password, or payment data. Privacy policy: https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/blob/main/docs/browser-extension-privacy.md Support: https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/issues"
     },
     "categories": {
         "firefox": ["shopping"]
@@ -21,6 +21,6 @@
     "requires_payment": false,
     "version": {
         "license": "MIT",
-        "approval_notes": "The extension only accepts runtime commands from https://vintrack.jakobaio.dev and explicitly supported Vinted origins. No browser refresh token or complete cookie jar is read or transmitted. Source and privacy details are linked from the listing description."
+        "approval_notes": "The extension only accepts runtime commands from https://vintrack.jakobaio.dev, its own pages, and explicitly supported Vinted origins. Inline page actions are opt-in and use a closed Shadow DOM. Catalog and item handoffs require final creation inside Vintrack. No browser refresh token, complete cookie jar, checkout confirmation, or payment data is read or transmitted. Source and privacy details are linked from the listing description."
     }
 }

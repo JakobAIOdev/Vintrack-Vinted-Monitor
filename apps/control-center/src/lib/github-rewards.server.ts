@@ -68,27 +68,36 @@ async function getGithubRewardFacts(userId: string, client: RewardClient) {
             select: { provider: true, providerAccountId: true },
         }),
     ]);
-    const donation = githubAccount?.sponsorships[0] ?? assignedDonation;
-    const githubConnected = authAccount.some(
-        (account) => account.provider === "github",
+    const githubAuthAccount = authAccount.find(
+        (account) =>
+            account.provider === "github" &&
+            /^\d+$/.test(account.providerAccountId),
     );
-    const githubIdentityKnown =
-        githubConnected || githubAccount?.claimed_user_id === userId;
+    const githubConnected = Boolean(githubAuthAccount);
+    const githubIdentityMatches = Boolean(
+        githubAccount &&
+        githubAuthAccount &&
+        githubAccount.github_id.toString() ===
+            githubAuthAccount.providerAccountId,
+    );
+    const githubIdentityKnown = githubIdentityMatches;
+    const donation =
+        (githubIdentityMatches ? githubAccount?.sponsorships[0] : null) ??
+        assignedDonation;
     return {
         loginProviders: Array.from(
             new Set(authAccount.map((account) => account.provider)),
         ),
         githubConnected,
         githubIdentityKnown,
-        // A successfully claimed reward identity remains reserved to this
-        // Vintrack member even when Auth.js did not persist a login Account.
-        // The verified reward must therefore not depend on the provider row.
         starred: Boolean(
-            githubIdentityKnown && githubAccount?.star_status === "starred",
+            githubIdentityMatches && githubAccount?.star_status === "starred",
         ),
         donated: Boolean(donation),
-        githubLogin: githubAccount?.login ?? null,
-        starVerifiedAt: githubAccount?.star_verified_at?.toISOString() ?? null,
+        githubLogin: githubIdentityMatches ? githubAccount?.login : null,
+        starVerifiedAt: githubIdentityMatches
+            ? (githubAccount?.star_verified_at?.toISOString() ?? null)
+            : null,
         donation: donation
             ? {
                   sponsoredAt: donation.sponsored_at.toISOString(),
@@ -406,15 +415,13 @@ export async function recheckGithubStarForUser(userId: string) {
     const authAccount = authAccounts.find((account) =>
         /^\d+$/.test(account.providerAccountId),
     );
-    const githubId = authAccount
-        ? BigInt(authAccount.providerAccountId)
-        : claimedRewardAccount?.github_id;
-    if (!githubId) {
+    if (!authAccount) {
         throw new GithubStarRecheckError(
             "not_connected",
             "Connect your GitHub account before checking for a star.",
         );
     }
+    const githubId = BigInt(authAccount.providerAccountId);
 
     const checkStartedAt = new Date();
     const lastVerifiedAt = claimedRewardAccount?.star_verified_at;

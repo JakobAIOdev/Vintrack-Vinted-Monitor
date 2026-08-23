@@ -33,6 +33,7 @@ import {
     fetchStargazers,
     hasUserStarredRepository,
 } from "@/lib/github-api.server";
+import { unlinkGithubAccountForUser } from "@/lib/github-account-linking.server";
 import {
     GLOBAL_MONITOR_LIMIT_SCOPE,
     getMonitorLimits,
@@ -53,7 +54,9 @@ export async function connectGithubAccount() {
     if (!session?.user?.id) throw new Error("Unauthorized");
     if (!githubAuthConfigured)
         throw new Error("GitHub login is not configured");
-    await signIn("github", { redirectTo: "/account?github=connected" });
+    await signIn("github", {
+        redirectTo: "/account?connection=github&github=connected",
+    });
 }
 
 export async function recheckGithubRewards() {
@@ -203,20 +206,23 @@ export async function disconnectGithubAccount() {
         select: { provider: true, providerAccountId: true },
     });
     const github = accounts.find((account) => account.provider === "github");
-    if (!github) return { success: true };
+    if (!github) {
+        await unlinkGithubAccountForUser(session.user.id);
+        await reconcileUserFreeProxyMonitorLimit(
+            session.user.id,
+            "github-disconnect",
+            session.user.id,
+        );
+        revalidatePath("/account");
+        revalidatePath("/dashboard");
+        return { success: true };
+    }
     if (!accounts.some((account) => account.provider !== "github")) {
         throw new Error(
             "Connect another login provider before disconnecting GitHub",
         );
     }
-    await db.account.delete({
-        where: {
-            provider_providerAccountId: {
-                provider: "github",
-                providerAccountId: github.providerAccountId,
-            },
-        },
-    });
+    await unlinkGithubAccountForUser(session.user.id);
     await reconcileUserFreeProxyMonitorLimit(
         session.user.id,
         "github-disconnect",
@@ -476,39 +482,44 @@ export async function previewGithubRewardsEnforcement(
     const affected = [];
     const priceWatchAffected = [];
     for (const user of users) {
-        const [status, current, override, activeFreeMonitors, activePriceWatches] =
-            await Promise.all([
-                getMemberGithubRewardStatus(user.id),
-                getEffectiveMonitorLimits(user.id),
-                db.monitor_limits.findUnique({
-                    where: { scope: userLimitScope(user.id) },
-                    select: {
-                        free_proxy_active_limit: true,
-                        price_watch_limit: true,
-                    },
-                }),
-                db.monitors.findMany({
-                    where: {
-                        userId: user.id,
-                        status: "active",
-                        proxy_source: "free",
-                    },
-                    orderBy: [
-                        { created_at: { sort: "desc", nulls: "last" } },
-                        { id: "desc" },
-                    ],
-                    select: { id: true, name: true, created_at: true },
-                }),
-                db.price_watches.findMany({
-                    where: { user_id: user.id, status: "active" },
-                    orderBy: [{ created_at: "desc" }, { id: "desc" }],
-                    select: {
-                        id: true,
-                        created_at: true,
-                        target: { select: { title: true, item_id: true } },
-                    },
-                }),
-            ]);
+        const [
+            status,
+            current,
+            override,
+            activeFreeMonitors,
+            activePriceWatches,
+        ] = await Promise.all([
+            getMemberGithubRewardStatus(user.id),
+            getEffectiveMonitorLimits(user.id),
+            db.monitor_limits.findUnique({
+                where: { scope: userLimitScope(user.id) },
+                select: {
+                    free_proxy_active_limit: true,
+                    price_watch_limit: true,
+                },
+            }),
+            db.monitors.findMany({
+                where: {
+                    userId: user.id,
+                    status: "active",
+                    proxy_source: "free",
+                },
+                orderBy: [
+                    { created_at: { sort: "desc", nulls: "last" } },
+                    { id: "desc" },
+                ],
+                select: { id: true, name: true, created_at: true },
+            }),
+            db.price_watches.findMany({
+                where: { user_id: user.id, status: "active" },
+                orderBy: [{ created_at: "desc" }, { id: "desc" }],
+                select: {
+                    id: true,
+                    created_at: true,
+                    target: { select: { title: true, item_id: true } },
+                },
+            }),
+        ]);
         const projected = !policy.enforcementEnabled
             ? {
                   limit: current.freeProxyActiveLimit,
@@ -679,27 +690,27 @@ export async function testGithubRewardsIntegration() {
     };
     const [repositoryResponse, starSource, sponsorsResponse] =
         await Promise.all([
-        fetch(
-            `https://api.github.com/repos/${encodeURIComponent(policy.repositoryOwner)}/${encodeURIComponent(policy.repositoryName)}`,
-            { headers, cache: "no-store" },
-        ),
-        // Reading the repository does not imply the token may list its
-        // stargazers — fine-grained tokens are always rejected there — so
-        // probe both star paths and report which one the sync will use.
-        probeStarSource(token, policy),
-        fetch("https://api.github.com/graphql", {
-            method: "POST",
-            headers,
-            cache: "no-store",
-            body: JSON.stringify({
-                query: `query VintrackSponsorsTest($login: String!) {
+            fetch(
+                `https://api.github.com/repos/${encodeURIComponent(policy.repositoryOwner)}/${encodeURIComponent(policy.repositoryName)}`,
+                { headers, cache: "no-store" },
+            ),
+            // Reading the repository does not imply the token may list its
+            // stargazers — fine-grained tokens are always rejected there — so
+            // probe both star paths and report which one the sync will use.
+            probeStarSource(token, policy),
+            fetch("https://api.github.com/graphql", {
+                method: "POST",
+                headers,
+                cache: "no-store",
+                body: JSON.stringify({
+                    query: `query VintrackSponsorsTest($login: String!) {
                   user(login: $login) { sponsorshipsAsMaintainer(first: 1, activeOnly: false, includePrivate: true) { totalCount } }
                   organization(login: $login) { sponsorshipsAsMaintainer(first: 1, activeOnly: false, includePrivate: true) { totalCount } }
                 }`,
-                variables: { login: policy.sponsorsLogin },
+                    variables: { login: policy.sponsorsLogin },
+                }),
             }),
-        }),
-    ]);
+        ]);
     const sponsorsPayload = (await sponsorsResponse
         .json()
         .catch(() => null)) as {
@@ -773,19 +784,18 @@ export async function saveGithubRewardsPolicy(input: GithubRewardsPolicy) {
     const requiresReconciliation =
         policy.enforcementEnabled !== previous.enforcementEnabled ||
         (policy.enforcementEnabled &&
-            (
-            policy.defaultLimit < previous.defaultLimit ||
-            policy.starLimit < previous.starLimit ||
-            policy.donationLimit < previous.donationLimit ||
-            policy.priceWatchDefaultLimit <
-                previous.priceWatchDefaultLimit ||
-            policy.priceWatchStarLimit < previous.priceWatchStarLimit ||
-            policy.priceWatchDonationLimit <
-                previous.priceWatchDonationLimit ||
-            policy.priceWatchRewardsEnabled !==
-                previous.priceWatchRewardsEnabled ||
-            policy.eligibleRoles.join(",") !==
-                previous.eligibleRoles.join(",")));
+            (policy.defaultLimit < previous.defaultLimit ||
+                policy.starLimit < previous.starLimit ||
+                policy.donationLimit < previous.donationLimit ||
+                policy.priceWatchDefaultLimit <
+                    previous.priceWatchDefaultLimit ||
+                policy.priceWatchStarLimit < previous.priceWatchStarLimit ||
+                policy.priceWatchDonationLimit <
+                    previous.priceWatchDonationLimit ||
+                policy.priceWatchRewardsEnabled !==
+                    previous.priceWatchRewardsEnabled ||
+                policy.eligibleRoles.join(",") !==
+                    previous.eligibleRoles.join(",")));
     // Reconciliation reads the policy through a transaction client, which
     // bypasses the request-scoped policy cache — it therefore sees the value
     // just written above rather than the one read into `previous`.

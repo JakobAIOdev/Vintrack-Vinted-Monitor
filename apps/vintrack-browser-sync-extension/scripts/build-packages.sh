@@ -10,6 +10,8 @@ FIREFOX_DIR="$DIST_DIR/firefox"
 
 COMMON_FILES=(
   background.js
+  companion.css
+  companion.js
   content-script.js
   page-bridge.js
   popup.html
