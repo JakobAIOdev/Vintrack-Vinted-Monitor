@@ -58,6 +58,7 @@ model User {
   telegram_connections         telegram_connections[]
   telegram_connect_codes       telegram_connect_codes[]
   vinted_session               vinted_sessions?
+  vinted_browser_link          vinted_browser_links?
   audit_events                 audit_events[]
   alert_events                 alert_events[]
   alert_notifications          alert_notifications[]
@@ -840,4 +841,13 @@ model vinted_sessions {
 
   @@index([status])
   @@index([last_check])
+}
+
+model vinted_browser_links {
+  userId       String    @id @map("user_id")
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token_hash   String    @unique @db.VarChar(64)
+  created_at   DateTime  @default(now()) @db.Timestamp(6)
+  last_used_at DateTime? @db.Timestamp(6)
+  updated_at   DateTime  @updatedAt @db.Timestamp(6)
 }

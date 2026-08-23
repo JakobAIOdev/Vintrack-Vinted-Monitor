@@ -229,5 +229,29 @@ assert.ok(
   contentScript.includes("if (!isVintrackAppOrigin(window.location.origin))"),
   "Content-script bridge must reject foreign app origins",
 );
+assert.ok(
+  background.includes('autoRecoveryNextAt: "vintrackAutoRecoveryNextAt"'),
+  "Auto-recovery cooldown state is missing",
+);
+assert.ok(
+  background.includes("AUTO_RECOVERY_FAILURE_COOLDOWN_MS"),
+  "Auto-recovery must apply a bounded failure cooldown",
+);
+assert.ok(
+  background.includes("active: false"),
+  "Session recovery must use an inactive Vinted tab",
+);
+assert.ok(
+  background.includes("tabs.remove(recoveryTabId)"),
+  "Temporary Vinted recovery tabs must be closed",
+);
+assert.ok(
+  background.includes('result.reason === "no-open-vinted-tab"'),
+  "Manual sync must recover when no Vinted tab is open",
+);
+assert.ok(
+  background.includes("bypassAutoRecoveryCooldown: true"),
+  "Explicit connect and sync actions must bypass the periodic cooldown",
+);
 
 console.log(`Extension validation passed for v${chromeManifest.version}`);

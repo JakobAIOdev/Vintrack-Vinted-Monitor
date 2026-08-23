@@ -68,7 +68,7 @@ Temporary extensions are removed by Firefox on restart by design.
    **Prepare Release** workflow.
 
 When the prepared release PR is merged, **Release and Deploy** compares the
-manifest version with marker tags such as `extension-v0.1.5`. A missing tag
+manifest version with marker tags such as `extension-v0.1.6`. A missing tag
 causes the workflow to validate and lint the extension, submit the listed build
 with `web-ext sign --channel=listed --approval-timeout=0`, and create the marker
 tag after AMO accepts the upload and validation. AMO review then continues

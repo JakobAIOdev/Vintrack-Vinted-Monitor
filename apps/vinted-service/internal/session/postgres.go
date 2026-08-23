@@ -183,6 +183,83 @@ func (s *persistentStore) Delete(ctx context.Context, userID string) error {
 	return nil
 }
 
+func (s *persistentStore) SaveBrowserLink(ctx context.Context, tokenHash string, link BrowserLink) error {
+	createdAt := parseNullableTime(link.CreatedAt)
+	if createdAt == nil {
+		createdAt = time.Now().UTC()
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO vinted_browser_links (
+			user_id,
+			token_hash,
+			created_at,
+			last_used_at,
+			updated_at
+		)
+		VALUES ($1, $2, $3, $4, NOW())
+		ON CONFLICT (user_id) DO UPDATE SET
+			token_hash = EXCLUDED.token_hash,
+			created_at = EXCLUDED.created_at,
+			last_used_at = EXCLUDED.last_used_at,
+			updated_at = NOW()`,
+		link.UserID,
+		tokenHash,
+		createdAt,
+		parseNullableTime(link.LastUsedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("save durable browser link: %w", err)
+	}
+	return nil
+}
+
+func (s *persistentStore) GetBrowserLinkByTokenHash(ctx context.Context, tokenHash string) (*BrowserLink, error) {
+	var link BrowserLink
+	var createdAt time.Time
+	var lastUsedAt sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		SELECT user_id, created_at, last_used_at
+		FROM vinted_browser_links
+		WHERE token_hash = $1`, tokenHash).Scan(
+		&link.UserID,
+		&createdAt,
+		&lastUsedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get durable browser link: %w", err)
+	}
+
+	link.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	link.LastUsedAt = formatNullTime(lastUsedAt)
+	link.Persistent = true
+	return &link, nil
+}
+
+func (s *persistentStore) HasBrowserLink(ctx context.Context, userID string) (bool, error) {
+	var exists bool
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM vinted_browser_links WHERE user_id = $1)`,
+		userID,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check durable browser link: %w", err)
+	}
+	return exists, nil
+}
+
+func (s *persistentStore) DeleteBrowserLink(ctx context.Context, userID string) error {
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM vinted_browser_links WHERE user_id = $1`,
+		userID,
+	); err != nil {
+		return fmt.Errorf("delete durable browser link: %w", err)
+	}
+	return nil
+}
+
 type rowScanner interface {
 	Scan(dest ...interface{}) error
 }

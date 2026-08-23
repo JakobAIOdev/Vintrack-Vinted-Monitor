@@ -494,7 +494,16 @@ func (s *Server) getSessionAndClient(r *http.Request, w http.ResponseWriter) (*s
 			sess.InvalidReason = ""
 			_ = s.sessions.Store(*sess)
 		} else {
-			if sess.Status == "degraded" {
+			if sess.BrowserLinked {
+				sess.Status = "needs_browser_sync"
+				sess.InvalidReason = "browser_session_validation_failed"
+				_ = s.sessions.Store(*sess)
+				writeJSON(w, http.StatusForbidden, map[string]interface{}{
+					"error":                 "The linked Vinted session needs to be refreshed from your browser.",
+					"code":                  "vinted_session_refresh_required",
+					"requires_browser_sync": true,
+				})
+			} else if sess.Status == "degraded" {
 				writeError(w, "Vinted session is temporarily degraded; retry or sync the browser extension", 503)
 			} else {
 				sess.Status = "needs_browser_reauth"
@@ -839,7 +848,17 @@ func (s *Server) handleBrowserLinkCreate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	writeJSON(w, 200, link)
+	var expiresAt interface{} = link.ExpiresAt
+	if link.Persistent {
+		expiresAt = nil
+	}
+	writeJSON(w, 200, map[string]interface{}{
+		"token":        link.Token,
+		"created_at":   link.CreatedAt,
+		"expires_at":   expiresAt,
+		"last_used_at": link.LastUsedAt,
+		"persistent":   link.Persistent,
+	})
 }
 
 func (s *Server) handleExtensionSyncComplete(w http.ResponseWriter, r *http.Request) {
@@ -1083,6 +1102,10 @@ func (s *Server) handleUnlink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "unauthorized", 401)
 		return
 	}
+	if err := s.sessions.DeleteBrowserLink(userID); err != nil {
+		writeError(w, "failed to revoke browser link", 500)
+		return
+	}
 
 	if err := s.sessions.Delete(userID); err != nil {
 		writeError(w, "failed to unlink", 500)
@@ -1114,10 +1137,19 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.canonicalizeSessionDomain(sess)
+	browserSyncRequired := sess.BrowserLinked && (sess.Status == "needs_browser_sync" || sess.Status == "needs_browser_reauth" || sess.Status == "missing_refresh_token")
+	status := sess.Status
+	if browserSyncRequired {
+		status = "needs_browser_sync"
+	}
 
+	browserLinkConnected, err := s.sessions.HasBrowserLink(userID)
+	if err != nil {
+		log.Printf("[account] failed to check browser link for user %s: %v", userID, err)
+	}
 	writeJSON(w, 200, map[string]interface{}{
 		"linked":                  true,
-		"status":                  sess.Status,
+		"status":                  status,
 		"vinted_name":             sess.VintedName,
 		"vinted_id":               sess.VintedUserID,
 		"domain":                  sess.Domain,
@@ -1127,9 +1159,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"last_valid_at":           sess.LastValidAt,
 		"invalid_reason":          sess.InvalidReason,
 		"has_refresh_token":       sess.RefreshToken != "",
-		"requires_browser_reauth": sess.Status == "needs_browser_reauth" || sess.Status == "missing_refresh_token",
+		"requires_browser_reauth": !sess.BrowserLinked && (sess.Status == "needs_browser_reauth" || sess.Status == "missing_refresh_token"),
+		"requires_browser_sync":   browserSyncRequired,
 		"has_browser_session":     sess.CookieHeader != "",
 		"browser_linked":          sess.BrowserLinked,
+		"browser_link_connected":  browserLinkConnected,
 		"last_browser_sync":       sess.LastBrowserSync,
 		"has_phone_number":        sess.PhoneNumber != "",
 	})
@@ -1650,7 +1684,38 @@ func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 
 	notifications, err := client.GetNotifications(page, perPage)
 	if err != nil {
-		writeError(w, "failed to fetch notifications: "+err.Error(), 502)
+		switch vinted.UpstreamStatus(err) {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			if sess.BrowserLinked {
+				sess.Status = "needs_browser_sync"
+				sess.InvalidReason = "notifications_auth_rejected"
+				_ = s.sessions.Store(*sess)
+				writeJSON(w, http.StatusForbidden, map[string]interface{}{
+					"error":                 "The linked Vinted session needs to be refreshed from your browser.",
+					"code":                  "vinted_session_refresh_required",
+					"requires_browser_sync": true,
+				})
+			} else {
+				sess.Status = "needs_browser_reauth"
+				sess.InvalidReason = "notifications_auth_rejected"
+				_ = s.sessions.Store(*sess)
+				writeJSON(w, http.StatusForbidden, map[string]interface{}{
+					"error":                   "The Vinted session has expired. Please refresh or update the linked session.",
+					"code":                    "vinted_session_reauth_required",
+					"requires_browser_reauth": true,
+				})
+			}
+		case http.StatusTooManyRequests:
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "Vinted notifications are temporarily rate limited.",
+				"code":  "vinted_rate_limited",
+			})
+		default:
+			writeJSON(w, http.StatusBadGateway, map[string]string{
+				"error": "Vinted notifications are temporarily unavailable.",
+				"code":  "vinted_notifications_unavailable",
+			})
+		}
 		return
 	}
 

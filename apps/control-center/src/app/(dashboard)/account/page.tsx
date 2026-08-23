@@ -21,10 +21,10 @@ export default async function AccountPage({
     ]);
     const githubResult = (await searchParams)?.github;
     const latestExtensionVersion =
-        process.env.BROWSER_EXTENSION_LATEST_VERSION?.trim() || "0.1.5";
+        process.env.BROWSER_EXTENSION_LATEST_VERSION?.trim() || "0.1.6";
     const minimumExtensionVersion =
         process.env.BROWSER_EXTENSION_MIN_VERSION?.trim() ||
-        latestExtensionVersion;
+        "0.1.5";
     const firefoxExtensionUrl =
         process.env.BROWSER_EXTENSION_FIREFOX_URL?.trim() ||
         "https://addons.mozilla.org/firefox/addon/vintrack-browser-sync/";

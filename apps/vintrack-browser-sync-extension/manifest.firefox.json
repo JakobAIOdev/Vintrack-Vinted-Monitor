@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Vintrack Browser Sync",
-    "version": "0.1.5",
+    "version": "0.1.6",
     "description": "Keeps the Vintrack Vinted session synced automatically.",
     "permissions": ["alarms", "cookies", "storage", "tabs"],
     "host_permissions": [

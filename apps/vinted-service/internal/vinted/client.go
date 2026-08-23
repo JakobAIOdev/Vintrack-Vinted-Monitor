@@ -1709,6 +1709,65 @@ func (e *AuthError) Error() string {
 	return fmt.Sprintf("invalid authentication token at %s (HTTP %d)", e.Step, e.StatusCode)
 }
 
+type UpstreamHTTPError struct {
+	Operation  string
+	StatusCode int
+	Code       string
+	Message    string
+	BodyIsHTML bool
+}
+
+func (e *UpstreamHTTPError) Error() string {
+	operation := strings.TrimSpace(e.Operation)
+	if operation == "" {
+		operation = "Vinted request"
+	}
+	if e.Code != "" {
+		return fmt.Sprintf("%s failed (HTTP %d, code %s)", operation, e.StatusCode, e.Code)
+	}
+	return fmt.Sprintf("%s failed (HTTP %d)", operation, e.StatusCode)
+}
+
+func UpstreamStatus(err error) int {
+	var upstreamErr *UpstreamHTTPError
+	if errors.As(err, &upstreamErr) {
+		return upstreamErr.StatusCode
+	}
+	var authErr *AuthError
+	if errors.As(err, &authErr) {
+		return authErr.StatusCode
+	}
+	return 0
+}
+
+func newUpstreamHTTPError(operation string, statusCode int, contentType string, body []byte) error {
+	trimmed := strings.TrimSpace(string(body))
+	upstreamErr := &UpstreamHTTPError{
+		Operation:  operation,
+		StatusCode: statusCode,
+		BodyIsHTML: strings.Contains(strings.ToLower(contentType), "text/html") ||
+			strings.HasPrefix(strings.ToLower(trimmed), "<!doctype html") ||
+			strings.HasPrefix(strings.ToLower(trimmed), "<html"),
+	}
+
+	if !upstreamErr.BodyIsHTML && strings.Contains(strings.ToLower(contentType), "json") {
+		var payload struct {
+			Code    interface{} `json:"code"`
+			Message string      `json:"message"`
+			Error   string      `json:"error"`
+		}
+		if json.Unmarshal(body, &payload) == nil {
+			upstreamErr.Code = strings.TrimSpace(fmt.Sprint(payload.Code))
+			if upstreamErr.Code == "<nil>" {
+				upstreamErr.Code = ""
+			}
+			upstreamErr.Message = firstNonEmptyString(payload.Message, payload.Error)
+		}
+	}
+
+	return upstreamErr
+}
+
 type PaymentStateError struct {
 	Step       string
 	StatusCode int
@@ -2010,6 +2069,9 @@ func shouldAttemptTokenRefresh(err error) bool {
 
 	var authErr *AuthError
 	if errors.As(err, &authErr) {
+		return true
+	}
+	if status := UpstreamStatus(err); status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return true
 	}
 
@@ -2883,7 +2945,21 @@ func (c *Client) GetInbox(page, perPage int) (*InboxResponse, error) {
 
 func (c *Client) GetNotifications(page, perPage int) (*NotificationsResponse, error) {
 	notifications, err := c.doGetNotifications(page, perPage)
-	if err != nil && (strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "403")) && c.session.RefreshToken != "" {
+	if err == nil {
+		return notifications, nil
+	}
+
+	if shouldAttemptTokenRefresh(err) {
+		if warmErr := c.ForceWarmUp(); warmErr == nil {
+			if retried, retryErr := c.doGetNotifications(page, perPage); retryErr == nil {
+				return retried, nil
+			} else {
+				err = retryErr
+			}
+		}
+	}
+
+	if shouldAttemptTokenRefresh(err) && c.session.RefreshToken != "" {
 		log.Printf("[vinted] get notifications got %v, attempting token refresh...", err)
 		if refreshErr := c.RefreshAccessToken(); refreshErr != nil {
 			log.Printf("[vinted] token refresh failed: %v", refreshErr)
@@ -2947,14 +3023,14 @@ func (c *Client) doGetNotifications(page, perPage int) (*NotificationsResponse, 
 		perPage = 5
 	}
 
-	apiDomain := strings.TrimPrefix(c.session.Domain, "www.")
-	u := fmt.Sprintf("https://api.%s/inbox-notifications/v1/notifications?page=%d&per_page=%d", apiDomain, page, perPage)
+	u := fmt.Sprintf("https://%s/web/gateway/inbox-notifications/v1/notifications?page=%d&per_page=%d", c.session.Domain, page, perPage)
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create notifications request: %w", err)
 	}
 	req.Header = c.apiHeaders()
 	req.Header.Set("Referer", fmt.Sprintf("https://%s/", c.session.Domain))
+	req.Header.Set("Platform", "web")
 	req.Header.Set("X-Next-App", "marketplace-web")
 
 	resp, err := c.httpClient.Do(req)
@@ -2963,11 +3039,12 @@ func (c *Client) doGetNotifications(page, perPage int) (*NotificationsResponse, 
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[vinted] GET /inbox-notifications/v1/notifications?page=%d&per_page=%d -> %d (%.300s)", page, perPage, resp.StatusCode, string(body))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	contentType := resp.Header.Get("Content-Type")
+	log.Printf("[vinted] GET /web/gateway/inbox-notifications/v1/notifications?page=%d&per_page=%d -> %d content_type=%q bytes=%d", page, perPage, resp.StatusCode, contentType, len(body))
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 300))
+		return nil, newUpstreamHTTPError("fetch notifications", resp.StatusCode, contentType, body)
 	}
 
 	var notifications NotificationsResponse

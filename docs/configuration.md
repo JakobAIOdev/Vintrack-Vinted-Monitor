@@ -130,7 +130,7 @@ persistent data.
 ## Browser extension
 
 ```env
-BROWSER_EXTENSION_LATEST_VERSION=0.1.5
+BROWSER_EXTENSION_LATEST_VERSION=0.1.6
 BROWSER_EXTENSION_MIN_VERSION=0.1.5
 BROWSER_EXTENSION_FIREFOX_URL=https://addons.mozilla.org/firefox/addon/vintrack-browser-sync/
 ```
@@ -142,7 +142,7 @@ clients should remain usable. The Firefox URL points the dashboard and guide to
 the public AMO listing and can be replaced after the first AMO approval if the
 final listing URL differs. GitHub releases attach the Chrome ZIP. During the
 same release, Firefox is published only when the manifest version has no
-corresponding marker tag such as `extension-v0.1.5`.
+corresponding marker tag such as `extension-v0.1.6`.
 
 ## Telegram
 

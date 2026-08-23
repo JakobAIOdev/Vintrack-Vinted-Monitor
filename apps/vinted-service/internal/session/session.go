@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -66,6 +67,7 @@ type BrowserLink struct {
 	CreatedAt  string `json:"created_at"`
 	ExpiresAt  string `json:"expires_at"`
 	LastUsedAt string `json:"last_used_at,omitempty"`
+	Persistent bool   `json:"persistent,omitempty"`
 }
 
 type Manager struct {
@@ -447,6 +449,11 @@ func (m *Manager) browserLinkUserKey(userID string) string {
 	return fmt.Sprintf("vinted:browser-link:user:%s", userID)
 }
 
+func browserLinkTokenHash(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
 func (m *Manager) CreateBrowserLink(userID string, ttl time.Duration) (*BrowserLink, error) {
 	existingToken, err := m.redis.Get(m.ctx, m.browserLinkUserKey(userID)).Result()
 	if err != nil && err != redis.Nil {
@@ -463,10 +470,11 @@ func (m *Manager) CreateBrowserLink(userID string, ttl time.Duration) (*BrowserL
 
 	now := time.Now().UTC()
 	link := BrowserLink{
-		Token:     token,
-		UserID:    userID,
-		CreatedAt: now.Format(time.RFC3339),
-		ExpiresAt: now.Add(ttl).Format(time.RFC3339),
+		Token:      token,
+		UserID:     userID,
+		CreatedAt:  now.Format(time.RFC3339),
+		ExpiresAt:  now.Add(ttl).Format(time.RFC3339),
+		Persistent: m.store != nil,
 	}
 
 	if err := m.StoreBrowserLink(link); err != nil {
@@ -477,6 +485,16 @@ func (m *Manager) CreateBrowserLink(userID string, ttl time.Duration) (*BrowserL
 }
 
 func (m *Manager) StoreBrowserLink(link BrowserLink) error {
+	if m.store != nil {
+		link.Persistent = true
+		if err := m.store.SaveBrowserLink(m.ctx, browserLinkTokenHash(link.Token), link); err != nil {
+			return err
+		}
+	}
+	return m.cacheBrowserLink(link)
+}
+
+func (m *Manager) cacheBrowserLink(link BrowserLink) error {
 	expiresAt, err := time.Parse(time.RFC3339, link.ExpiresAt)
 	if err != nil {
 		return fmt.Errorf("parse browser link expiry: %w", err)
@@ -501,19 +519,36 @@ func (m *Manager) StoreBrowserLink(link BrowserLink) error {
 
 func (m *Manager) GetBrowserLinkByToken(token string) (*BrowserLink, error) {
 	data, err := m.redis.Get(m.ctx, m.browserLinkTokenKey(token)).Bytes()
-	if err == redis.Nil {
+	if err != nil && err != redis.Nil {
+		return nil, err
+	}
+	if err == nil {
+		var link BrowserLink
+		if err := json.Unmarshal(data, &link); err != nil {
+			return nil, err
+		}
+		if m.store != nil {
+			link.Persistent = true
+			if err := m.store.SaveBrowserLink(m.ctx, browserLinkTokenHash(token), link); err != nil {
+				return nil, err
+			}
+		}
+		return &link, nil
+	}
+
+	if m.store == nil {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
+	link, err := m.store.GetBrowserLinkByTokenHash(m.ctx, browserLinkTokenHash(token))
+	if err != nil || link == nil {
+		return link, err
 	}
-
-	var link BrowserLink
-	if err := json.Unmarshal(data, &link); err != nil {
-		return nil, err
+	link.Token = token
+	link.ExpiresAt = time.Now().UTC().Add(180 * 24 * time.Hour).Format(time.RFC3339)
+	if err := m.cacheBrowserLink(*link); err != nil {
+		log.Printf("[session] failed to cache durable browser link for user %s: %v", link.UserID, err)
 	}
-
-	return &link, nil
+	return link, nil
 }
 
 func (m *Manager) TouchBrowserLink(token string) error {
@@ -526,6 +561,36 @@ func (m *Manager) TouchBrowserLink(token string) error {
 	link.LastUsedAt = time.Now().UTC().Format(time.RFC3339)
 	link.ExpiresAt = now.Add(180 * 24 * time.Hour).Format(time.RFC3339)
 	return m.StoreBrowserLink(*link)
+}
+
+func (m *Manager) HasBrowserLink(userID string) (bool, error) {
+	if m.store != nil {
+		exists, err := m.store.HasBrowserLink(m.ctx, userID)
+		if err != nil || exists {
+			return exists, err
+		}
+	}
+	exists, err := m.redis.Exists(m.ctx, m.browserLinkUserKey(userID)).Result()
+	return exists > 0, err
+}
+
+func (m *Manager) DeleteBrowserLink(userID string) error {
+	token, err := m.redis.Get(m.ctx, m.browserLinkUserKey(userID)).Result()
+	if err != nil && err != redis.Nil {
+		return err
+	}
+
+	if m.store != nil {
+		if err := m.store.DeleteBrowserLink(m.ctx, userID); err != nil {
+			return err
+		}
+	}
+
+	keys := []string{m.browserLinkUserKey(userID)}
+	if token != "" {
+		keys = append(keys, m.browserLinkTokenKey(token))
+	}
+	return m.redis.Del(m.ctx, keys...).Err()
 }
 
 func (m *Manager) StartKeepAlive(validateFn func(sess *VintedSession) bool) {

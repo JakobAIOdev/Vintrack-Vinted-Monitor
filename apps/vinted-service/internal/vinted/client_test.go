@@ -859,3 +859,66 @@ func TestCanReuseWarmup(t *testing.T) {
 		t.Fatal("canReuseWarmup() = true, want false for stale cached warmup")
 	}
 }
+
+func TestGetNotificationsUsesSameOriginGateway(t *testing.T) {
+	client, transport := testClient(fakeHTTPResult{
+		status:  200,
+		body:    `{"notifications":[{"id":"notification-1","body":"Test","link":"/inbox"}],"pagination":{}}`,
+		headers: http.Header{"Content-Type": {"application/json"}},
+	})
+	client.warmedUp = true
+
+	result, err := client.doGetNotifications(2, 7)
+	if err != nil {
+		t.Fatalf("doGetNotifications() error = %v", err)
+	}
+	if len(result.Notifications) != 1 {
+		t.Fatalf("notifications = %d, want 1", len(result.Notifications))
+	}
+	if len(transport.requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(transport.requests))
+	}
+
+	request := transport.requests[0]
+	if request.URL.Host != "www.vinted.cz" {
+		t.Fatalf("host = %q, want %q", request.URL.Host, "www.vinted.cz")
+	}
+	if request.URL.Path != "/web/gateway/inbox-notifications/v1/notifications" {
+		t.Fatalf("path = %q", request.URL.Path)
+	}
+	if request.URL.Query().Get("page") != "2" || request.URL.Query().Get("per_page") != "7" {
+		t.Fatalf("query = %q", request.URL.RawQuery)
+	}
+	if got := request.Header.Get("Platform"); got != "web" {
+		t.Fatalf("Platform = %q, want web", got)
+	}
+	if got := request.Header.Get("X-Next-App"); got != "marketplace-web" {
+		t.Fatalf("X-Next-App = %q, want marketplace-web", got)
+	}
+}
+
+func TestGetNotificationsSanitizesHTMLForbiddenResponse(t *testing.T) {
+	client, _ := testClient(fakeHTTPResult{
+		status:  403,
+		body:    "<!doctype html><html><body>sensitive challenge markup</body></html>",
+		headers: http.Header{"Content-Type": {"text/html; charset=utf-8"}},
+	})
+	client.warmedUp = true
+
+	_, err := client.doGetNotifications(1, 5)
+	if err == nil {
+		t.Fatal("doGetNotifications() error = nil, want error")
+	}
+	var upstreamErr *UpstreamHTTPError
+	if !errors.As(err, &upstreamErr) {
+		t.Fatalf("error type = %T, want *UpstreamHTTPError", err)
+	}
+	if upstreamErr.StatusCode != 403 || !upstreamErr.BodyIsHTML {
+		t.Fatalf("upstream error = %#v", upstreamErr)
+	}
+	for _, leaked := range []string{"doctype", "sensitive", "<html"} {
+		if strings.Contains(strings.ToLower(err.Error()), leaked) {
+			t.Fatalf("sanitized error leaked %q: %v", leaked, err)
+		}
+	}
+}
