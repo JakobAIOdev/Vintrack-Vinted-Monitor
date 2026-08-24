@@ -30,7 +30,10 @@ import {
 import { QuietHoursSection } from "@/components/monitors/quiet-hours-section";
 import { VintedUrlImporter } from "@/components/monitors/vinted-url-importer";
 import { Switch } from "@/components/ui/switch";
-import { getStatusLocaleForRegionCodes } from "@/lib/regions";
+import {
+    getRegionCurrencyCode,
+    getStatusLocaleForRegionCodes,
+} from "@/lib/regions";
 import {
     DEFAULT_QUERY_DELAY_MS,
     MAX_QUERY_DELAY_MS,
@@ -407,7 +410,12 @@ export default function NewMonitorPage() {
         selectedSizes.length > 0,
         sellerQualityEnabled,
     ].filter(Boolean).length;
-    const priceFilterSummary = formatPriceFilterSummary(priceMin, priceMax);
+    const selectedCurrencyCode = getRegionCurrencyCode(selectedRegion);
+    const priceFilterSummary = formatPriceFilterSummary(
+        priceMin,
+        priceMax,
+        selectedCurrencyCode,
+    );
     const notificationChannelCount =
         Number(Boolean(webhookUrl)) + Number(telegramEnabled);
     const selectedProxySummary = loading
@@ -857,14 +865,14 @@ export default function NewMonitorPage() {
                                             Min Price
                                         </Label>
                                         <div className="relative">
-                                            <span className="text-muted-foreground absolute top-1/2 left-3 -translate-y-1/2 text-sm">
-                                                €
+                                            <span className="text-muted-foreground pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-xs font-medium">
+                                                {selectedCurrencyCode}
                                             </span>
                                             <Input
                                                 type="number"
                                                 name="price_min"
                                                 placeholder="0"
-                                                className="pl-7"
+                                                className="pr-14"
                                                 value={priceMin}
                                                 onChange={(event) =>
                                                     setPriceMin(
@@ -882,14 +890,14 @@ export default function NewMonitorPage() {
                                             Max Price
                                         </Label>
                                         <div className="relative">
-                                            <span className="text-muted-foreground absolute top-1/2 left-3 -translate-y-1/2 text-sm">
-                                                €
+                                            <span className="text-muted-foreground pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-xs font-medium">
+                                                {selectedCurrencyCode}
                                             </span>
                                             <Input
                                                 type="number"
                                                 name="price_max"
                                                 placeholder="Any"
-                                                className="pl-7"
+                                                className="pr-14"
                                                 value={priceMax}
                                                 onChange={(event) =>
                                                     setPriceMax(
@@ -900,6 +908,11 @@ export default function NewMonitorPage() {
                                         </div>
                                     </div>
                                 </div>
+                                <p className="text-muted-foreground mt-2 text-xs">
+                                    Price limits use the selected Vinted
+                                    market&apos;s currency (
+                                    {selectedCurrencyCode}).
+                                </p>
                             </ActiveFilterField>
 
                             <ActiveFilterField

@@ -95,7 +95,7 @@ import {
     setUserPriceWatchLimit,
     type PriceWatchPollingAdminState,
 } from "@/actions/admin";
-import { getRegionLabel, REGIONS } from "@/lib/regions";
+import { getRegionCurrencyCode, getRegionLabel, REGIONS } from "@/lib/regions";
 import { getProxyErrorDetails } from "@/lib/proxy-errors";
 import {
     ADMIN_SECTION_ROUTES,
@@ -8549,7 +8549,9 @@ export function AdminClient({
                                                                     {
                                                                         monitor.price_max
                                                                     }{" "}
-                                                                    EUR
+                                                                    {getRegionCurrencyCode(
+                                                                        monitor.region,
+                                                                    )}
                                                                 </span>
                                                             ) : null}
                                                             <span>
@@ -8713,7 +8715,9 @@ export function AdminClient({
                                                                 -
                                                                 {monitor.price_max ??
                                                                     "any"}{" "}
-                                                                EUR
+                                                                {getRegionCurrencyCode(
+                                                                    monitor.region,
+                                                                )}
                                                             </span>
                                                         ) : null}
                                                         <span className="inline-flex items-center gap-1">

@@ -417,22 +417,43 @@ test.describe("first monitor onboarding", () => {
         const maxPrice = page.locator('input[name="price_max"]');
         await expect(priceField).toHaveAttribute("data-state", "active");
         await expect(
-            priceField.getByText("€10–€100", { exact: true }),
+            priceField.getByText("10–100 EUR", { exact: true }),
         ).toBeVisible();
         await minPrice.fill("");
         await expect(
-            priceField.getByText("Up to €100", { exact: true }),
+            priceField.getByText("Up to 100 EUR", { exact: true }),
         ).toBeVisible();
         await maxPrice.fill("");
         await expect(priceField).toHaveAttribute("data-state", "inactive");
         await minPrice.fill("25");
         await expect(
-            priceField.getByText("From €25", { exact: true }),
+            priceField.getByText("From 25 EUR", { exact: true }),
         ).toBeVisible();
         await maxPrice.fill("80");
         await expect(
-            priceField.getByText("€25–€80", { exact: true }),
+            priceField.getByText("25–80 EUR", { exact: true }),
         ).toBeVisible();
+        await page
+            .getByTestId("region-picker")
+            .getByRole("button", { name: /Poland/ })
+            .click();
+        await expect(minPrice).toHaveValue("25");
+        await expect(maxPrice).toHaveValue("80");
+        await expect(
+            priceField.getByText("25–80 PLN", { exact: true }),
+        ).toBeVisible();
+        await expect(
+            priceField.getByText(/selected Vinted market's currency \(PLN\)/),
+        ).toBeVisible();
+
+        await page
+            .getByTestId("region-picker")
+            .getByRole("button", { name: /Germany/ })
+            .click();
+        await expect(
+            priceField.getByText("25–80 EUR", { exact: true }),
+        ).toBeVisible();
+
         await minPrice.fill("");
         await maxPrice.fill("");
         await expect(priceField).toHaveAttribute("data-state", "inactive");
