@@ -25,6 +25,7 @@ import { getSizeLabelsForRegion } from "@/lib/sizes.server";
 import {
     getRegionLabel,
     getRegionFlags,
+    getRegionCurrencyCode,
     getStatusLocaleForRegionCodes,
 } from "@/lib/regions";
 import { getStatusLabels } from "@/lib/statuses";
@@ -203,7 +204,10 @@ export default async function MonitorPage({
                                         </span>
                                         <span className="flex items-center gap-1">
                                             <Tag className="h-3 w-3" /> Max{" "}
-                                            {monitor.price_max}€
+                                            {monitor.price_max}{" "}
+                                            {getRegionCurrencyCode(
+                                                monitor.region,
+                                            )}
                                         </span>
                                     </>
                                 )}

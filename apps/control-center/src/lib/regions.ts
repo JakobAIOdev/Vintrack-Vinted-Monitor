@@ -3,6 +3,7 @@ export type Region = {
     label: string;
     flag: string;
     domain: string;
+    currencyCode: string;
 };
 
 const STATUS_LOCALE_BY_REGION: Record<string, string> = {
@@ -32,27 +33,27 @@ const STATUS_LOCALE_BY_REGION: Record<string, string> = {
 };
 
 export const REGIONS: Region[] = [
-    { code: "de", label: "Germany", flag: "🇩🇪", domain: "vinted.de" },
-    { code: "fr", label: "France", flag: "🇫🇷", domain: "vinted.fr" },
-    { code: "it", label: "Italy", flag: "🇮🇹", domain: "vinted.it" },
-    { code: "es", label: "Spain", flag: "🇪🇸", domain: "vinted.es" },
-    { code: "nl", label: "Netherlands", flag: "🇳🇱", domain: "vinted.nl" },
-    { code: "pl", label: "Poland", flag: "🇵🇱", domain: "vinted.pl" },
-    { code: "pt", label: "Portugal", flag: "🇵🇹", domain: "vinted.pt" },
-    { code: "be", label: "Belgium", flag: "🇧🇪", domain: "vinted.be" },
-    { code: "at", label: "Austria", flag: "🇦🇹", domain: "vinted.at" },
-    { code: "lu", label: "Luxembourg", flag: "🇱🇺", domain: "vinted.lu" },
-    { code: "uk", label: "United Kingdom", flag: "🇬🇧", domain: "vinted.co.uk" },
-    { code: "ie", label: "Ireland", flag: "🇮🇪", domain: "vinted.ie" },
-    { code: "cz", label: "Czech Republic", flag: "🇨🇿", domain: "vinted.cz" },
-    { code: "sk", label: "Slovakia", flag: "🇸🇰", domain: "vinted.sk" },
-    { code: "lt", label: "Lithuania", flag: "🇱🇹", domain: "vinted.lt" },
-    { code: "se", label: "Sweden", flag: "🇸🇪", domain: "vinted.se" },
-    { code: "dk", label: "Denmark", flag: "🇩🇰", domain: "vinted.dk" },
-    { code: "ro", label: "Romania", flag: "🇷🇴", domain: "vinted.ro" },
-    { code: "hu", label: "Hungary", flag: "🇭🇺", domain: "vinted.hu" },
-    { code: "hr", label: "Croatia", flag: "🇭🇷", domain: "vinted.hr" },
-    { code: "fi", label: "Finland", flag: "🇫🇮", domain: "vinted.fi" },
+    { code: "de", label: "Germany", flag: "🇩🇪", domain: "vinted.de", currencyCode: "EUR" },
+    { code: "fr", label: "France", flag: "🇫🇷", domain: "vinted.fr", currencyCode: "EUR" },
+    { code: "it", label: "Italy", flag: "🇮🇹", domain: "vinted.it", currencyCode: "EUR" },
+    { code: "es", label: "Spain", flag: "🇪🇸", domain: "vinted.es", currencyCode: "EUR" },
+    { code: "nl", label: "Netherlands", flag: "🇳🇱", domain: "vinted.nl", currencyCode: "EUR" },
+    { code: "pl", label: "Poland", flag: "🇵🇱", domain: "vinted.pl", currencyCode: "PLN" },
+    { code: "pt", label: "Portugal", flag: "🇵🇹", domain: "vinted.pt", currencyCode: "EUR" },
+    { code: "be", label: "Belgium", flag: "🇧🇪", domain: "vinted.be", currencyCode: "EUR" },
+    { code: "at", label: "Austria", flag: "🇦🇹", domain: "vinted.at", currencyCode: "EUR" },
+    { code: "lu", label: "Luxembourg", flag: "🇱🇺", domain: "vinted.lu", currencyCode: "EUR" },
+    { code: "uk", label: "United Kingdom", flag: "🇬🇧", domain: "vinted.co.uk", currencyCode: "GBP" },
+    { code: "ie", label: "Ireland", flag: "🇮🇪", domain: "vinted.ie", currencyCode: "EUR" },
+    { code: "cz", label: "Czech Republic", flag: "🇨🇿", domain: "vinted.cz", currencyCode: "CZK" },
+    { code: "sk", label: "Slovakia", flag: "🇸🇰", domain: "vinted.sk", currencyCode: "EUR" },
+    { code: "lt", label: "Lithuania", flag: "🇱🇹", domain: "vinted.lt", currencyCode: "EUR" },
+    { code: "se", label: "Sweden", flag: "🇸🇪", domain: "vinted.se", currencyCode: "SEK" },
+    { code: "dk", label: "Denmark", flag: "🇩🇰", domain: "vinted.dk", currencyCode: "DKK" },
+    { code: "ro", label: "Romania", flag: "🇷🇴", domain: "vinted.ro", currencyCode: "RON" },
+    { code: "hu", label: "Hungary", flag: "🇭🇺", domain: "vinted.hu", currencyCode: "HUF" },
+    { code: "hr", label: "Croatia", flag: "🇭🇷", domain: "vinted.hr", currencyCode: "EUR" },
+    { code: "fi", label: "Finland", flag: "🇫🇮", domain: "vinted.fi", currencyCode: "EUR" },
 ];
 
 const TIMEZONE_BY_REGION: Record<string, string> = {
@@ -92,6 +93,10 @@ export function getRegionLabel(code: string): string {
 
 export function getRegionDomain(code: string): string {
     return REGIONS_BY_CODE[code]?.domain ?? "vinted.de";
+}
+
+export function getRegionCurrencyCode(code: string): string {
+    return REGIONS_BY_CODE[code]?.currencyCode ?? "EUR";
 }
 
 export function getRegionTimezone(code: string): string {

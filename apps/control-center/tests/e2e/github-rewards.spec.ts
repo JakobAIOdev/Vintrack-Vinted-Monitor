@@ -8,6 +8,7 @@ import {
     resolveFreeProxyLimit,
     rewardNoticeForLimitTransition,
 } from "../../src/lib/github-rewards";
+import { isIgnorableSponsorsGraphqlError } from "../../src/lib/github-rewards-graphql";
 import { verifyGithubWebhookSignature } from "../../src/lib/github-webhooks.server";
 
 test.describe("GitHub reward policy", () => {
@@ -227,4 +228,39 @@ test("GitHub webhook signatures require the exact raw body", () => {
     expect(verifyGithubWebhookSignature(body, "sha256=bad", secret)).toBe(
         false,
     );
+});
+
+test.describe("GitHub Sponsors partial GraphQL access", () => {
+    test("keeps syncing when a fine-grained token hides one sponsorship node", () => {
+        expect(
+            isIgnorableSponsorsGraphqlError({
+                message: "Resource not accessible by personal access token",
+                path: ["user", "sponsorshipsAsMaintainer", "nodes", 6],
+            }),
+        ).toBe(true);
+    });
+
+    test("keeps syncing when only a sponsorship detail field is hidden", () => {
+        expect(
+            isIgnorableSponsorsGraphqlError({
+                message: "Resource not accessible by personal access token",
+                path: [
+                    "user",
+                    "sponsorshipsAsMaintainer",
+                    "nodes",
+                    0,
+                    "tier",
+                ],
+            }),
+        ).toBe(true);
+    });
+
+    test("still fails when the whole sponsorship connection is inaccessible", () => {
+        expect(
+            isIgnorableSponsorsGraphqlError({
+                message: "Resource not accessible by personal access token",
+                path: ["user", "sponsorshipsAsMaintainer"],
+            }),
+        ).toBe(false);
+    });
 });

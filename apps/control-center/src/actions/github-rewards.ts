@@ -20,7 +20,11 @@ import {
     reconcileAllRewardEligibleUsers,
     reconcileUserFreeProxyMonitorLimit,
 } from "@/lib/free-proxy-limit-reconciliation.server";
-import { runGithubRewardsSync } from "@/lib/github-rewards-sync.server";
+import {
+    SPONSORSHIPS_QUERY,
+    runGithubRewardsSync,
+} from "@/lib/github-rewards-sync.server";
+import { isIgnorableSponsorsGraphqlError } from "@/lib/github-rewards-graphql";
 import { logAuditEvent } from "@/lib/audit";
 import {
     getEffectiveMonitorLimits,
@@ -703,11 +707,13 @@ export async function testGithubRewardsIntegration() {
                 headers,
                 cache: "no-store",
                 body: JSON.stringify({
-                    query: `query VintrackSponsorsTest($login: String!) {
-                  user(login: $login) { sponsorshipsAsMaintainer(first: 1, activeOnly: false, includePrivate: true) { totalCount } }
-                  organization(login: $login) { sponsorshipsAsMaintainer(first: 1, activeOnly: false, includePrivate: true) { totalCount } }
-                }`,
-                    variables: { login: policy.sponsorsLogin },
+                    // Probe the same fields as the real sync. A totalCount-only
+                    // query can pass even when every full sync would fail.
+                    query: SPONSORSHIPS_QUERY,
+                    variables: {
+                        login: policy.sponsorsLogin,
+                        after: null,
+                    },
                 }),
             }),
         ]);
@@ -718,7 +724,10 @@ export async function testGithubRewardsIntegration() {
             user?: { sponsorshipsAsMaintainer?: unknown } | null;
             organization?: { sponsorshipsAsMaintainer?: unknown } | null;
         };
-        errors?: { message?: string }[];
+        errors?: {
+            message?: string;
+            path?: Array<string | number>;
+        }[];
     } | null;
     const sponsorsTargetFound = Boolean(
         sponsorsPayload?.data?.user?.sponsorshipsAsMaintainer ??
@@ -726,9 +735,10 @@ export async function testGithubRewardsIntegration() {
     );
     const unexpectedSponsorsErrors = (sponsorsPayload?.errors ?? []).filter(
         (error) =>
-            !/^Could not resolve to (?:an? )?(?:Organization|User) with the login of '.+'\.?$/.test(
-                error.message ?? "",
-            ),
+            !isIgnorableSponsorsGraphqlError({
+                message: error.message ?? "",
+                path: error.path,
+            }),
     );
     const sponsorsApiOk =
         sponsorsResponse.ok &&
@@ -883,6 +893,7 @@ export async function runGithubRewardsSyncAction() {
         const message = error instanceof Error ? error.message : "";
         const safeMessage =
             message === "GITHUB_REWARDS_MAINTAINER_TOKEN is missing" ||
+            message === "Resource not accessible by personal access token" ||
             // Keep this in sync with the `label` values passed to githubFetch;
             // an unlisted label silently hides the real cause from the admin.
             /^GitHub (GitHub user|Repository stargazers|User stars|Sponsors GraphQL) API request failed \(\d{3}\)(?:: .+)?$/.test(

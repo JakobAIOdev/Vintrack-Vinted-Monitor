@@ -19,13 +19,17 @@ export function formatFilterCount(
     return `${count} ${count === 1 ? singular : plural}`;
 }
 
-export function formatPriceFilterSummary(priceMin: string, priceMax: string) {
+export function formatPriceFilterSummary(
+    priceMin: string,
+    priceMax: string,
+    currencyCode: string,
+) {
     const min = priceMin.trim();
     const max = priceMax.trim();
 
-    if (min && max) return `€${min}–€${max}`;
-    if (min) return `From €${min}`;
-    if (max) return `Up to €${max}`;
+    if (min && max) return `${min}–${max} ${currencyCode}`;
+    if (min) return `From ${min} ${currencyCode}`;
+    if (max) return `Up to ${max} ${currencyCode}`;
     return "";
 }
 

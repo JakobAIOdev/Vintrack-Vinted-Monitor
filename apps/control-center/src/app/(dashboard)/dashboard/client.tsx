@@ -79,6 +79,7 @@ import { getColorLabels } from "@/lib/colors";
 import {
     getRegionLabel,
     getRegionFlags,
+    getRegionCurrencyCode,
     getRegionTimezone,
     getStatusLocaleForRegionCodes,
     REGIONS,
@@ -1470,7 +1471,12 @@ export function DashboardClient({
                                         </span>
                                         <span>
                                             {m.price_max
-                                                ? "Max " + m.price_max + " EUR"
+                                                ? "Max " +
+                                                  m.price_max +
+                                                  " " +
+                                                  getRegionCurrencyCode(
+                                                      m.region,
+                                                  )
                                                 : "No price limit"}
                                         </span>
                                     </div>

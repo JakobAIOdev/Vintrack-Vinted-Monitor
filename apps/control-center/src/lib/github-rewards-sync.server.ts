@@ -10,6 +10,7 @@ import {
     githubFetch,
     hasUserStarredRepository,
 } from "@/lib/github-api.server";
+import { isIgnorableSponsorsGraphqlError } from "@/lib/github-rewards-graphql";
 
 type SponsorshipNode = {
     id: string;
@@ -32,7 +33,9 @@ type SponsorshipNode = {
 };
 
 type SponsorshipConnection = {
-    nodes: SponsorshipNode[];
+    // GitHub returns null for an individual sponsorship when a fine-grained
+    // token may list the connection but may not read that sponsor record.
+    nodes: Array<SponsorshipNode | null>;
     pageInfo: { hasNextPage: boolean; endCursor?: string | null };
 };
 
@@ -44,29 +47,7 @@ type SponsorsGraphqlResponse = {
     errors?: { message: string; path?: Array<string | number> }[];
 };
 
-function isIgnorableSponsorsGraphqlError(error: {
-    message: string;
-    path?: Array<string | number>;
-}) {
-    if (
-        /^Could not resolve to (?:an? )?(?:Organization|User) with the login of '.+'\.?$/.test(
-            error.message,
-        )
-    ) {
-        return true;
-    }
-    if (error.message !== "Resource not accessible by personal access token") {
-        return false;
-    }
-    // Fine-grained tokens can be valid while lacking access to these
-    // sponsorship-detail fields on sponsorships they don't directly own
-    // (e.g. tier pricing, payment source, or privacy level of another
-    // maintainer's sponsorship). Losing one field must not fail the sync.
-    const field = error.path?.at(-1);
-    return field === "tier" || field === "paymentSource" || field === "privacyLevel";
-}
-
-const SPONSORSHIPS_QUERY = `
+export const SPONSORSHIPS_QUERY = `
 query VintrackSponsorships($login: String!, $after: String) {
   user(login: $login) {
     sponsorshipsAsMaintainer(first: 100, after: $after, activeOnly: false, includePrivate: true) {
@@ -219,6 +200,13 @@ async function syncSponsorships(token: string, syncStartedAt: Date) {
             );
         }
         for (const node of connection.nodes) {
+            if (!node) {
+                failed += 1;
+                console.warn(
+                    "[github-rewards] skipped sponsorship hidden from the maintainer token",
+                );
+                continue;
+            }
             const sponsor = node.sponsorEntity;
             if (!sponsor?.databaseId || !sponsor.login) continue;
             try {

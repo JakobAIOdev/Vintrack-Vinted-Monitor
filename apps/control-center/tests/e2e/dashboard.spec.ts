@@ -6,6 +6,7 @@ import {
     upsertVerifiedMemberBrand,
 } from "../../src/lib/member-brands.server";
 import { parsePriceWatchUrl } from "../../src/lib/price-watch";
+import { getRegionCurrencyCode } from "../../src/lib/regions";
 import { parseVintedSearchUrl } from "../../src/lib/vinted-url";
 import {
     prepareGithubAccountLink,
@@ -14,6 +15,57 @@ import {
 import { getMemberGithubRewardStatus } from "../../src/lib/github-rewards.server";
 
 const db = new PrismaClient();
+
+test.describe("Regional monitor currencies", () => {
+    test("uses the Vinted market currency with an EUR fallback", () => {
+        expect(
+            ["de", "pl", "uk", "cz", "se", "dk", "ro", "hu", "unknown"].map(
+                getRegionCurrencyCode,
+            ),
+        ).toEqual([
+            "EUR",
+            "PLN",
+            "GBP",
+            "CZK",
+            "SEK",
+            "DKK",
+            "RON",
+            "HUF",
+            "EUR",
+        ]);
+    });
+
+    test("updates the price label without changing the entered values", async ({
+        page,
+    }) => {
+        await page.goto("/monitors/new");
+        await page.getByText("Filters", { exact: true }).click();
+
+        const priceField = page.getByTestId("price-filter-field");
+        const minPrice = page.locator('input[name="price_min"]');
+        const maxPrice = page.locator('input[name="price_max"]');
+
+        await minPrice.fill("25");
+        await maxPrice.fill("80");
+        await expect(
+            priceField.getByText("25–80 EUR", { exact: true }),
+        ).toBeVisible();
+
+        await page
+            .getByTestId("region-picker")
+            .getByRole("button", { name: /Poland/ })
+            .click();
+
+        await expect(minPrice).toHaveValue("25");
+        await expect(maxPrice).toHaveValue("80");
+        await expect(
+            priceField.getByText("25–80 PLN", { exact: true }),
+        ).toBeVisible();
+        await expect(
+            priceField.getByText(/selected Vinted market's currency \(PLN\)/),
+        ).toBeVisible();
+    });
+});
 
 test.afterAll(async () => {
     await db.$disconnect();
@@ -1187,7 +1239,7 @@ test.describe("dashboard monitors", () => {
         const editPriceField = page.getByTestId("price-filter-field");
         await expect(editPriceField).toHaveAttribute("data-state", "active");
         await expect(
-            editPriceField.getByText("€12–€22", { exact: true }),
+            editPriceField.getByText("12–22 EUR", { exact: true }),
         ).toBeVisible();
         await expect(
             page.getByRole("switch", {
