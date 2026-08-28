@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { createHmac } from "node:crypto";
+import GitHub from "next-auth/providers/github";
 import {
     DEFAULT_GITHUB_REWARDS_POLICY,
     buildRewardPrompt,
@@ -10,6 +11,15 @@ import {
 } from "../../src/lib/github-rewards";
 import { isIgnorableSponsorsGraphqlError } from "../../src/lib/github-rewards-graphql";
 import { verifyGithubWebhookSignature } from "../../src/lib/github-webhooks.server";
+
+test("GitHub OAuth uses GitHub's RFC 9207 issuer", () => {
+    const provider = GitHub({
+        clientId: "github-client-id",
+        clientSecret: "github-client-secret",
+    });
+
+    expect(provider.issuer).toBe("https://github.com/login/oauth");
+});
 
 test.describe("GitHub reward policy", () => {
     test("uses the safe 3/5/15 default and rejects inverted limits", () => {
