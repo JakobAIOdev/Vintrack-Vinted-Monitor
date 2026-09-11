@@ -32,7 +32,10 @@ import { getStatusLabels } from "@/lib/statuses";
 import { getVideoGamePlatformLabels } from "@/lib/video-game-platforms";
 import { formatQueryDelay } from "@/lib/monitor-delay";
 import { formatQuietHours } from "@/lib/monitor-schedule";
-import { getMonitorActivationState } from "@/lib/monitor-limits";
+import {
+    getMonitorActivationState,
+    monitorActivationErrorMessage,
+} from "@/lib/monitor-limits";
 import { ProxyHealthCard } from "@/components/monitors/proxy-health";
 import { MonitorLiveProvider } from "@/components/monitors/monitor-live-context";
 import { MonitorItemCount } from "@/components/monitors/monitor-item-count";
@@ -405,11 +408,10 @@ export default async function MonitorPage({
                                 disabled={resumeBlocked}
                                 title={
                                     resumeBlocked && resumeState
-                                        ? resumeState.maintenanceEnabled
-                                            ? "Paused for maintenance"
-                                            : resumeState.freeProxyLimitReached
-                                              ? `Free proxy monitor limit reached (${resumeState.freeProxyActiveCount}/${resumeState.freeProxyActiveLimit})`
-                                              : `Active monitor limit reached (${resumeState.activeCount}/${resumeState.activeLimit})`
+                                        ? monitorActivationErrorMessage(
+                                              resumeState,
+                                              monitor.proxy_source,
+                                          )
                                         : undefined
                                 }
                                 className={`h-8 text-xs font-medium ${

@@ -1,6 +1,11 @@
 "use client";
 
 import {
+    OwnProxyUsageSummary,
+    type OwnProxyUsage,
+} from "@/components/monitors/own-proxy-usage";
+
+import {
     deleteMonitorAndReturn,
     updateMonitorAndReturn,
     testDiscordWebhook,
@@ -147,6 +152,9 @@ export default function EditMonitorPage() {
     const [minSellerRating, setMinSellerRating] = useState(4.5);
     const [minSellerRatingCount, setMinSellerRatingCount] = useState(5);
     const [proxyGroups, setProxyGroups] = useState<ProxyGroupOption[]>([]);
+    const [ownProxyUsage, setOwnProxyUsage] = useState<OwnProxyUsage | null>(
+        null,
+    );
     const [freeProxy, setFreeProxy] = useState<FreeProxyOption>({
         enabled: false,
         activeCount: 0,
@@ -325,6 +333,7 @@ export default function EditMonitorPage() {
                         Boolean(m.telegram_active && telegramData.connected),
                     );
                 }
+                setOwnProxyUsage(proxyData.ownProxyUsage ?? null);
                 setProxyGroups(proxyData.groups || []);
                 setUserRole(proxyData.role || "free");
                 setFreeProxy(
@@ -445,9 +454,11 @@ export default function EditMonitorPage() {
             success: (result) =>
                 result.rewardNotice
                     ? `${result.rewardNotice.title}: ${result.rewardNotice.message}`
-                    : result.pausedByFreeProxyLimit
-                      ? "Saved and paused because your Free Proxy Pool monitor limit is reached"
-                      : "Saved successfully",
+                    : result.pausedByOwnProxyLimit
+                      ? "Monitor updated and paused because your own proxy monitor limit is reached."
+                      : result.pausedByFreeProxyLimit
+                        ? "Saved and paused because your Free Proxy Pool monitor limit is reached"
+                        : "Saved successfully",
             error: (error) =>
                 error instanceof Error
                     ? error.message
@@ -1095,6 +1106,11 @@ export default function EditMonitorPage() {
                                     <div className="bg-muted h-10 animate-pulse rounded-md" />
                                 ) : (
                                     <>
+                                        {ownProxyUsage && (
+                                            <OwnProxyUsageSummary
+                                                usage={ownProxyUsage}
+                                            />
+                                        )}
                                         <RegionPoolStatus
                                             freeProxy={freeProxy}
                                             selectedRegion={selectedRegion}

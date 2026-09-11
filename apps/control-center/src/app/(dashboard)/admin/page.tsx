@@ -1,3 +1,4 @@
+import { getOwnProxyLimit } from "@/lib/own-proxy-limit.server";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
@@ -50,6 +51,7 @@ export async function renderAdminSection(initialTab: AdminSection) {
         inactiveMemberPolicyState,
         githubRewardsState,
         priceWatchPollingState,
+        ownProxyLimit,
     ] = await Promise.all([
         getMonitorLimits([
             GLOBAL_MONITOR_LIMIT_SCOPE,
@@ -67,6 +69,7 @@ export async function renderAdminSection(initialTab: AdminSection) {
         getInactiveMemberPolicyAdminState(),
         getGithubRewardsAdminState(),
         getPriceWatchPollingAdminState(),
+        getOwnProxyLimit(),
     ]);
 
     return (
@@ -82,6 +85,7 @@ export async function renderAdminSection(initialTab: AdminSection) {
             freeProxyState={freeProxyState}
             initialGithubRewardsState={githubRewardsState}
             initialPriceWatchPollingState={priceWatchPollingState}
+            initialOwnProxyLimit={ownProxyLimit}
             monitorLimits={{
                 global:
                     limits.get(GLOBAL_MONITOR_LIMIT_SCOPE)?.active_limit ??

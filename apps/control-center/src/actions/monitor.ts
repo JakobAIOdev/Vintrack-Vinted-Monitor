@@ -141,7 +141,11 @@ export type CreateMonitorResult =
           redirectTo: string;
           started: boolean;
           activeLimit: number | null;
-          pauseReason: "active-limit" | "free-proxy-limit" | null;
+          pauseReason:
+              | "active-limit"
+              | "free-proxy-limit"
+              | "own-proxy-limit"
+              | null;
           rewardNotice: MonitorRewardNotice | null;
       }
     | { ok: false; message: string };
@@ -345,9 +349,11 @@ export async function createMonitor(
         pauseReason:
             initialStatus === "active"
                 ? null
-                : activationState.freeProxyLimitReached
-                  ? "free-proxy-limit"
-                  : "active-limit",
+                : activationState.ownProxyLimitReached
+                  ? "own-proxy-limit"
+                  : activationState.freeProxyLimitReached
+                    ? "free-proxy-limit"
+                    : "active-limit",
         rewardNotice,
     };
 }
@@ -831,7 +837,7 @@ export async function updateMonitor(id: number, formData: FormData) {
         ? await getTelegramConnection(userId)
         : null;
 
-    const pausedByFreeProxyLimit = await withMonitorActivationLock(
+    const pausedByProxyLimit = await withMonitorActivationLock(
         userId,
         async (tx) => {
             const currentMonitor = await tx.monitors.findFirst({
@@ -841,16 +847,33 @@ export async function updateMonitor(id: number, formData: FormData) {
             if (!currentMonitor) throw new Error("Monitor not found");
 
             let pauseForFreeProxyLimit = false;
+            let pauseForOwnProxyLimit = false;
             if (
                 currentMonitor.status === "active" &&
-                currentMonitor.proxy_source !== "free" &&
-                proxySource === "free"
+                currentMonitor.proxy_source !== proxySource &&
+                (proxySource === "free" || proxySource === "group")
             ) {
                 const activationState = await getMonitorActivationState(
                     userId,
-                    "free",
+                    proxySource,
                     tx,
                 );
+                pauseForOwnProxyLimit = activationState.ownProxyLimitReached;
+                if (pauseForOwnProxyLimit) {
+                    await tx.audit_events.create({
+                        data: {
+                            userId,
+                            action: "monitor.own_proxy_limit_paused",
+                            status: "success",
+                            target_type: "monitor",
+                            target_id: String(id),
+                            metadata: {
+                                reason: "proxy_source_change",
+                                limit: activationState.ownProxyActiveLimit,
+                            },
+                        },
+                    });
+                }
                 pauseForFreeProxyLimit = activationState.freeProxyLimitReached;
             }
 
@@ -886,10 +909,16 @@ export async function updateMonitor(id: number, formData: FormData) {
                     proxy_source: proxySource,
                     webhook_active: urlToSave ? true : false,
                     telegram_active: Boolean(telegramConnection),
-                    ...(pauseForFreeProxyLimit ? { status: "paused" } : {}),
+                    ...(pauseForFreeProxyLimit || pauseForOwnProxyLimit
+                        ? { status: "paused" }
+                        : {}),
                 },
             });
-            return pauseForFreeProxyLimit;
+            return pauseForOwnProxyLimit
+                ? "own-proxy-limit"
+                : pauseForFreeProxyLimit
+                  ? "free-proxy-limit"
+                  : null;
         },
     );
 
@@ -902,8 +931,8 @@ export async function updateMonitor(id: number, formData: FormData) {
     }
 
     redirect(
-        pausedByFreeProxyLimit
-            ? `/monitors/${id}?paused=free-proxy-limit`
+        pausedByProxyLimit
+            ? `/monitors/${id}?paused=${pausedByProxyLimit}`
             : `/monitors/${id}`,
     );
 }
@@ -913,6 +942,7 @@ export type UpdateMonitorResult =
           success: true;
           redirectTo: string;
           pausedByFreeProxyLimit: boolean;
+          pausedByOwnProxyLimit: boolean;
           rewardNotice: MonitorRewardNotice | null;
       }
     | { success: false; message: string };
@@ -1015,22 +1045,39 @@ export async function updateMonitorAndReturn(
         if (!currentMonitor) throw new Error("Monitor not found");
 
         let pauseForFreeProxyLimit = false;
+        let pauseForOwnProxyLimit = false;
         let rewardNotice: MonitorRewardNotice | null = null;
         if (
             currentMonitor.status === "active" &&
-            currentMonitor.proxy_source !== "free" &&
-            proxySource === "free"
+            currentMonitor.proxy_source !== proxySource &&
+            (proxySource === "free" || proxySource === "group")
         ) {
             const activationState = await getMonitorActivationState(
                 userId,
-                "free",
+                proxySource,
                 tx,
             );
+            pauseForOwnProxyLimit = activationState.ownProxyLimitReached;
+            if (pauseForOwnProxyLimit) {
+                await tx.audit_events.create({
+                    data: {
+                        userId,
+                        action: "monitor.own_proxy_limit_paused",
+                        status: "success",
+                        target_type: "monitor",
+                        target_id: String(id),
+                        metadata: {
+                            reason: "proxy_source_change",
+                            limit: activationState.ownProxyActiveLimit,
+                        },
+                    },
+                });
+            }
             pauseForFreeProxyLimit = activationState.freeProxyLimitReached;
-            if (!pauseForFreeProxyLimit) {
+            if (!pauseForFreeProxyLimit && !pauseForOwnProxyLimit) {
                 rewardNotice = rewardNoticeAfterActivation(
                     activationState,
-                    "free",
+                    proxySource,
                 );
             }
         }
@@ -1067,7 +1114,9 @@ export async function updateMonitorAndReturn(
                 proxy_source: proxySource,
                 webhook_active: urlToSave ? true : false,
                 telegram_active: Boolean(telegramConnection),
-                ...(pauseForFreeProxyLimit ? { status: "paused" } : {}),
+                ...(pauseForFreeProxyLimit || pauseForOwnProxyLimit
+                    ? { status: "paused" }
+                    : {}),
             },
         });
         if (rewardNotice) {
@@ -1078,7 +1127,11 @@ export async function updateMonitorAndReturn(
                 tx,
             );
         }
-        return { pausedByFreeProxyLimit: pauseForFreeProxyLimit, rewardNotice };
+        return {
+            pausedByFreeProxyLimit: pauseForFreeProxyLimit,
+            pausedByOwnProxyLimit: pauseForOwnProxyLimit,
+            rewardNotice,
+        };
     });
 
     revalidatePath("/dashboard");
@@ -1090,10 +1143,13 @@ export async function updateMonitorAndReturn(
         redirectTo:
             returnTo === "dashboard"
                 ? "/dashboard"
-                : updateResult.pausedByFreeProxyLimit
-                  ? `/monitors/${id}?paused=free-proxy-limit`
-                  : `/monitors/${id}`,
+                : updateResult.pausedByOwnProxyLimit
+                  ? `/monitors/${id}?paused=own-proxy-limit`
+                  : updateResult.pausedByFreeProxyLimit
+                    ? `/monitors/${id}?paused=free-proxy-limit`
+                    : `/monitors/${id}`,
         pausedByFreeProxyLimit: updateResult.pausedByFreeProxyLimit,
+        pausedByOwnProxyLimit: updateResult.pausedByOwnProxyLimit,
         rewardNotice: updateResult.rewardNotice,
     };
 }
