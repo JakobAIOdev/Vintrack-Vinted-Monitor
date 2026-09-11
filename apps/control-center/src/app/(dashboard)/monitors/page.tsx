@@ -1,3 +1,5 @@
+import { getOwnProxyLimit } from "@/lib/own-proxy-limit.server";
+import { resolveOwnProxyLimit } from "@/lib/own-proxy-limit";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { getCategoryLabelsForRegion } from "@/lib/categories.server";
@@ -27,6 +29,8 @@ export default async function MonitorsPage() {
         bannedSellerIds,
         githubRewards,
         recentLimitPauses,
+        ownProxyLimit,
+        ownProxyPauses,
     ] = await Promise.all([
         db.monitors.findMany({
             where: { userId: session.user.id },
@@ -43,6 +47,7 @@ export default async function MonitorsPage() {
         db.user.findUnique({
             where: { id: session.user.id },
             select: {
+                role: true,
                 dedupe_monitor_alerts: true,
                 telegram_message_style: true,
                 discord_message_style: true,
@@ -61,7 +66,24 @@ export default async function MonitorsPage() {
             take: 1,
             select: { metadata: true },
         }),
+        getOwnProxyLimit(),
+        db.audit_events.findFirst({
+            where: {
+                action: "member.own_proxy_limit_reconciled",
+                target_type: "user",
+                target_id: session.user.id,
+            },
+            orderBy: { created_at: "desc" },
+            select: { metadata: true },
+        }),
     ]);
+    const ownPausedIds =
+        (ownProxyPauses?.metadata as { pausedMonitorIds?: number[] } | null)
+            ?.pausedMonitorIds ?? [];
+    const ownPaused = rawMonitors.filter(
+        (monitor) =>
+            monitor.status === "paused" && ownPausedIds.includes(monitor.id),
+    );
     const usedBrandIds = [
         ...new Set(
             rawMonitors.flatMap((monitor) =>
@@ -232,6 +254,16 @@ export default async function MonitorsPage() {
 
     return (
         <div className="space-y-5">
+            {ownPaused.length > 0 && (
+                <p
+                    role="status"
+                    className="border-border/60 rounded-lg border p-4 text-sm"
+                >
+                    Paused because the own proxy monitor limit was reached:{" "}
+                    {ownPaused.map((monitor) => monitor.name).join(", ")}. The
+                    oldest monitors were kept active.
+                </p>
+            )}
             <GithubRewardStatusCard
                 status={githubRewards}
                 placement="dashboard"
@@ -246,6 +278,11 @@ export default async function MonitorsPage() {
                 pausedMonitors={pausedMonitors}
             />
             <DashboardClient
+                ownProxyActiveLimit={resolveOwnProxyLimit(
+                    userSettings?.role ?? "free",
+                    githubRewards.donated,
+                    ownProxyLimit,
+                )}
                 initialMonitors={monitors}
                 userName={session.user.name || "User"}
                 initialDedupeMonitorAlerts={

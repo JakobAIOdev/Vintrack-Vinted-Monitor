@@ -1,3 +1,5 @@
+import { getOwnProxyLimit } from "@/lib/own-proxy-limit.server";
+import { resolveOwnProxyLimit } from "@/lib/own-proxy-limit";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { getMonitorMaintenance } from "@/lib/monitor-maintenance.server";
@@ -142,6 +144,7 @@ export async function getEffectiveMonitorLimits(
 
     if (user.role === "admin") {
         return {
+            ownProxyActiveLimit: null,
             activeLimit: null,
             source: null,
             freeProxyActiveLimit: null,
@@ -156,9 +159,10 @@ export async function getEffectiveMonitorLimits(
         roleLimitScope(user.role),
         GLOBAL_MONITOR_LIMIT_SCOPE,
     ];
-    const [limits, reward] = await Promise.all([
+    const [limits, reward, ownProxyLimit] = await Promise.all([
         getMonitorLimits(scopes, client),
         getGithubRewardEntitlement(userId, user.role, client),
+        getOwnProxyLimit(client),
     ]);
     // GitHub rewards govern the Free Proxy Pool allowance only. The overall
     // active monitor limit keeps resolving through user → role → global so
@@ -205,6 +209,11 @@ export async function getEffectiveMonitorLimits(
     });
 
     return {
+        ownProxyActiveLimit: resolveOwnProxyLimit(
+            user.role,
+            reward.donated,
+            ownProxyLimit,
+        ),
         activeLimit: active.value,
         source: active.source,
         freeProxyActiveLimit: freeProxy.limit,
@@ -306,18 +315,29 @@ export async function getMonitorActivationState(
     proxySource?: string | null,
     client: MonitorLimitClient = db,
 ) {
-    const [limit, activeCount, freeProxyActiveCount, maintenance] =
-        await Promise.all([
-            getEffectiveMonitorLimits(userId, client),
-            getActiveMonitorCount(userId, client),
-            client.monitors.count({
-                where: { userId, status: "active", proxy_source: "free" },
-            }),
-            getMonitorMaintenance(client),
-        ]);
+    const [
+        limit,
+        activeCount,
+        freeProxyActiveCount,
+        maintenance,
+        ownProxyActiveCount,
+    ] = await Promise.all([
+        getEffectiveMonitorLimits(userId, client),
+        getActiveMonitorCount(userId, client),
+        client.monitors.count({
+            where: { userId, status: "active", proxy_source: "free" },
+        }),
+        getMonitorMaintenance(client),
+        client.monitors.count({
+            where: { userId, status: "active", proxy_source: "group" },
+        }),
+    ]);
 
     const withinActiveLimit =
         limit.activeLimit === null || activeCount < limit.activeLimit;
+    const withinOwnProxyLimit =
+        limit.ownProxyActiveLimit === null ||
+        ownProxyActiveCount < limit.ownProxyActiveLimit;
     const withinFreeProxyLimit =
         limit.freeProxyActiveLimit === null ||
         freeProxyActiveCount < limit.freeProxyActiveLimit;
@@ -326,6 +346,12 @@ export async function getMonitorActivationState(
         ...limit,
         activeCount,
         freeProxyActiveCount,
+        ownProxyActiveCount,
+        ownProxyActiveSlots:
+            limit.ownProxyActiveLimit === null
+                ? null
+                : Math.max(limit.ownProxyActiveLimit - ownProxyActiveCount, 0),
+        ownProxyLimitReached: proxySource === "group" && !withinOwnProxyLimit,
         activeSlots:
             limit.activeLimit === null
                 ? null
@@ -340,6 +366,7 @@ export async function getMonitorActivationState(
         canActivate:
             !maintenance.enabled &&
             withinActiveLimit &&
+            (proxySource !== "group" || withinOwnProxyLimit) &&
             (proxySource !== "free" || withinFreeProxyLimit),
         maintenanceEnabled: maintenance.enabled,
         activeLimitReached: !withinActiveLimit,
@@ -351,7 +378,11 @@ export async function getMonitorActivationState(
 export type MonitorRewardNotice = RewardLimitNotice;
 
 export type MonitorActivationBlock = {
-    code: "maintenance" | "free_proxy_limit" | "active_limit";
+    code:
+        | "maintenance"
+        | "free_proxy_limit"
+        | "own_proxy_limit"
+        | "active_limit";
     title: string;
     message: string;
     freePool: {
@@ -464,6 +495,14 @@ export function monitorActivationBlock(
                     state.freeProxyActiveLimit ??
                     0,
             },
+        };
+    }
+    if (proxySource === "group" && state.ownProxyLimitReached) {
+        return {
+            code: "own_proxy_limit",
+            title: "Own proxy monitor limit reached",
+            message: `Own proxy monitor limit reached (${state.ownProxyActiveCount}/${state.ownProxyActiveLimit}). Pause another own proxy monitor first. Premium members and confirmed donors are exempt from this limit.`,
+            freePool: null,
         };
     }
     return {

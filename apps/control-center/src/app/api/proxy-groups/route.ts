@@ -35,6 +35,10 @@ export async function GET() {
             name: g.name,
             proxyCount: g.proxies.split("\n").filter((l) => l.trim()).length,
         })),
+        ownProxyUsage: {
+            activeCount: freeProxyUsage.ownProxyActiveCount,
+            activeLimit: freeProxyUsage.ownProxyActiveLimit,
+        },
         freeProxy: {
             ...freeProxy,
             usage: {

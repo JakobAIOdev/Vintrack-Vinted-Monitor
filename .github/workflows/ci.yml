@@ -168,6 +168,8 @@ jobs:
             script: test:e2e
           - suite: dashboard
             script: test:e2e:dashboard
+          - suite: own-proxy
+            script: test:e2e:own-proxy
 
     services:
       postgres:

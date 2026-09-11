@@ -1,5 +1,10 @@
 "use client";
 
+import {
+    OwnProxyUsageSummary,
+    type OwnProxyUsage,
+} from "@/components/monitors/own-proxy-usage";
+
 import { createMonitor, testDiscordWebhook } from "@/actions/monitor";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -119,6 +124,9 @@ export default function NewMonitorPage() {
     const [minSellerRating, setMinSellerRating] = useState(4.5);
     const [minSellerRatingCount, setMinSellerRatingCount] = useState(5);
     const [proxyGroups, setProxyGroups] = useState<ProxyGroupOption[]>([]);
+    const [ownProxyUsage, setOwnProxyUsage] = useState<OwnProxyUsage | null>(
+        null,
+    );
     const [freeProxy, setFreeProxy] = useState<FreeProxyOption>({
         enabled: false,
         activeCount: 0,
@@ -295,9 +303,11 @@ export default function NewMonitorPage() {
                         ? `${result.rewardNotice.title}: ${result.rewardNotice.message}`
                         : result.started
                           ? "Monitor created"
-                          : result.pauseReason === "free-proxy-limit"
-                            ? "Monitor saved paused because your Free Proxy Pool monitor limit is reached"
-                            : "Monitor saved paused because your active monitor limit is reached",
+                          : result.pauseReason === "own-proxy-limit"
+                            ? "Monitor saved paused because your own proxy monitor limit is reached."
+                            : result.pauseReason === "free-proxy-limit"
+                              ? "Monitor saved paused because your Free Proxy Pool monitor limit is reached"
+                              : "Monitor saved paused because your active monitor limit is reached",
                 error: (error) =>
                     error instanceof Error
                         ? error.message
@@ -352,6 +362,7 @@ export default function NewMonitorPage() {
                     regions: {},
                 };
 
+                setOwnProxyUsage(proxyData.ownProxyUsage ?? null);
                 setProxyGroups(groups);
                 setUserRole(role);
                 setFreeProxy(freeProxyOption);
@@ -1175,6 +1186,11 @@ export default function NewMonitorPage() {
                                     <div className="bg-muted h-10 animate-pulse rounded-md" />
                                 ) : (
                                     <>
+                                        {ownProxyUsage && (
+                                            <OwnProxyUsageSummary
+                                                usage={ownProxyUsage}
+                                            />
+                                        )}
                                         <RegionPoolStatus
                                             freeProxy={freeProxy}
                                             selectedRegion={selectedRegion}
