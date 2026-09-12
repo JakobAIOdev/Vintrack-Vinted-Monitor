@@ -365,7 +365,7 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 		return
 	}
 	freeProxyPools.Retain(regions)
-	enabled, err := settingBoolContext(refreshCtx, store, "free_proxy_enabled", false)
+	enabled, err := store.FeatureGloballyEnabledContext(refreshCtx, "free_proxy_pool", "free_proxy_enabled", false)
 	if err != nil {
 		log.Printf("free proxy enabled setting refresh failed: %v", err)
 		return
@@ -426,7 +426,7 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 	cycleCtx, cancelCycle := context.WithTimeout(ctx, freeProxyCheckCycleTimeout)
 	defer cancelCycle()
 
-	enabled, err := settingBoolContext(cycleCtx, store, "free_proxy_enabled", false)
+	enabled, err := store.FeatureGloballyEnabledContext(cycleCtx, "free_proxy_pool", "free_proxy_enabled", false)
 	if err != nil {
 		log.Printf("free proxy enabled setting load failed: %v", err)
 		return
@@ -1292,7 +1292,7 @@ func importFreeProxies(ctx context.Context, store *database.Store) {
 	importCtx, cancelImport := context.WithTimeout(ctx, freeProxyImportTimeout)
 	defer cancelImport()
 
-	enabled, err := settingBoolContext(importCtx, store, "free_proxy_enabled", false)
+	enabled, err := store.FeatureGloballyEnabledContext(importCtx, "free_proxy_pool", "free_proxy_enabled", false)
 	if err != nil {
 		log.Printf("free proxy import enabled setting failed: %v", err)
 		return

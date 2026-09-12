@@ -1,3 +1,4 @@
+import { guardApiFeature } from "@/lib/features.server";
 import { auth } from "@/auth";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -7,6 +8,14 @@ async function proxyRequest(req: NextRequest, subPath: string) {
     const session = await auth();
     if (!session?.user?.id) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    if (subPath !== "unlink") {
+        const featureDenied = await guardApiFeature(
+            session.user.id,
+            "vinted_account",
+        );
+        if (featureDenied) return featureDenied;
     }
 
     const url = `${API_URL}/api/account/${subPath}`;

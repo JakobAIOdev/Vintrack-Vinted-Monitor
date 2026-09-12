@@ -21,6 +21,9 @@ import {
 } from "@/lib/github-rewards.server";
 import { prepareGithubAccountLink } from "@/lib/github-account-linking.server";
 import { reconcileUserFreeProxyMonitorLimit } from "@/lib/free-proxy-limit-reconciliation.server";
+import { assertControlCenterProductionConfig } from "@/lib/deployment-config.server";
+
+assertControlCenterProductionConfig();
 
 export const githubAuthConfigured = Boolean(
     process.env.AUTH_GITHUB_ID?.trim() &&

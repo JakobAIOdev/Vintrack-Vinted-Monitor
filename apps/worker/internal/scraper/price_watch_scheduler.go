@@ -41,10 +41,6 @@ const (
 	priceWatchTransportProxy  priceWatchTransportMode = "proxy"
 )
 
-func priceWatchConfiguredByEnvironment() bool {
-	return !strings.EqualFold(strings.TrimSpace(os.Getenv("PRICE_WATCH_ENABLED")), "false")
-}
-
 func configuredPriceWatchTransportMode() priceWatchTransportMode {
 	switch priceWatchTransportMode(strings.ToLower(strings.TrimSpace(os.Getenv("PRICE_WATCH_TRANSPORT_MODE")))) {
 	case priceWatchTransportDirect:
@@ -57,10 +53,6 @@ func configuredPriceWatchTransportMode() priceWatchTransportMode {
 }
 
 func (e *Engine) startPriceWatchPipeline() {
-	if !priceWatchConfiguredByEnvironment() {
-		log.Printf("Price watch polling disabled by environment")
-		return
-	}
 	loadCtx, cancel := context.WithTimeout(e.jobsCtx, 2*time.Second)
 	e.refreshPriceWatchRuntimeSettings(loadCtx)
 	cancel()
@@ -434,11 +426,10 @@ func databasePriceWatchObservation(target model.PriceWatchTarget, page PriceWatc
 }
 
 func (e *Engine) refreshPriceWatchRuntimeSettings(ctx context.Context) {
-	enabled := true
-	if raw, ok, err := e.db.GetSettingValueContext(ctx, priceWatchEnabledSettingKey); err == nil && ok {
-		if parsed, parseErr := strconv.ParseBool(strings.TrimSpace(raw)); parseErr == nil {
-			enabled = parsed
-		}
+	enabled, err := e.db.FeatureGloballyEnabledContext(ctx, "price_watch", priceWatchEnabledSettingKey, true)
+	if err != nil {
+		log.Printf("price watch feature policy refresh failed: %v", err)
+		return
 	}
 	e.priceWatchEnabled.Store(enabled)
 	refreshIntSetting := func(key string, fallback int64, minimum int64, maximum int64) int64 {

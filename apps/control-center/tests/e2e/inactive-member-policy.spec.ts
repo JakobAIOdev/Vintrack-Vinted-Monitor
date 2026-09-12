@@ -92,7 +92,7 @@ test.describe("inactive member monitor policy", () => {
     });
 
     test("shows the admin policy editor", async ({ page }) => {
-        await page.goto("/admin/monitors");
+        await page.goto("/admin/operations");
         const card = page
             .getByRole("main")
             .getByTestId("inactive-member-automation");
@@ -117,7 +117,7 @@ test.describe("inactive member monitor policy", () => {
             where: { key: "inactive_member_monitor_policy" },
         });
         try {
-            await page.goto("/admin/monitors");
+            await page.goto("/admin/operations");
             const card = page
                 .getByRole("main")
                 .getByTestId("inactive-member-automation");

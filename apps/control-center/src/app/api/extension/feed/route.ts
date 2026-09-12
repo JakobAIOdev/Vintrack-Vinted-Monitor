@@ -1,3 +1,4 @@
+import { getFeatureAccessForUser } from "@/lib/features.server";
 import {
     authenticateExtensionRequest,
     extensionJson,
@@ -14,6 +15,20 @@ export function OPTIONS() {
 export async function GET(request: Request) {
     const authentication = await authenticateExtensionRequest(request);
     if (!authentication.ok) return authentication.response;
+    const featureAccess = await getFeatureAccessForUser(
+        "live_feed",
+        authentication.principal.userId,
+    );
+    if (!featureAccess.allowed) {
+        return extensionJson(
+            {
+                code: "FEATURE_UNAVAILABLE",
+                feature: featureAccess.feature,
+                reason: featureAccess.reason,
+            },
+            403,
+        );
+    }
 
     try {
         const items = await getExtensionRecentFeed(

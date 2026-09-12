@@ -5,20 +5,66 @@ function getAdminMain(page: Page) {
 }
 
 test.describe("admin running monitors", () => {
-    test("shows the cached runtime snapshot without opening insights", async ({
+    test("reviews feature roles, dependencies, and job impact before apply", async ({
+        page,
+    }) => {
+        await page.goto("/admin/features");
+        const main = getAdminMain(page);
+        await expect(
+            main.getByRole("heading", { name: "Feature access", exact: true }),
+        ).toBeVisible();
+        await expect(
+            main.getByText(
+                "Master switch. Off means nobody can see or use the feature.",
+            ),
+        ).toBeVisible();
+        await expect(
+            main.getByText(
+                "Hides Price Watch, blocks page and API access, stops new worker claims, and pauses affected active watches.",
+            ),
+        ).toBeVisible();
+        await expect(main.getByText("Draft access:").first()).toBeVisible();
+        await expect(
+            main.getByLabel("Price Watch globally enabled"),
+        ).toBeVisible();
+        await expect(
+            main.getByText("Requires Vinted Account").first(),
+        ).toBeVisible();
+
+        await main.getByLabel("Vinted Account globally enabled").uncheck();
+        await main.getByRole("button", { name: "Review changes" }).click();
+        const dialog = page.getByRole("dialog", {
+            name: "Apply feature policy changes?",
+        });
+        await expect(dialog).toContainText("Dependencies affected");
+        await expect(dialog).toContainText("Your Listings");
+        await dialog.getByRole("button", { name: "Cancel" }).click();
+        await main.getByRole("button", { name: "Discard" }).click();
+    });
+
+    test("shows low-cost monitor health without runtime history", async ({
         page,
     }) => {
         await page.goto("/admin/overview");
 
         await expect(
+            getAdminMain(page).getByText("Live system overview"),
+        ).toBeVisible();
+        await expect(
+            getAdminMain(page).getByText(/Refreshes every 10 seconds/),
+        ).toBeVisible();
+        await expect(
+            getAdminMain(page).getByRole("button", { name: "Refresh now" }),
+        ).toBeEnabled();
+        await expect(
+            getAdminMain(page).getByText("Monitor Health"),
+        ).toBeVisible();
+        await expect(
+            getAdminMain(page).getByText("Canonical checks 24h").first(),
+        ).toBeVisible();
+        await expect(
             getAdminMain(page).getByText("Runtime Snapshot"),
-        ).toBeVisible();
-        await expect(
-            getAdminMain(page).getByText("Total runtime"),
-        ).toBeVisible();
-        await expect(
-            getAdminMain(page).getByText("Active source mix"),
-        ).toBeVisible();
+        ).toHaveCount(0);
     });
 
     test("shows global and role Free Proxy Pool monitor limits", async ({
@@ -32,11 +78,15 @@ test.describe("admin running monitors", () => {
                 getAdminMain(page).getByRole("combobox", {
                     name: "Admin section",
                 }),
-            ).toHaveValue("roles");
+            ).toHaveValue("members");
         } else {
+            await expect(page).toHaveURL(/\/admin\/members\?view=roles$/);
             await expect(
-                getAdminMain(page).getByRole("tab", { name: "Roles" }),
-            ).toHaveAttribute("aria-selected", "true");
+                getAdminMain(page).getByRole("button", {
+                    name: "Roles",
+                    exact: true,
+                }),
+            ).toBeVisible();
         }
         await expect(
             page
@@ -91,7 +141,8 @@ test.describe("admin running monitors", () => {
             .click();
 
         await expect(dialog.getByText("Running Free Pool: 1")).toBeVisible();
-        await expect(dialog.getByText("Monitor Runtime")).toBeVisible();
+        await expect(dialog.getByText("New Items 24h")).toBeVisible();
+        await expect(dialog.getByText("Monitor Runtime")).toHaveCount(0);
         const runningSection = dialog
             .getByText("Running Monitors", { exact: true })
             .locator("xpath=../../..");
@@ -103,7 +154,7 @@ test.describe("admin running monitors", () => {
         page,
         isMobile,
     }) => {
-        await page.goto("/admin/monitors");
+        await page.goto("/admin/operations");
 
         await expect(
             getAdminMain(page).getByRole("heading", { name: "Admin Panel" }),
@@ -113,13 +164,14 @@ test.describe("admin running monitors", () => {
                 getAdminMain(page).getByRole("combobox", {
                     name: "Admin section",
                 }),
-            ).toHaveValue("monitors");
+            ).toHaveValue("operations");
         } else {
             await expect(
-                getAdminMain(page).getByRole("tab", {
+                getAdminMain(page).getByRole("button", {
                     name: "Running Monitors",
+                    exact: true,
                 }),
-            ).toHaveAttribute("aria-selected", "true");
+            ).toBeVisible();
         }
 
         const memberSection = getAdminMain(page)
@@ -161,7 +213,7 @@ test.describe("admin running monitors", () => {
         isMobile,
     }) => {
         test.skip(isMobile, "The shared setting mutation runs once on desktop");
-        await page.goto("/admin/price-watch");
+        await page.goto("/admin/operations?view=price_watch");
 
         await expect(
             getAdminMain(page).getByText("Runtime & capacity"),
@@ -196,32 +248,28 @@ test.describe("admin running monitors", () => {
         page,
         isMobile,
     }) => {
-        await page.goto("/admin/member-insights");
+        await page.goto("/admin/members?view=insights");
 
         if (isMobile) {
             await expect(
                 getAdminMain(page).getByRole("combobox", {
                     name: "Admin section",
                 }),
-            ).toHaveValue("insights");
+            ).toHaveValue("members");
         } else {
             await expect(
-                getAdminMain(page).getByRole("tab", {
+                getAdminMain(page).getByRole("button", {
                     name: "Member Insights",
+                    exact: true,
                 }),
-            ).toHaveAttribute("aria-selected", "true");
+            ).toBeVisible();
         }
         await expect(
             getAdminMain(page).getByText("Member growth", { exact: true }),
         ).toBeVisible();
         await expect(
             getAdminMain(page).getByText("Runtime by proxy source"),
-        ).toBeVisible();
-        await expect(
-            getAdminMain(page).getByRole("img", {
-                name: "Monitor runtime by proxy source over the last 30 days",
-            }),
-        ).toBeVisible();
+        ).toHaveCount(0);
         await expect(
             getAdminMain(page).getByRole("img", {
                 name: "Member signups over the last 90 days",
@@ -235,7 +283,7 @@ test.describe("admin running monitors", () => {
             getAdminMain(page).getByText("Newest members"),
         ).toBeVisible();
         await expect(
-            getAdminMain(page).getByText("E2E User").last(),
+            getAdminMain(page).getByText("E2E Limit User").last(),
         ).toBeVisible();
     });
 
@@ -244,13 +292,20 @@ test.describe("admin running monitors", () => {
         isMobile,
     }) => {
         await page.goto("/admin/overview");
+        const operationsNavigation = page.waitForURL("**/admin/operations");
         if (isMobile) {
             await getAdminMain(page)
                 .getByRole("combobox", { name: "Admin section" })
-                .selectOption("logs");
+                .selectOption("operations");
         } else {
-            await getAdminMain(page).getByRole("tab", { name: "Logs" }).click();
+            await getAdminMain(page)
+                .getByRole("tab", { name: "Operations", exact: true })
+                .click();
         }
+        await operationsNavigation;
+        await getAdminMain(page)
+            .getByRole("button", { name: "Logs", exact: true })
+            .click();
 
         await expect(
             getAdminMain(page).getByText("Delivered (24h)"),
@@ -268,9 +323,25 @@ test.describe("admin running monitors", () => {
             getAdminMain(page).getByText("Expected duplicate suppression"),
         ).toBeVisible();
         await expect(
-            getAdminMain(page).getByText("successful-delivery noise", {
-                exact: false,
+            getAdminMain(page).getByText("Live operations log"),
+        ).toBeVisible();
+        await expect(
+            getAdminMain(page).getByRole("textbox", {
+                name: "Search operation logs",
             }),
+        ).toBeVisible();
+        await expect(
+            getAdminMain(page).getByText(
+                "Failures, incidents, monitor changes, and admin actions",
+            ),
+        ).toBeVisible();
+        await getAdminMain(page)
+            .getByRole("button", { name: "Delivery", exact: true })
+            .click();
+        await expect(
+            getAdminMain(page).getByText(
+                "Failed, retried, or cancelled alert deliveries",
+            ),
         ).toBeVisible();
         await expect(getAdminMain(page).getByText(/alert issues/i)).toHaveCount(
             0,

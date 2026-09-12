@@ -231,6 +231,23 @@
     let feedBusy = false;
     let lastFeedUpdatedAt = null;
 
+    function featureAllowed(feature) {
+      const capability = state?.overview?.capabilities?.[feature];
+      return capability ? capability.allowed === true : true;
+    }
+
+    function applyCapabilities() {
+      const visibility = {
+        feed: featureAllowed("live_feed"),
+        watches: featureAllowed("price_watch"),
+      };
+      for (const button of root.querySelectorAll("[data-tab]")) {
+        if (button.dataset.tab === "overview") continue;
+        button.hidden = visibility[button.dataset.tab] === false;
+      }
+      if (visibility[activeTab] === false) selectTab("overview");
+    }
+
     function applyTheme(theme) {
       if (theme === "light" || theme === "dark") {
         root.dataset.theme = theme;
@@ -415,27 +432,29 @@
       const links = element("div", "vtc-card vtc-quick-links");
       links.appendChild(element("span", "vtc-eyebrow", "QUICK LINKS"));
       const grid = element("div", "vtc-link-grid");
-      for (const [label, destination] of [
-        ["Dashboard", "dashboard"],
-        ["Monitors", "monitors"],
-        ["New monitor", "newMonitor"],
-        ["Notifications", "notifications"],
-        ["Feed", "feed"],
-        ["Watches", "priceWatches"],
-        ["Chats", "chats"],
-        ["Favorites", "favorites"],
-        ["Account", "account"],
+      for (const [label, destination, feature] of [
+        ["Dashboard", "dashboard", null],
+        ["Monitors", "monitors", null],
+        ["New monitor", "newMonitor", null],
+        ["Notifications", "notifications", null],
+        ["Feed", "feed", "live_feed"],
+        ["Watches", "priceWatches", "price_watch"],
+        ["Chats", "chats", "chats"],
+        ["Favorites", "favorites", "liked_items"],
+        ["Account", "account", null],
       ]) {
-        addButton(grid, label, "open", { destination, secondary: true });
+        if (!feature || featureAllowed(feature)) {
+          addButton(grid, label, "open", { destination, secondary: true });
+        }
       }
       links.appendChild(grid);
       overviewPanel.appendChild(links);
 
       const metrics = element("div", "vtc-metrics");
-      metrics.append(
-        metric("Active monitors", state.overview?.monitors?.active ?? 0),
-        metric("Price Watches", state.overview?.priceWatches?.total ?? 0),
-      );
+      metrics.append(metric("Active monitors", state.overview?.monitors?.active ?? 0));
+      if (featureAllowed("price_watch")) {
+        metrics.append(metric("Price Watches", state.overview?.priceWatches?.total ?? 0));
+      }
       overviewPanel.appendChild(metrics);
 
       const accountCard = element("div", "vtc-card vtc-account-card");
@@ -462,7 +481,7 @@
       addButton(accountCard, "Sync linked account now", "sync", {
         secondary: true,
       });
-      overviewPanel.appendChild(accountCard);
+      if (featureAllowed("vinted_account")) overviewPanel.appendChild(accountCard);
     }
 
     function renderFeed() {
@@ -724,6 +743,7 @@
       version.textContent = state.version ? `v${state.version}` : "";
       if (!state.ok && state.error) showNotice(state.error);
       if (state.contextError) showNotice(state.contextError, "warning");
+      applyCapabilities();
       renderOverview();
       renderFeed();
       renderWatches();

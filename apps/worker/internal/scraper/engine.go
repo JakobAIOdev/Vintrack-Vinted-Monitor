@@ -37,7 +37,7 @@ type Engine struct {
 	serverProxy            *proxy.Manager
 	freeProxy              *proxy.RegionPools
 	fetcher                CatalogFetcher
-	enrichSeller           bool
+	workerPolicy           atomic.Value
 	poolSize               int
 	freePoolSize           int
 	pools                  map[string]*ClientPool
@@ -50,7 +50,6 @@ type Engine struct {
 	notificationPoliciesMu sync.RWMutex
 	freeProxySuccessSeen   map[string]time.Time
 	freeProxySuccessSeenMu sync.Mutex
-	discoveryMode          string
 	jobsCtx                context.Context
 	jobsCancel             context.CancelFunc
 	alertJobs              chan alertJob
@@ -81,13 +80,14 @@ type notificationPolicy struct {
 
 func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools) *Engine {
 	fetcher := NewCatalogFetcherFromEnv()
-	enrich := os.Getenv("ENRICH_SELLER_INFO") != "false"
+	policy := loadWorkerPolicy(db)
+	enrich := policy.EnrichSellerInfo
 	if !fetcher.RequiresNetwork() {
 		enrich = false
 	}
 	poolSize := getEnvInt("CLIENT_POOL_SIZE", 5)
 	freePoolSize := configuredFreeProxyClientPoolSize()
-	discoveryMode := resolveDiscoveryMode(os.Getenv("DISCOVERY_MODE"))
+	discoveryMode := policy.DiscoveryMode
 	if !fetcher.RequiresNetwork() {
 		discoveryMode = "off"
 	}
@@ -109,7 +109,6 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 		serverProxy:            pm,
 		freeProxy:              freePM,
 		fetcher:                fetcher,
-		enrichSeller:           enrich,
 		poolSize:               poolSize,
 		freePoolSize:           freePoolSize,
 		pools:                  make(map[string]*ClientPool),
@@ -117,7 +116,6 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 		sellerFlights:          make(map[string]*sellerFetchFlight),
 		notificationPolicies:   make(map[int]notificationPolicy),
 		freeProxySuccessSeen:   make(map[string]time.Time),
-		discoveryMode:          discoveryMode,
 		jobsCtx:                jobsCtx,
 		jobsCancel:             jobsCancel,
 		alertJobs:              make(chan alertJob, 4096),
@@ -133,21 +131,15 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 		// out of its lease while queued, gets recovered, and is delivered twice.
 		alertDeliveryMaxFlight: alertDeliveryWorkerCount() + alertDeliveryWorkerCount()/2,
 		enrichmentMetrics:      &sellerEnrichmentMetrics{},
+		catalogLatency:         newCatalogLatencyMetrics(),
 	}
+	engine.applyWorkerPolicy(policy)
 	engine.priceWatchEnabled.Store(true)
 	engine.priceWatchSharedMaxRPM.Store(30)
 	engine.priceWatchPersonalRPM.Store(2)
-	// The catalog latency aggregate is opt-out rather than opt-in: it is a single
-	// bounded ring plus one app_settings row every 10s, and without it the worker
-	// has no view of fetch versus post-fetch cost at all.
-	if catalogLatencyMetricsEnabled() {
-		engine.catalogLatency = newCatalogLatencyMetrics()
-	}
 	engine.startPipelines()
-	if engine.catalogLatency != nil {
-		engine.jobsWG.Add(1)
-		go engine.catalogLatencyHeartbeat()
-	}
+	engine.jobsWG.Add(1)
+	go engine.catalogLatencyHeartbeat()
 	return engine
 }
 
@@ -420,7 +412,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	}
 
 	var enricher *SellerEnricher
-	if e.fetcher.RequiresNetwork() && (e.enrichSeller || requiresSellerEnrichment(m)) {
+	if e.fetcher.RequiresNetwork() && (e.workerPolicySnapshot().EnrichSellerInfo || requiresSellerEnrichment(m)) {
 		enricher = e.GetOrCreateEnricher(pm, domain, proxyKey, trafficRecorder, proxySource)
 	}
 

@@ -142,20 +142,6 @@ func TestCatalogLatencyPercentileMatchesExistingArithmetic(t *testing.T) {
 	}
 }
 
-func TestCatalogLatencyMetricsEnabledByDefaultAndDisablable(t *testing.T) {
-	if !catalogLatencyMetricsEnabled() {
-		t.Fatal("catalog latency metrics should default to enabled")
-	}
-	t.Setenv("CATALOG_LATENCY_METRICS", "false")
-	if catalogLatencyMetricsEnabled() {
-		t.Fatal("CATALOG_LATENCY_METRICS=false should disable the metrics")
-	}
-	t.Setenv("CATALOG_LATENCY_METRICS", "true")
-	if !catalogLatencyMetricsEnabled() {
-		t.Fatal("CATALOG_LATENCY_METRICS=true should enable the metrics")
-	}
-}
-
 func TestCatalogLatencyMetricsConcurrentRecording(t *testing.T) {
 	metrics := newCatalogLatencyMetrics()
 	const writers = 8

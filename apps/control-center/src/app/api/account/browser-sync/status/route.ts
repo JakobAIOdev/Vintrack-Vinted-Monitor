@@ -1,3 +1,4 @@
+import { guardApiFeature } from "@/lib/features.server";
 import { auth } from "@/auth";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -8,6 +9,12 @@ export async function GET(req: NextRequest) {
     if (!session?.user?.id) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const featureDenied = await guardApiFeature(
+        session.user.id,
+        "vinted_account",
+    );
+    if (featureDenied) return featureDenied;
 
     const code = req.nextUrl.searchParams.get("code");
     if (!code) {

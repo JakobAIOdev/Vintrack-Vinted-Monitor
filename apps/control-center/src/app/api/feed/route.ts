@@ -1,3 +1,4 @@
+import { guardApiFeature } from "@/lib/features.server";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { auth } from "@/auth";
@@ -15,6 +16,9 @@ export async function GET(request: Request) {
     if (!session?.user?.id) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const featureDenied = await guardApiFeature(session.user.id, "live_feed");
+    if (featureDenied) return featureDenied;
 
     try {
         const itemCap = normalizeLiveFeedItemCap(

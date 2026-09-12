@@ -3,6 +3,7 @@ package scraper
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -44,6 +45,8 @@ func NewManager(store *database.Store, engine *Engine) *Manager {
 }
 
 func (m *Manager) Sync(ctx context.Context) {
+	policy := loadWorkerPolicy(m.store)
+	m.engine.applyWorkerPolicy(policy)
 	maintenanceEnabled, maintenanceRead := m.readMaintenanceEnabled(ctx)
 	expiredDemoIDs, err := m.store.PauseExpiredDemoMonitors()
 	if err != nil {
@@ -92,7 +95,7 @@ func (m *Manager) Sync(ctx context.Context) {
 			delete(m.scheduledPaused, mon.ID)
 		}
 		activeIDs[mon.ID] = true
-		hash := monitorConfigFingerprint(*mon)
+		hash := fmt.Sprintf("%s|worker-policy=%d", monitorConfigFingerprint(*mon), policy.Revision)
 
 		if task, exists := m.running[mon.ID]; exists {
 			if task.stopping {
@@ -137,7 +140,11 @@ func (m *Manager) Sync(ctx context.Context) {
 		}
 	}
 
-	discoverySpecs := BuildDiscoverySpecs(discoveryMonitors, m.engine.discoveryMode)
+	discoverySpecs := BuildDiscoverySpecsWithPolicy(discoveryMonitors, policy.DiscoveryMode, policy.DiscoveryAllowFreeActive)
+	for key, spec := range discoverySpecs {
+		spec.Fingerprint = fmt.Sprintf("worker-policy=%d|%s", policy.Revision, spec.Fingerprint)
+		discoverySpecs[key] = spec
+	}
 	for key, spec := range discoverySpecs {
 		if task, exists := m.discoveryRunning[key]; exists {
 			if task.stopping {

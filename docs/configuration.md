@@ -31,29 +31,25 @@ openssl rand -base64 32
 | Variable | Default in `.env.example` | Purpose |
 | --- | --- | --- |
 | `AUTH_URL` | `http://localhost:3000` | Canonical URL used by the authentication layer |
-| `APP_PUBLIC_URL` | `http://localhost:3000` | Canonical origin used by Discord and Telegram links |
 | `SEO_INDEXING_ENABLED` | `false` | Opt in to public marketing-page indexing, canonicals, and sitemap output |
-| `DASHBOARD_URL` | `http://localhost:3000` | Legacy notification-link fallback |
+| `APP_PUBLIC_URL`, `DASHBOARD_URL` | unset | Deprecated one-release fallback aliases for `AUTH_URL` |
 | `VINTRACK_SITE_ADDRESS` | `http://localhost` | Caddy site address or public hostname |
 
 For production:
 
 ```env
 AUTH_URL=https://vintrack.example.com
-APP_PUBLIC_URL=https://vintrack.example.com
 SEO_INDEXING_ENABLED=true
-DASHBOARD_URL=https://vintrack.example.com
 VINTRACK_SITE_ADDRESS=vintrack.example.com
 ```
 
-The worker resolves `APP_PUBLIC_URL`, then `AUTH_URL`, then the legacy
-`DASHBOARD_URL`. Values must be absolute origins and must agree when several are
+The worker resolves canonical `AUTH_URL`, then the deprecated `APP_PUBLIC_URL` and `DASHBOARD_URL` fallbacks. Values must be absolute origins and must agree when several are
 configured. Production requires HTTPS and rejects local or temporary tunnel
 origins; Vintrack omits dashboard buttons while configuration health is red.
 
 Search indexing is disabled by default so self-hosted instances do not compete
 with identical marketing content accidentally. Enable `SEO_INDEXING_ENABLED`
-only for a deliberately public deployment with a valid `APP_PUBLIC_URL`.
+only for a deliberately public deployment with a valid `AUTH_URL`.
 
 ## Authentication
 
@@ -223,11 +219,10 @@ Price Watch separates canonical targets from polling schedules. Shared watches
 deduplicate by `(region, item)` and use the fastest booked interval; personal
 proxy schedules are isolated by `(item, proxy group)`. Shared presets are 2–60
 minutes, while a region-verified group with working proxies unlocks presets from
-30 seconds. Runtime floors and request budgets live under **Admin → Price Watch**
+30 seconds. Activation and role access live under **Admin → Features**. Runtime floors and request budgets live under **Admin → Operations → Price Watch**
 and are reloaded by workers about every 10 seconds.
 
 ```env
-PRICE_WATCH_ENABLED=true
 PRICE_WATCH_WORKERS=4
 PRICE_WATCH_TRANSPORT_MODE=auto
 PRICE_WATCH_CLIENT_POOL_SIZE=4
@@ -246,12 +241,12 @@ Transport modes:
 Production shared polling always requires reliable server proxies. Personal
 schedules use only the selected verified group and never fall back to server or
 direct traffic. Free public proxies are not used for Price Watch polling. Set
-`APP_PUBLIC_URL` to the public HTTPS origin so Discord and Telegram alerts can
+`AUTH_URL` to the public HTTPS origin so Discord and Telegram alerts can
 link directly to the corresponding Price Watch.
 
 ## Worker behavior
 
-Important safe starting points:
+Deployment-bound worker settings (discovery, enrichment and latency switches are managed under **Admin → System → Worker Policy**):
 
 | Variable | Default | Description |
 | --- | ---: | --- |
@@ -263,8 +258,6 @@ Important safe starting points:
 | `CATALOG_HEDGE_DELAY_MS` | `250` | Delay before a secondary attempt |
 | `FREE_PROXY_CATALOG_HEDGE_DELAY_MS` | `900` | Less aggressive hedge delay for public proxies |
 | `CATALOG_MAX_ATTEMPTS` | `5` | Bounded request attempts |
-| `DISCOVERY_MODE` | `off` | Optional hybrid discovery behavior |
-| `DISCOVERY_ALLOW_FREE_ACTIVE` | `false` | Explicit opt-in for free-pool active alerts |
 
 Change concurrency only after observing database, Redis, proxy, and upstream
 behavior. More workers do not automatically improve useful throughput.

@@ -280,7 +280,7 @@ func TestBuildDiscoverySpecsGroupsStructuralFilters(t *testing.T) {
 		{ID: 3, Status: "active", Region: "de", Query: "puma", CatalogIDs: &catalog, ProxySource: "free"},
 	}
 
-	specs := BuildDiscoverySpecs(monitors, "active")
+	specs := BuildDiscoverySpecsWithPolicy(monitors, "active", false)
 	if len(specs) != 1 {
 		t.Fatalf("BuildDiscoverySpecs() produced %d groups, want 1", len(specs))
 	}
@@ -292,14 +292,13 @@ func TestBuildDiscoverySpecsGroupsStructuralFilters(t *testing.T) {
 			t.Fatal("group fingerprint is empty")
 		}
 	}
-	if got := BuildDiscoverySpecs(monitors, "off"); len(got) != 0 {
+	if got := BuildDiscoverySpecsWithPolicy(monitors, "off", false); len(got) != 0 {
 		t.Fatalf("off mode produced %d groups, want none", len(got))
 	}
-	if got := BuildDiscoverySpecs(monitors, "shadow"); len(got) != 2 {
+	if got := BuildDiscoverySpecsWithPolicy(monitors, "shadow", false); len(got) != 2 {
 		t.Fatalf("shadow mode produced %d groups, want dedicated and free test groups", len(got))
 	}
-	t.Setenv("DISCOVERY_ALLOW_FREE_ACTIVE", "true")
-	if got := BuildDiscoverySpecs(monitors, "active"); len(got) != 2 {
+	if got := BuildDiscoverySpecsWithPolicy(monitors, "active", true); len(got) != 2 {
 		t.Fatalf("active free opt-in produced %d groups, want 2", len(got))
 	}
 }
@@ -539,7 +538,7 @@ func TestBuildDiscoverySpecsDoesNotMixProxyGroups(t *testing.T) {
 		{ID: 2, Status: "active", Region: "de", ProxySource: "group", ProxyGroupID: &groupTwo, Proxies: proxies},
 	}
 
-	if got := BuildDiscoverySpecs(monitors, "active"); len(got) != 2 {
+	if got := BuildDiscoverySpecsWithPolicy(monitors, "active", false); len(got) != 2 {
 		t.Fatalf("BuildDiscoverySpecs() produced %d groups, want separate user proxy groups", len(got))
 	}
 }

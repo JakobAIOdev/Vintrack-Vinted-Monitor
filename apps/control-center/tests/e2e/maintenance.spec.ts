@@ -232,10 +232,10 @@ test.describe("monitor maintenance", () => {
                 }),
             ]);
 
-            await page.goto("/admin/monitors");
-            const systemControl = page.getByTestId(
-                "maintenance-system-control",
-            );
+            await page.goto("/admin/operations");
+            const systemControl = page
+                .getByRole("main")
+                .getByTestId("maintenance-system-control");
             await expect(systemControl).toContainText("Normal operation");
             await systemControl
                 .getByRole("button", { name: "Enable maintenance" })
@@ -393,7 +393,7 @@ test.describe("monitor maintenance", () => {
                 page.getByRole("button", { name: "Create Monitor" }),
             ).toHaveCount(0);
 
-            await page.goto("/admin/monitors");
+            await page.goto("/admin/operations");
             await systemControl
                 .getByRole("button", { name: "Edit notice" })
                 .click();
@@ -446,7 +446,7 @@ test.describe("monitor maintenance", () => {
                 "Estimated completion",
             );
 
-            await page.goto("/admin/monitors");
+            await page.goto("/admin/operations");
             await systemControl
                 .getByRole("button", { name: "End maintenance" })
                 .click();
@@ -560,10 +560,10 @@ test.describe("monitor maintenance", () => {
             });
             await db.monitors.updateMany({ data: { status: "paused" } });
 
-            await page.goto("/admin/monitors");
-            const systemControl = page.getByTestId(
-                "maintenance-system-control",
-            );
+            await page.goto("/admin/operations");
+            const systemControl = page
+                .getByRole("main")
+                .getByTestId("maintenance-system-control");
             await systemControl
                 .getByRole("button", { name: "Enable maintenance" })
                 .click();
@@ -648,10 +648,10 @@ test.describe("monitor maintenance", () => {
             });
             await expect(submitCreate).toBeEnabled();
 
-            await page.goto("/admin/monitors");
-            const systemControl = page.getByTestId(
-                "maintenance-system-control",
-            );
+            await page.goto("/admin/operations");
+            const systemControl = page
+                .getByRole("main")
+                .getByTestId("maintenance-system-control");
             await systemControl
                 .getByRole("button", { name: "Enable maintenance" })
                 .click();

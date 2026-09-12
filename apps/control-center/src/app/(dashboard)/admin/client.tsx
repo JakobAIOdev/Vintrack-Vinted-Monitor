@@ -37,6 +37,7 @@ import {
     Megaphone,
     Wrench,
     TimerReset,
+    RefreshCw,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,11 +69,9 @@ import {
     setUserFreeProxyMonitorLimit,
     getAdminActiveMonitors,
     getAdminOverviewState,
-    getAdminRuntimeInsights,
     getAdminUsersPage,
     getAdminMemberInsights,
-    getAdminOperationsPage,
-    getAdminOperationsSummary,
+    getAdminOverviewDashboardState,
     getFreeProxyAdminState,
     getFreeProxySourceDiagnostics,
     getAdminUserDetails,
@@ -92,17 +91,18 @@ import {
     updateInactiveMemberPolicy,
     type InactiveMemberPolicyAdminState,
     updatePriceWatchRuntimeSettings,
+    updateWorkerPolicy,
     setGlobalPriceWatchLimit,
     setRolePriceWatchLimit,
     setUserPriceWatchLimit,
     type PriceWatchPollingAdminState,
 } from "@/actions/admin";
 import { getRegionCurrencyCode, getRegionLabel, REGIONS } from "@/lib/regions";
+import type { WorkerPolicy } from "@/lib/runtime-policies";
+import type { DeploymentConfigDiagnostics } from "@/lib/deployment-config.server";
 import { getProxyErrorDetails } from "@/lib/proxy-errors";
-import {
-    ADMIN_SECTION_ROUTES,
-    type AdminSection,
-} from "@/lib/admin-sections";
+import { ADMIN_SECTION_ROUTES, type AdminSection } from "@/lib/admin-sections";
+import { getAdminOperationsState } from "@/actions/admin-operations";
 import { MemberAnnouncementBanner } from "@/components/announcements/member-announcement-banner";
 import {
     MEMBER_ANNOUNCEMENT_AUDIENCES,
@@ -123,6 +123,10 @@ import type {
 } from "@/lib/inactive-member-policy";
 import { GithubRewardsAdminPanel } from "@/components/admin/github-rewards-admin-panel";
 import type { GithubRewardsAdminState } from "@/actions/github-rewards";
+import {
+    FeaturePoliciesAdminPanel,
+    type FeatureAdminState,
+} from "@/components/admin/feature-policies-admin-panel";
 type UserMonitor = {
     id: number;
     name: string;
@@ -131,8 +135,6 @@ type UserMonitor = {
     status: string | null;
     region: string;
     created_at: Date | null;
-    active_since: Date | null;
-    runtime_total_seconds: number;
     price_min: number | null;
     price_max: number | null;
     discord_webhook: string | null;
@@ -140,10 +142,9 @@ type UserMonitor = {
     telegram_active: boolean;
     proxy_source: string;
     proxy_group: { name: string } | null;
-    _count: { items: number };
 };
 
-type ActiveMonitor = Omit<UserMonitor, "discord_webhook"> & {
+type ActiveMonitor = Omit<UserMonitor, "discord_webhook" | "_count"> & {
     discord_configured: boolean;
     userId: string;
     user: {
@@ -160,7 +161,6 @@ type AdminUserMetrics = {
     runningMonitors: number;
     runningFreeProxyMonitors: number;
     pausedMonitors: number;
-    totalItems: number;
     newItems24h: number;
     checks24h: number;
     successfulChecks24h: number;
@@ -169,21 +169,9 @@ type AdminUserMetrics = {
     avgDurationMs24h: number | null;
     lastCheckAt: Date | null;
     latestError24h: string | null;
-    currentRuntimeSeconds: number;
-    totalRuntimeSeconds: number;
-    oldestActiveSince: Date | null;
 };
 
 type AdminOverviewState = Awaited<ReturnType<typeof getAdminOverviewState>>;
-type RuntimeInsights = Awaited<ReturnType<typeof getAdminRuntimeInsights>>;
-
-type UserRuntimeDetails = {
-    currentRuntimeSeconds: number;
-    totalRuntimeSeconds: number;
-    runtimeSeconds7d: number;
-    averageSessionSeconds: number;
-};
-
 type UserRow = {
     id: string;
     name: string | null;
@@ -194,7 +182,6 @@ type UserRow = {
     monitors: UserMonitor[];
     activeMonitors: ActiveMonitor[];
     metrics: AdminUserMetrics;
-    runtimeDetails?: UserRuntimeDetails;
 };
 
 type AdminTab = AdminSection;
@@ -261,6 +248,38 @@ type AdminOperationsSummary = {
 };
 
 type AdminOperationFilter = "all" | "delivery" | "proxy" | "monitor" | "audit";
+
+const ADMIN_OPERATION_FILTERS: {
+    value: AdminOperationFilter;
+    label: string;
+    description: string;
+}[] = [
+    {
+        value: "all",
+        label: "All",
+        description: "Failures, incidents, monitor changes, and admin actions",
+    },
+    {
+        value: "delivery",
+        label: "Delivery",
+        description: "Failed, retried, or cancelled alert deliveries",
+    },
+    {
+        value: "proxy",
+        label: "Proxy",
+        description: "Active and recently recovered proxy incidents",
+    },
+    {
+        value: "monitor",
+        label: "Monitor",
+        description: "Monitor errors and operational state changes",
+    },
+    {
+        value: "audit",
+        label: "Audit",
+        description: "Administrative configuration and access changes",
+    },
+];
 
 type MemberInsights = {
     summary: {
@@ -562,6 +581,13 @@ const ADMIN_TABS: {
             "Polling lanes, capacity, errors, delays, and runtime controls.",
     },
     {
+        value: "features",
+        label: "Features",
+        icon: FlaskConical,
+        description:
+            "Global availability, role access, and feature dependencies.",
+    },
+    {
         value: "users",
         label: "Members",
         icon: Users,
@@ -597,6 +623,84 @@ const ADMIN_TABS: {
         label: "Settings",
         icon: Settings2,
         description: "Shared proxy infrastructure and worker configuration.",
+    },
+];
+
+type AdminPrimaryTab = {
+    value:
+        | "overview"
+        | "members"
+        | "features"
+        | "operations"
+        | "integrations"
+        | "communication"
+        | "system";
+    label: string;
+    route: string;
+    icon: typeof BarChart3;
+    description: string;
+    sections: AdminTab[];
+};
+
+const ADMIN_PRIMARY_TABS: AdminPrimaryTab[] = [
+    {
+        value: "overview",
+        label: "Overview",
+        route: "/admin/overview",
+        icon: BarChart3,
+        description: "Essential system health, capacity, and current warnings.",
+        sections: ["overview"],
+    },
+    {
+        value: "members",
+        label: "Members",
+        route: "/admin/members",
+        icon: Users,
+        description: "Accounts, insights, roles, limits, and member overrides.",
+        sections: ["users", "insights", "roles"],
+    },
+    {
+        value: "features",
+        label: "Features",
+        route: "/admin/features",
+        icon: FlaskConical,
+        description:
+            "Global availability, role access, and feature dependencies.",
+        sections: ["features"],
+    },
+    {
+        value: "operations",
+        label: "Operations",
+        route: "/admin/operations",
+        icon: Activity,
+        description: "Monitor, Price Watch, delivery, maintenance, and logs.",
+        sections: ["monitors", "price_watch", "logs"],
+    },
+    {
+        value: "integrations",
+        label: "Integrations",
+        route: "/admin/integrations",
+        icon: Github,
+        description:
+            "Authentication, rewards, notifications, and linked services.",
+        sections: ["rewards"],
+    },
+    {
+        value: "communication",
+        label: "Communication",
+        route: "/admin/communication",
+        icon: Megaphone,
+        description: "Member announcements and targeted product communication.",
+        sections: ["announcements"],
+    },
+    {
+        value: "system",
+        label: "System",
+        route: "/admin/system",
+        icon: Settings2,
+        description:
+            "Proxy infrastructure, worker policy, and configuration health.",
+        sections: ["settings"],
     },
 ];
 
@@ -967,119 +1071,44 @@ function formatMetricDate(value: Date | null) {
     }).format(new Date(value));
 }
 
+function formatRelativeTime(value: Date) {
+    const elapsedSeconds = Math.max(
+        0,
+        Math.floor((Date.now() - new Date(value).getTime()) / 1000),
+    );
+    if (elapsedSeconds < 10) return "just now";
+    if (elapsedSeconds < 60) return String(elapsedSeconds) + "s ago";
+    const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+    if (elapsedMinutes < 60) return String(elapsedMinutes) + "m ago";
+    const elapsedHours = Math.floor(elapsedMinutes / 60);
+    if (elapsedHours < 24) return String(elapsedHours) + "h ago";
+    return String(Math.floor(elapsedHours / 24)) + "d ago";
+}
+
+function operationStatusClass(status: string) {
+    const normalized = status.toLowerCase();
+    if (["failed", "error", "open"].includes(normalized)) {
+        return "border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300";
+    }
+    if (
+        ["retry_scheduled", "retrying", "warning", "paused"].includes(
+            normalized,
+        )
+    ) {
+        return "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+    }
+    if (["success", "sent", "recovered", "completed"].includes(normalized)) {
+        return "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+    }
+    return "border-border bg-muted text-muted-foreground";
+}
+
 function formatSuccessRate(value: number | null) {
     return value === null ? "n/a" : `${value}%`;
 }
 
 function formatDuration(value: number | null) {
     return value === null ? "n/a" : `${value} ms`;
-}
-
-function formatRuntime(totalSeconds: number) {
-    const seconds = Math.max(0, Math.floor(totalSeconds));
-    const days = Math.floor(seconds / 86_400);
-    const hours = Math.floor((seconds % 86_400) / 3_600);
-    const minutes = Math.floor((seconds % 3_600) / 60);
-    if (days > 0) return `${days}d ${hours}h`;
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    return `${minutes}m`;
-}
-
-function monitorRuntimeSeconds(monitor: UserMonitor, nowMs: number) {
-    const currentSeconds =
-        monitor.status === "active" && monitor.active_since
-            ? Math.max(
-                  0,
-                  Math.floor(
-                      (nowMs - new Date(monitor.active_since).getTime()) / 1000,
-                  ),
-              )
-            : 0;
-    return monitor.runtime_total_seconds + currentSeconds;
-}
-
-function RuntimeStackedChart({ data }: { data: RuntimeInsights["daily"] }) {
-    const totals = data.map(
-        (day) => day.freeSeconds + day.serverSeconds + day.groupSeconds,
-    );
-    const maximum = Math.max(1, ...totals);
-    const totalHours = totals.reduce((sum, value) => sum + value, 0) / 3_600;
-
-    return (
-        <div>
-            <div className="mb-4 flex flex-wrap items-center gap-4 text-xs">
-                {[
-                    ["Free pool", "bg-amber-500"],
-                    ["Server", "bg-sky-500"],
-                    ["Own pools", "bg-violet-500"],
-                ].map(([label, color]) => (
-                    <span key={label} className="flex items-center gap-2">
-                        <span className={`h-2.5 w-2.5 rounded-sm ${color}`} />
-                        <span className="text-muted-foreground">{label}</span>
-                    </span>
-                ))}
-                <span className="text-muted-foreground ml-auto tabular-nums">
-                    {totalHours.toFixed(1)} monitor-hours / 30d
-                </span>
-            </div>
-            <div
-                className="flex h-64 items-end gap-1 rounded-lg border border-dashed p-3"
-                role="img"
-                aria-label="Monitor runtime by proxy source over the last 30 days"
-            >
-                {data.map((day, index) => {
-                    const total = totals[index];
-                    const height = Math.max(
-                        total > 0 ? 2 : 0,
-                        (total / maximum) * 100,
-                    );
-                    const date = new Intl.DateTimeFormat("de-DE", {
-                        day: "2-digit",
-                        month: "short",
-                    }).format(new Date(`${day.date}T12:00:00Z`));
-                    return (
-                        <div
-                            key={day.date}
-                            className="group relative flex h-full min-w-0 flex-1 items-end"
-                            title={`${date}: ${(total / 3_600).toFixed(1)} monitor-hours`}
-                        >
-                            <div
-                                className="flex w-full flex-col-reverse overflow-hidden rounded-sm transition-opacity group-hover:opacity-80"
-                                style={{ height: `${height}%` }}
-                            >
-                                {total > 0 ? (
-                                    <>
-                                        <div
-                                            className="bg-amber-500"
-                                            style={{
-                                                height: `${(day.freeSeconds / total) * 100}%`,
-                                            }}
-                                        />
-                                        <div
-                                            className="bg-sky-500"
-                                            style={{
-                                                height: `${(day.serverSeconds / total) * 100}%`,
-                                            }}
-                                        />
-                                        <div
-                                            className="bg-violet-500"
-                                            style={{
-                                                height: `${(day.groupSeconds / total) * 100}%`,
-                                            }}
-                                        />
-                                    </>
-                                ) : null}
-                            </div>
-                        </div>
-                    );
-                })}
-            </div>
-            <div className="text-muted-foreground mt-2 flex justify-between text-[10px]">
-                <span>{data[0]?.date ?? ""}</span>
-                <span>{data[data.length - 1]?.date ?? ""}</span>
-            </div>
-        </div>
-    );
 }
 
 function limitInputValue(value: number | null | undefined) {
@@ -1125,6 +1154,9 @@ export function AdminClient({
     freeProxyState: initialFreeProxyState,
     initialGithubRewardsState,
     initialPriceWatchPollingState,
+    initialFeaturePolicyState,
+    initialWorkerPolicy,
+    configDiagnostics,
     monitorLimits: initialMonitorLimits,
     initialOwnProxyLimit,
 }: {
@@ -1139,6 +1171,9 @@ export function AdminClient({
     freeProxyState: FreeProxyState;
     initialGithubRewardsState: GithubRewardsAdminState;
     initialPriceWatchPollingState: PriceWatchPollingAdminState;
+    initialFeaturePolicyState: FeatureAdminState;
+    initialWorkerPolicy: WorkerPolicy;
+    configDiagnostics: DeploymentConfigDiagnostics;
     monitorLimits: MonitorLimits;
     initialOwnProxyLimit: number;
 }) {
@@ -1147,14 +1182,10 @@ export function AdminClient({
         useState<AdminOverviewState | null>(null);
     const [isLoadingOverview, setIsLoadingOverview] = useState(false);
     const [overviewLoadFailed, setOverviewLoadFailed] = useState(false);
+    const [overviewUpdatedAt, setOverviewUpdatedAt] = useState<Date | null>(
+        null,
+    );
     const overviewRequestRef = useRef<Promise<void> | null>(null);
-    const [runtimeInsights, setRuntimeInsights] =
-        useState<RuntimeInsights | null>(null);
-    const [isLoadingRuntimeInsights, setIsLoadingRuntimeInsights] =
-        useState(false);
-    const [runtimeInsightsLoadFailed, setRuntimeInsightsLoadFailed] =
-        useState(false);
-    const runtimeInsightsRequestRef = useRef<Promise<void> | null>(null);
     const [activeMonitorRows, setActiveMonitorRows] = useState<ActiveMonitor[]>(
         [],
     );
@@ -1165,17 +1196,21 @@ export function AdminClient({
         totalPages: 1,
     });
     const usersRequestSequenceRef = useRef(0);
-    const [nowMs, setNowMs] = useState(() => Date.now());
     const [adminLogs, setAdminLogs] = useState<AdminLogRow[]>(logs);
     const [operationsSummary, setOperationsSummary] =
         useState<AdminOperationsSummary | null>(null);
     const [operationFilter, setOperationFilter] =
         useState<AdminOperationFilter>("all");
+    const [logSearchQuery, setLogSearchQuery] = useState("");
     const [operationNextCursor, setOperationNextCursor] = useState<
         string | null
     >(null);
     const [logsLoaded, setLogsLoaded] = useState(logs.length > 0);
     const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+    const [logsUpdatedAt, setLogsUpdatedAt] = useState<Date | null>(
+        logs.length > 0 ? new Date() : null,
+    );
+    const logsRequestRef = useRef<Promise<void> | null>(null);
     const [memberInsights, setMemberInsights] = useState<MemberInsights | null>(
         null,
     );
@@ -1195,6 +1230,7 @@ export function AdminClient({
     const [activeTab, setActiveTab] = useState<AdminTab>(
         normalizeTab(initialTab),
     );
+    const [isNavigationReady, setIsNavigationReady] = useState(false);
     const activeTabButtonRef = useRef<HTMLButtonElement | null>(null);
     const [selected, setSelected] = useState<UserRow | null>(null);
     const [loadingUserDetailsId, setLoadingUserDetailsId] = useState<
@@ -1264,9 +1300,12 @@ export function AdminClient({
             ]),
         ),
     );
-    const [userPriceWatchLimitInput, setUserPriceWatchLimitInput] = useState("");
+    const [userPriceWatchLimitInput, setUserPriceWatchLimitInput] =
+        useState("");
     const [serverProxies, setServerProxies] = useState(initialServerProxies);
     const [isSavingServerProxies, setIsSavingServerProxies] = useState(false);
+    const [workerPolicy, setWorkerPolicy] = useState(initialWorkerPolicy);
+    const [isSavingWorkerPolicy, setIsSavingWorkerPolicy] = useState(false);
     const [memberAnnouncement, setMemberAnnouncement] = useState(
         initialMemberAnnouncement,
     );
@@ -1309,16 +1348,18 @@ export function AdminClient({
     );
     const [isSavingPriceWatchInterval, setIsSavingPriceWatchInterval] =
         useState(false);
-    const [priceWatchRuntimeDraft, setPriceWatchRuntimeDraft] = useState(() => ({
-        enabled: initialPriceWatchPollingState.enabled,
-        sharedMinimumSeconds:
-            initialPriceWatchPollingState.sharedMinimumSeconds,
-        personalMinimumSeconds:
-            initialPriceWatchPollingState.personalMinimumSeconds,
-        sharedMaxRpm: initialPriceWatchPollingState.sharedMaxRpm,
-        personalMaxRpmPerProxy:
-            initialPriceWatchPollingState.personalMaxRpmPerProxy,
-    }));
+    const [priceWatchRuntimeDraft, setPriceWatchRuntimeDraft] = useState(
+        () => ({
+            enabled: initialPriceWatchPollingState.enabled,
+            sharedMinimumSeconds:
+                initialPriceWatchPollingState.sharedMinimumSeconds,
+            personalMinimumSeconds:
+                initialPriceWatchPollingState.personalMinimumSeconds,
+            sharedMaxRpm: initialPriceWatchPollingState.sharedMaxRpm,
+            personalMaxRpmPerProxy:
+                initialPriceWatchPollingState.personalMaxRpmPerProxy,
+        }),
+    );
     const [freeProxyState, setFreeProxyState] = useState(initialFreeProxyState);
     const [freeProxySettings, setFreeProxySettings] = useState(
         normalizeFreeProxySettings(initialFreeProxyState.settings),
@@ -1425,37 +1466,49 @@ export function AdminClient({
     const loadAdminLogs = (
         filter: AdminOperationFilter = operationFilter,
         append = false,
+        force = false,
     ) => {
         if (
-            (!append && logsLoaded && filter === operationFilter) ||
-            isLoadingLogs
-        )
+            (!force && !append && logsLoaded && filter === operationFilter) ||
+            logsRequestRef.current
+        ) {
             return;
+        }
 
         setIsLoadingLogs(true);
-        Promise.all([
-            operationsSummary
-                ? Promise.resolve(operationsSummary)
-                : getAdminOperationsSummary(),
-            getAdminOperationsPage({
-                filter,
-                cursor: append ? operationNextCursor : null,
-                pageSize: 50,
-            }),
-        ])
-            .then(([summary, page]) => {
+        const request = getAdminOperationsState({
+            filter,
+            cursor: append ? operationNextCursor : null,
+            pageSize: 50,
+        })
+            .then(({ summary, page }) => {
                 setOperationsSummary(summary);
-                setAdminLogs((current) =>
-                    append ? [...current, ...page.rows] : page.rows,
-                );
+                setAdminLogs((current) => {
+                    if (!append && (!force || filter !== operationFilter)) {
+                        return page.rows;
+                    }
+                    const incomingIds = new Set(page.rows.map((row) => row.id));
+                    const retained = current.filter(
+                        (row) => !incomingIds.has(row.id),
+                    );
+                    return append
+                        ? [...retained, ...page.rows]
+                        : [...page.rows, ...retained].slice(0, 200);
+                });
                 setOperationNextCursor(page.nextCursor);
                 setOperationFilter(filter);
                 setLogsLoaded(true);
+                setLogsUpdatedAt(new Date());
             })
             .catch(() => {
-                toast.error("Failed to load admin logs");
+                if (!force) toast.error("Failed to load admin logs");
             })
-            .finally(() => setIsLoadingLogs(false));
+            .finally(() => {
+                logsRequestRef.current = null;
+                setIsLoadingLogs(false);
+            });
+
+        logsRequestRef.current = request;
     };
 
     const loadMemberInsights = () => {
@@ -1480,46 +1533,30 @@ export function AdminClient({
         memberInsightsRequestRef.current = request;
     };
 
-    const loadOverview = () => {
-        if (overviewState || overviewRequestRef.current) return;
+    const loadOverview = (force = false) => {
+        if ((!force && overviewState) || overviewRequestRef.current) return;
         setIsLoadingOverview(true);
         setOverviewLoadFailed(false);
-        const request = Promise.all([
-            getAdminOverviewState(),
-            getAdminOperationsSummary(),
-            getAdminOperationsPage({ filter: "all", pageSize: 6 }),
-        ])
-            .then(([overview, summary, operations]) => {
+        const request = getAdminOverviewDashboardState()
+            .then(({ overview, summary, operations }) => {
                 setOverviewState(overview);
                 setOperationsSummary(summary);
                 setAdminLogs(operations.rows);
+                setOperationFilter("all");
+                setOperationNextCursor(operations.nextCursor);
+                setLogsLoaded(true);
+                setOverviewUpdatedAt(new Date());
+                setLogsUpdatedAt(new Date());
             })
             .catch(() => {
                 setOverviewLoadFailed(true);
-                toast.error("Failed to load admin overview");
+                if (!force) toast.error("Failed to load admin overview");
             })
             .finally(() => {
                 overviewRequestRef.current = null;
                 setIsLoadingOverview(false);
             });
         overviewRequestRef.current = request;
-    };
-
-    const loadRuntimeInsights = () => {
-        if (runtimeInsights || runtimeInsightsRequestRef.current) return;
-        setIsLoadingRuntimeInsights(true);
-        setRuntimeInsightsLoadFailed(false);
-        const request = getAdminRuntimeInsights()
-            .then(setRuntimeInsights)
-            .catch(() => {
-                setRuntimeInsightsLoadFailed(true);
-                toast.error("Failed to load runtime insights");
-            })
-            .finally(() => {
-                runtimeInsightsRequestRef.current = null;
-                setIsLoadingRuntimeInsights(false);
-            });
-        runtimeInsightsRequestRef.current = request;
     };
 
     const loadAdminUsers = (
@@ -1590,16 +1627,14 @@ export function AdminClient({
     };
 
     useEffect(() => {
+        setIsNavigationReady(true);
         const params = new URLSearchParams(window.location.search);
         const tab = normalizeTab(initialTab ?? params.get("tab"));
         setActiveTab(tab);
-        loadOverview();
+        if (tab === "overview") loadOverview();
         if (["users", "roles"].includes(tab)) void loadAdminUsers();
-        if (tab === "insights") {
-            loadMemberInsights();
-            loadRuntimeInsights();
-        }
-        if (tab === "logs") loadAdminLogs();
+        if (tab === "insights") loadMemberInsights();
+        if (tab === "logs") loadAdminLogs(operationFilter, false, true);
         if (tab === "monitors") loadActiveMonitors();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -1611,19 +1646,44 @@ export function AdminClient({
         if (["users", "roles"].includes(tab)) {
             void loadAdminUsers();
         }
-        if (tab === "overview") loadOverview();
-        if (tab === "insights") {
-            loadMemberInsights();
-            loadRuntimeInsights();
-        }
-        if (tab === "logs") loadAdminLogs();
+        if (tab === "overview") loadOverview(true);
+        if (tab === "insights") loadMemberInsights();
+        if (tab === "logs") loadAdminLogs(operationFilter, false, true);
         if (tab === "monitors") loadActiveMonitors();
     };
 
+    const switchPrimaryTab = (value: AdminPrimaryTab["value"]) => {
+        const primary = ADMIN_PRIMARY_TABS.find((tab) => tab.value === value);
+        if (!primary) return;
+        window.location.assign(primary.route);
+    };
+
     useEffect(() => {
-        const interval = window.setInterval(() => setNowMs(Date.now()), 60_000);
-        return () => window.clearInterval(interval);
-    }, []);
+        if (!isNavigationReady) return;
+
+        const refreshVisibleSection = () => {
+            if (document.visibilityState !== "visible") return;
+            if (activeTab === "overview") loadOverview(true);
+            if (activeTab === "logs") {
+                loadAdminLogs(operationFilter, false, true);
+            }
+        };
+
+        const interval = window.setInterval(refreshVisibleSection, 10_000);
+        window.addEventListener("focus", refreshVisibleSection);
+        document.addEventListener("visibilitychange", refreshVisibleSection);
+
+        return () => {
+            window.clearInterval(interval);
+            window.removeEventListener("focus", refreshVisibleSection);
+            document.removeEventListener(
+                "visibilitychange",
+                refreshVisibleSection,
+            );
+        };
+        // The active section and filter intentionally define the refresh lifecycle.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeTab, isNavigationReady, operationFilter]);
 
     useEffect(() => {
         activeTabButtonRef.current?.scrollIntoView({
@@ -1719,7 +1779,6 @@ export function AdminClient({
                 runningFreeProxyMonitors:
                     monitor.proxy_source === "free" ? 1 : 0,
                 pausedMonitors: 0,
-                totalItems: 0,
                 newItems24h: 0,
                 checks24h: 0,
                 successfulChecks24h: 0,
@@ -1728,9 +1787,6 @@ export function AdminClient({
                 avgDurationMs24h: null,
                 lastCheckAt: null,
                 latestError24h: null,
-                currentRuntimeSeconds: 0,
-                totalRuntimeSeconds: 0,
-                oldestActiveSince: monitor.active_since,
             },
         });
     }
@@ -1820,7 +1876,6 @@ export function AdminClient({
                 runningMonitors: member.runningMonitors,
                 runningFreeProxyMonitors: 0,
                 pausedMonitors: 0,
-                totalItems: 0,
                 newItems24h: 0,
                 checks24h: 0,
                 successfulChecks24h: 0,
@@ -1829,12 +1884,24 @@ export function AdminClient({
                 avgDurationMs24h: null,
                 lastCheckAt: null,
                 latestError24h: null,
-                currentRuntimeSeconds: member.currentRuntimeSeconds,
-                totalRuntimeSeconds: member.totalRuntimeSeconds,
-                oldestActiveSince: null,
             },
         }),
     );
+    const normalizedLogSearch = logSearchQuery.trim().toLowerCase();
+    const visibleAdminLogs = normalizedLogSearch
+        ? adminLogs.filter((log) =>
+              [
+                  log.title,
+                  log.detail,
+                  log.subject,
+                  log.actor,
+                  log.status,
+                  log.type,
+              ].some((value) =>
+                  value?.toLowerCase().includes(normalizedLogSearch),
+              ),
+          )
+        : adminLogs;
     const importantLogs = adminLogs
         .filter(
             (log) =>
@@ -1917,16 +1984,7 @@ export function AdminClient({
             ...user,
             monitors,
             _count: { ...user._count, monitors: monitors.length },
-            runtimeDetails: details.runtime,
-            metrics: {
-                ...user.metrics,
-                currentRuntimeSeconds: details.runtime.currentRuntimeSeconds,
-                totalRuntimeSeconds: details.runtime.totalRuntimeSeconds,
-                totalItems: monitors.reduce(
-                    (sum, monitor) => sum + monitor._count.items,
-                    0,
-                ),
-            },
+            metrics: user.metrics,
         };
 
         setUsers((prev) =>
@@ -2093,7 +2151,13 @@ export function AdminClient({
         }
     };
 
-    const applyAutomaticallyPausedMonitors = (monitorIds: number[]) => {
+    const applyAutomaticallyPausedMonitors = (
+        monitorIds: number[],
+        fallback?: {
+            userId: string;
+            freeProxyCount: number;
+        },
+    ) => {
         if (monitorIds.length === 0) return;
         const pausedIds = new Set(monitorIds);
         setActiveMonitorRows((current) =>
@@ -2106,11 +2170,17 @@ export function AdminClient({
                     .filter((monitor) => pausedIds.has(monitor.id))
                     .map((monitor) => [monitor.id, monitor]),
             );
-            if (pausedForUser.size === 0) return user;
+            const fallbackCount =
+                fallback?.userId === user.id ? fallback.freeProxyCount : 0;
+            const pausedCount = Math.max(pausedForUser.size, fallbackCount);
+            if (pausedCount === 0) return user;
 
-            const pausedFreeCount = Array.from(pausedForUser.values()).filter(
-                (monitor) => monitor.proxy_source === "free",
-            ).length;
+            const pausedFreeCount = Math.max(
+                Array.from(pausedForUser.values()).filter(
+                    (monitor) => monitor.proxy_source === "free",
+                ).length,
+                fallbackCount,
+            );
             return {
                 ...user,
                 monitors: user.monitors.map((monitor) =>
@@ -2124,15 +2194,14 @@ export function AdminClient({
                 metrics: {
                     ...user.metrics,
                     runningMonitors: Math.max(
-                        user.metrics.runningMonitors - pausedForUser.size,
+                        user.metrics.runningMonitors - pausedCount,
                         0,
                     ),
                     runningFreeProxyMonitors: Math.max(
                         user.metrics.runningFreeProxyMonitors - pausedFreeCount,
                         0,
                     ),
-                    pausedMonitors:
-                        user.metrics.pausedMonitors + pausedForUser.size,
+                    pausedMonitors: user.metrics.pausedMonitors + pausedCount,
                 },
             };
         };
@@ -2228,7 +2297,10 @@ export function AdminClient({
                 selected.id,
                 userFreeProxyLimitInput,
             );
-            applyAutomaticallyPausedMonitors(result.pausedMonitorIds);
+            applyAutomaticallyPausedMonitors(result.pausedMonitorIds, {
+                userId: selected.id,
+                freeProxyCount: result.pausedCount,
+            });
             toast.success(
                 result.pausedCount > 0
                     ? `Free proxy limit saved · ${result.pausedCount} paused`
@@ -2565,7 +2637,7 @@ export function AdminClient({
                       ? "Maintenance notice updated"
                       : `${nextState.maintenancePausedCount} monitor${nextState.maintenancePausedCount === 1 ? "" : "s"} safely paused`,
             );
-            void loadOverview();
+            void loadOverview(true);
         } catch (error) {
             toast.error(
                 error instanceof Error
@@ -2634,6 +2706,28 @@ export function AdminClient({
             );
         } finally {
             setIsSavingPriceWatchInterval(false);
+        }
+    };
+
+    const handleSaveWorkerPolicy = async () => {
+        setIsSavingWorkerPolicy(true);
+        try {
+            const next = await updateWorkerPolicy({
+                discoveryMode: workerPolicy.discoveryMode,
+                discoveryAllowFreeActive: workerPolicy.discoveryAllowFreeActive,
+                enrichSellerInfo: workerPolicy.enrichSellerInfo,
+                catalogLatencyMetrics: workerPolicy.catalogLatencyMetrics,
+            });
+            setWorkerPolicy(next);
+            toast.success("Worker policy saved");
+        } catch (error) {
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save worker policy",
+            );
+        } finally {
+            setIsSavingWorkerPolicy(false);
         }
     };
 
@@ -2861,7 +2955,6 @@ export function AdminClient({
                   (monitor) => monitor.proxy_source === "free",
               ).length
             : (selected?.metrics.runningFreeProxyMonitors ?? 0);
-    const selectedItems = selected?.metrics.totalItems ?? 0;
     const selectedEffectiveLimit = selected
         ? getEffectiveLimit(selected)
         : { value: null, source: "Unlimited" };
@@ -2877,9 +2970,10 @@ export function AdminClient({
     const readyFreeProxyRegionCount = freeProxyState.regions.filter(
         (region) => region.healthy,
     ).length;
-    const activeTabDefinition =
-        ADMIN_TABS.find((tab) => tab.value === activeTab) ?? ADMIN_TABS[0];
-    const ActiveTabIcon = activeTabDefinition.icon;
+    const activePrimaryDefinition =
+        ADMIN_PRIMARY_TABS.find((tab) => tab.sections.includes(activeTab)) ??
+        ADMIN_PRIMARY_TABS[0];
+    const ActiveTabIcon = activePrimaryDefinition.icon;
     const maintenanceStatusLabel =
         monitorMaintenanceState.status === "active"
             ? "Maintenance active"
@@ -2930,7 +3024,7 @@ export function AdminClient({
                     <div>
                         <h1 className="text-2xl font-bold">Admin Panel</h1>
                         <p className="text-muted-foreground mt-1 text-sm">
-                            {activeTabDefinition.description}
+                            {activePrimaryDefinition.description}
                         </p>
                     </div>
                 </div>
@@ -2966,7 +3060,7 @@ export function AdminClient({
                         <button
                             type="button"
                             className="text-amber-600 hover:underline dark:text-amber-400"
-                            onClick={loadOverview}
+                            onClick={() => loadOverview(true)}
                             disabled={isLoadingUserMetrics}
                         >
                             Retry member metrics
@@ -2986,11 +3080,16 @@ export function AdminClient({
 
             <select
                 aria-label="Admin section"
-                value={activeTab}
-                onChange={(event) => switchTab(event.target.value as AdminTab)}
+                value={activePrimaryDefinition.value}
+                disabled={!isNavigationReady}
+                onChange={(event) =>
+                    switchPrimaryTab(
+                        event.target.value as AdminPrimaryTab["value"],
+                    )
+                }
                 className="border-input bg-background h-10 w-full rounded-lg border px-3 text-sm md:hidden"
             >
-                {ADMIN_TABS.map((tab) => (
+                {ADMIN_PRIMARY_TABS.map((tab) => (
                     <option key={tab.value} value={tab.value}>
                         {tab.label}
                     </option>
@@ -3002,10 +3101,10 @@ export function AdminClient({
                 aria-label="Admin sections"
                 className="border-border/60 bg-card hidden gap-1 overflow-x-auto rounded-xl border p-1 md:flex"
             >
-                {ADMIN_TABS.map((tab) => {
+                {ADMIN_PRIMARY_TABS.map((tab) => {
                     const Icon = tab.icon;
-                    const isActive = activeTab === tab.value;
-
+                    const isActive =
+                        activePrimaryDefinition.value === tab.value;
                     return (
                         <button
                             key={tab.value}
@@ -3018,7 +3117,7 @@ export function AdminClient({
                                     ? "bg-primary text-primary-foreground"
                                     : "text-muted-foreground hover:bg-muted hover:text-foreground"
                             }`}
-                            onClick={() => switchTab(tab.value)}
+                            onClick={() => switchPrimaryTab(tab.value)}
                         >
                             <Icon className="h-4 w-4" />
                             {tab.label}
@@ -3026,6 +3125,37 @@ export function AdminClient({
                     );
                 })}
             </div>
+
+            {activePrimaryDefinition.sections.length > 1 ? (
+                <div className="flex flex-wrap gap-2">
+                    {activePrimaryDefinition.sections.map((section) => {
+                        const definition = ADMIN_TABS.find(
+                            (tab) => tab.value === section,
+                        )!;
+                        return (
+                            <Button
+                                key={section}
+                                type="button"
+                                size="sm"
+                                variant={
+                                    activeTab === section
+                                        ? "default"
+                                        : "outline"
+                                }
+                                onClick={() => switchTab(section)}
+                            >
+                                {definition.label}
+                            </Button>
+                        );
+                    })}
+                </div>
+            ) : null}
+
+            {activeTab === "features" ? (
+                <FeaturePoliciesAdminPanel
+                    initialState={initialFeaturePolicyState}
+                />
+            ) : null}
 
             {activeTab === "monitors" ? (
                 <div className="w-full">
@@ -3182,6 +3312,50 @@ export function AdminClient({
 
             {activeTab === "overview" ? (
                 <>
+                    <div className="border-border/60 bg-card flex flex-col gap-3 rounded-lg border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                            <p className="text-sm font-semibold">
+                                Live system overview
+                            </p>
+                            <p className="text-muted-foreground mt-0.5 text-xs">
+                                Refreshes every 10 seconds and whenever this tab
+                                regains focus.
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Badge
+                                variant="outline"
+                                className="gap-1.5 rounded-md"
+                            >
+                                <span className="size-1.5 rounded-full bg-emerald-500" />
+                                Live
+                            </Badge>
+                            <span className="text-muted-foreground text-xs">
+                                {overviewUpdatedAt
+                                    ? "Updated " +
+                                      formatRelativeTime(overviewUpdatedAt)
+                                    : "Waiting for first update"}
+                            </span>
+                            <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-8 gap-1.5"
+                                onClick={() => loadOverview(true)}
+                                disabled={isLoadingOverview}
+                            >
+                                <RefreshCw
+                                    className={
+                                        "size-3.5 " +
+                                        (isLoadingOverview
+                                            ? "animate-spin"
+                                            : "")
+                                    }
+                                />
+                                Refresh now
+                            </Button>
+                        </div>
+                    </div>
                     <div className="border-border/60 bg-border/60 grid gap-px overflow-hidden rounded-lg border sm:grid-cols-2 xl:grid-cols-5">
                         <OverviewMetric
                             label="Total users"
@@ -3230,105 +3404,6 @@ export function AdminClient({
                             icon={Globe}
                             iconClassName="bg-amber-500/10 text-amber-600"
                         />
-                    </div>
-                    <div className="border-border/60 bg-card rounded-lg border p-5">
-                        <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
-                            <div>
-                                <p className="text-foreground text-sm font-semibold">
-                                    Runtime Snapshot
-                                </p>
-                                <p className="text-muted-foreground text-xs">
-                                    Aggregate monitor-hours without scanning
-                                    runtime history.
-                                </p>
-                            </div>
-                            <Badge
-                                variant="outline"
-                                className="rounded-md text-[10px] uppercase"
-                            >
-                                {overviewState?.runtime.trackedSince
-                                    ? `Tracked since ${new Intl.DateTimeFormat("de-DE", { dateStyle: "medium" }).format(new Date(overviewState.runtime.trackedSince))}`
-                                    : "Tracking starts with migration"}
-                            </Badge>
-                        </div>
-                        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                            <div className="bg-muted/30 rounded-lg px-4 py-3">
-                                <p className="text-muted-foreground text-[11px] uppercase">
-                                    Total runtime
-                                </p>
-                                <p className="mt-1 text-2xl font-semibold tabular-nums">
-                                    {overviewState
-                                        ? formatRuntime(
-                                              overviewState.runtime
-                                                  .totalSeconds,
-                                          )
-                                        : "—"}
-                                </p>
-                            </div>
-                            <div className="bg-muted/30 rounded-lg px-4 py-3">
-                                <p className="text-muted-foreground text-[11px] uppercase">
-                                    Open sessions
-                                </p>
-                                <p className="mt-1 text-2xl font-semibold tabular-nums">
-                                    {overviewState
-                                        ? formatRuntime(
-                                              overviewState.runtime
-                                                  .currentSeconds,
-                                          )
-                                        : "—"}
-                                </p>
-                            </div>
-                            <div className="bg-muted/30 rounded-lg px-4 py-3">
-                                <p className="text-muted-foreground text-[11px] uppercase">
-                                    Oldest running
-                                </p>
-                                <p className="mt-1 text-2xl font-semibold tabular-nums">
-                                    {overviewState?.runtime.oldestActiveSince
-                                        ? formatRuntime(
-                                              (nowMs -
-                                                  new Date(
-                                                      overviewState.runtime
-                                                          .oldestActiveSince,
-                                                  ).getTime()) /
-                                                  1000,
-                                          )
-                                        : "—"}
-                                </p>
-                            </div>
-                            <div className="bg-muted/30 rounded-lg px-4 py-3">
-                                <p className="text-muted-foreground text-[11px] uppercase">
-                                    Active source mix
-                                </p>
-                                <div className="bg-muted mt-3 flex h-3 overflow-hidden rounded-full">
-                                    {(["free", "server", "group"] as const).map(
-                                        (source) => (
-                                            <span
-                                                key={source}
-                                                className={
-                                                    source === "free"
-                                                        ? "bg-amber-500"
-                                                        : source === "server"
-                                                          ? "bg-sky-500"
-                                                          : "bg-violet-500"
-                                                }
-                                                style={{
-                                                    width: `${runningMonitors > 0 ? ((overviewState?.monitors.sources[source] ?? 0) / runningMonitors) * 100 : 0}%`,
-                                                }}
-                                            />
-                                        ),
-                                    )}
-                                </div>
-                                <p className="text-muted-foreground mt-2 text-[10px]">
-                                    {overviewState?.monitors.sources.free ?? 0}{" "}
-                                    free ·{" "}
-                                    {overviewState?.monitors.sources.server ??
-                                        0}{" "}
-                                    server ·{" "}
-                                    {overviewState?.monitors.sources.group ?? 0}{" "}
-                                    own
-                                </p>
-                            </div>
-                        </div>
                     </div>
                     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
                         <div className="border-border/60 bg-card flex h-full flex-col rounded-lg border p-5">
@@ -3526,10 +3601,11 @@ export function AdminClient({
                         <div className="border-border/60 bg-card overflow-hidden rounded-lg border">
                             <div className="border-border/60 border-b px-5 py-4">
                                 <p className="text-foreground text-sm font-semibold">
-                                    Runtime Leaders
+                                    Most Active Members
                                 </p>
                                 <p className="text-muted-foreground text-xs">
-                                    Highest tracked aggregate monitor runtime.
+                                    Members with the most currently running
+                                    monitors.
                                 </p>
                             </div>
                             <div className="divide-border/50 divide-y">
@@ -3549,20 +3625,11 @@ export function AdminClient({
                                             </p>
                                         </div>
                                         <div className="text-right text-xs">
-                                            <p className="text-foreground font-semibold">
-                                                {formatRuntime(
-                                                    user.metrics
-                                                        .totalRuntimeSeconds,
-                                                )}
+                                            <p className="text-foreground font-semibold tabular-nums">
+                                                {user.metrics.runningMonitors}
                                             </p>
                                             <p className="text-muted-foreground">
-                                                {user.metrics.runningMonitors}{" "}
-                                                running ·{" "}
-                                                {formatRuntime(
-                                                    user.metrics
-                                                        .currentRuntimeSeconds,
-                                                )}{" "}
-                                                open
+                                                running monitors
                                             </p>
                                         </div>
                                     </button>
@@ -3621,168 +3688,6 @@ export function AdminClient({
 
             {activeTab === "insights" ? (
                 <div className="space-y-5">
-                    {isLoadingRuntimeInsights && !runtimeInsights ? (
-                        <div className="border-border/60 bg-card text-muted-foreground flex min-h-48 items-center justify-center rounded-lg border text-sm">
-                            Loading runtime analytics...
-                        </div>
-                    ) : runtimeInsightsLoadFailed && !runtimeInsights ? (
-                        <div className="border-border/60 bg-card flex min-h-48 flex-col items-center justify-center gap-3 rounded-lg border text-center">
-                            <AlertTriangle className="h-6 w-6 text-amber-500" />
-                            <p className="text-sm font-medium">
-                                Runtime analytics could not be loaded
-                            </p>
-                            <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={loadRuntimeInsights}
-                            >
-                                Retry runtime analytics
-                            </Button>
-                        </div>
-                    ) : runtimeInsights ? (
-                        <>
-                            <div className="grid gap-4 sm:grid-cols-3">
-                                <MemberMetricCard
-                                    label="Monitor-hours 7d"
-                                    value={formatRuntime(
-                                        runtimeInsights.daily
-                                            .slice(-7)
-                                            .reduce(
-                                                (sum, day) =>
-                                                    sum +
-                                                    day.freeSeconds +
-                                                    day.serverSeconds +
-                                                    day.groupSeconds,
-                                                0,
-                                            ),
-                                    )}
-                                    detail="Aggregate active time across all monitors"
-                                    icon={Clock3}
-                                    tone="sky"
-                                />
-                                <MemberMetricCard
-                                    label="Median session 7d"
-                                    value={formatRuntime(
-                                        runtimeInsights.medianSessionSeconds7d,
-                                    )}
-                                    detail="Completed active sessions"
-                                    icon={Activity}
-                                    tone="violet"
-                                />
-                                <MemberMetricCard
-                                    label="Tracked members 7d"
-                                    value={runtimeInsights.leaderboard.length}
-                                    detail="Top runtime members shown below"
-                                    icon={Users}
-                                    tone="amber"
-                                />
-                            </div>
-                            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(340px,1fr)]">
-                                <div className="border-border/60 bg-card rounded-xl border p-5 shadow-sm sm:p-6">
-                                    <div className="mb-5">
-                                        <p className="text-sm font-semibold">
-                                            Runtime by proxy source
-                                        </p>
-                                        <p className="text-muted-foreground text-xs">
-                                            UTC day buckets · tracked since{" "}
-                                            {runtimeInsights.trackedSince
-                                                ? new Intl.DateTimeFormat(
-                                                      "de-DE",
-                                                      { dateStyle: "medium" },
-                                                  ).format(
-                                                      new Date(
-                                                          runtimeInsights.trackedSince,
-                                                      ),
-                                                  )
-                                                : "feature launch"}
-                                        </p>
-                                    </div>
-                                    <RuntimeStackedChart
-                                        data={runtimeInsights.daily}
-                                    />
-                                </div>
-                                <div className="border-border/60 bg-card overflow-hidden rounded-xl border shadow-sm">
-                                    <div className="border-border/50 border-b px-5 py-4">
-                                        <p className="text-sm font-semibold">
-                                            7-day runtime leaderboard
-                                        </p>
-                                        <p className="text-muted-foreground text-xs">
-                                            Efficiency uses existing hourly
-                                            worker stats.
-                                        </p>
-                                    </div>
-                                    <div className="divide-border/50 divide-y">
-                                        {runtimeInsights.leaderboard.map(
-                                            (member, index) => {
-                                                const maximum =
-                                                    runtimeInsights
-                                                        .leaderboard[0]
-                                                        ?.runtimeSeconds7d || 1;
-                                                return (
-                                                    <div
-                                                        key={member.userId}
-                                                        className="px-5 py-3"
-                                                    >
-                                                        <div className="flex items-center gap-3">
-                                                            <span className="text-muted-foreground w-5 text-xs tabular-nums">
-                                                                #{index + 1}
-                                                            </span>
-                                                            <div className="min-w-0 flex-1">
-                                                                <div className="flex items-center justify-between gap-3">
-                                                                    <p className="truncate text-sm font-medium">
-                                                                        {member.name ??
-                                                                            member.email ??
-                                                                            "Unknown"}
-                                                                    </p>
-                                                                    <span className="text-xs font-semibold tabular-nums">
-                                                                        {formatRuntime(
-                                                                            member.runtimeSeconds7d,
-                                                                        )}
-                                                                    </span>
-                                                                </div>
-                                                                <div className="bg-muted mt-2 h-1.5 overflow-hidden rounded-full">
-                                                                    <div
-                                                                        className="h-full rounded-full bg-violet-500"
-                                                                        style={{
-                                                                            width: `${(member.runtimeSeconds7d / maximum) * 100}%`,
-                                                                        }}
-                                                                    />
-                                                                </div>
-                                                                <p className="text-muted-foreground mt-1 text-[10px]">
-                                                                    {member.checksPerRuntimeHour ===
-                                                                    null
-                                                                        ? "—"
-                                                                        : member.checksPerRuntimeHour.toFixed(
-                                                                              1,
-                                                                          )}{" "}
-                                                                    checks/h ·{" "}
-                                                                    {member.newItemsPer100RuntimeHours ===
-                                                                    null
-                                                                        ? "—"
-                                                                        : member.newItemsPer100RuntimeHours.toFixed(
-                                                                              1,
-                                                                          )}{" "}
-                                                                    items/100h
-                                                                </p>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                );
-                                            },
-                                        )}
-                                        {runtimeInsights.leaderboard.length ===
-                                        0 ? (
-                                            <p className="text-muted-foreground px-5 py-8 text-center text-sm">
-                                                Runtime tracking has just
-                                                started.
-                                            </p>
-                                        ) : null}
-                                    </div>
-                                </div>
-                            </div>
-                        </>
-                    ) : null}
                     {isLoadingMemberInsights && !memberInsights ? (
                         <div className="border-border/60 bg-card text-muted-foreground flex min-h-72 items-center justify-center rounded-lg border text-sm">
                             Loading member insights...
@@ -4286,7 +4191,7 @@ export function AdminClient({
                     <div className="border-border/60 bg-card rounded-lg border p-5">
                         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                             <div className="flex items-start gap-3">
-                                <div className="bg-emerald-500/10 text-emerald-600 flex size-10 shrink-0 items-center justify-center rounded-lg dark:text-emerald-400">
+                                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
                                     <Clock3 className="size-5" />
                                 </div>
                                 <div>
@@ -4294,9 +4199,10 @@ export function AdminClient({
                                         Price Watch has its own operations area
                                     </p>
                                     <p className="text-muted-foreground mt-1 max-w-2xl text-xs leading-5">
-                                        Configure shared and personal lanes, capacity,
-                                        health metrics and limits without mixing them
-                                        into monitor operations.
+                                        Configure shared and personal lanes,
+                                        capacity, health metrics and limits
+                                        without mixing them into monitor
+                                        operations.
                                     </p>
                                 </div>
                             </div>
@@ -4343,10 +4249,9 @@ export function AdminClient({
                                     </div>
                                     <p className="text-muted-foreground mt-1 max-w-2xl text-xs leading-5">
                                         Pause abandoned monitors and optionally
-                                        Price Watches without
-                                        affecting members who keep Vintrack open
-                                        and active. Admin accounts are always
-                                        excluded.
+                                        Price Watches without affecting members
+                                        who keep Vintrack open and active. Admin
+                                        accounts are always excluded.
                                     </p>
                                 </div>
                             </div>
@@ -4432,11 +4337,13 @@ export function AdminClient({
                                             inactivePolicyDraft.includePriceWatches
                                         }
                                         onChange={(event) =>
-                                            setInactivePolicyDraft((current) => ({
-                                                ...current,
-                                                includePriceWatches:
-                                                    event.target.checked,
-                                            }))
+                                            setInactivePolicyDraft(
+                                                (current) => ({
+                                                    ...current,
+                                                    includePriceWatches:
+                                                        event.target.checked,
+                                                }),
+                                            )
                                         }
                                     />
                                     Include Price Watches
@@ -4511,7 +4418,8 @@ export function AdminClient({
                                     {
                                         inactivePolicyState.inactivityPausedPriceWatchCount
                                     }{" "}
-                                    Price Watches currently paused · Last evaluation:{" "}
+                                    Price Watches currently paused · Last
+                                    evaluation:{" "}
                                     {inactivePolicyState.runtime
                                         ? formatMetricDate(
                                               new Date(
@@ -4806,15 +4714,6 @@ export function AdminClient({
                                                                                 delay
                                                                             </p>
                                                                             <p className="inline-flex items-center gap-1.5">
-                                                                                <Boxes className="h-3.5 w-3.5" />
-                                                                                {
-                                                                                    monitor
-                                                                                        ._count
-                                                                                        .items
-                                                                                }{" "}
-                                                                                items
-                                                                            </p>
-                                                                            <p className="inline-flex items-center gap-1.5">
                                                                                 <Webhook className="h-3.5 w-3.5" />
                                                                                 {[
                                                                                     monitor.discord_configured &&
@@ -4953,7 +4852,7 @@ export function AdminClient({
                                         Role
                                     </th>
                                     <th className="text-muted-foreground px-5 py-3 text-center text-[11px] font-medium tracking-wider uppercase">
-                                        Runtime
+                                        Checks 24h
                                     </th>
                                     <th className="text-muted-foreground px-5 py-3 text-center text-[11px] font-medium tracking-wider uppercase">
                                         Monitors
@@ -5014,18 +4913,15 @@ export function AdminClient({
                                             </td>
                                             <td className="px-5 py-3.5 text-center">
                                                 <div className="flex flex-col items-center gap-1">
-                                                    <span className="text-foreground inline-flex items-center gap-1 text-sm font-medium tabular-nums">
-                                                        <Clock3 className="text-muted-foreground h-3.5 w-3.5" />
-                                                        {formatRuntime(
-                                                            user.metrics
-                                                                .totalRuntimeSeconds,
-                                                        )}
+                                                    <span className="text-foreground text-sm font-medium tabular-nums">
+                                                        {user.metrics.checks24h}
                                                     </span>
                                                     <span className="text-muted-foreground text-[10px] uppercase">
-                                                        {user.metrics
-                                                            .oldestActiveSince
-                                                            ? `${formatRuntime((nowMs - new Date(user.metrics.oldestActiveSince).getTime()) / 1000)} longest open`
-                                                            : "No open session"}
+                                                        {
+                                                            user.metrics
+                                                                .failedChecks24h
+                                                        }{" "}
+                                                        failed
                                                     </span>
                                                 </div>
                                             </td>
@@ -5226,12 +5122,24 @@ export function AdminClient({
 
             {activeTab === "price_watch" ? (
                 <div className="space-y-4">
-                    <div className="grid gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-2 xl:grid-cols-4">
+                    <div className="bg-border grid gap-px overflow-hidden rounded-xl border sm:grid-cols-2 xl:grid-cols-4">
                         {[
-                            ["Active watches", priceWatchPollingState.activeWatches],
-                            ["Shared lanes", priceWatchPollingState.sharedSchedules],
-                            ["Personal lanes", priceWatchPollingState.personalSchedules],
-                            ["Expected RPM", priceWatchPollingState.expectedRpm.toFixed(1)],
+                            [
+                                "Active watches",
+                                priceWatchPollingState.activeWatches,
+                            ],
+                            [
+                                "Shared lanes",
+                                priceWatchPollingState.sharedSchedules,
+                            ],
+                            [
+                                "Personal lanes",
+                                priceWatchPollingState.personalSchedules,
+                            ],
+                            [
+                                "Expected RPM",
+                                priceWatchPollingState.expectedRpm.toFixed(1),
+                            ],
                             ["Checks · 24h", priceWatchPollingState.checks24h],
                             [
                                 "Success rate",
@@ -5239,7 +5147,10 @@ export function AdminClient({
                                     ? `${((priceWatchPollingState.successfulChecks24h / priceWatchPollingState.checks24h) * 100).toFixed(1)}%`
                                     : "—",
                             ],
-                            ["403 / 429", `${priceWatchPollingState.accessDenied24h} / ${priceWatchPollingState.rateLimited24h}`],
+                            [
+                                "403 / 429",
+                                `${priceWatchPollingState.accessDenied24h} / ${priceWatchPollingState.rateLimited24h}`,
+                            ],
                             [
                                 "p50 / p95 latency",
                                 priceWatchPollingState.p50DurationMs == null ||
@@ -5247,17 +5158,24 @@ export function AdminClient({
                                     ? "—"
                                     : `${Math.round(priceWatchPollingState.p50DurationMs)} / ${Math.round(priceWatchPollingState.p95DurationMs)} ms`,
                             ],
-                            ["Queue lag", `${priceWatchPollingState.queueLagSeconds.toFixed(0)} sec`],
-                            ["Traffic · 24h", `${(priceWatchPollingState.trafficBytes24h / 1024 / 1024).toFixed(1)} MB`],
+                            [
+                                "Queue lag",
+                                `${priceWatchPollingState.queueLagSeconds.toFixed(0)} sec`,
+                            ],
+                            [
+                                "Traffic · 24h",
+                                `${(priceWatchPollingState.trafficBytes24h / 1024 / 1024).toFixed(1)} MB`,
+                            ],
                             [
                                 "Alert success",
-                                priceWatchPollingState.alertSuccessRate24h == null
+                                priceWatchPollingState.alertSuccessRate24h ==
+                                null
                                     ? "—"
                                     : `${priceWatchPollingState.alertSuccessRate24h.toFixed(1)}%`,
                             ],
                         ].map(([label, value]) => (
                             <div key={label} className="bg-card p-4">
-                                <p className="text-muted-foreground text-[10px] font-medium uppercase tracking-wide">
+                                <p className="text-muted-foreground text-[10px] font-medium tracking-wide uppercase">
                                     {label}
                                 </p>
                                 <p className="mt-1 text-xl font-semibold tabular-nums">
@@ -5287,104 +5205,165 @@ export function AdminClient({
                                 <div>
                                     <CardTitle>Runtime & capacity</CardTitle>
                                     <CardDescription className="mt-1">
-                                        Applied by workers within about ten seconds. Every HTTP attempt consumes capacity.
+                                        Applied by workers within about ten
+                                        seconds. Every HTTP attempt consumes
+                                        capacity.
                                     </CardDescription>
                                 </div>
                                 <Badge
-                                    variant={priceWatchRuntimeDraft.enabled ? "default" : "destructive"}
+                                    variant={
+                                        priceWatchRuntimeDraft.enabled
+                                            ? "default"
+                                            : "destructive"
+                                    }
                                 >
-                                    {priceWatchRuntimeDraft.enabled ? "Running" : "Paused"}
+                                    {priceWatchRuntimeDraft.enabled
+                                        ? "Running"
+                                        : "Paused"}
                                 </Badge>
                             </div>
                         </CardHeader>
                         <CardContent className="space-y-5 p-5">
                             <label className="border-border/60 bg-muted/20 flex items-center justify-between gap-4 rounded-lg border p-4">
                                 <span>
-                                    <span className="block text-sm font-semibold">Price Watch worker</span>
-                                    <span className="text-muted-foreground block text-xs">Pause all new Price Watch checks without a redeploy.</span>
+                                    <span className="block text-sm font-semibold">
+                                        Price Watch worker
+                                    </span>
+                                    <span className="text-muted-foreground block text-xs">
+                                        Global access is managed in Features;
+                                        runtime limits are configured here.
+                                    </span>
                                 </span>
                                 <input
                                     type="checkbox"
                                     checked={priceWatchRuntimeDraft.enabled}
-                                    onChange={(event) =>
-                                        setPriceWatchRuntimeDraft((current) => ({
-                                            ...current,
-                                            enabled: event.target.checked,
-                                        }))
-                                    }
+                                    disabled
+                                    aria-label="Managed in Features"
                                     className="h-5 w-5 accent-current"
                                 />
                             </label>
                             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                                 <div className="space-y-2">
-                                    <Label htmlFor="shared-minimum">Shared minimum</Label>
+                                    <Label htmlFor="shared-minimum">
+                                        Shared minimum
+                                    </Label>
                                     <select
                                         id="shared-minimum"
                                         disabled={isSavingPriceWatchInterval}
-                                        value={priceWatchRuntimeDraft.sharedMinimumSeconds}
+                                        value={
+                                            priceWatchRuntimeDraft.sharedMinimumSeconds
+                                        }
                                         onChange={(event) =>
-                                            setPriceWatchRuntimeDraft((current) => ({
-                                                ...current,
-                                                sharedMinimumSeconds: Number(event.target.value),
-                                            }))
+                                            setPriceWatchRuntimeDraft(
+                                                (current) => ({
+                                                    ...current,
+                                                    sharedMinimumSeconds:
+                                                        Number(
+                                                            event.target.value,
+                                                        ),
+                                                }),
+                                            )
                                         }
                                         className="border-input bg-background h-10 w-full rounded-md border px-3 text-sm"
                                     >
-                                        {[120, 300, 600, 900, 1800, 3600].map((seconds) => (
-                                            <option key={seconds} value={seconds}>{seconds / 60} min</option>
-                                        ))}
+                                        {[120, 300, 600, 900, 1800, 3600].map(
+                                            (seconds) => (
+                                                <option
+                                                    key={seconds}
+                                                    value={seconds}
+                                                >
+                                                    {seconds / 60} min
+                                                </option>
+                                            ),
+                                        )}
                                     </select>
                                 </div>
                                 <div className="space-y-2">
-                                    <Label htmlFor="personal-minimum">Personal minimum</Label>
+                                    <Label htmlFor="personal-minimum">
+                                        Personal minimum
+                                    </Label>
                                     <select
                                         id="personal-minimum"
                                         disabled={isSavingPriceWatchInterval}
-                                        value={priceWatchRuntimeDraft.personalMinimumSeconds}
+                                        value={
+                                            priceWatchRuntimeDraft.personalMinimumSeconds
+                                        }
                                         onChange={(event) =>
-                                            setPriceWatchRuntimeDraft((current) => ({
-                                                ...current,
-                                                personalMinimumSeconds: Number(event.target.value),
-                                            }))
+                                            setPriceWatchRuntimeDraft(
+                                                (current) => ({
+                                                    ...current,
+                                                    personalMinimumSeconds:
+                                                        Number(
+                                                            event.target.value,
+                                                        ),
+                                                }),
+                                            )
                                         }
                                         className="border-input bg-background h-10 w-full rounded-md border px-3 text-sm"
                                     >
-                                        {[30, 60, 120, 300, 600, 900, 1800, 3600].map((seconds) => (
-                                            <option key={seconds} value={seconds}>{seconds === 30 ? "30 sec" : `${seconds / 60} min`}</option>
+                                        {[
+                                            30, 60, 120, 300, 600, 900, 1800,
+                                            3600,
+                                        ].map((seconds) => (
+                                            <option
+                                                key={seconds}
+                                                value={seconds}
+                                            >
+                                                {seconds === 30
+                                                    ? "30 sec"
+                                                    : `${seconds / 60} min`}
+                                            </option>
                                         ))}
                                     </select>
                                 </div>
                                 <div className="space-y-2">
-                                    <Label htmlFor="shared-rpm">Shared max RPM</Label>
+                                    <Label htmlFor="shared-rpm">
+                                        Shared max RPM
+                                    </Label>
                                     <Input
                                         id="shared-rpm"
                                         type="number"
                                         min={1}
                                         max={300}
                                         disabled={isSavingPriceWatchInterval}
-                                        value={priceWatchRuntimeDraft.sharedMaxRpm}
+                                        value={
+                                            priceWatchRuntimeDraft.sharedMaxRpm
+                                        }
                                         onChange={(event) =>
-                                            setPriceWatchRuntimeDraft((current) => ({
-                                                ...current,
-                                                sharedMaxRpm: Number(event.target.value),
-                                            }))
+                                            setPriceWatchRuntimeDraft(
+                                                (current) => ({
+                                                    ...current,
+                                                    sharedMaxRpm: Number(
+                                                        event.target.value,
+                                                    ),
+                                                }),
+                                            )
                                         }
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <Label htmlFor="personal-rpm">BYO RPM / working proxy</Label>
+                                    <Label htmlFor="personal-rpm">
+                                        BYO RPM / working proxy
+                                    </Label>
                                     <Input
                                         id="personal-rpm"
                                         type="number"
                                         min={1}
                                         max={10}
                                         disabled={isSavingPriceWatchInterval}
-                                        value={priceWatchRuntimeDraft.personalMaxRpmPerProxy}
+                                        value={
+                                            priceWatchRuntimeDraft.personalMaxRpmPerProxy
+                                        }
                                         onChange={(event) =>
-                                            setPriceWatchRuntimeDraft((current) => ({
-                                                ...current,
-                                                personalMaxRpmPerProxy: Number(event.target.value),
-                                            }))
+                                            setPriceWatchRuntimeDraft(
+                                                (current) => ({
+                                                    ...current,
+                                                    personalMaxRpmPerProxy:
+                                                        Number(
+                                                            event.target.value,
+                                                        ),
+                                                }),
+                                            )
                                         }
                                     />
                                 </div>
@@ -5394,7 +5373,9 @@ export function AdminClient({
                                     onClick={handleSavePriceWatchRuntime}
                                     disabled={isSavingPriceWatchInterval}
                                 >
-                                    {isSavingPriceWatchInterval ? "Saving…" : "Save worker settings"}
+                                    {isSavingPriceWatchInterval
+                                        ? "Saving…"
+                                        : "Save worker settings"}
                                 </Button>
                             </div>
                         </CardContent>
@@ -5403,45 +5384,88 @@ export function AdminClient({
                     <div className="grid gap-4 xl:grid-cols-2">
                         <Card className="py-0">
                             <CardHeader className="border-b p-5">
-                                <CardTitle className="text-base">Problematic targets</CardTitle>
-                                <CardDescription>Active schedules with a concrete polling or parsing failure.</CardDescription>
+                                <CardTitle className="text-base">
+                                    Problematic targets
+                                </CardTitle>
+                                <CardDescription>
+                                    Active schedules with a concrete polling or
+                                    parsing failure.
+                                </CardDescription>
                             </CardHeader>
                             <CardContent className="divide-y p-0">
                                 {priceWatchPollingState.problems.length ? (
-                                    priceWatchPollingState.problems.map((problem) => (
-                                        <div key={problem.scheduleId} className="p-4">
-                                            <div className="flex items-center justify-between gap-3">
-                                                <p className="truncate text-sm font-medium">{problem.title}</p>
-                                                <Badge variant="outline">{problem.region.toUpperCase()} · {problem.transport}</Badge>
+                                    priceWatchPollingState.problems.map(
+                                        (problem) => (
+                                            <div
+                                                key={problem.scheduleId}
+                                                className="p-4"
+                                            >
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <p className="truncate text-sm font-medium">
+                                                        {problem.title}
+                                                    </p>
+                                                    <Badge variant="outline">
+                                                        {problem.region.toUpperCase()}{" "}
+                                                        · {problem.transport}
+                                                    </Badge>
+                                                </div>
+                                                <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">
+                                                    {problem.errorCode}
+                                                </p>
+                                                <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs">
+                                                    {problem.detail}
+                                                </p>
                                             </div>
-                                            <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">{problem.errorCode}</p>
-                                            <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs">{problem.detail}</p>
-                                        </div>
-                                    ))
+                                        ),
+                                    )
                                 ) : (
-                                    <p className="text-muted-foreground p-5 text-sm">No problematic active targets.</p>
+                                    <p className="text-muted-foreground p-5 text-sm">
+                                        No problematic active targets.
+                                    </p>
                                 )}
                             </CardContent>
                         </Card>
                         <Card className="py-0">
                             <CardHeader className="border-b p-5">
-                                <CardTitle className="text-base">Problematic proxy groups</CardTitle>
-                                <CardDescription>Personal lanes without usable regional capacity.</CardDescription>
+                                <CardTitle className="text-base">
+                                    Problematic proxy groups
+                                </CardTitle>
+                                <CardDescription>
+                                    Personal lanes without usable regional
+                                    capacity.
+                                </CardDescription>
                             </CardHeader>
                             <CardContent className="divide-y p-0">
                                 {priceWatchPollingState.proxyProblems.length ? (
-                                    priceWatchPollingState.proxyProblems.map((problem) => (
-                                        <div key={problem.id} className="p-4">
-                                            <div className="flex items-center justify-between gap-3">
-                                                <p className="truncate text-sm font-medium">{problem.name}</p>
-                                                <Badge variant="outline">{problem.working} working · {problem.region.toUpperCase()}</Badge>
+                                    priceWatchPollingState.proxyProblems.map(
+                                        (problem) => (
+                                            <div
+                                                key={problem.id}
+                                                className="p-4"
+                                            >
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <p className="truncate text-sm font-medium">
+                                                        {problem.name}
+                                                    </p>
+                                                    <Badge variant="outline">
+                                                        {problem.working}{" "}
+                                                        working ·{" "}
+                                                        {problem.region.toUpperCase()}
+                                                    </Badge>
+                                                </div>
+                                                <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">
+                                                    {problem.status}
+                                                </p>
+                                                <p className="text-muted-foreground mt-0.5 text-xs">
+                                                    {problem.error}
+                                                </p>
                                             </div>
-                                            <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">{problem.status}</p>
-                                            <p className="text-muted-foreground mt-0.5 text-xs">{problem.error}</p>
-                                        </div>
-                                    ))
+                                        ),
+                                    )
                                 ) : (
-                                    <p className="text-muted-foreground p-5 text-sm">No proxy groups need attention.</p>
+                                    <p className="text-muted-foreground p-5 text-sm">
+                                        No proxy groups need attention.
+                                    </p>
                                 )}
                             </CardContent>
                         </Card>
@@ -5495,23 +5519,78 @@ export function AdminClient({
                                 Active Price Watch Limits
                             </p>
                             <p className="text-muted-foreground text-xs">
-                                User override → reward tier → role → global. Lower limits pause newest excess watches.
+                                User override → reward tier → role → global.
+                                Lower limits pause newest excess watches.
                             </p>
                         </div>
                         <div className="grid gap-3 lg:grid-cols-4">
                             <div className="space-y-2">
-                                <Label htmlFor="roles-global-price-watch-limit">Global default</Label>
+                                <Label htmlFor="roles-global-price-watch-limit">
+                                    Global default
+                                </Label>
                                 <div className="flex gap-2">
-                                    <Input id="roles-global-price-watch-limit" type="number" min={0} value={globalPriceWatchLimitInput} onChange={(event) => setGlobalPriceWatchLimitInput(event.target.value)} placeholder="Unlimited" />
-                                    <Button type="button" variant="outline" onClick={handleSaveGlobalPriceWatchLimit}>Save</Button>
+                                    <Input
+                                        id="roles-global-price-watch-limit"
+                                        type="number"
+                                        min={0}
+                                        value={globalPriceWatchLimitInput}
+                                        onChange={(event) =>
+                                            setGlobalPriceWatchLimitInput(
+                                                event.target.value,
+                                            )
+                                        }
+                                        placeholder="Unlimited"
+                                    />
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={
+                                            handleSaveGlobalPriceWatchLimit
+                                        }
+                                    >
+                                        Save
+                                    </Button>
                                 </div>
                             </div>
                             {LIMIT_ROLES.map((role) => (
                                 <div key={role.value} className="space-y-2">
-                                    <Label htmlFor={`roles-price-watch-${role.value}`}>{role.label}</Label>
+                                    <Label
+                                        htmlFor={`roles-price-watch-${role.value}`}
+                                    >
+                                        {role.label}
+                                    </Label>
                                     <div className="flex gap-2">
-                                        <Input id={`roles-price-watch-${role.value}`} type="number" min={0} value={rolePriceWatchLimitInputs[role.value] ?? ""} onChange={(event) => setRolePriceWatchLimitInputs((current) => ({ ...current, [role.value]: event.target.value }))} placeholder="Reward/global" />
-                                        <Button type="button" variant="outline" onClick={() => handleSaveRolePriceWatchLimit(role.value)}>Save</Button>
+                                        <Input
+                                            id={`roles-price-watch-${role.value}`}
+                                            type="number"
+                                            min={0}
+                                            value={
+                                                rolePriceWatchLimitInputs[
+                                                    role.value
+                                                ] ?? ""
+                                            }
+                                            onChange={(event) =>
+                                                setRolePriceWatchLimitInputs(
+                                                    (current) => ({
+                                                        ...current,
+                                                        [role.value]:
+                                                            event.target.value,
+                                                    }),
+                                                )
+                                            }
+                                            placeholder="Reward/global"
+                                        />
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={() =>
+                                                handleSaveRolePriceWatchLimit(
+                                                    role.value,
+                                                )
+                                            }
+                                        >
+                                            Save
+                                        </Button>
                                     </div>
                                 </div>
                             ))}
@@ -5716,6 +5795,55 @@ export function AdminClient({
 
             {activeTab === "logs" ? (
                 <div className="space-y-4">
+                    <div className="border-border/60 bg-card flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex items-start gap-3">
+                            <div className="bg-muted text-muted-foreground rounded-lg p-2">
+                                <ScrollText className="size-4" />
+                            </div>
+                            <div>
+                                <p className="text-sm font-semibold">
+                                    Live operations log
+                                </p>
+                                <p className="text-muted-foreground mt-0.5 text-xs">
+                                    Operational problems and admin changes,
+                                    refreshed every 10 seconds.
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Badge
+                                variant="outline"
+                                className="gap-1.5 rounded-md"
+                            >
+                                <span className="size-1.5 rounded-full bg-emerald-500" />
+                                Auto-refresh
+                            </Badge>
+                            <span className="text-muted-foreground text-xs">
+                                {logsUpdatedAt
+                                    ? "Updated " +
+                                      formatRelativeTime(logsUpdatedAt)
+                                    : "Waiting for first update"}
+                            </span>
+                            <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-8 gap-1.5"
+                                onClick={() =>
+                                    loadAdminLogs(operationFilter, false, true)
+                                }
+                                disabled={isLoadingLogs}
+                            >
+                                <RefreshCw
+                                    className={
+                                        "size-3.5 " +
+                                        (isLoadingLogs ? "animate-spin" : "")
+                                    }
+                                />
+                                Refresh now
+                            </Button>
+                        </div>
+                    </div>
                     {operationsSummary ? (
                         <>
                             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -5930,47 +6058,74 @@ export function AdminClient({
                                         Operations
                                     </p>
                                     <p className="text-muted-foreground text-xs">
-                                        Actual failures, relevant incidents and
-                                        audit activity without
-                                        successful-delivery noise.
+                                        {visibleAdminLogs.length.toLocaleString()}{" "}
+                                        shown of{" "}
+                                        {adminLogs.length.toLocaleString()}{" "}
+                                        loaded ·{" "}
+                                        {
+                                            ADMIN_OPERATION_FILTERS.find(
+                                                (filter) =>
+                                                    filter.value ===
+                                                    operationFilter,
+                                            )?.description
+                                        }
                                     </p>
                                 </div>
-                                <div className="flex flex-wrap gap-1">
-                                    {(
-                                        [
-                                            "all",
-                                            "delivery",
-                                            "proxy",
-                                            "monitor",
-                                            "audit",
-                                        ] as AdminOperationFilter[]
-                                    ).map((filter) => (
-                                        <Button
-                                            key={filter}
-                                            type="button"
-                                            size="sm"
-                                            variant={
-                                                operationFilter === filter
-                                                    ? "secondary"
-                                                    : "ghost"
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <div className="relative min-w-[220px] flex-1 sm:flex-none">
+                                        <Search className="text-muted-foreground absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />
+                                        <Input
+                                            aria-label="Search operation logs"
+                                            value={logSearchQuery}
+                                            onChange={(event) =>
+                                                setLogSearchQuery(
+                                                    event.target.value,
+                                                )
                                             }
-                                            className="h-7 capitalize"
-                                            onClick={() => {
-                                                setLogsLoaded(false);
-                                                loadAdminLogs(filter);
-                                            }}
-                                        >
-                                            {filter}
-                                        </Button>
-                                    ))}
+                                            placeholder="Search logs..."
+                                            className="h-8 pl-8 text-xs sm:w-56"
+                                        />
+                                    </div>
+                                    <div className="flex flex-wrap gap-1">
+                                        {ADMIN_OPERATION_FILTERS.map(
+                                            (filter) => (
+                                                <Button
+                                                    key={filter.value}
+                                                    type="button"
+                                                    size="sm"
+                                                    variant={
+                                                        operationFilter ===
+                                                        filter.value
+                                                            ? "secondary"
+                                                            : "ghost"
+                                                    }
+                                                    className="h-7"
+                                                    aria-pressed={
+                                                        operationFilter ===
+                                                        filter.value
+                                                    }
+                                                    title={filter.description}
+                                                    onClick={() =>
+                                                        loadAdminLogs(
+                                                            filter.value,
+                                                            false,
+                                                            true,
+                                                        )
+                                                    }
+                                                >
+                                                    {filter.label}
+                                                </Button>
+                                            ),
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                        {isLoadingLogs ? (
+                        {isLoadingLogs && adminLogs.length === 0 ? (
                             <div className="text-muted-foreground px-5 py-12 text-center text-sm">
                                 Loading admin logs...
                             </div>
-                        ) : adminLogs.length > 0 ? (
+                        ) : visibleAdminLogs.length > 0 ? (
                             <div className="overflow-x-auto">
                                 <table className="w-full">
                                     <thead className="bg-muted/30">
@@ -5993,7 +6148,7 @@ export function AdminClient({
                                         </tr>
                                     </thead>
                                     <tbody className="divide-border/50 divide-y">
-                                        {adminLogs.map((log) => (
+                                        {visibleAdminLogs.map((log) => (
                                             <tr key={log.id}>
                                                 <td className="px-5 py-3.5">
                                                     <div className="space-y-1">
@@ -6009,7 +6164,7 @@ export function AdminClient({
                                                             </p>
                                                         </div>
                                                         {log.detail ? (
-                                                            <p className="text-muted-foreground max-w-xl truncate text-xs">
+                                                            <p className="text-muted-foreground max-w-2xl text-xs leading-5 break-words">
                                                                 {log.detail}
                                                             </p>
                                                         ) : null}
@@ -6023,16 +6178,33 @@ export function AdminClient({
                                                 </td>
                                                 <td className="px-5 py-3.5">
                                                     <Badge
-                                                        variant="secondary"
-                                                        className="rounded-md text-[10px] uppercase"
+                                                        variant="outline"
+                                                        className={
+                                                            "rounded-md text-[10px] uppercase " +
+                                                            operationStatusClass(
+                                                                log.status,
+                                                            )
+                                                        }
                                                     >
                                                         {log.status}
                                                     </Badge>
                                                 </td>
-                                                <td className="text-muted-foreground px-5 py-3.5 text-right text-xs">
-                                                    {formatMetricDate(
+                                                <td
+                                                    className="text-muted-foreground px-5 py-3.5 text-right text-xs"
+                                                    title={new Date(
                                                         log.createdAt,
-                                                    )}
+                                                    ).toISOString()}
+                                                >
+                                                    <span className="text-foreground block font-medium">
+                                                        {formatRelativeTime(
+                                                            log.createdAt,
+                                                        )}
+                                                    </span>
+                                                    <span className="mt-0.5 block text-[10px]">
+                                                        {formatMetricDate(
+                                                            log.createdAt,
+                                                        )}
+                                                    </span>
                                                 </td>
                                             </tr>
                                         ))}
@@ -6041,7 +6213,9 @@ export function AdminClient({
                             </div>
                         ) : (
                             <div className="text-muted-foreground px-5 py-12 text-center text-sm">
-                                No admin logs found yet.
+                                {normalizedLogSearch
+                                    ? "No loaded operations match your search."
+                                    : "No operations match this filter yet."}
                             </div>
                         )}
                         {operationNextCursor && !isLoadingLogs ? (
@@ -6630,6 +6804,151 @@ export function AdminClient({
 
             {activeTab === "settings" ? (
                 <div className="space-y-4">
+                    <div className="border-border/60 bg-card rounded-lg border p-5">
+                        <div className="flex items-start justify-between gap-4">
+                            <div>
+                                <p className="text-sm font-semibold">
+                                    Configuration diagnostics
+                                </p>
+                                <p className="text-muted-foreground mt-1 text-xs">
+                                    Values are always redacted. Run make
+                                    config-check for file-level validation.
+                                </p>
+                            </div>
+                            <Badge
+                                variant={
+                                    configDiagnostics.status === "healthy"
+                                        ? "secondary"
+                                        : "destructive"
+                                }
+                            >
+                                {configDiagnostics.status}
+                            </Badge>
+                        </div>
+                        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                            <div className="bg-muted/30 rounded-lg p-3 text-xs">
+                                <p className="text-muted-foreground uppercase">
+                                    Origin source
+                                </p>
+                                <p className="mt-1 font-medium">
+                                    {configDiagnostics.originSource ??
+                                        "Missing"}
+                                </p>
+                            </div>
+                            <div className="bg-muted/30 rounded-lg p-3 text-xs">
+                                <p className="text-muted-foreground uppercase">
+                                    Secret slots
+                                </p>
+                                <p className="mt-1 font-medium">
+                                    {configDiagnostics.configuredSecrets}/
+                                    {configDiagnostics.secretSlots} configured
+                                </p>
+                            </div>
+                            <div className="bg-muted/30 rounded-lg p-3 text-xs">
+                                <p className="text-muted-foreground uppercase">
+                                    Missing variables
+                                </p>
+                                <p className="mt-1 font-medium">
+                                    {configDiagnostics.missing.join(", ") ||
+                                        "None"}
+                                </p>
+                            </div>
+                        </div>
+                        {configDiagnostics.usingLegacyOrigin ||
+                        configDiagnostics.originConflict ? (
+                            <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
+                                {configDiagnostics.originConflict
+                                    ? "AUTH_URL conflicts with a legacy alias."
+                                    : "A deprecated origin alias is in use."}
+                            </p>
+                        ) : null}
+                    </div>
+
+                    <div className="border-border/60 bg-card rounded-lg border p-5">
+                        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                            <div>
+                                <p className="text-sm font-semibold">
+                                    Worker Policy
+                                </p>
+                                <p className="text-muted-foreground mt-1 text-xs">
+                                    Runtime behavior stored atomically in the
+                                    database · revision {workerPolicy.revision}
+                                </p>
+                                <div className="mt-4 flex flex-wrap gap-4 text-sm">
+                                    {[
+                                        [
+                                            "Seller enrichment",
+                                            "enrichSellerInfo",
+                                        ],
+                                        [
+                                            "Latency metrics",
+                                            "catalogLatencyMetrics",
+                                        ],
+                                        [
+                                            "Allow active free discovery",
+                                            "discoveryAllowFreeActive",
+                                        ],
+                                    ].map(([label, key]) => (
+                                        <label
+                                            key={key}
+                                            className="flex items-center gap-2"
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(
+                                                    workerPolicy[
+                                                        key as keyof WorkerPolicy
+                                                    ],
+                                                )}
+                                                onChange={(event) =>
+                                                    setWorkerPolicy(
+                                                        (current) => ({
+                                                            ...current,
+                                                            [key]: event.target
+                                                                .checked,
+                                                        }),
+                                                    )
+                                                }
+                                            />
+                                            {label}
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="flex items-end gap-2">
+                                <div className="space-y-1">
+                                    <Label htmlFor="worker-discovery-mode">
+                                        Discovery mode
+                                    </Label>
+                                    <select
+                                        id="worker-discovery-mode"
+                                        value={workerPolicy.discoveryMode}
+                                        onChange={(event) =>
+                                            setWorkerPolicy((current) => ({
+                                                ...current,
+                                                discoveryMode: event.target
+                                                    .value as WorkerPolicy["discoveryMode"],
+                                            }))
+                                        }
+                                        className="border-input bg-background h-9 rounded-md border px-3 text-sm"
+                                    >
+                                        <option value="off">Off</option>
+                                        <option value="shadow">Shadow</option>
+                                        <option value="active">Active</option>
+                                    </select>
+                                </div>
+                                <Button
+                                    onClick={handleSaveWorkerPolicy}
+                                    disabled={isSavingWorkerPolicy}
+                                >
+                                    {isSavingWorkerPolicy
+                                        ? "Saving..."
+                                        : "Save policy"}
+                                </Button>
+                            </div>
+                        </div>
+                    </div>
+
                     <div className="border-border/60 bg-card flex flex-col gap-3 rounded-lg border px-5 py-4 md:flex-row md:items-center md:justify-between">
                         <div className="flex items-center gap-3">
                             <div className="bg-muted text-muted-foreground rounded-lg p-2">
@@ -6781,25 +7100,17 @@ export function AdminClient({
                                         <input
                                             type="checkbox"
                                             checked={freeProxySettings.enabled}
-                                            onChange={(event) =>
-                                                setFreeProxySettings(
-                                                    (prev) => ({
-                                                        ...prev,
-                                                        enabled:
-                                                            event.target
-                                                                .checked,
-                                                    }),
-                                                )
-                                            }
+                                            disabled
+                                            aria-label="Managed in Features"
                                             className="mt-1"
                                         />
                                         <span>
                                             <span className="text-sm font-medium">
-                                                Enable for users
+                                                Feature availability
                                             </span>
                                             <span className="text-muted-foreground block text-xs">
-                                                Shows Free Proxy Pool in monitor
-                                                proxy selection.
+                                                Managed globally and per role in
+                                                Features.
                                             </span>
                                         </span>
                                     </label>
@@ -8204,6 +8515,9 @@ export function AdminClient({
                                                     type="button"
                                                     variant="outline"
                                                     className="h-10 shrink-0 px-4"
+                                                    disabled={
+                                                        isLoadingSelectedDetails
+                                                    }
                                                     onClick={
                                                         handleSaveUserFreeProxyLimit
                                                     }
@@ -8223,7 +8537,9 @@ export function AdminClient({
                                             Active Price Watch Limit
                                         </p>
                                         <p className="text-muted-foreground mt-1 text-xs">
-                                            Empty override uses reward, role, then global. Lowering it pauses newest excess watches.
+                                            Empty override uses reward, role,
+                                            then global. Lowering it pauses
+                                            newest excess watches.
                                         </p>
                                     </div>
                                     {selected.role === "admin" ? (
@@ -8232,7 +8548,10 @@ export function AdminClient({
                                         </div>
                                     ) : (
                                         <div className="space-y-2">
-                                            <Label htmlFor="user-price-watch-limit" className="text-xs">
+                                            <Label
+                                                htmlFor="user-price-watch-limit"
+                                                className="text-xs"
+                                            >
                                                 User override
                                             </Label>
                                             <div className="flex gap-2">
@@ -8241,9 +8560,13 @@ export function AdminClient({
                                                     type="number"
                                                     min={0}
                                                     className="h-10"
-                                                    value={userPriceWatchLimitInput}
+                                                    value={
+                                                        userPriceWatchLimitInput
+                                                    }
                                                     onChange={(event) =>
-                                                        setUserPriceWatchLimitInput(event.target.value)
+                                                        setUserPriceWatchLimitInput(
+                                                            event.target.value,
+                                                        )
                                                     }
                                                     placeholder="Reward/role/global"
                                                 />
@@ -8251,72 +8574,15 @@ export function AdminClient({
                                                     type="button"
                                                     variant="outline"
                                                     className="h-10 shrink-0 px-4"
-                                                    onClick={handleSaveUserPriceWatchLimit}
+                                                    onClick={
+                                                        handleSaveUserPriceWatchLimit
+                                                    }
                                                 >
                                                     Save
                                                 </Button>
                                             </div>
                                         </div>
                                     )}
-                                </div>
-                            </div>
-
-                            <div className="border-border/60 bg-card rounded-lg border p-4 sm:p-5">
-                                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                                    <div>
-                                        <p className="text-sm font-semibold">
-                                            Monitor Runtime
-                                        </p>
-                                        <p className="text-muted-foreground text-xs">
-                                            Aggregate monitor-hours for this
-                                            member.
-                                        </p>
-                                    </div>
-                                    <span className="text-muted-foreground text-[10px] uppercase">
-                                        {overviewState?.runtime.trackedSince
-                                            ? `Tracked since ${new Intl.DateTimeFormat("de-DE", { dateStyle: "medium" }).format(new Date(overviewState.runtime.trackedSince))}`
-                                            : "Tracking from feature launch"}
-                                    </span>
-                                </div>
-                                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                                    {[
-                                        [
-                                            "Total",
-                                            selected.metrics
-                                                .totalRuntimeSeconds,
-                                        ],
-                                        [
-                                            "Open sessions",
-                                            selected.metrics
-                                                .currentRuntimeSeconds,
-                                        ],
-                                        [
-                                            "Last 7 days",
-                                            selected.runtimeDetails
-                                                ?.runtimeSeconds7d ?? 0,
-                                        ],
-                                        [
-                                            "Average session",
-                                            selected.runtimeDetails
-                                                ?.averageSessionSeconds ?? 0,
-                                        ],
-                                    ].map(([label, value]) => (
-                                        <div
-                                            key={String(label)}
-                                            className="bg-muted/30 rounded-lg px-4 py-3"
-                                        >
-                                            <p className="text-muted-foreground text-[10px] uppercase">
-                                                {label}
-                                            </p>
-                                            <p className="mt-1 text-xl font-semibold tabular-nums">
-                                                {isLoadingSelectedDetails
-                                                    ? "—"
-                                                    : formatRuntime(
-                                                          Number(value),
-                                                      )}
-                                            </p>
-                                        </div>
-                                    ))}
                                 </div>
                             </div>
 
@@ -8348,16 +8614,6 @@ export function AdminClient({
                                         </CardDescription>
                                         <CardTitle className="text-2xl">
                                             {selected.metrics.pausedMonitors}
-                                        </CardTitle>
-                                    </CardHeader>
-                                </Card>
-                                <Card className="py-0">
-                                    <CardHeader className="pt-3 pb-2">
-                                        <CardDescription>
-                                            Found Items
-                                        </CardDescription>
-                                        <CardTitle className="text-2xl">
-                                            {selectedItems}
                                         </CardTitle>
                                     </CardHeader>
                                 </Card>
@@ -8516,39 +8772,11 @@ export function AdminClient({
                                                                 ms delay
                                                             </span>
                                                             <span>
-                                                                {
-                                                                    monitor
-                                                                        ._count
-                                                                        .items
-                                                                }{" "}
-                                                                items
-                                                            </span>
-                                                            <span>
                                                                 {monitorProxyLabel(
                                                                     monitor,
                                                                 )}
                                                             </span>
-                                                            <span className="inline-flex items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400">
-                                                                <Clock3 className="h-3.5 w-3.5" />
-                                                                Running for{" "}
-                                                                {formatRuntime(
-                                                                    monitor.active_since
-                                                                        ? (nowMs -
-                                                                              new Date(
-                                                                                  monitor.active_since,
-                                                                              ).getTime()) /
-                                                                              1000
-                                                                        : 0,
-                                                                )}{" "}
-                                                                ·{" "}
-                                                                {formatRuntime(
-                                                                    monitorRuntimeSeconds(
-                                                                        monitor,
-                                                                        nowMs,
-                                                                    ),
-                                                                )}{" "}
-                                                                total
-                                                            </span>
+
                                                             {monitor.price_max ? (
                                                                 <span>
                                                                     Max{" "}
@@ -8673,14 +8901,6 @@ export function AdminClient({
                                                                 monitor.created_at,
                                                             )}
                                                         </span>
-                                                        <span className="inline-flex items-center gap-1">
-                                                            <Boxes className="h-3.5 w-3.5" />
-                                                            {
-                                                                monitor._count
-                                                                    .items
-                                                            }{" "}
-                                                            items
-                                                        </span>
                                                         <span>
                                                             {getRegionLabel(
                                                                 monitor.region,
@@ -8697,21 +8917,7 @@ export function AdminClient({
                                                                 monitor,
                                                             )}
                                                         </span>
-                                                        <span className="inline-flex items-center gap-1 font-medium">
-                                                            <Clock3 className="h-3.5 w-3.5" />
-                                                            {formatRuntime(
-                                                                monitorRuntimeSeconds(
-                                                                    monitor,
-                                                                    nowMs,
-                                                                ),
-                                                            )}{" "}
-                                                            total
-                                                            {monitor.status ===
-                                                                "active" &&
-                                                            monitor.active_since
-                                                                ? ` · ${formatRuntime((nowMs - new Date(monitor.active_since).getTime()) / 1000)} running`
-                                                                : ""}
-                                                        </span>
+
                                                         {monitor.price_min ||
                                                         monitor.price_max ? (
                                                             <span>

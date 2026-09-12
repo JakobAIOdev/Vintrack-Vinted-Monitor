@@ -40,6 +40,47 @@ func newPersistentStore(databaseURL, encryptionKey string) (*persistentStore, er
 	return &persistentStore{db: db, cipher: c}, nil
 }
 
+type FeatureAccess struct {
+	Allowed    bool
+	Reason     string
+	Dependency string
+}
+
+func (s *persistentStore) FeatureAccess(ctx context.Context, userID string, feature string) (FeatureAccess, error) {
+	var role string
+	var enabled, freeEnabled, premiumEnabled, adminEnabled bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT member.role, policy.enabled, policy.free_enabled,
+		       policy.premium_enabled, policy.admin_enabled
+		FROM "User" member
+		INNER JOIN feature_policies policy ON policy.feature = $2
+		WHERE member.id = $1`, userID, feature,
+	).Scan(&role, &enabled, &freeEnabled, &premiumEnabled, &adminEnabled)
+	if err == sql.ErrNoRows {
+		return FeatureAccess{Reason: "role_denied"}, nil
+	}
+	if err != nil {
+		return FeatureAccess{}, err
+	}
+	if !enabled {
+		return FeatureAccess{Reason: "disabled"}, nil
+	}
+	roleAllowed := map[string]bool{"free": freeEnabled, "premium": premiumEnabled, "admin": adminEnabled}[role]
+	if !roleAllowed {
+		return FeatureAccess{Reason: "role_denied"}, nil
+	}
+	if feature != "vinted_account" {
+		parent, err := s.FeatureAccess(ctx, userID, "vinted_account")
+		if err != nil {
+			return FeatureAccess{}, err
+		}
+		if !parent.Allowed {
+			return FeatureAccess{Reason: "dependency_disabled", Dependency: "vinted_account"}, nil
+		}
+	}
+	return FeatureAccess{Allowed: true}, nil
+}
+
 func (s *persistentStore) Close() error {
 	return s.db.Close()
 }

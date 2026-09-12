@@ -1,3 +1,4 @@
+import { guardApiFeature } from "@/lib/features.server";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { isValidMemberBrandId } from "@/lib/member-brands.server";
@@ -11,6 +12,12 @@ export async function DELETE(
     if (!session?.user?.id) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const featureDenied = await guardApiFeature(
+        session.user.id,
+        "your_listings",
+    );
+    if (featureDenied) return featureDenied;
 
     const { brandId } = await params;
     if (!isValidMemberBrandId(brandId)) {

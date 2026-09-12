@@ -12,6 +12,7 @@ import {
 } from "../dashboard/client";
 import { getBannedSellerIds, visibleSellerWhere } from "@/lib/seller-bans";
 import { getFreeProxyPoolHealth } from "@/lib/free-proxy-health";
+import { getFeatureAccessForUser } from "@/lib/features.server";
 import { normalizeMonitorOnboardingStatus } from "@/lib/monitor-presets";
 import { normalizeNotificationMessageStyle } from "@/lib/notification-message-style";
 import { getMemberGithubRewardStatus } from "@/lib/github-rewards.server";
@@ -37,11 +38,6 @@ export default async function MonitorsPage() {
             orderBy: { created_at: "desc" },
             include: {
                 proxy_group: { select: { name: true } },
-                runtime_sessions: {
-                    orderBy: { started_at: "desc" },
-                    take: 1,
-                    select: { started_at: true, ended_at: true },
-                },
             },
         }),
         db.user.findUnique({
@@ -160,12 +156,7 @@ export default async function MonitorsPage() {
             created_at: m.created_at
                 ? m.created_at.toISOString()
                 : new Date().toISOString(),
-            status_changed_at: (
-                m.runtime_sessions[0]?.ended_at ??
-                m.runtime_sessions[0]?.started_at ??
-                m.created_at ??
-                new Date()
-            ).toISOString(),
+            status_changed_at: (m.created_at ?? new Date()).toISOString(),
         })),
     );
 
@@ -175,9 +166,13 @@ export default async function MonitorsPage() {
     const quickStartEligible =
         monitors.length === 0 &&
         (onboardingStatus === "pending" || onboardingStatus === "dismissed");
-    const freeProxyHealth = quickStartEligible
-        ? await getFreeProxyPoolHealth()
+    const freePoolAccess = quickStartEligible
+        ? await getFeatureAccessForUser("free_proxy_pool", session.user.id)
         : null;
+    const freeProxyHealth =
+        quickStartEligible && freePoolAccess?.allowed
+            ? await getFreeProxyPoolHealth()
+            : null;
     const quickStartPool = freeProxyHealth
         ? {
               enabled: freeProxyHealth.enabled,

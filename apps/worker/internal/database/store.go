@@ -651,11 +651,78 @@ func (s *Store) SetSellerInfoCache(ctx context.Context, domain string, userID in
 	return s.cache.SetSellerInfo(ctx, domain, userID, info, ttl)
 }
 
+type policyFieldBinding struct {
+	documentKey string
+	field       string
+}
+
+var legacyPolicyFieldBindings = map[string]policyFieldBinding{
+	"price_watch_shared_min_interval_seconds":   {"policy.price_watch", "sharedMinimumSeconds"},
+	"price_watch_personal_min_interval_seconds": {"policy.price_watch", "personalMinimumSeconds"},
+	"price_watch_shared_max_rpm":                {"policy.price_watch", "sharedMaxRpm"},
+	"price_watch_personal_max_rpm_per_proxy":    {"policy.price_watch", "personalMaxRpmPerProxy"},
+	"free_proxy_auto_import_enabled":            {"policy.free_proxy", "autoImportEnabled"},
+	"free_proxy_import_source":                  {"policy.free_proxy", "importSource"},
+	"free_proxy_import_url":                     {"policy.free_proxy", "importUrl"},
+	"free_proxy_max_pool_size":                  {"policy.free_proxy", "maxPoolSize"},
+	"free_proxy_failure_threshold":              {"policy.free_proxy", "failureThreshold"},
+	"free_proxy_quarantine_minutes":             {"policy.free_proxy", "quarantineMinutes"},
+	"free_proxy_min_active_per_region":          {"policy.free_proxy", "minActivePerRegion"},
+	"free_proxy_target_active_per_region":       {"policy.free_proxy", "targetActivePerRegion"},
+	"free_proxy_max_latency_ms":                 {"policy.free_proxy", "maxLatencyMs"},
+	"free_proxy_starter_regions":                {"policy.free_proxy", "starterRegions"},
+	"free_proxy_inventory_limit":                {"policy.free_proxy", "inventoryLimit"},
+	"free_proxy_candidate_limit_active_region":  {"policy.free_proxy", "activeCandidateLimit"},
+	"free_proxy_candidate_limit_idle_region":    {"policy.free_proxy", "idleCandidateLimit"},
+	"free_proxy_ready_target_active_region":     {"policy.free_proxy", "readyTarget"},
+	"free_proxy_reserve_target_active_region":   {"policy.free_proxy", "reserveTarget"},
+	"free_proxy_idle_region_target":             {"policy.free_proxy", "idleTarget"},
+	"free_proxy_emergency_recovery_enabled":     {"policy.free_proxy", "emergencyRecoveryEnabled"},
+}
+
+func (s *Store) getPolicyFieldContext(ctx context.Context, key string) (string, bool, error) {
+	binding, mapped := legacyPolicyFieldBindings[key]
+	if !mapped {
+		return "", false, nil
+	}
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM app_settings WHERE key = $1`, binding.documentKey).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	var document map[string]any
+	if err := decoder.Decode(&document); err != nil {
+		return "", false, nil
+	}
+	value, ok := document[binding.field]
+	if !ok {
+		return "", false, nil
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed, true, nil
+	case bool:
+		return strconv.FormatBool(typed), true, nil
+	case json.Number:
+		return typed.String(), true, nil
+	default:
+		return "", false, nil
+	}
+}
+
 func (s *Store) GetSettingValue(key string) (string, bool, error) {
 	return s.GetSettingValueContext(context.Background(), key)
 }
 
 func (s *Store) GetSettingValueContext(ctx context.Context, key string) (string, bool, error) {
+	if value, ok, err := s.getPolicyFieldContext(ctx, key); err != nil || ok {
+		return value, ok, err
+	}
 	var value string
 	err := s.db.QueryRowContext(ctx, `SELECT value FROM app_settings WHERE key = $1`, key).Scan(&value)
 	if err == sql.ErrNoRows {
@@ -677,6 +744,31 @@ func (s *Store) SetSettingValueContext(ctx context.Context, key string, value st
 	return err
 }
 
+// FeatureGloballyEnabledContext returns the canonical global feature switch.
+// The app_settings fallback keeps mixed-version deployments working for one
+// transition release while the feature_policies migration rolls out.
+func (s *Store) FeatureGloballyEnabledContext(ctx context.Context, feature string, legacySetting string, fallback bool) (bool, error) {
+	var enabled bool
+	err := s.db.QueryRowContext(ctx, `SELECT enabled FROM feature_policies WHERE feature = $1`, feature).Scan(&enabled)
+	if err == nil {
+		return enabled, nil
+	}
+	if err != sql.ErrNoRows {
+		return fallback, err
+	}
+	if legacySetting == "" {
+		return fallback, nil
+	}
+	raw, ok, err := s.GetSettingValueContext(ctx, legacySetting)
+	if err != nil || !ok {
+		return fallback, err
+	}
+	parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
+	if err != nil {
+		return fallback, nil
+	}
+	return parsed, nil
+}
 func (s *Store) FreeProxyEgressLimitedContext(ctx context.Context) (bool, error) {
 	var limited bool
 	err := s.db.QueryRowContext(ctx, `

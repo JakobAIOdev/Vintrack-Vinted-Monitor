@@ -1,3 +1,4 @@
+import { getFeatureAccessForUser } from "@/lib/features.server";
 import {
     authenticateExtensionRequest,
     extensionJson,
@@ -30,6 +31,20 @@ function readCursor(value: string | null) {
 export async function GET(request: Request) {
     const authentication = await authenticateExtensionRequest(request);
     if (!authentication.ok) return authentication.response;
+    const featureAccess = await getFeatureAccessForUser(
+        "price_watch",
+        authentication.principal.userId,
+    );
+    if (!featureAccess.allowed) {
+        return extensionJson(
+            {
+                code: "FEATURE_UNAVAILABLE",
+                feature: featureAccess.feature,
+                reason: featureAccess.reason,
+            },
+            403,
+        );
+    }
     const url = new URL(request.url);
     const limit = readLimit(url.searchParams.get("limit"));
     const rawCursor = url.searchParams.get("cursor");

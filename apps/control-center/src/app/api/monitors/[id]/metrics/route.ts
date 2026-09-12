@@ -118,7 +118,10 @@ export async function GET(
         newItemCount: savedItemCount,
         lastError: runMetrics.lastError,
         lastErrorCode: runMetrics.lastError
-            ? inferProxyErrorCode(runMetrics.lastError, runMetrics.lastStatusCode)
+            ? inferProxyErrorCode(
+                  runMetrics.lastError,
+                  runMetrics.lastStatusCode,
+              )
             : null,
         lastStatusCode: runMetrics.lastStatusCode,
         earlyAlertRate,

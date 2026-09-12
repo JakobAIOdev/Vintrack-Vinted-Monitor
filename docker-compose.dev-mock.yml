@@ -25,7 +25,6 @@ services:
       - VINTED_FETCH_MODE=mock
       - VINTED_MOCK_SCENARIO=${VINTED_MOCK_SCENARIO:-new-items}
       - VINTED_MOCK_DROP_INTERVAL_MS=${VINTED_MOCK_DROP_INTERVAL_MS:-3000}
-      - ENRICH_SELLER_INFO=false
       - VINTED_MOCK_DISCORD_WEBHOOK_URL=${VINTED_MOCK_DISCORD_WEBHOOK_URL:-http://webhook-catcher:8080/api/webhooks/mock/token}
     depends_on:
       webhook-catcher:

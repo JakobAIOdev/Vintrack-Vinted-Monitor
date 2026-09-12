@@ -1,3 +1,4 @@
+import { guardApiFeature } from "@/lib/features.server";
 import { auth } from "@/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { logAuditEvent } from "@/lib/audit";
@@ -9,6 +10,9 @@ export async function POST(req: NextRequest) {
     if (!session?.user?.id) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const featureDenied = await guardApiFeature(session.user.id, "offers");
+    if (featureDenied) return featureDenied;
 
     try {
         const body = await req.text();

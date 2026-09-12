@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { setGlobalOwnProxyMonitorLimit } from "@/actions/admin";
 import { Button } from "@/components/ui/button";
@@ -10,13 +10,17 @@ import { Label } from "@/components/ui/label";
 export function OwnProxyLimitCard({ initialLimit }: { initialLimit: number }) {
     const [value, setValue] = useState(String(initialLimit));
     const [saving, setSaving] = useState(false);
+    const [isReady, setIsReady] = useState(false);
     const [result, setResult] = useState<string | null>(null);
+    const inputRef = useRef<HTMLInputElement>(null);
+    useEffect(() => setIsReady(true), []);
     async function save() {
         setSaving(true);
         setResult(null);
         try {
-            const { limit, pausedCount } =
-                await setGlobalOwnProxyMonitorLimit(value);
+            const { limit, pausedCount } = await setGlobalOwnProxyMonitorLimit(
+                inputRef.current?.value ?? value,
+            );
             setValue(String(limit));
             const message = `Own proxy limit saved: ${limit}. ${pausedCount} monitor(s) paused.`;
             setResult(message);
@@ -51,15 +55,17 @@ export function OwnProxyLimitCard({ initialLimit }: { initialLimit: number }) {
             </Label>
             <div className="flex max-w-sm gap-2">
                 <Input
+                    ref={inputRef}
                     id="own-proxy-active-limit"
                     type="number"
                     min={0}
                     step={1}
                     required
+                    disabled={!isReady || saving}
                     value={value}
                     onChange={(event) => setValue(event.target.value)}
                 />
-                <Button onClick={save} disabled={saving}>
+                <Button onClick={save} disabled={!isReady || saving}>
                     {saving ? "Applying…" : "Save and apply"}
                 </Button>
             </div>
