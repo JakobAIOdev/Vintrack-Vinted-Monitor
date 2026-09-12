@@ -39,7 +39,21 @@ function normalizePublicOrigin(value: string | undefined) {
 }
 
 export function readSeoConfig(): SeoConfig {
-    const configuredOrigin = normalizePublicOrigin(process.env.APP_PUBLIC_URL);
+    const canonicalOrigin = normalizePublicOrigin(process.env.AUTH_URL);
+    const legacyOrigin =
+        normalizePublicOrigin(process.env.APP_PUBLIC_URL) ??
+        normalizePublicOrigin(process.env.DASHBOARD_URL);
+    if (!canonicalOrigin && legacyOrigin) {
+        console.warn(
+            "[config] APP_PUBLIC_URL/DASHBOARD_URL is deprecated; configure AUTH_URL instead",
+        );
+    }
+    if (canonicalOrigin && legacyOrigin && canonicalOrigin !== legacyOrigin) {
+        console.warn(
+            "[config] AUTH_URL conflicts with a deprecated public URL alias; AUTH_URL wins",
+        );
+    }
+    const configuredOrigin = canonicalOrigin ?? legacyOrigin;
 
     return {
         origin: configuredOrigin ?? FALLBACK_ORIGIN,
@@ -58,7 +72,7 @@ export async function buildMarketingMetadata({
     description: string;
     path: (typeof MARKETING_PAGES)[number];
 }): Promise<Metadata> {
-    // Public Docker images receive APP_PUBLIC_URL when the container starts,
+    // Public Docker images receive AUTH_URL when the container starts,
     // so metadata must not be frozen during the image build.
     await connection();
 

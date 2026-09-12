@@ -2,6 +2,7 @@ import { auth } from "@/auth";
 import type { ProxyCheckResult } from "@/actions/proxy-groups";
 import { db } from "@/lib/db";
 import { getFreeProxyPoolHealth } from "@/lib/free-proxy-health";
+import { getFeatureAccessForUser } from "@/lib/features.server";
 import { REGIONS } from "@/lib/regions";
 import { redirect } from "next/navigation";
 import { ProxiesClient } from "./client";
@@ -10,20 +11,22 @@ export default async function ProxiesPage() {
     const session = await auth();
     if (!session?.user?.id) redirect("/login");
 
-    const [proxyGroups, user, freeProxyHealth] = await Promise.all([
-        db.proxy_groups.findMany({
-            where: { userId: session.user.id },
-            orderBy: { created_at: "desc" },
-            include: {
-                _count: { select: { monitors: true } },
-            },
-        }),
-        db.user.findUnique({
-            where: { id: session.user.id },
-            select: { role: true },
-        }),
-        getFreeProxyPoolHealth(),
-    ]);
+    const [proxyGroups, user, freeProxyHealth, freePoolAccess] =
+        await Promise.all([
+            db.proxy_groups.findMany({
+                where: { userId: session.user.id },
+                orderBy: { created_at: "desc" },
+                include: {
+                    _count: { select: { monitors: true } },
+                },
+            }),
+            db.user.findUnique({
+                where: { id: session.user.id },
+                select: { role: true },
+            }),
+            getFreeProxyPoolHealth(),
+            getFeatureAccessForUser("free_proxy_pool", session.user.id),
+        ]);
 
     const regionOrder = new Map(
         REGIONS.map((region, index) => [region.code, index]),
@@ -67,8 +70,7 @@ export default async function ProxiesPage() {
                     error: g.proxy_check_error,
                     requestedAt:
                         g.proxy_check_requested_at?.toISOString() ?? null,
-                    startedAt:
-                        g.proxy_check_started_at?.toISOString() ?? null,
+                    startedAt: g.proxy_check_started_at?.toISOString() ?? null,
                     completedAt:
                         g.proxy_check_completed_at?.toISOString() ?? null,
                 },
@@ -76,7 +78,7 @@ export default async function ProxiesPage() {
             }))}
             userRole={user?.role ?? "free"}
             freeProxyPool={{
-                enabled: freeProxyHealth.enabled,
+                enabled: freeProxyHealth.enabled && freePoolAccess.allowed,
                 minActivePerRegion: freeProxyHealth.minActivePerRegion,
                 regions: freeProxyRegions,
             }}

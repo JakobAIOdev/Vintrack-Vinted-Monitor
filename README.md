@@ -195,8 +195,7 @@ authentication.
 
 Open [http://localhost:3000](http://localhost:3000), which matches the default
 `AUTH_URL`. Caddy also exposes [http://localhost](http://localhost); if you use
-that as the canonical local URL, change `AUTH_URL`, `DASHBOARD_URL`, and the
-identity-provider callback to the same origin.
+that as the canonical local URL, change `AUTH_URL` and the identity-provider callback to the same origin.
 
 For Discord OAuth, register:
 
@@ -210,8 +209,7 @@ For OIDC, use:
 http://localhost:3000/api/auth/callback/oidc
 ```
 
-A production deployment must use the same public hostname in `AUTH_URL`,
-`DASHBOARD_URL`, `VINTRACK_SITE_ADDRESS`, and the identity-provider callback.
+A production deployment must use the same public hostname in `AUTH_URL`, `VINTRACK_SITE_ADDRESS`, and the identity-provider callback.
 Keep `AUTH_SECRET` and `VINTED_SESSION_ENCRYPTION_KEY` stable after the instance
 contains users or linked sessions.
 

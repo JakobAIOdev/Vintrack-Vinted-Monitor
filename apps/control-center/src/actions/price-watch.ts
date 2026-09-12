@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
+import { getFeatureAccessForUser } from "@/lib/features.server";
 import { getEffectivePriceWatchLimit } from "@/lib/monitor-limits";
 import { parsePriceWatchUrl } from "@/lib/price-watch";
 import { getTelegramConnection } from "@/lib/telegram-connection";
@@ -33,7 +34,12 @@ export type PriceWatchBulkActionResult =
           skippedCount: number;
           message: string;
       }
-    | { ok: false; changedCount: number; skippedCount: number; message: string };
+    | {
+          ok: false;
+          changedCount: number;
+          skippedCount: number;
+          message: string;
+      };
 
 type Tx = Prisma.TransactionClient;
 
@@ -99,11 +105,7 @@ async function getRuntimeSettings(tx: Tx): Promise<RuntimeSettings> {
                 30,
             ),
         ),
-        sharedMaxRpm: settingNumber(
-            values,
-            "price_watch_shared_max_rpm",
-            30,
-        ),
+        sharedMaxRpm: settingNumber(values, "price_watch_shared_max_rpm", 30),
         personalMaxRpmPerProxy: settingNumber(
             values,
             "price_watch_personal_max_rpm_per_proxy",
@@ -129,7 +131,8 @@ async function normalizeSettings(
         if (!connection) {
             return {
                 ok: false as const,
-                message: "Connect Telegram before enabling it for a Price Watch.",
+                message:
+                    "Connect Telegram before enabling it for a Price Watch.",
             };
         }
     }
@@ -140,7 +143,10 @@ async function normalizeSettings(
         };
     }
     if (!Number.isInteger(input.pollIntervalSeconds)) {
-        return { ok: false as const, message: "Select a valid polling interval." };
+        return {
+            ok: false as const,
+            message: "Select a valid polling interval.",
+        };
     }
     if (
         input.proxyGroupId !== null &&
@@ -245,7 +251,9 @@ async function resolveSchedule(
             group.bandwidth_rx_bytes + group.bandwidth_tx_bytes >=
                 group.bandwidth_limit_bytes
         ) {
-            throw new Error("This proxy group has reached its bandwidth limit.");
+            throw new Error(
+                "This proxy group has reached its bandwidth limit.",
+            );
         }
         workingProxyCount = group.proxy_check_working;
         transportKey = `proxy:${group.id}`;
@@ -276,7 +284,8 @@ async function resolveSchedule(
               AND schedule.proxy_group_id = ${input.proxyGroupId}
               AND (${input.excludeWatchId ?? BigInt(0)} = 0 OR watch.id <> ${input.excludeWatchId ?? BigInt(0)})
         `;
-        const projected = Number(rows[0]?.rpm ?? 0) + 60 / input.intervalSeconds;
+        const projected =
+            Number(rows[0]?.rpm ?? 0) + 60 / input.intervalSeconds;
         const capacity = Math.min(
             60,
             workingProxyCount * runtime.personalMaxRpmPerProxy,
@@ -313,7 +322,8 @@ async function resolveSchedule(
         });
         const oldInterval = currentForSchedule._min.poll_interval_seconds;
         const oldRate = oldInterval ? 60 / oldInterval : 0;
-        const newRate = 60 / Math.min(oldInterval ?? Infinity, input.intervalSeconds);
+        const newRate =
+            60 / Math.min(oldInterval ?? Infinity, input.intervalSeconds);
         const projected = Number(totals[0]?.rpm ?? 0) - oldRate + newRate;
         if (projected > runtime.sharedMaxRpm + 0.0001) {
             throw new Error(
@@ -338,6 +348,13 @@ export async function createPriceWatch(
     const session = await auth();
     const userId = session?.user?.id;
     if (!userId) return { ok: false, message: "Not authenticated." };
+    const featureAccess = await getFeatureAccessForUser("price_watch", userId);
+    if (!featureAccess.allowed) {
+        return {
+            ok: false,
+            message: "Price Watch is not available for your role.",
+        };
+    }
     const parsed = parsePriceWatchUrl(itemUrl);
     if (!parsed.ok) return { ok: false, message: parsed.error };
     const settings = await normalizeSettings(userId, settingsInput);
@@ -364,7 +381,10 @@ export async function createPriceWatch(
                 });
                 const existing = await tx.price_watches.findUnique({
                     where: {
-                        user_id_target_id: { user_id: userId, target_id: target.id },
+                        user_id_target_id: {
+                            user_id: userId,
+                            target_id: target.id,
+                        },
                     },
                 });
                 if (existing?.status === "active") {
@@ -438,6 +458,13 @@ export async function updatePriceWatch(
     const session = await auth();
     const userId = session?.user?.id;
     if (!userId) return { ok: false, message: "Not authenticated." };
+    const featureAccess = await getFeatureAccessForUser("price_watch", userId);
+    if (!featureAccess.allowed) {
+        return {
+            ok: false,
+            message: "Price Watch is not available for your role.",
+        };
+    }
     const id = parseWatchId(watchId);
     if (!id) return { ok: false, message: "Invalid Price Watch." };
     const settings = await normalizeSettings(userId, settingsInput);
@@ -479,7 +506,9 @@ export async function updatePriceWatch(
         return {
             ok: false,
             message:
-                error instanceof Error ? error.message : "Failed to update the Price Watch.",
+                error instanceof Error
+                    ? error.message
+                    : "Failed to update the Price Watch.",
         };
     }
 }
@@ -491,6 +520,13 @@ export async function setPriceWatchStatus(
     const session = await auth();
     const userId = session?.user?.id;
     if (!userId) return { ok: false, message: "Not authenticated." };
+    const featureAccess = await getFeatureAccessForUser("price_watch", userId);
+    if (!featureAccess.allowed) {
+        return {
+            ok: false,
+            message: "Price Watch is not available for your role.",
+        };
+    }
     const id = parseWatchId(watchId);
     if (!id) return { ok: false, message: "Invalid Price Watch." };
     try {
@@ -522,7 +558,11 @@ export async function setPriceWatchStatus(
                 });
                 await tx.price_watches.update({
                     where: { id },
-                    data: { status: "active", armed_at: null, stopped_reason: null },
+                    data: {
+                        status: "active",
+                        armed_at: null,
+                        stopped_reason: null,
+                    },
                 });
                 await tx.price_watch_schedules.update({
                     where: { id: watch.schedule_id },
@@ -547,7 +587,9 @@ export async function setPriceWatchStatus(
         return {
             ok: false,
             message:
-                error instanceof Error ? error.message : "Failed to update the Price Watch.",
+                error instanceof Error
+                    ? error.message
+                    : "Failed to update the Price Watch.",
         };
     }
 }
@@ -561,6 +603,15 @@ export async function stopAllPriceWatches(): Promise<PriceWatchBulkActionResult>
             changedCount: 0,
             skippedCount: 0,
             message: "Not authenticated.",
+        };
+    }
+    const featureAccess = await getFeatureAccessForUser("price_watch", userId);
+    if (!featureAccess.allowed) {
+        return {
+            ok: false,
+            changedCount: 0,
+            skippedCount: 0,
+            message: "Price Watch is not available for your role.",
         };
     }
     try {
@@ -605,6 +656,15 @@ export async function startAllPriceWatches(): Promise<PriceWatchBulkActionResult
             changedCount: 0,
             skippedCount: 0,
             message: "Not authenticated.",
+        };
+    }
+    const featureAccess = await getFeatureAccessForUser("price_watch", userId);
+    if (!featureAccess.allowed) {
+        return {
+            ok: false,
+            changedCount: 0,
+            skippedCount: 0,
+            message: "Price Watch is not available for your role.",
         };
     }
     try {
@@ -741,38 +801,42 @@ export async function deletePriceWatch(
     const session = await auth();
     const userId = session?.user?.id;
     if (!userId) return { ok: false, message: "Not authenticated." };
+    const featureAccess = await getFeatureAccessForUser("price_watch", userId);
+    if (!featureAccess.allowed) {
+        return {
+            ok: false,
+            message: "Price Watch is not available for your role.",
+        };
+    }
     const id = parseWatchId(watchId);
     if (!id) return { ok: false, message: "Invalid Price Watch." };
-    const deleted = await db.$transaction(
-        async (tx) => {
-            const watch = await tx.price_watches.findFirst({
-                where: { id, user_id: userId },
-                select: { id: true, target_id: true, schedule_id: true },
+    const deleted = await db.$transaction(async (tx) => {
+        const watch = await tx.price_watches.findFirst({
+            where: { id, user_id: userId },
+            select: { id: true, target_id: true, schedule_id: true },
+        });
+        if (!watch) return false;
+        await tx.price_watches.delete({ where: { id: watch.id } });
+        if (
+            (await tx.price_watches.count({
+                where: { schedule_id: watch.schedule_id },
+            })) === 0
+        ) {
+            await tx.price_watch_schedules.delete({
+                where: { id: watch.schedule_id },
             });
-            if (!watch) return false;
-            await tx.price_watches.delete({ where: { id: watch.id } });
-            if (
-                (await tx.price_watches.count({
-                    where: { schedule_id: watch.schedule_id },
-                })) === 0
-            ) {
-                await tx.price_watch_schedules.delete({
-                    where: { id: watch.schedule_id },
-                });
-            }
-            if (
-                (await tx.price_watches.count({
-                    where: { target_id: watch.target_id },
-                })) === 0
-            ) {
-                await tx.price_watch_targets.delete({
-                    where: { id: watch.target_id },
-                });
-            }
-            return true;
-        },
-        PRICE_WATCH_TRANSACTION_OPTIONS,
-    );
+        }
+        if (
+            (await tx.price_watches.count({
+                where: { target_id: watch.target_id },
+            })) === 0
+        ) {
+            await tx.price_watch_targets.delete({
+                where: { id: watch.target_id },
+            });
+        }
+        return true;
+    }, PRICE_WATCH_TRANSACTION_OPTIONS);
     if (!deleted) return { ok: false, message: "Price Watch not found." };
     refreshPriceWatchPages();
     return { ok: true };

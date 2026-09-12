@@ -233,7 +233,7 @@ test.describe("member announcements", () => {
                 placements: ["admin", "monitors"],
                 startsAt: null,
             });
-            await page.goto("/admin/announcements");
+            await page.goto("/admin/communication");
             const admin = page.getByRole("main");
             await expect(
                 admin.getByText("Member Announcement", { exact: true }),

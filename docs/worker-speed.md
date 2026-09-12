@@ -12,16 +12,16 @@ Both paths use the same atomic `(monitor, item)` claim, so only the first path t
 Start with:
 
 ```env
-DISCOVERY_MODE=shadow
+Select **Shadow** under Admin → System → Worker Policy
 ```
 
 Shadow mode runs discovery and records timing without sending discovery alerts. Open a monitor's **Metrics** dialog and compare hybrid detections, early wins, median early lead, and first-delivery detect-to-alert p95. Once the selected proxy pool is stable and early wins are useful, enable:
 
 ```env
-DISCOVERY_MODE=active
+Select **Active** under Admin → System → Worker Policy
 ```
 
-Shadow discovery also runs on a healthy shared free-proxy pool so its timing can be evaluated without sending discovery alerts. Active discovery requires at least two dedicated proxies by default. For a short, deliberate free-pool alert test, set `DISCOVERY_ALLOW_FREE_ACTIVE=true`; canonical monitoring stays active if discovery cannot start.
+Shadow discovery also runs on a healthy shared free-proxy pool so its timing can be evaluated without sending discovery alerts. Active discovery requires at least two dedicated proxies by default. For a short, deliberate free-pool alert test, enable **Allow active free discovery** in the Worker Policy; canonical monitoring stays active if discovery cannot start.
 
 ## Runtime controls
 
@@ -33,8 +33,6 @@ Shadow discovery also runs on a healthy shared free-proxy pool so its timing can
 | `CATALOG_TIMEOUT_MS`               |       `2000` | Deadline for a catalog cycle.                                                                                      |
 | `CATALOG_HEDGE_DELAY_MS`           |        `250` | Starts a second request on another healthy proxy if the first request has not completed.                           |
 | `FREE_PROXY_CATALOG_HEDGE_DELAY_MS` |       `900` | Delays speculative free-proxy traffic so a normal public-proxy response does not automatically double the load.   |
-| `DISCOVERY_MODE`                   |        `off` | `off`, `shadow`, or `active`.                                                                                      |
-| `DISCOVERY_ALLOW_FREE_ACTIVE`      |      `false` | Explicitly allows active discovery alerts on the shared free-proxy pool. Shadow measurement does not require this. |
 | `DISCOVERY_INTERVAL_MS`            |        `500` | Minimum discovery cycle interval; the worker adds 0–100 ms jitter.                                                 |
 | `DISCOVERY_FREE_INTERVAL_MS`       |        `500` | Free-pool discovery interval before jitter.                                                                        |
 | `DISCOVERY_PER_PAGE`               |         `96` | Items requested per discovery page.                                                                                |
@@ -56,7 +54,6 @@ Shadow discovery also runs on a healthy shared free-proxy pool so its timing can
 | `MONITOR_RUN_RETENTION_HOURS`      |         `24` | Retention for raw per-check monitor telemetry; hourly aggregates remain available separately.                      |
 | `MONITOR_RUN_STATS_RETENTION_DAYS` |         `90` | Retention for compact hourly monitor-run aggregates.                                                               |
 | `DETECTION_RETENTION_DAYS`         |         `14` | Retention for discovery/canonical comparison telemetry.                                                            |
-| `CATALOG_LATENCY_METRICS`          |        `true` | In-worker fetch/process latency aggregation (p50/p95 written to `app_settings`); set `false` to disable.           |
 
 Client selection favors low-latency, successful, idle sessions. HTTP 401/403/407/429 responses cool down the affected session, and hedged-request losers are canceled without being counted as failures. Free discovery uses its own stable client pool, so free-pool refreshes no longer restart the feed or disturb canonical catalog sessions.
 

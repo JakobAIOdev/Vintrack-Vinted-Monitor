@@ -104,8 +104,7 @@ Open [http://localhost:3000](http://localhost:3000) by default. It matches the
 example `AUTH_URL` and the callback configured above.
 
 Caddy also exposes [http://localhost](http://localhost). To use that as the
-canonical origin, set `AUTH_URL` and `DASHBOARD_URL` to `http://localhost` and
-register the matching identity-provider callback without port `3000`.
+canonical origin, set `AUTH_URL` to `http://localhost` and register the matching identity-provider callback without port `3000`.
 
 The first startup can take several minutes while images are built and the
 database migration container completes.
@@ -122,7 +121,7 @@ host:port
 ```
 
 You can also create personal proxy groups in the dashboard. The optional shared
-starter pool is enabled and managed from **Admin → Settings**.
+starter pool is enabled and managed from **Admin → System**.
 
 ### 5. Inspect logs
 
@@ -137,7 +136,7 @@ deleting Docker volumes.
 
 Do not expose a local configuration unchanged. Before deployment:
 
-1. Set `AUTH_URL` and `DASHBOARD_URL` to the public HTTPS URL.
+1. Set `AUTH_URL` to the public HTTPS URL.
 2. Set `VINTRACK_SITE_ADDRESS` to the public hostname.
 3. Add the production OAuth/OIDC callback URL.
 4. Store `.env` with owner-only permissions and back it up securely.
@@ -151,7 +150,6 @@ Example:
 
 ```env
 AUTH_URL=https://vintrack.example.com
-DASHBOARD_URL=https://vintrack.example.com
 VINTRACK_SITE_ADDRESS=vintrack.example.com
 ```
 

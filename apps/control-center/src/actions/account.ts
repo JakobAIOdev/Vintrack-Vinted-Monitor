@@ -2,6 +2,8 @@
 
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
+import { getFeatureAccessForUser } from "@/lib/features.server";
+import type { FeatureKey } from "@/lib/features";
 import { revalidatePath } from "next/cache";
 import { logAuditEvent } from "@/lib/audit";
 import {
@@ -37,10 +39,17 @@ type VintedAccountStatus = {
 async function apiFetch<T extends object = Record<string, unknown>>(
     path: string,
     options: RequestInit = {},
+    feature: FeatureKey | null = "vinted_account",
 ): Promise<ApiResult<T>> {
     const session = await auth();
     if (!session?.user?.id) {
         return { error: "Not authenticated" };
+    }
+    if (feature) {
+        const access = await getFeatureAccessForUser(feature, session.user.id);
+        if (!access.allowed) {
+            return { error: "This feature is not available for your role" };
+        }
     }
 
     let res: Response;
@@ -207,9 +216,11 @@ export async function linkVintedAccount(
 }
 
 export async function unlinkVintedAccount() {
-    const result = await apiFetch("/api/account/unlink", {
-        method: "DELETE",
-    });
+    const result = await apiFetch(
+        "/api/account/unlink",
+        { method: "DELETE" },
+        null,
+    );
     await auditAccountAction("vinted_session.unlink", result);
     return result;
 }
@@ -255,15 +266,23 @@ export async function refreshVintedSession() {
 }
 
 export async function likeItem(itemId: number) {
-    return apiFetch("/api/items/like", {
-        method: "POST",
-        body: JSON.stringify({ item_id: itemId }),
-    });
+    return apiFetch(
+        "/api/items/like",
+        {
+            method: "POST",
+            body: JSON.stringify({ item_id: itemId }),
+        },
+        "liked_items",
+    );
 }
 
 export async function unlikeItem(itemId: number) {
-    return apiFetch("/api/items/unlike", {
-        method: "POST",
-        body: JSON.stringify({ item_id: itemId }),
-    });
+    return apiFetch(
+        "/api/items/unlike",
+        {
+            method: "POST",
+            body: JSON.stringify({ item_id: itemId }),
+        },
+        "liked_items",
+    );
 }

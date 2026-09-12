@@ -75,6 +75,48 @@ func (s *Server) Start() error {
 	return http.ListenAndServe(s.listenAddr, s.withMiddleware(mux))
 }
 
+func featureForPath(path string) string {
+	switch {
+	case path == "/api/account/unlink":
+		return ""
+	case strings.HasPrefix(path, "/api/account/"):
+		return "vinted_account"
+	case path == "/api/items/like" || path == "/api/items/unlike" || path == "/api/items/liked" || path == "/api/items/favorites":
+		return "liked_items"
+	case path == "/api/items/wardrobe":
+		return "your_listings"
+	case strings.HasPrefix(path, "/api/messages/"):
+		return "chats"
+	case strings.HasPrefix(path, "/api/offers/"):
+		return "offers"
+	case path == "/api/items/buy" || path == "/api/items/buy/warm" || path == "/api/items/checkout-links":
+		return "checkout_links"
+	default:
+		return ""
+	}
+}
+
+func (s *Server) requireFeature(w http.ResponseWriter, userID string, feature string) bool {
+	access, err := s.sessions.FeatureAccess(userID, feature)
+	if err != nil {
+		writeError(w, "feature policy unavailable", http.StatusServiceUnavailable)
+		return false
+	}
+	if access.Allowed {
+		return true
+	}
+	payload := map[string]interface{}{
+		"code":    "FEATURE_UNAVAILABLE",
+		"feature": feature,
+		"reason":  access.Reason,
+	}
+	if access.Dependency != "" {
+		payload["dependency"] = access.Dependency
+	}
+	writeJSON(w, http.StatusForbidden, payload)
+	return false
+}
+
 func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -83,6 +125,11 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(204)
 			return
+		}
+		if feature := featureForPath(r.URL.Path); feature != "" {
+			if userID := getUserID(r); userID != "" && !s.requireFeature(w, userID, feature) {
+				return
+			}
 		}
 		start := time.Now()
 		next.ServeHTTP(w, r)
@@ -768,6 +815,9 @@ func (s *Server) handleBrowserSyncComplete(w http.ResponseWriter, r *http.Reques
 		writeError(w, "browser sync request expired or not found", 404)
 		return
 	}
+	if !s.requireFeature(w, syncReq.UserID, "vinted_account") {
+		return
+	}
 
 	linkReq := linkRequest{
 		CookieHeader: req.CookieHeader,
@@ -894,6 +944,9 @@ func (s *Server) handleExtensionSyncComplete(w http.ResponseWriter, r *http.Requ
 	}
 	if link == nil {
 		writeError(w, "browser link expired or not found", 404)
+		return
+	}
+	if !s.requireFeature(w, link.UserID, "vinted_account") {
 		return
 	}
 

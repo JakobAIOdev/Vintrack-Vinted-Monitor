@@ -1,3 +1,4 @@
+import { guardApiFeature } from "@/lib/features.server";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import {
@@ -39,6 +40,12 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const featureDenied = await guardApiFeature(
+        session.user.id,
+        "your_listings",
+    );
+    if (featureDenied) return featureDenied;
+
     const selectedIds = (req.nextUrl.searchParams.get("ids") || "")
         .split(",")
         .filter(isValidMemberBrandId)
@@ -66,6 +73,12 @@ export async function POST(req: NextRequest) {
     if (!session?.user?.id) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const featureDenied = await guardApiFeature(
+        session.user.id,
+        "your_listings",
+    );
+    if (featureDenied) return featureDenied;
     const userId = session.user.id;
 
     let body: { brand_url?: unknown; region?: unknown };

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -29,7 +28,7 @@ func resolveDiscoveryMode(raw string) string {
 	}
 }
 
-func BuildDiscoverySpecs(monitors []model.Monitor, mode string) map[string]DiscoverySpec {
+func BuildDiscoverySpecsWithPolicy(monitors []model.Monitor, mode string, allowFreeActive bool) map[string]DiscoverySpec {
 	specs := make(map[string]DiscoverySpec)
 	resolvedMode := resolveDiscoveryMode(mode)
 	if resolvedMode == "off" {
@@ -37,7 +36,7 @@ func BuildDiscoverySpecs(monitors []model.Monitor, mode string) map[string]Disco
 	}
 
 	for _, monitor := range monitors {
-		if monitor.Status != "active" || !discoveryAllowsProxySource(monitor.ProxySource, resolvedMode) {
+		if monitor.Status != "active" || !discoveryAllowsProxySource(monitor.ProxySource, resolvedMode, allowFreeActive) {
 			continue
 		}
 		key := discoveryStructuralKey(monitor)
@@ -58,14 +57,14 @@ func BuildDiscoverySpecs(monitors []model.Monitor, mode string) map[string]Disco
 	return specs
 }
 
-func discoveryAllowsProxySource(proxySource string, mode string) bool {
+func discoveryAllowsProxySource(proxySource string, mode string, allowFreeActive bool) bool {
 	if proxySource != "free" {
 		return true
 	}
 	if mode == "shadow" {
 		return true
 	}
-	return mode == "active" && strings.EqualFold(strings.TrimSpace(os.Getenv("DISCOVERY_ALLOW_FREE_ACTIVE")), "true")
+	return mode == "active" && allowFreeActive
 }
 
 func discoveryStructuralKey(m model.Monitor) string {
@@ -110,7 +109,9 @@ func discoveryMonitorFingerprint(m model.Monitor) string {
 }
 
 func (e *Engine) DiscoveryTask(ctx context.Context, spec DiscoverySpec) {
-	if len(spec.Monitors) == 0 || e.discoveryMode == "off" {
+	policy := e.workerPolicySnapshot()
+	discoveryMode := policy.DiscoveryMode
+	if len(spec.Monitors) == 0 || discoveryMode == "off" {
 		return
 	}
 	representative := spec.Monitors[0]
@@ -136,7 +137,7 @@ func (e *Engine) DiscoveryTask(ctx context.Context, spec DiscoverySpec) {
 	}
 	pool := e.GetOrCreatePoolSized(pm, domain, discoveryPoolKey, trafficRecorder, proxySource+":discovery", discoveryPoolSize)
 	var enricher *SellerEnricher
-	needsSellerEnrichment := e.enrichSeller
+	needsSellerEnrichment := policy.EnrichSellerInfo
 	for _, monitor := range spec.Monitors {
 		needsSellerEnrichment = needsSellerEnrichment || requiresSellerEnrichment(monitor)
 	}
@@ -171,7 +172,7 @@ func (e *Engine) DiscoveryTask(ctx context.Context, spec DiscoverySpec) {
 	if timeout < 500*time.Millisecond {
 		timeout = 500 * time.Millisecond
 	}
-	log.Printf("[discovery:%s] started | monitors=%d | proxy=%s (%d proxies) | clients=%d | interval=%s | per_page=%d | timeout=%s | hedge=%s", e.discoveryMode, len(spec.Monitors), proxySource, pm.Count(), pool.Size(), interval, perPage, timeout, hedgeDelay)
+	log.Printf("[discovery:%s] started | monitors=%d | proxy=%s (%d proxies) | clients=%d | interval=%s | per_page=%d | timeout=%s | hedge=%s", discoveryMode, len(spec.Monitors), proxySource, pm.Count(), pool.Size(), interval, perPage, timeout, hedgeDelay)
 
 	seen := make(map[int64]time.Time, perPage*4)
 	previousPage := make(map[int64]struct{}, perPage)
@@ -256,7 +257,7 @@ func (e *Engine) DiscoveryTask(ctx context.Context, spec DiscoverySpec) {
 				e.db.RecordItemDetection(model.MonitorItemDetection{
 					MonitorID: monitor.ID, ItemID: vintedItem.ID, Source: "discovery", SeenAt: seenAt,
 				})
-				if e.discoveryMode == "active" {
+				if discoveryMode == "active" {
 					e.handleDetectedItem(ctx, monitor, vintedItem, "discovery", proxySource, enricher)
 				}
 			}

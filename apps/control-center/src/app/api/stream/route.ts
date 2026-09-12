@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { redisSubscriber, userItemChannel } from "@/lib/redis";
 import { buildSellerProfileUrl, getBannedSellerIds } from "@/lib/seller-bans";
+import { guardApiFeature } from "@/lib/features.server";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,8 @@ export async function GET(req: NextRequest) {
         return new NextResponse("Unauthorized", { status: 401 });
     }
     const userId = session.user.id;
+    const featureGuard = await guardApiFeature(userId, "live_feed");
+    if (featureGuard) return featureGuard;
 
     const userMonitors = await db.monitors.findMany({
         where: { userId },
@@ -62,7 +65,9 @@ export async function GET(req: NextRequest) {
                             parsed.url,
                         ),
                 });
-                void writer.write(encoder.encode(`data: ${enrichedPayload}\n\n`));
+                void writer.write(
+                    encoder.encode(`data: ${enrichedPayload}\n\n`),
+                );
             } catch {
                 // Skip malformed messages
             }

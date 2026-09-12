@@ -1,3 +1,4 @@
+import { guardApiFeature } from "@/lib/features.server";
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 
@@ -8,6 +9,9 @@ export async function GET(request: Request) {
     if (!session?.user?.id) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const featureDenied = await guardApiFeature(session.user.id, "liked_items");
+    if (featureDenied) return featureDenied;
 
     const { searchParams } = new URL(request.url);
     const page = searchParams.get("page") || "";

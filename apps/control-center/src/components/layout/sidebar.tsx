@@ -24,30 +24,55 @@ import {
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { CreateMonitorLink } from "@/components/maintenance/create-monitor-link";
+import type { FeatureAccessResult, FeatureKey } from "@/lib/features";
 
 const ACCOUNT_SEEN_KEY = "vintrack:account-tab-seen";
 const GITHUB_SPONSORS_URL = "https://github.com/sponsors/JakobAIOdev";
 
-const primaryNavItems = [
+type NavItem = {
+    href: string;
+    label: string;
+    icon: typeof LayoutDashboard;
+    feature?: FeatureKey;
+    experimental?: boolean;
+};
+
+const primaryNavItems: NavItem[] = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { href: "/price-watches", label: "Price Watch", icon: TrendingDown },
-    { href: "/feed", label: "Live Feed", icon: Radio },
+    {
+        href: "/price-watches",
+        label: "Price Watch",
+        icon: TrendingDown,
+        feature: "price_watch",
+    },
+    { href: "/feed", label: "Live Feed", icon: Radio, feature: "live_feed" },
 ];
 
-const accountNavItems = [
+const accountNavItems: NavItem[] = [
     { href: "/account", label: "Account", icon: User },
-    { href: "/your-listings", label: "Your Listings", icon: Store },
-    { href: "/liked", label: "Liked Items", icon: Heart },
-    { href: "/chats", label: "Chats", icon: MessageCircle },
+    {
+        href: "/your-listings",
+        label: "Your Listings",
+        icon: Store,
+        feature: "your_listings",
+    },
+    {
+        href: "/liked",
+        label: "Liked Items",
+        icon: Heart,
+        feature: "liked_items",
+    },
+    { href: "/chats", label: "Chats", icon: MessageCircle, feature: "chats" },
 ];
 
-const moreNavItems = [
+const moreNavItems: NavItem[] = [
     { href: "/guide", label: "Guide", icon: BookOpen },
     {
         href: "/checkout-links",
         label: "Checkout Links",
         icon: Link2,
         experimental: true,
+        feature: "checkout_links",
     },
 ];
 
@@ -62,9 +87,10 @@ interface SidebarProps {
     };
     isOpen?: boolean;
     onClose?: () => void;
+    features: Record<FeatureKey, FeatureAccessResult>;
 }
 
-export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
+export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
     const pathname = usePathname();
     const [showAccountBadge, setShowAccountBadge] = useState(false);
     useEffect(() => {
@@ -114,48 +140,56 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
                     Track
                 </p>
 
-                {primaryNavItems.map((item) => {
-                    const isActive =
-                        pathname === item.href ||
-                        pathname.startsWith(item.href + "/");
-                    return (
-                        <Link
-                            key={item.href}
-                            href={item.href}
-                            onClick={onClose}
-                            className={cn(
-                                "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
-                                isActive
-                                    ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
-                                    : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-                            )}
-                        >
-                            <item.icon
+                {primaryNavItems
+                    .filter(
+                        (item) =>
+                            !item.feature || features[item.feature].allowed,
+                    )
+                    .map((item) => {
+                        const isActive =
+                            pathname === item.href ||
+                            pathname.startsWith(item.href + "/");
+                        return (
+                            <Link
+                                key={item.href}
+                                href={item.href}
+                                onClick={onClose}
                                 className={cn(
-                                    "h-4 w-4",
+                                    "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                     isActive
-                                        ? "text-sidebar-primary-foreground"
-                                        : "text-sidebar-foreground/45",
+                                        ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
+                                        : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                                 )}
-                            />
-                            {item.label}
-                        </Link>
-                    );
-                })}
+                            >
+                                <item.icon
+                                    className={cn(
+                                        "h-4 w-4",
+                                        isActive
+                                            ? "text-sidebar-primary-foreground"
+                                            : "text-sidebar-foreground/45",
+                                    )}
+                                />
+                                {item.label}
+                            </Link>
+                        );
+                    })}
 
-                <Link
-                    href="/proxies"
-                    onClick={onClose}
-                    className={cn(
-                        "mt-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
-                        pathname === "/proxies" || pathname.startsWith("/proxies/")
-                            ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
-                            : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-                    )}
-                >
-                    <Globe className="h-4 w-4" />
-                    Proxy Groups
-                </Link>
+                {features.proxy_groups.allowed ? (
+                    <Link
+                        href="/proxies"
+                        onClick={onClose}
+                        className={cn(
+                            "mt-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
+                            pathname === "/proxies" ||
+                                pathname.startsWith("/proxies/")
+                                ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
+                                : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                        )}
+                    >
+                        <Globe className="h-4 w-4" />
+                        Proxy Groups
+                    </Link>
+                ) : null}
 
                 <div className="py-3">
                     <CreateMonitorLink
@@ -171,57 +205,12 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
                     <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
                         Account
                     </p>
-                    {accountNavItems.map((item) => {
-                        const isActive =
-                            pathname === item.href ||
-                            pathname.startsWith(item.href + "/");
-                        return (
-                            <Link
-                                key={item.href}
-                                href={item.href}
-                                onClick={() => {
-                                    if (
-                                        item.href === "/account" &&
-                                        showAccountBadge
-                                    ) {
-                                        localStorage.setItem(ACCOUNT_SEEN_KEY, "1");
-                                        setShowAccountBadge(false);
-                                    }
-                                    onClose?.();
-                                }}
-                                className={cn(
-                                    "mb-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
-                                    isActive
-                                        ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
-                                        : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-                                )}
-                            >
-                                <item.icon
-                                    className={cn(
-                                        "h-4 w-4",
-                                        isActive
-                                            ? "text-sidebar-primary-foreground"
-                                            : "text-sidebar-foreground/45",
-                                    )}
-                                />
-                                {item.label}
-                                {item.href === "/account" &&
-                                    showAccountBadge && (
-                                        <span className="ml-auto rounded-full bg-blue-500 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-white uppercase">
-                                            New
-                                        </span>
-                                    )}
-                            </Link>
-                        );
-                    })}
-                </div>
-
-                <div className="border-sidebar-border/60 mt-3 border-t pt-3">
-                    <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
-                        Tools
-                    </p>
-                    <div className="space-y-0.5">
-                        {moreNavItems.map((item) => {
+                    {accountNavItems
+                        .filter(
+                            (item) =>
+                                !item.feature || features[item.feature].allowed,
+                        )
+                        .map((item) => {
                             const isActive =
                                 pathname === item.href ||
                                 pathname.startsWith(item.href + "/");
@@ -229,25 +218,84 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
                                 <Link
                                     key={item.href}
                                     href={item.href}
-                                    onClick={onClose}
+                                    onClick={() => {
+                                        if (
+                                            item.href === "/account" &&
+                                            showAccountBadge
+                                        ) {
+                                            localStorage.setItem(
+                                                ACCOUNT_SEEN_KEY,
+                                                "1",
+                                            );
+                                            setShowAccountBadge(false);
+                                        }
+                                        onClose?.();
+                                    }}
                                     className={cn(
-                                        "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
+                                        "mb-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                         isActive
                                             ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
                                             : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                                     )}
                                 >
-                                    <item.icon className="h-4 w-4 opacity-60" />
+                                    <item.icon
+                                        className={cn(
+                                            "h-4 w-4",
+                                            isActive
+                                                ? "text-sidebar-primary-foreground"
+                                                : "text-sidebar-foreground/45",
+                                        )}
+                                    />
                                     {item.label}
-                                    {item.experimental && (
-                                        <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-amber-600 uppercase dark:text-amber-400">
-                                            <FlaskConical className="h-2.5 w-2.5" />
-                                            Exp
-                                        </span>
-                                    )}
+                                    {item.href === "/account" &&
+                                        showAccountBadge && (
+                                            <span className="ml-auto rounded-full bg-blue-500 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-white uppercase">
+                                                New
+                                            </span>
+                                        )}
                                 </Link>
                             );
                         })}
+                </div>
+
+                <div className="border-sidebar-border/60 mt-3 border-t pt-3">
+                    <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
+                        Tools
+                    </p>
+                    <div className="space-y-0.5">
+                        {moreNavItems
+                            .filter(
+                                (item) =>
+                                    !item.feature ||
+                                    features[item.feature].allowed,
+                            )
+                            .map((item) => {
+                                const isActive =
+                                    pathname === item.href ||
+                                    pathname.startsWith(item.href + "/");
+                                return (
+                                    <Link
+                                        key={item.href}
+                                        href={item.href}
+                                        onClick={onClose}
+                                        className={cn(
+                                            "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
+                                            isActive
+                                                ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
+                                                : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                                        )}
+                                    >
+                                        <item.icon className="h-4 w-4 opacity-60" />
+                                        {item.label}
+                                        {item.experimental && (
+                                            <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-amber-600 uppercase dark:text-amber-400">
+                                                <FlaskConical className="h-2.5 w-2.5" />
+                                                Exp
+                                            </span>
+                                        )}
+                                    </Link>
+                                );
+                            })}
                     </div>
                 </div>
 

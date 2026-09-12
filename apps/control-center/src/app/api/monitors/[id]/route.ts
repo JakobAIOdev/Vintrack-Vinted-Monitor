@@ -28,10 +28,5 @@ export async function GET(
         return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    return NextResponse.json({
-        monitor: {
-            ...monitor,
-            runtime_total_seconds: Number(monitor.runtime_total_seconds),
-        },
-    });
+    return NextResponse.json({ monitor });
 }

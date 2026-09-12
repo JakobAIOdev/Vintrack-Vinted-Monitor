@@ -5,6 +5,10 @@ import { db } from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import { revalidatePath, unstable_cache } from "next/cache";
 import { enqueueMonitorStatusNotification } from "@/lib/alert-outbox";
+import {
+    getAdminOperationsPage,
+    getAdminOperationsSummary,
+} from "@/actions/admin-operations";
 import { reconcileFreeProxyLimitsForUsers } from "@/lib/free-proxy-limit-reconciliation.server";
 import {
     GLOBAL_MONITOR_LIMIT_SCOPE,
@@ -53,6 +57,19 @@ import {
     getInactiveMemberPolicy,
     getInactiveMemberRuntime,
 } from "@/lib/inactive-member-policy.server";
+import {
+    readFreeProxyPolicy,
+    readPriceWatchPolicy,
+    readWorkerPolicy,
+    writePolicyDocument,
+} from "@/lib/runtime-policies.server";
+import {
+    policyPayload,
+    RUNTIME_POLICY_KEYS,
+    type FreeProxyPolicy,
+    type PriceWatchPolicy,
+    type WorkerPolicy,
+} from "@/lib/runtime-policies";
 
 const SERVER_PROXIES_SETTING_KEY = "server_proxies";
 const PRICE_WATCH_INTERVAL_SETTING_KEY = "price_watch_interval_seconds";
@@ -296,16 +313,12 @@ type AdminMetricCountRow = {
     avg_duration_ms_24h?: number | null;
     last_check_at?: Date | null;
     latest_error_24h?: string | null;
-    current_runtime_seconds?: bigint;
-    total_runtime_seconds?: bigint;
-    oldest_active_since?: Date | null;
 };
 
 type AdminUserMetrics = {
     runningMonitors: number;
     runningFreeProxyMonitors: number;
     pausedMonitors: number;
-    totalItems: number;
     newItems24h: number;
     checks24h: number;
     successfulChecks24h: number;
@@ -314,17 +327,10 @@ type AdminUserMetrics = {
     avgDurationMs24h: number | null;
     lastCheckAt: Date | null;
     latestError24h: string | null;
-    currentRuntimeSeconds: number;
-    totalRuntimeSeconds: number;
-    oldestActiveSince: Date | null;
 };
 
-type CachedAdminUserMetrics = Omit<
-    AdminUserMetrics,
-    "lastCheckAt" | "oldestActiveSince"
-> & {
+type CachedAdminUserMetrics = Omit<AdminUserMetrics, "lastCheckAt"> & {
     lastCheckAt: string | null;
-    oldestActiveSince: string | null;
 };
 
 type AdminMemberSummaryRow = {
@@ -359,7 +365,6 @@ function emptyAdminUserMetrics(): AdminUserMetrics {
         runningMonitors: 0,
         runningFreeProxyMonitors: 0,
         pausedMonitors: 0,
-        totalItems: 0,
         newItems24h: 0,
         checks24h: 0,
         successfulChecks24h: 0,
@@ -368,9 +373,6 @@ function emptyAdminUserMetrics(): AdminUserMetrics {
         avgDurationMs24h: null,
         lastCheckAt: null,
         latestError24h: null,
-        currentRuntimeSeconds: 0,
-        totalRuntimeSeconds: 0,
-        oldestActiveSince: null,
     };
 }
 
@@ -385,19 +387,6 @@ async function loadAdminUserMetrics() {
                     WHERE status = 'active' AND proxy_source = 'free'
                 )::bigint AS running_free_proxy_monitors,
                 COUNT(*) FILTER (WHERE status IS DISTINCT FROM 'active')::bigint AS paused_monitors
-                ,COALESCE(SUM(
-                    CASE
-                        WHEN status = 'active' AND active_since IS NOT NULL
-                        THEN GREATEST(
-                            0,
-                            FLOOR(EXTRACT(EPOCH FROM (NOW() - active_since)))
-                        )
-                        ELSE 0
-                    END
-                ), 0)::bigint AS current_runtime_seconds
-                ,MIN(active_since) FILTER (
-                    WHERE status = 'active' AND active_since IS NOT NULL
-                ) AS oldest_active_since
             FROM monitors
             GROUP BY "userId"
         ),
@@ -422,41 +411,24 @@ async function loadAdminUserMetrics() {
             FROM monitor_run_hourly_stats s
             INNER JOIN monitors m ON m.id = s.monitor_id
             WHERE s.fetch_source = 'canonical'
-              AND s.bucket_hour >=
-                  DATE_TRUNC('hour', NOW()) - INTERVAL '23 hours'
+              AND s.bucket_hour >= DATE_TRUNC('hour', NOW()) - INTERVAL '23 hours'
             GROUP BY m."userId"
         )
         SELECT
             member.id AS "userId",
-            COALESCE(monitor_totals.running_monitors, 0)::bigint
-                AS running_monitors,
-            COALESCE(monitor_totals.running_free_proxy_monitors, 0)::bigint
-                AS running_free_proxy_monitors,
-            COALESCE(monitor_totals.paused_monitors, 0)::bigint
-                AS paused_monitors,
+            COALESCE(monitor_totals.running_monitors, 0)::bigint AS running_monitors,
+            COALESCE(monitor_totals.running_free_proxy_monitors, 0)::bigint AS running_free_proxy_monitors,
+            COALESCE(monitor_totals.paused_monitors, 0)::bigint AS paused_monitors,
             COALESCE(run_totals.checks_24h, 0)::bigint AS checks_24h,
-            COALESCE(run_totals.successful_checks_24h, 0)::bigint
-                AS successful_checks_24h,
-            COALESCE(run_totals.failed_checks_24h, 0)::bigint
-                AS failed_checks_24h,
+            COALESCE(run_totals.successful_checks_24h, 0)::bigint AS successful_checks_24h,
+            COALESCE(run_totals.failed_checks_24h, 0)::bigint AS failed_checks_24h,
             COALESCE(run_totals.new_items_24h, 0)::bigint AS new_items_24h,
             run_totals.avg_duration_ms_24h,
             run_totals.last_check_at,
             run_totals.latest_error_24h
-            ,COALESCE(monitor_totals.current_runtime_seconds, 0)::bigint
-                AS current_runtime_seconds
-            ,(
-                COALESCE(runtime_totals.closed_runtime_seconds, 0) +
-                COALESCE(monitor_totals.current_runtime_seconds, 0)
-            )::bigint AS total_runtime_seconds
-            ,monitor_totals.oldest_active_since
         FROM "User" member
-        LEFT JOIN monitor_totals
-            ON monitor_totals."userId" = member.id
-        LEFT JOIN run_totals
-            ON run_totals."userId" = member.id
-        LEFT JOIN member_monitor_runtime_totals runtime_totals
-            ON runtime_totals.user_id = member.id
+        LEFT JOIN monitor_totals ON monitor_totals."userId" = member.id
+        LEFT JOIN run_totals ON run_totals."userId" = member.id
     `.catch((error) => {
         console.error("[admin] failed to load hourly user metrics", error);
         return [];
@@ -478,17 +450,11 @@ async function loadAdminUserMetrics() {
         current.successRate24h =
             checks > 0 ? Math.round((successful / checks) * 100) : null;
         current.avgDurationMs24h =
-            row.avg_duration_ms_24h === null ||
-            row.avg_duration_ms_24h === undefined
+            row.avg_duration_ms_24h == null
                 ? null
                 : Math.round(row.avg_duration_ms_24h);
         current.lastCheckAt = row.last_check_at ?? null;
         current.latestError24h = row.latest_error_24h ?? null;
-        current.currentRuntimeSeconds = Number(
-            row.current_runtime_seconds ?? 0,
-        );
-        current.totalRuntimeSeconds = Number(row.total_runtime_seconds ?? 0);
-        current.oldestActiveSince = row.oldest_active_since ?? null;
         metrics.set(row.userId, current);
     }
 
@@ -499,8 +465,6 @@ async function loadAdminUserMetrics() {
                 {
                     ...values,
                     lastCheckAt: values.lastCheckAt?.toISOString() ?? null,
-                    oldestActiveSince:
-                        values.oldestActiveSince?.toISOString() ?? null,
                 },
             ] as [string, CachedAdminUserMetrics],
     );
@@ -508,7 +472,7 @@ async function loadAdminUserMetrics() {
 
 const getCachedAdminUserMetrics = unstable_cache(
     loadAdminUserMetrics,
-    ["admin-user-metrics-v7"],
+    ["admin-user-metrics-v8"],
     { revalidate: 30 },
 );
 
@@ -523,9 +487,6 @@ type AdminOverviewSummaryRow = {
     free_running: bigint;
     server_running: bigint;
     group_running: bigint;
-    current_runtime_seconds: bigint;
-    closed_runtime_seconds: bigint;
-    oldest_active_since: Date | null;
     checks_24h: bigint;
     successful_checks_24h: bigint;
     failed_checks_24h: bigint;
@@ -535,18 +496,16 @@ type AdminOverviewSummaryRow = {
     role_limits: bigint;
 };
 
-type AdminRuntimeMemberRow = {
+type AdminActiveMemberRow = {
     user_id: string;
     name: string | null;
     email: string | null;
     role: string;
     running_monitors: bigint;
-    current_runtime_seconds: bigint;
-    total_runtime_seconds: bigint;
 };
 
 async function loadAdminOverviewState() {
-    const [summaryRows, topMemberRows, trackingSetting] = await Promise.all([
+    const [summaryRows, topMemberRows] = await Promise.all([
         db.$queryRaw<AdminOverviewSummaryRow[]>`
             WITH user_totals AS (
                 SELECT
@@ -559,158 +518,69 @@ async function loadAdminOverviewState() {
             monitor_totals AS (
                 SELECT
                     COUNT(*)::bigint AS total_monitors,
-                    COUNT(*) FILTER (WHERE status = 'active')::bigint
-                        AS running_monitors,
-                    COUNT(*) FILTER (WHERE status IS DISTINCT FROM 'active')::bigint
-                        AS paused_monitors,
+                    COUNT(*) FILTER (WHERE status = 'active')::bigint AS running_monitors,
+                    COUNT(*) FILTER (WHERE status IS DISTINCT FROM 'active')::bigint AS paused_monitors,
+                    COUNT(*) FILTER (WHERE status = 'active' AND proxy_source = 'free')::bigint AS free_running,
+                    COUNT(*) FILTER (WHERE status = 'active' AND proxy_source = 'server')::bigint AS server_running,
                     COUNT(*) FILTER (
-                        WHERE status = 'active' AND proxy_source = 'free'
-                    )::bigint AS free_running,
-                    COUNT(*) FILTER (
-                        WHERE status = 'active' AND proxy_source = 'server'
-                    )::bigint AS server_running,
-                    COUNT(*) FILTER (
-                        WHERE status = 'active'
-                          AND proxy_source NOT IN ('free', 'server')
-                    )::bigint AS group_running,
-                    COALESCE(SUM(
-                        CASE
-                            WHEN status = 'active' AND active_since IS NOT NULL
-                            THEN GREATEST(
-                                0,
-                                FLOOR(EXTRACT(EPOCH FROM (NOW() - active_since)))
-                            )
-                            ELSE 0
-                        END
-                    ), 0)::bigint AS current_runtime_seconds,
-                    MIN(active_since) FILTER (
-                        WHERE status = 'active' AND active_since IS NOT NULL
-                    ) AS oldest_active_since
+                        WHERE status = 'active' AND proxy_source NOT IN ('free', 'server')
+                    )::bigint AS group_running
                 FROM monitors
-            ),
-            closed_runtime AS (
-                SELECT COALESCE(SUM(closed_runtime_seconds), 0)::bigint
-                    AS closed_runtime_seconds
-                FROM member_monitor_runtime_totals
             ),
             run_totals AS (
                 SELECT
                     COALESCE(SUM(check_count), 0)::bigint AS checks_24h,
-                    COALESCE(SUM(successful_check_count), 0)::bigint
-                        AS successful_checks_24h,
-                    COALESCE(SUM(failed_check_count), 0)::bigint
-                        AS failed_checks_24h,
+                    COALESCE(SUM(successful_check_count), 0)::bigint AS successful_checks_24h,
+                    COALESCE(SUM(failed_check_count), 0)::bigint AS failed_checks_24h,
                     COALESCE(SUM(new_item_count), 0)::bigint AS new_items_24h
                 FROM monitor_run_hourly_stats
                 WHERE fetch_source = 'canonical'
-                  AND bucket_hour >=
-                      DATE_TRUNC('hour', NOW()) - INTERVAL '23 hours'
+                  AND bucket_hour >= DATE_TRUNC('hour', NOW()) - INTERVAL '23 hours'
             ),
             active_by_user AS (
-                SELECT
-                    "userId" AS user_id,
-                    COUNT(*) FILTER (WHERE status = 'active')::bigint
-                        AS active_count
-                FROM monitors
-                GROUP BY "userId"
+                SELECT "userId" AS user_id, COUNT(*) FILTER (WHERE status = 'active')::bigint AS active_count
+                FROM monitors GROUP BY "userId"
             ),
             effective_limits AS (
                 SELECT
                     member.id,
-                    COALESCE(active_by_user.active_count, 0)::bigint
-                        AS active_count,
-                    COALESCE(
-                        user_limit.active_limit,
-                        role_limit.active_limit,
-                        global_limit.active_limit
-                    ) AS active_limit
+                    COALESCE(active_by_user.active_count, 0)::bigint AS active_count,
+                    COALESCE(user_limit.active_limit, role_limit.active_limit, global_limit.active_limit) AS active_limit
                 FROM "User" member
                 LEFT JOIN active_by_user ON active_by_user.user_id = member.id
-                LEFT JOIN monitor_limits user_limit
-                    ON user_limit.scope = 'user:' || member.id
-                LEFT JOIN monitor_limits role_limit
-                    ON role_limit.scope = 'role:' || member.role
-                LEFT JOIN monitor_limits global_limit
-                    ON global_limit.scope = 'global'
+                LEFT JOIN monitor_limits user_limit ON user_limit.scope = 'user:' || member.id
+                LEFT JOIN monitor_limits role_limit ON role_limit.scope = 'role:' || member.role
+                LEFT JOIN monitor_limits global_limit ON global_limit.scope = 'global'
                 WHERE member.role <> 'admin'
             ),
             limit_totals AS (
                 SELECT
-                    (
-                        SELECT COUNT(*)
-                        FROM effective_limits
-                        WHERE active_limit IS NOT NULL
-                          AND active_count >= active_limit
-                    )::bigint AS users_at_limit,
-                    (
-                        SELECT COUNT(*)
-                        FROM monitor_limits
-                        WHERE scope LIKE 'user:%'
-                          AND active_limit IS NOT NULL
-                    )::bigint AS user_overrides,
-                    (
-                        SELECT COUNT(*)
-                        FROM monitor_limits
-                        WHERE scope LIKE 'role:%'
-                          AND active_limit IS NOT NULL
-                    )::bigint AS role_limits
+                    (SELECT COUNT(*) FROM effective_limits WHERE active_limit IS NOT NULL AND active_count >= active_limit)::bigint AS users_at_limit,
+                    (SELECT COUNT(*) FROM monitor_limits WHERE scope LIKE 'user:%' AND active_limit IS NOT NULL)::bigint AS user_overrides,
+                    (SELECT COUNT(*) FROM monitor_limits WHERE scope LIKE 'role:%' AND active_limit IS NOT NULL)::bigint AS role_limits
             )
-            SELECT *
-            FROM user_totals
+            SELECT * FROM user_totals
             CROSS JOIN monitor_totals
-            CROSS JOIN closed_runtime
             CROSS JOIN run_totals
             CROSS JOIN limit_totals
         `,
-        db.$queryRaw<AdminRuntimeMemberRow[]>`
-            WITH active_runtime AS (
-                SELECT
-                    "userId" AS user_id,
-                    COUNT(*) FILTER (WHERE status = 'active')::bigint
-                        AS running_monitors,
-                    COALESCE(SUM(
-                        CASE
-                            WHEN status = 'active' AND active_since IS NOT NULL
-                            THEN GREATEST(
-                                0,
-                                FLOOR(EXTRACT(EPOCH FROM (NOW() - active_since)))
-                            )
-                            ELSE 0
-                        END
-                    ), 0)::bigint AS current_runtime_seconds
-                FROM monitors
-                GROUP BY "userId"
-            )
+        db.$queryRaw<AdminActiveMemberRow[]>`
             SELECT
                 member.id AS user_id,
                 member.name,
                 member.email,
                 member.role,
-                COALESCE(active_runtime.running_monitors, 0)::bigint
-                    AS running_monitors,
-                COALESCE(active_runtime.current_runtime_seconds, 0)::bigint
-                    AS current_runtime_seconds,
-                (
-                    COALESCE(runtime.closed_runtime_seconds, 0) +
-                    COALESCE(active_runtime.current_runtime_seconds, 0)
-                )::bigint AS total_runtime_seconds
+                COUNT(monitor.id) FILTER (WHERE monitor.status = 'active')::bigint AS running_monitors
             FROM "User" member
-            LEFT JOIN active_runtime ON active_runtime.user_id = member.id
-            LEFT JOIN member_monitor_runtime_totals runtime
-                ON runtime.user_id = member.id
-            ORDER BY total_runtime_seconds DESC, member.id ASC
+            LEFT JOIN monitors monitor ON monitor."userId" = member.id
+            GROUP BY member.id, member.name, member.email, member.role
+            ORDER BY running_monitors DESC, member.id ASC
             LIMIT 5
         `,
-        db.app_settings.findUnique({
-            where: { key: "monitor_runtime_tracking_started_at" },
-            select: { value: true },
-        }),
     ]);
-
     const summary = summaryRows[0];
     const checks = Number(summary?.checks_24h ?? 0);
     const successful = Number(summary?.successful_checks_24h ?? 0);
-
     return {
         users: {
             total: Number(summary?.total_users ?? 0),
@@ -736,16 +606,6 @@ async function loadAdminOverviewState() {
             successRate:
                 checks > 0 ? Math.round((successful / checks) * 100) : null,
         },
-        runtime: {
-            currentSeconds: Number(summary?.current_runtime_seconds ?? 0),
-            totalSeconds: Number(
-                (summary?.closed_runtime_seconds ?? BigInt(0)) +
-                    (summary?.current_runtime_seconds ?? BigInt(0)),
-            ),
-            oldestActiveSince:
-                summary?.oldest_active_since?.toISOString() ?? null,
-            trackedSince: trackingSetting?.value ?? null,
-        },
         limits: {
             usersAtLimit: Number(summary?.users_at_limit ?? 0),
             userOverrides: Number(summary?.user_overrides ?? 0),
@@ -757,242 +617,9 @@ async function loadAdminOverviewState() {
             email: row.email,
             role: row.role,
             runningMonitors: Number(row.running_monitors),
-            currentRuntimeSeconds: Number(row.current_runtime_seconds),
-            totalRuntimeSeconds: Number(row.total_runtime_seconds),
         })),
     };
 }
-
-const getCachedAdminOverviewState = unstable_cache(
-    loadAdminOverviewState,
-    ["admin-overview-state-v1"],
-    { revalidate: 30 },
-);
-
-type AdminRuntimeDailyRow = {
-    day: Date;
-    proxy_source: string;
-    runtime_seconds: number;
-};
-
-type AdminRuntimeLeaderboardRow = AdminRuntimeMemberRow & {
-    runtime_seconds_7d: number;
-    checks_7d: bigint;
-    new_items_7d: bigint;
-};
-
-async function loadAdminRuntimeInsights() {
-    const [dailyRows, leaderboardRows, sessionRows, trackingSetting] =
-        await Promise.all([
-            db.$queryRaw<AdminRuntimeDailyRow[]>`
-                WITH days AS (
-                    SELECT GENERATE_SERIES(
-                        DATE_TRUNC('day', NOW() AT TIME ZONE 'UTC') -
-                            INTERVAL '29 days',
-                        DATE_TRUNC('day', NOW() AT TIME ZONE 'UTC'),
-                        INTERVAL '1 day'
-                    )::timestamp AS day
-                ),
-                eligible_sessions AS (
-                    SELECT proxy_source, started_at, ended_at
-                    FROM monitor_runtime_sessions
-                    WHERE ended_at >=
-                        DATE_TRUNC('day', NOW() AT TIME ZONE 'UTC') -
-                            INTERVAL '29 days'
-                      AND started_at < NOW()
-
-                    UNION ALL
-
-                    SELECT proxy_source, started_at, ended_at
-                    FROM monitor_runtime_sessions
-                    WHERE ended_at IS NULL
-                      AND started_at < NOW()
-                )
-                SELECT
-                    days.day,
-                    CASE
-                        WHEN sessions.proxy_source = 'free' THEN 'free'
-                        WHEN sessions.proxy_source = 'server' THEN 'server'
-                        ELSE 'group'
-                    END AS proxy_source,
-                    COALESCE(SUM(GREATEST(
-                        0,
-                        EXTRACT(EPOCH FROM (
-                            LEAST(
-                                COALESCE(sessions.ended_at, NOW()),
-                                days.day + INTERVAL '1 day'
-                            ) - GREATEST(sessions.started_at, days.day)
-                        ))
-                    )), 0)::double precision AS runtime_seconds
-                FROM days
-                INNER JOIN eligible_sessions sessions
-                    ON sessions.started_at < days.day + INTERVAL '1 day'
-                   AND COALESCE(sessions.ended_at, NOW()) > days.day
-                GROUP BY days.day, proxy_source
-                ORDER BY days.day, proxy_source
-            `,
-            db.$queryRaw<AdminRuntimeLeaderboardRow[]>`
-                WITH eligible_sessions AS (
-                    SELECT user_id, started_at, ended_at
-                    FROM monitor_runtime_sessions
-                    WHERE ended_at >= NOW() - INTERVAL '7 days'
-                      AND started_at < NOW()
-
-                    UNION ALL
-
-                    SELECT user_id, started_at, ended_at
-                    FROM monitor_runtime_sessions
-                    WHERE ended_at IS NULL
-                      AND started_at < NOW()
-                ),
-                runtime_7d AS (
-                    SELECT
-                        user_id,
-                        SUM(GREATEST(
-                            0,
-                            EXTRACT(EPOCH FROM (
-                                LEAST(COALESCE(ended_at, NOW()), NOW()) -
-                                GREATEST(started_at, NOW() - INTERVAL '7 days')
-                            ))
-                        ))::double precision AS runtime_seconds_7d
-                    FROM eligible_sessions
-                    GROUP BY user_id
-                ),
-                activity_7d AS (
-                    SELECT
-                        monitor."userId" AS user_id,
-                        SUM(stats.check_count)::bigint AS checks_7d,
-                        SUM(stats.new_item_count)::bigint AS new_items_7d
-                    FROM monitor_run_hourly_stats stats
-                    INNER JOIN monitors monitor ON monitor.id = stats.monitor_id
-                    WHERE stats.fetch_source = 'canonical'
-                      AND stats.bucket_hour >= NOW() - INTERVAL '7 days'
-                    GROUP BY monitor."userId"
-                ),
-                active_runtime AS (
-                    SELECT
-                        "userId" AS user_id,
-                        COUNT(*) FILTER (WHERE status = 'active')::bigint
-                            AS running_monitors,
-                        COALESCE(SUM(
-                            CASE
-                                WHEN status = 'active' AND active_since IS NOT NULL
-                                THEN GREATEST(
-                                    0,
-                                    FLOOR(EXTRACT(EPOCH FROM (NOW() - active_since)))
-                                )
-                                ELSE 0
-                            END
-                        ), 0)::bigint AS current_runtime_seconds
-                    FROM monitors
-                    GROUP BY "userId"
-                )
-                SELECT
-                    member.id AS user_id,
-                    member.name,
-                    member.email,
-                    member.role,
-                    COALESCE(active.running_monitors, 0)::bigint
-                        AS running_monitors,
-                    COALESCE(active.current_runtime_seconds, 0)::bigint
-                        AS current_runtime_seconds,
-                    (
-                        COALESCE(totals.closed_runtime_seconds, 0) +
-                        COALESCE(active.current_runtime_seconds, 0)
-                    )::bigint AS total_runtime_seconds,
-                    runtime.runtime_seconds_7d,
-                    COALESCE(activity.checks_7d, 0)::bigint AS checks_7d,
-                    COALESCE(activity.new_items_7d, 0)::bigint AS new_items_7d
-                FROM runtime_7d runtime
-                INNER JOIN "User" member ON member.id = runtime.user_id
-                LEFT JOIN active_runtime active ON active.user_id = member.id
-                LEFT JOIN member_monitor_runtime_totals totals
-                    ON totals.user_id = member.id
-                LEFT JOIN activity_7d activity ON activity.user_id = member.id
-                ORDER BY runtime.runtime_seconds_7d DESC, member.id ASC
-                LIMIT 5
-            `,
-            db.$queryRaw<{ median_seconds: number | null }[]>`
-                SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (
-                    ORDER BY EXTRACT(EPOCH FROM (ended_at - started_at))
-                )::double precision AS median_seconds
-                FROM monitor_runtime_sessions
-                WHERE ended_at >= NOW() - INTERVAL '7 days'
-                  AND ended_at IS NOT NULL
-            `,
-            db.app_settings.findUnique({
-                where: { key: "monitor_runtime_tracking_started_at" },
-                select: { value: true },
-            }),
-        ]);
-
-    const dailyByDate = new Map<
-        string,
-        {
-            date: string;
-            freeSeconds: number;
-            serverSeconds: number;
-            groupSeconds: number;
-        }
-    >();
-    for (let offset = 29; offset >= 0; offset -= 1) {
-        const date = new Date();
-        date.setUTCHours(0, 0, 0, 0);
-        date.setUTCDate(date.getUTCDate() - offset);
-        const key = date.toISOString().slice(0, 10);
-        dailyByDate.set(key, {
-            date: key,
-            freeSeconds: 0,
-            serverSeconds: 0,
-            groupSeconds: 0,
-        });
-    }
-    for (const row of dailyRows) {
-        const key = row.day.toISOString().slice(0, 10);
-        const day = dailyByDate.get(key);
-        if (!day) continue;
-        if (row.proxy_source === "free") {
-            day.freeSeconds = Number(row.runtime_seconds);
-        } else if (row.proxy_source === "server") {
-            day.serverSeconds = Number(row.runtime_seconds);
-        } else {
-            day.groupSeconds = Number(row.runtime_seconds);
-        }
-    }
-
-    return {
-        trackedSince: trackingSetting?.value ?? null,
-        medianSessionSeconds7d: Number(sessionRows[0]?.median_seconds ?? 0),
-        daily: Array.from(dailyByDate.values()),
-        leaderboard: leaderboardRows.map((row) => {
-            const runtimeSeconds7d = Number(row.runtime_seconds_7d);
-            const runtimeHours = runtimeSeconds7d / 3600;
-            const checks7d = Number(row.checks_7d);
-            const newItems7d = Number(row.new_items_7d);
-            return {
-                userId: row.user_id,
-                name: row.name,
-                email: row.email,
-                role: row.role,
-                runningMonitors: Number(row.running_monitors),
-                totalRuntimeSeconds: Number(row.total_runtime_seconds),
-                runtimeSeconds7d,
-                checks7d,
-                newItems7d,
-                checksPerRuntimeHour:
-                    runtimeHours > 0 ? checks7d / runtimeHours : null,
-                newItemsPer100RuntimeHours:
-                    runtimeHours > 0 ? (newItems7d / runtimeHours) * 100 : null,
-            };
-        }),
-    };
-}
-
-const getCachedAdminRuntimeInsights = unstable_cache(
-    loadAdminRuntimeInsights,
-    ["admin-runtime-insights-v1"],
-    { revalidate: 60 },
-);
 
 async function loadAdminMemberInsights() {
     const [summaryRows, growthRows, roleRows, demoRows, recentMembers] =
@@ -1275,9 +902,59 @@ export type PriceWatchPollingAdminState = {
     };
 };
 
+export async function getWorkerPolicyAdminState() {
+    await requireAdmin();
+    return readWorkerPolicy();
+}
+
+export async function updateWorkerPolicy(
+    input: Omit<WorkerPolicy, "version" | "revision">,
+) {
+    const adminUserId = await requireAdmin();
+    if (!["off", "shadow", "active"].includes(input.discoveryMode)) {
+        throw new Error("Invalid discovery mode");
+    }
+    for (const value of [
+        input.discoveryAllowFreeActive,
+        input.enrichSellerInfo,
+        input.catalogLatencyMetrics,
+    ]) {
+        if (typeof value !== "boolean")
+            throw new Error("Invalid worker policy");
+    }
+    const policy = await writePolicyDocument<WorkerPolicy>(
+        RUNTIME_POLICY_KEYS.worker,
+        input,
+    );
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.worker_policy_updated",
+        targetType: "app_setting",
+        targetId: RUNTIME_POLICY_KEYS.worker,
+        metadata: policy,
+    });
+    revalidatePath("/admin/system");
+    return policy;
+}
+
 export async function getPriceWatchPollingAdminState(): Promise<PriceWatchPollingAdminState> {
     await requireAdmin();
-    const [settings, uniqueActiveTargets, scheduleStats, telemetry, alertStats, problemSchedules, problemProxyGroups] = await Promise.all([
+    const [
+        policy,
+        featurePolicy,
+        settings,
+        uniqueActiveTargets,
+        scheduleStats,
+        telemetry,
+        alertStats,
+        problemSchedules,
+        problemProxyGroups,
+    ] = await Promise.all([
+        readPriceWatchPolicy(),
+        db.feature_policies.findUnique({
+            where: { feature: "price_watch" },
+            select: { enabled: true },
+        }),
         db.app_settings.findMany({
             where: {
                 key: {
@@ -1410,7 +1087,9 @@ export async function getPriceWatchPollingAdminState(): Promise<PriceWatchPollin
             take: 10,
         }),
     ]);
-    const settingMap = new Map(settings.map((setting) => [setting.key, setting.value]));
+    const settingMap = new Map(
+        settings.map((setting) => [setting.key, setting.value]),
+    );
     const setting = settingMap.get(PRICE_WATCH_INTERVAL_SETTING_KEY);
     const configuredSeconds = Number(setting);
     const configuredMinutes = configuredSeconds / 60;
@@ -1448,19 +1127,11 @@ export async function getPriceWatchPollingAdminState(): Promise<PriceWatchPollin
         minMinutes: MIN_PRICE_WATCH_INTERVAL_MINUTES,
         maxMinutes: MAX_PRICE_WATCH_INTERVAL_MINUTES,
         uniqueActiveTargets,
-        enabled: settingMap.get(PRICE_WATCH_ENABLED_SETTING_KEY) !== "false",
-        sharedMinimumSeconds: Math.max(
-            120,
-            Number(settingMap.get(PRICE_WATCH_SHARED_MIN_SETTING_KEY)) || 120,
-        ),
-        personalMinimumSeconds: Math.max(
-            30,
-            Number(settingMap.get(PRICE_WATCH_PERSONAL_MIN_SETTING_KEY)) || 30,
-        ),
-        sharedMaxRpm:
-            Number(settingMap.get(PRICE_WATCH_SHARED_RPM_SETTING_KEY)) || 30,
-        personalMaxRpmPerProxy:
-            Number(settingMap.get(PRICE_WATCH_PERSONAL_RPM_SETTING_KEY)) || 2,
+        enabled: featurePolicy?.enabled ?? true,
+        sharedMinimumSeconds: policy.sharedMinimumSeconds,
+        personalMinimumSeconds: policy.personalMinimumSeconds,
+        sharedMaxRpm: policy.sharedMaxRpm,
+        personalMaxRpmPerProxy: policy.personalMaxRpmPerProxy,
         activeWatches: Number(runtime?.active_watches ?? 0),
         sharedSchedules: Number(runtime?.shared_schedules ?? 0),
         personalSchedules: Number(runtime?.personal_schedules ?? 0),
@@ -1482,10 +1153,7 @@ export async function getPriceWatchPollingAdminState(): Promise<PriceWatchPollin
             runtime?.p95_duration_ms == null
                 ? null
                 : Number(runtime.p95_duration_ms),
-        queueLagSeconds: Math.max(
-            0,
-            Number(runtime?.queue_lag_seconds ?? 0),
-        ),
+        queueLagSeconds: Math.max(0, Number(runtime?.queue_lag_seconds ?? 0)),
         trafficBytes24h:
             Number(health?.tx_bytes ?? 0) + Number(health?.rx_bytes ?? 0),
         alertSuccessRate24h:
@@ -1539,33 +1207,44 @@ export async function updatePriceWatchRuntimeSettings(
     input: PriceWatchRuntimeSettingsInput,
 ) {
     const adminUserId = await requireAdmin();
-    if (![120, 300, 600, 900, 1800, 3600].includes(input.sharedMinimumSeconds)) {
-        throw new Error("Shared minimum must be a supported interval from 2 to 60 minutes.");
+    if (
+        ![120, 300, 600, 900, 1800, 3600].includes(input.sharedMinimumSeconds)
+    ) {
+        throw new Error(
+            "Shared minimum must be a supported interval from 2 to 60 minutes.",
+        );
     }
-    if (![30, 60, 120, 300, 600, 900, 1800, 3600].includes(input.personalMinimumSeconds)) {
-        throw new Error("Personal minimum must be a supported interval from 30 seconds to 60 minutes.");
+    if (
+        ![30, 60, 120, 300, 600, 900, 1800, 3600].includes(
+            input.personalMinimumSeconds,
+        )
+    ) {
+        throw new Error(
+            "Personal minimum must be a supported interval from 30 seconds to 60 minutes.",
+        );
     }
-    if (!Number.isInteger(input.sharedMaxRpm) || input.sharedMaxRpm < 1 || input.sharedMaxRpm > 300) {
+    if (
+        !Number.isInteger(input.sharedMaxRpm) ||
+        input.sharedMaxRpm < 1 ||
+        input.sharedMaxRpm > 300
+    ) {
         throw new Error("Shared request budget must be between 1 and 300 RPM.");
     }
-    if (!Number.isInteger(input.personalMaxRpmPerProxy) || input.personalMaxRpmPerProxy < 1 || input.personalMaxRpmPerProxy > 10) {
+    if (
+        !Number.isInteger(input.personalMaxRpmPerProxy) ||
+        input.personalMaxRpmPerProxy < 1 ||
+        input.personalMaxRpmPerProxy > 10
+    ) {
         throw new Error("Personal proxy budget must be between 1 and 10 RPM.");
     }
-    const values: Array<[string, string]> = [
-        [PRICE_WATCH_ENABLED_SETTING_KEY, String(input.enabled)],
-        [PRICE_WATCH_SHARED_MIN_SETTING_KEY, String(input.sharedMinimumSeconds)],
-        [PRICE_WATCH_PERSONAL_MIN_SETTING_KEY, String(input.personalMinimumSeconds)],
-        [PRICE_WATCH_SHARED_RPM_SETTING_KEY, String(input.sharedMaxRpm)],
-        [PRICE_WATCH_PERSONAL_RPM_SETTING_KEY, String(input.personalMaxRpmPerProxy)],
-    ];
-    await db.$transaction(
-        values.map(([key, value]) =>
-            db.app_settings.upsert({
-                where: { key },
-                create: { key, value },
-                update: { value },
-            }),
-        ),
+    await writePolicyDocument<PriceWatchPolicy>(
+        RUNTIME_POLICY_KEYS.priceWatch,
+        {
+            sharedMinimumSeconds: input.sharedMinimumSeconds,
+            personalMinimumSeconds: input.personalMinimumSeconds,
+            sharedMaxRpm: input.sharedMaxRpm,
+            personalMaxRpmPerProxy: input.personalMaxRpmPerProxy,
+        },
     );
     await logAuditEvent({
         userId: adminUserId,
@@ -2183,6 +1862,20 @@ function parsePositiveIntSetting(
 }
 
 async function getFreeProxySettings(): Promise<FreeProxySettings> {
+    const [document, featurePolicy] = await Promise.all([
+        readFreeProxyPolicy(),
+        db.feature_policies.findUnique({
+            where: { feature: "free_proxy_pool" },
+            select: { enabled: true },
+        }),
+    ]);
+    if (document) {
+        return {
+            ...policyPayload(document),
+            enabled: featurePolicy?.enabled ?? false,
+        };
+    }
+
     const keys = [
         FREE_PROXY_ENABLED_KEY,
         FREE_PROXY_AUTO_IMPORT_ENABLED_KEY,
@@ -2221,7 +1914,9 @@ async function getFreeProxySettings(): Promise<FreeProxySettings> {
               DEFAULT_FREE_PROXY_IMPORT_URL);
 
     return {
-        enabled: parseBooleanSetting(values[FREE_PROXY_ENABLED_KEY], false),
+        enabled:
+            featurePolicy?.enabled ??
+            parseBooleanSetting(values[FREE_PROXY_ENABLED_KEY], false),
         autoImportEnabled: parseBooleanSetting(
             values[FREE_PROXY_AUTO_IMPORT_ENABLED_KEY],
             false,
@@ -2308,14 +2003,6 @@ async function getFreeProxySettings(): Promise<FreeProxySettings> {
             true,
         ),
     };
-}
-
-async function setAppSetting(key: string, value: string) {
-    await db.app_settings.upsert({
-        where: { key },
-        create: { key, value },
-        update: { value },
-    });
 }
 
 async function upsertFreeProxies(proxies: ParsedProxy[], source: string) {
@@ -2883,7 +2570,6 @@ export async function getFreeProxySourceDiagnostics(region: string) {
 export async function updateFreeProxySettings(formData: FormData) {
     await requireAdmin();
 
-    const enabled = formData.get("enabled") === "true";
     const autoImportEnabled = formData.get("autoImportEnabled") === "true";
     const importSource =
         (formData.get("importSource") as string | null)?.trim() ||
@@ -2992,50 +2678,25 @@ export async function updateFreeProxySettings(formData: FormData) {
         return { success: false, error: "Invalid import URL" };
     }
 
-    await Promise.all([
-        setAppSetting(FREE_PROXY_ENABLED_KEY, String(enabled)),
-        setAppSetting(
-            FREE_PROXY_AUTO_IMPORT_ENABLED_KEY,
-            String(autoImportEnabled),
-        ),
-        setAppSetting(FREE_PROXY_IMPORT_SOURCE_KEY, importSource),
-        setAppSetting(FREE_PROXY_IMPORT_URL_KEY, importUrl),
-        setAppSetting(FREE_PROXY_MAX_POOL_SIZE_KEY, String(maxPoolSize)),
-        setAppSetting(
-            FREE_PROXY_FAILURE_THRESHOLD_KEY,
-            String(failureThreshold),
-        ),
-        setAppSetting(
-            FREE_PROXY_QUARANTINE_MINUTES_KEY,
-            String(quarantineMinutes),
-        ),
-        setAppSetting(
-            FREE_PROXY_MIN_ACTIVE_PER_REGION_KEY,
-            String(minActivePerRegion),
-        ),
-        setAppSetting(
-            FREE_PROXY_TARGET_ACTIVE_PER_REGION_KEY,
-            String(targetActivePerRegion),
-        ),
-        setAppSetting(FREE_PROXY_MAX_LATENCY_MS_KEY, String(maxLatencyMs)),
-        setAppSetting(FREE_PROXY_STARTER_REGIONS_KEY, starterRegions),
-        setAppSetting(FREE_PROXY_INVENTORY_LIMIT_KEY, String(inventoryLimit)),
-        setAppSetting(
-            FREE_PROXY_ACTIVE_CANDIDATE_LIMIT_KEY,
-            String(activeCandidateLimit),
-        ),
-        setAppSetting(
-            FREE_PROXY_IDLE_CANDIDATE_LIMIT_KEY,
-            String(idleCandidateLimit),
-        ),
-        setAppSetting(FREE_PROXY_READY_TARGET_KEY, String(readyTarget)),
-        setAppSetting(FREE_PROXY_RESERVE_TARGET_KEY, String(reserveTarget)),
-        setAppSetting(FREE_PROXY_IDLE_TARGET_KEY, String(idleTarget)),
-        setAppSetting(
-            FREE_PROXY_EMERGENCY_RECOVERY_KEY,
-            String(emergencyRecoveryEnabled),
-        ),
-    ]);
+    await writePolicyDocument<FreeProxyPolicy>(RUNTIME_POLICY_KEYS.freeProxy, {
+        autoImportEnabled,
+        importSource,
+        importUrl,
+        maxPoolSize,
+        failureThreshold,
+        quarantineMinutes,
+        minActivePerRegion,
+        targetActivePerRegion,
+        maxLatencyMs,
+        starterRegions,
+        inventoryLimit,
+        activeCandidateLimit,
+        idleCandidateLimit,
+        readyTarget,
+        reserveTarget,
+        idleTarget,
+        emergencyRecoveryEnabled,
+    });
 
     const activeMonitorRegions = await db.monitors.findMany({
         where: { status: "active", proxy_source: "free" },
@@ -3242,12 +2903,7 @@ export async function getUsers() {
 
 export async function getAdminOverviewState() {
     await requireAdmin();
-    return getCachedAdminOverviewState();
-}
-
-export async function getAdminRuntimeInsights() {
-    await requireAdmin();
-    return getCachedAdminRuntimeInsights();
+    return loadAdminOverviewState();
 }
 
 export async function getAdminUsersPage(input?: {
@@ -3335,9 +2991,6 @@ export async function getAdminUsersPage(input?: {
                           ...cached,
                           lastCheckAt: cached.lastCheckAt
                               ? new Date(cached.lastCheckAt)
-                              : null,
-                          oldestActiveSince: cached.oldestActiveSince
-                              ? new Date(cached.oldestActiveSince)
                               : null,
                       }
                     : emptyAdminUserMetrics(),
@@ -3442,9 +3095,6 @@ export async function getAdminUserMetricsState() {
                 lastCheckAt: metrics.lastCheckAt
                     ? new Date(metrics.lastCheckAt)
                     : null,
-                oldestActiveSince: metrics.oldestActiveSince
-                    ? new Date(metrics.oldestActiveSince)
-                    : null,
             },
         ]),
     );
@@ -3470,8 +3120,6 @@ export async function getAdminActiveMonitors() {
             status: true,
             region: true,
             created_at: true,
-            active_since: true,
-            runtime_total_seconds: true,
             price_min: true,
             price_max: true,
             discord_webhook: true,
@@ -3481,11 +3129,6 @@ export async function getAdminActiveMonitors() {
             proxy_group: {
                 select: {
                     name: true,
-                },
-            },
-            _count: {
-                select: {
-                    items: true,
                 },
             },
             user: {
@@ -3508,7 +3151,6 @@ export async function getAdminActiveMonitors() {
 
     return monitors.map(({ discord_webhook, ...monitor }) => ({
         ...monitor,
-        runtime_total_seconds: Number(monitor.runtime_total_seconds),
         discord_configured: Boolean(discord_webhook),
     }));
 }
@@ -3516,7 +3158,7 @@ export async function getAdminActiveMonitors() {
 export async function getAdminUserDetails(userId: string) {
     await requireAdmin();
 
-    const [user, runtimeRows, userLimit] = await Promise.all([
+    const [user, userLimit] = await Promise.all([
         db.user.findUnique({
             where: { id: userId },
             select: {
@@ -3531,71 +3173,17 @@ export async function getAdminUserDetails(userId: string) {
                         status: true,
                         region: true,
                         created_at: true,
-                        active_since: true,
-                        runtime_total_seconds: true,
                         price_min: true,
                         price_max: true,
                         discord_webhook: true,
                         webhook_active: true,
                         telegram_active: true,
                         proxy_source: true,
-                        proxy_group: {
-                            select: {
-                                name: true,
-                            },
-                        },
-                        _count: {
-                            select: {
-                                items: true,
-                            },
-                        },
+                        proxy_group: { select: { name: true } },
                     },
                 },
             },
         }),
-        db.$queryRaw<
-            {
-                runtime_seconds_7d: number;
-                average_session_seconds: number | null;
-                closed_runtime_seconds: bigint;
-            }[]
-        >`
-            WITH eligible_sessions AS (
-                SELECT started_at, ended_at
-                FROM monitor_runtime_sessions
-                WHERE user_id = ${userId}
-                  AND ended_at >= NOW() - INTERVAL '7 days'
-                  AND started_at < NOW()
-
-                UNION ALL
-
-                SELECT started_at, ended_at
-                FROM monitor_runtime_sessions
-                WHERE user_id = ${userId}
-                  AND ended_at IS NULL
-                  AND started_at < NOW()
-            )
-            SELECT
-                COALESCE(SUM(GREATEST(
-                    0,
-                    EXTRACT(EPOCH FROM (
-                        LEAST(COALESCE(ended_at, NOW()), NOW()) -
-                        GREATEST(started_at, NOW() - INTERVAL '7 days')
-                    ))
-                )), 0)::double precision AS runtime_seconds_7d,
-                (
-                    SELECT AVG(EXTRACT(EPOCH FROM (ended_at - started_at)))
-                    FROM monitor_runtime_sessions
-                    WHERE user_id = ${userId}
-                      AND ended_at IS NOT NULL
-                )::double precision AS average_session_seconds,
-                COALESCE((
-                    SELECT closed_runtime_seconds
-                    FROM member_monitor_runtime_totals
-                    WHERE user_id = ${userId}
-                ), 0)::bigint AS closed_runtime_seconds
-            FROM eligible_sessions
-        `,
         db.monitor_limits.findUnique({
             where: { scope: userLimitScope(userId) },
             select: {
@@ -3607,35 +3195,8 @@ export async function getAdminUserDetails(userId: string) {
 
     if (!user) throw new Error("User not found");
 
-    const currentRuntimeSeconds = user.monitors.reduce((sum, monitor) => {
-        if (monitor.status !== "active" || !monitor.active_since) return sum;
-        return (
-            sum +
-            Math.max(
-                0,
-                Math.floor(
-                    (Date.now() - monitor.active_since.getTime()) / 1000,
-                ),
-            )
-        );
-    }, 0);
-    const closedRuntimeSeconds = Number(
-        runtimeRows[0]?.closed_runtime_seconds ?? 0,
-    );
-
     return {
-        monitors: user.monitors.map((monitor) => ({
-            ...monitor,
-            runtime_total_seconds: Number(monitor.runtime_total_seconds),
-        })),
-        runtime: {
-            currentRuntimeSeconds,
-            totalRuntimeSeconds: closedRuntimeSeconds + currentRuntimeSeconds,
-            runtimeSeconds7d: Number(runtimeRows[0]?.runtime_seconds_7d ?? 0),
-            averageSessionSeconds: Number(
-                runtimeRows[0]?.average_session_seconds ?? 0,
-            ),
-        },
+        monitors: user.monitors,
         limits: {
             active: userLimit?.active_limit ?? null,
             freeProxy: userLimit?.free_proxy_active_limit ?? null,
@@ -3643,453 +3204,14 @@ export async function getAdminUserDetails(userId: string) {
     };
 }
 
-type AdminOperationFilter = "all" | "delivery" | "proxy" | "monitor" | "audit";
-
-type AdminOperationRow = {
-    id: string;
-    type: "audit" | "monitor" | "delivery" | "proxy";
-    title: string;
-    detail: string | null;
-    status: string;
-    subject: string | null;
-    actor: string | null;
-    createdAt: Date;
-};
-
-const getCachedAdminOperationsSummary = unstable_cache(
-    async () => {
-        type StatRow = {
-            channel: string;
-            outcome: string;
-            event_count: bigint;
-        };
-        type FailureRow = {
-            channel: string;
-            reason_code: string;
-            event_count: bigint;
-            last_seen_at: Date;
-        };
-        type LatencyRow = {
-            p50_ms: number | null;
-            p95_ms: number | null;
-            p99_ms: number | null;
-        };
-        const [
-            stats,
-            queue,
-            failures,
-            incidents,
-            briefIncidents,
-            settings,
-            latency,
-        ] = await Promise.all([
-            db.$queryRaw<StatRow[]>`
-                    SELECT channel, outcome, SUM(event_count)::bigint AS event_count
-                    FROM alert_event_hourly_stats
-                    WHERE bucket_hour >= DATE_TRUNC('hour', NOW() - INTERVAL '24 hours')
-                    GROUP BY channel, outcome
-                `,
-            db.$queryRaw<
-                {
-                    status: string;
-                    event_count: bigint;
-                    oldest_at: Date | null;
-                }[]
-            >`
-                    SELECT status, COUNT(*)::bigint AS event_count,
-                        MIN(created_at) AS oldest_at
-                    FROM alert_deliveries
-                    WHERE status IN ('pending', 'processing', 'retrying')
-                    GROUP BY status
-                `,
-            db.$queryRaw<FailureRow[]>`
-                    SELECT channel, reason_code, SUM(event_count)::bigint AS event_count,
-                        MAX(last_seen_at) AS last_seen_at
-                    FROM alert_event_hourly_stats
-                    WHERE bucket_hour >= DATE_TRUNC('hour', NOW() - INTERVAL '24 hours')
-                      AND outcome = 'failed'
-                    GROUP BY channel, reason_code
-                    ORDER BY event_count DESC, last_seen_at DESC
-                    LIMIT 8
-                `,
-            db.$queryRaw<
-                {
-                    open_count: bigint;
-                    relevant_recovered_count: bigint;
-                    brief_recovered_count: bigint;
-                }[]
-            >`
-                    SELECT
-                        COUNT(*) FILTER (WHERE recovered_at IS NULL)::bigint AS open_count,
-                        COUNT(*) FILTER (
-                            WHERE recovered_at >= NOW() - INTERVAL '24 hours'
-                              AND recovered_at - started_at >= INTERVAL '30 seconds'
-                        )::bigint AS relevant_recovered_count,
-                        COUNT(*) FILTER (
-                            WHERE recovered_at >= NOW() - INTERVAL '24 hours'
-                              AND recovered_at - started_at < INTERVAL '30 seconds'
-                        )::bigint AS brief_recovered_count
-                    FROM monitor_proxy_incidents
-                    WHERE recovered_at IS NULL OR recovered_at >= NOW() - INTERVAL '24 hours'
-                `,
-            db.$queryRaw<
-                {
-                    domain: string;
-                    proxy_source: string;
-                    incident_count: bigint;
-                    wait_count: bigint;
-                }[]
-            >`
-                    SELECT domain, proxy_source,
-                        COUNT(*)::bigint AS incident_count,
-                        SUM(wait_count)::bigint AS wait_count
-                    FROM monitor_proxy_incidents
-                    WHERE recovered_at >= NOW() - INTERVAL '24 hours'
-                      AND recovered_at - started_at < INTERVAL '30 seconds'
-                    GROUP BY domain, proxy_source
-                    ORDER BY incident_count DESC, wait_count DESC
-                    LIMIT 8
-                `,
-            db.app_settings.findMany({
-                where: {
-                    key: {
-                        in: [
-                            "alert_telemetry_tracked_since",
-                            "alert_dispatcher_heartbeat",
-                            "seller_enrichment_metrics",
-                        ],
-                    },
-                },
-                select: { key: true, value: true },
-            }),
-            db.$queryRaw<LatencyRow[]>`
-                    SELECT
-                        PERCENTILE_CONT(0.50) WITHIN GROUP (
-                            ORDER BY EXTRACT(EPOCH FROM (d.completed_at - d.created_at)) * 1000
-                        )::double precision AS p50_ms,
-                        PERCENTILE_CONT(0.95) WITHIN GROUP (
-                            ORDER BY EXTRACT(EPOCH FROM (d.completed_at - d.created_at)) * 1000
-                        )::double precision AS p95_ms,
-                        PERCENTILE_CONT(0.99) WITHIN GROUP (
-                            ORDER BY EXTRACT(EPOCH FROM (d.completed_at - d.created_at)) * 1000
-                        )::double precision AS p99_ms
-                    FROM alert_deliveries d
-                    JOIN alert_notifications n ON n.id = d.notification_id
-                    WHERE d.status = 'sent'
-                      AND d.completed_at >= NOW() - INTERVAL '24 hours'
-                      AND n.kind = 'item_match'
-                `,
-        ]);
-
-        const outcomeTotals = new Map<string, number>();
-        const byChannel: Record<
-            string,
-            { sent: number; failed: number; deduplicated: number }
-        > = {};
-        for (const row of stats) {
-            const count = Number(row.event_count);
-            outcomeTotals.set(
-                row.outcome,
-                (outcomeTotals.get(row.outcome) ?? 0) + count,
-            );
-            const channel = (byChannel[row.channel] ??= {
-                sent: 0,
-                failed: 0,
-                deduplicated: 0,
-            });
-            if (row.outcome === "sent") channel.sent += count;
-            if (row.outcome === "failed") channel.failed += count;
-            if (row.outcome === "deduplicated") channel.deduplicated += count;
-        }
-        const sent = outcomeTotals.get("sent") ?? 0;
-        const failed = outcomeTotals.get("failed") ?? 0;
-        const queueTotals = Object.fromEntries(
-            queue.map((row) => [row.status, Number(row.event_count)]),
-        );
-        const oldestPendingAt = queue
-            .map((row) => row.oldest_at)
-            .filter((value): value is Date => Boolean(value))
-            .sort((a, b) => a.getTime() - b.getTime())[0];
-        const settingMap = new Map(
-            settings.map((setting) => [setting.key, setting.value]),
-        );
-        const enrichmentRaw = settingMap.get("seller_enrichment_metrics");
-        let enrichment: {
-            queueAgeMs: number;
-            cacheHitRate: number;
-            cacheHits: number;
-            cacheMisses: number;
-            remoteP95Ms: number;
-            timeouts: number;
-            updatedAt: string | null;
-        } | null = null;
-        if (enrichmentRaw) {
-            try {
-                const value = JSON.parse(enrichmentRaw) as Record<
-                    string,
-                    unknown
-                >;
-                enrichment = {
-                    queueAgeMs: Number(value.queueAgeMs ?? 0),
-                    cacheHitRate: Number(value.cacheHitRate ?? 0),
-                    cacheHits: Number(value.cacheHits ?? 0),
-                    cacheMisses: Number(value.cacheMisses ?? 0),
-                    remoteP95Ms: Number(value.remoteP95Ms ?? 0),
-                    timeouts: Number(value.timeouts ?? 0),
-                    updatedAt:
-                        typeof value.updatedAt === "string"
-                            ? value.updatedAt
-                            : null,
-                };
-            } catch {
-                enrichment = null;
-            }
-        }
-
-        return {
-            windowHours: 24,
-            sent,
-            failed,
-            deduplicated: outcomeTotals.get("deduplicated") ?? 0,
-            queued: outcomeTotals.get("queued") ?? 0,
-            retryScheduled: outcomeTotals.get("retry_scheduled") ?? 0,
-            pending:
-                (queueTotals.pending ?? 0) +
-                (queueTotals.processing ?? 0) +
-                (queueTotals.retrying ?? 0),
-            retrying: queueTotals.retrying ?? 0,
-            successRate:
-                sent + failed > 0 ? (sent / (sent + failed)) * 100 : null,
-            oldestPendingAt: oldestPendingAt ?? null,
-            byChannel,
-            topFailures: failures.map((row) => ({
-                channel: row.channel,
-                reasonCode: row.reason_code || "unknown",
-                count: Number(row.event_count),
-                lastSeenAt: row.last_seen_at,
-            })),
-            proxyIncidents: {
-                open: Number(incidents[0]?.open_count ?? 0),
-                recovered: Number(incidents[0]?.relevant_recovered_count ?? 0),
-                brief: Number(incidents[0]?.brief_recovered_count ?? 0),
-                briefGroups: briefIncidents.map((row) => ({
-                    domain: row.domain,
-                    proxySource: row.proxy_source,
-                    incidents: Number(row.incident_count),
-                    waits: Number(row.wait_count),
-                })),
-            },
-            trackedSince:
-                settingMap.get("alert_telemetry_tracked_since") ?? null,
-            dispatcherHeartbeat:
-                settingMap.get("alert_dispatcher_heartbeat") ?? null,
-            enrichment,
-            notificationLatency: {
-                p50Ms: latency[0]?.p50_ms ?? null,
-                p95Ms: latency[0]?.p95_ms ?? null,
-                p99Ms: latency[0]?.p99_ms ?? null,
-            },
-        };
-    },
-    ["admin-operations-summary-v2"],
-    { revalidate: 30 },
-);
-
-export async function getAdminOperationsSummary() {
+export async function getAdminOverviewDashboardState() {
     await requireAdmin();
-    return getCachedAdminOperationsSummary();
-}
-
-export async function getAdminOperationsPage(input?: {
-    filter?: AdminOperationFilter;
-    cursor?: string | null;
-    pageSize?: number;
-}) {
-    await requireAdmin();
-    const filter = input?.filter ?? "all";
-    const pageSize = Math.min(Math.max(input?.pageSize ?? 50, 1), 50);
-    const parsedCursor = input?.cursor ? new Date(input.cursor) : null;
-    const cursor =
-        parsedCursor && !Number.isNaN(parsedCursor.getTime())
-            ? parsedCursor
-            : null;
-    const rows: AdminOperationRow[] = [];
-    const queryLimit = pageSize + 1;
-
-    if (filter === "all" || filter === "delivery") {
-        const deliveryRows = await db.alert_events.findMany({
-            where: {
-                status:
-                    filter === "all"
-                        ? "failed"
-                        : {
-                              in: ["failed", "retry_scheduled", "cancelled"],
-                          },
-                ...(cursor ? { created_at: { lt: cursor } } : {}),
-            },
-            orderBy: [{ created_at: "desc" }, { id: "desc" }],
-            take: queryLimit,
-            select: {
-                id: true,
-                channel: true,
-                status: true,
-                notification_kind: true,
-                reason_code: true,
-                failure_reason: true,
-                attempt_number: true,
-                created_at: true,
-                monitor: {
-                    select: {
-                        name: true,
-                        user: { select: { name: true, email: true } },
-                    },
-                },
-            },
-        });
-        rows.push(
-            ...deliveryRows.map((row) => ({
-                id: `delivery-${row.id.toString()}`,
-                type: "delivery" as const,
-                title: `${row.channel} ${row.notification_kind}`,
-                detail: [
-                    row.reason_code ?? row.status,
-                    row.attempt_number ? `attempt ${row.attempt_number}` : null,
-                    row.failure_reason,
-                ]
-                    .filter(Boolean)
-                    .join(" · "),
-                status: row.status,
-                subject: row.monitor?.name ?? null,
-                actor:
-                    row.monitor?.user.name ?? row.monitor?.user.email ?? null,
-                createdAt: row.created_at,
-            })),
-        );
-    }
-
-    if (filter === "all" || filter === "proxy") {
-        const proxyRows = await db.monitor_proxy_incidents.findMany({
-            where: {
-                OR: [
-                    { recovered_at: null },
-                    {
-                        recovered_at: {
-                            not: null,
-                            ...(cursor ? { lt: cursor } : {}),
-                        },
-                        AND: {
-                            recovered_at: {
-                                gte: new Date(Date.now() - 30 * 86400_000),
-                            },
-                        },
-                    },
-                ],
-                ...(cursor ? { started_at: { lt: cursor } } : {}),
-            },
-            orderBy: [{ started_at: "desc" }, { id: "desc" }],
-            take: queryLimit,
-            include: {
-                monitor: {
-                    select: {
-                        name: true,
-                        user: { select: { name: true, email: true } },
-                    },
-                },
-            },
-        });
-        rows.push(
-            ...proxyRows
-                .filter(
-                    (row) =>
-                        !row.recovered_at ||
-                        row.recovered_at.getTime() - row.started_at.getTime() >=
-                            30_000,
-                )
-                .map((row) => ({
-                    id: `proxy-${row.id.toString()}`,
-                    type: "proxy" as const,
-                    title: row.recovered_at
-                        ? "Proxy pool recovered"
-                        : "Proxy pool waiting",
-                    detail: `${row.domain} · ${row.proxy_source} · ${row.wait_count} wait${row.wait_count === 1 ? "" : "s"}${row.recovered_at ? ` · ${Math.max(1, Math.round((row.recovered_at.getTime() - row.started_at.getTime()) / 1000))}s` : ""}`,
-                    status: row.recovered_at ? "recovered" : "warning",
-                    subject: row.monitor.name,
-                    actor:
-                        row.monitor.user.name ?? row.monitor.user.email ?? null,
-                    createdAt: row.started_at,
-                })),
-        );
-    }
-
-    if (filter === "all" || filter === "monitor") {
-        const monitorRows = await db.monitor_events.findMany({
-            where: {
-                severity:
-                    filter === "all" ? "error" : { in: ["warning", "error"] },
-                event_type: {
-                    notIn: ["proxy_pool_waiting", "proxy_pool_recovered"],
-                },
-                ...(cursor ? { created_at: { lt: cursor } } : {}),
-            },
-            orderBy: [{ created_at: "desc" }, { id: "desc" }],
-            take: queryLimit,
-            include: {
-                monitor: {
-                    select: {
-                        name: true,
-                        user: { select: { name: true, email: true } },
-                    },
-                },
-            },
-        });
-        rows.push(
-            ...monitorRows.map((row) => ({
-                id: `monitor-${row.id.toString()}`,
-                type: "monitor" as const,
-                title: row.event_type,
-                detail: row.message,
-                status: row.severity,
-                subject: row.monitor.name,
-                actor: row.monitor.user.name ?? row.monitor.user.email ?? null,
-                createdAt: row.created_at,
-            })),
-        );
-    }
-
-    if (filter === "all" || filter === "audit") {
-        const auditRows = await db.audit_events.findMany({
-            where: {
-                ...(filter === "all" ? { status: { not: "success" } } : {}),
-                ...(cursor ? { created_at: { lt: cursor } } : {}),
-            },
-            orderBy: [{ created_at: "desc" }, { id: "desc" }],
-            take: queryLimit,
-            include: { user: { select: { name: true, email: true } } },
-        });
-        rows.push(
-            ...auditRows.map((row) => ({
-                id: `audit-${row.id.toString()}`,
-                type: "audit" as const,
-                title: row.action,
-                detail: row.target_type,
-                status: row.status,
-                subject: row.target_id,
-                actor: row.user?.name ?? row.user?.email ?? null,
-                createdAt: row.created_at,
-            })),
-        );
-    }
-
-    const page = rows
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-        .slice(0, pageSize);
-    return {
-        rows: page,
-        nextCursor:
-            rows.length > pageSize
-                ? (page.at(-1)?.createdAt.toISOString() ?? null)
-                : null,
-    };
+    const [overview, summary, operations] = await Promise.all([
+        loadAdminOverviewState(),
+        getAdminOperationsSummary(),
+        getAdminOperationsPage({ filter: "all", pageSize: 6 }),
+    ]);
+    return { overview, summary, operations };
 }
 
 export async function setUserRole(userId: string, role: string) {
@@ -4159,10 +3281,7 @@ export async function setUserActiveMonitorLimit(userId: string, value: string) {
     revalidatePath("/admin");
 }
 
-async function reconcilePriceWatchLimits(
-    userIds: string[],
-    reason: string,
-) {
+async function reconcilePriceWatchLimits(userIds: string[], reason: string) {
     let pausedCount = 0;
     for (const userId of userIds) {
         pausedCount += await db.$transaction(async (tx) => {
@@ -4176,7 +3295,10 @@ async function reconcilePriceWatchLimits(
                 orderBy: [{ created_at: "desc" }, { id: "desc" }],
                 select: { id: true },
             });
-            const excess = active.slice(0, Math.max(0, active.length - priceWatchLimit));
+            const excess = active.slice(
+                0,
+                Math.max(0, active.length - priceWatchLimit),
+            );
             if (excess.length === 0) return 0;
             const result = await tx.price_watches.updateMany({
                 where: { id: { in: excess.map((watch) => watch.id) } },
@@ -4222,7 +3344,10 @@ export async function setRolePriceWatchLimit(role: string, value: string) {
     const limit = normalizeMonitorLimitInput(value);
     const scope = roleLimitScope(role);
     await setPriceWatchLimit(scope, limit);
-    const users = await db.user.findMany({ where: { role }, select: { id: true } });
+    const users = await db.user.findMany({
+        where: { role },
+        select: { id: true },
+    });
     const reconciliation = await reconcilePriceWatchLimits(
         users.map((user) => user.id),
         scope,
@@ -4256,7 +3381,11 @@ export async function setUserPriceWatchLimit(userId: string, value: string) {
         action: "admin.price_watch_limit_updated",
         targetType: "monitor_limit",
         targetId: scope,
-        metadata: { memberUserId: userId, limit, pausedCount: reconciliation.pausedCount },
+        metadata: {
+            memberUserId: userId,
+            limit,
+            pausedCount: reconciliation.pausedCount,
+        },
     });
     revalidatePath("/admin");
     revalidatePath("/price-watches");

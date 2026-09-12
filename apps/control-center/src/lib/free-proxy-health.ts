@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { readFreeProxyPolicy } from "@/lib/runtime-policies.server";
 
 const DEFAULT_STARTER_REGIONS = "de,fr,it,es,nl,be,at";
 
@@ -100,17 +101,19 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
     }
 
     const [
-        setting,
+        featurePolicy,
+        policy,
         minActiveSetting,
         readyTargetSetting,
         starterRegionsSetting,
         degradationSetting,
         rows,
     ] = await Promise.all([
-        db.app_settings.findUnique({
-            where: { key: "free_proxy_enabled" },
-            select: { value: true },
+        db.feature_policies.findUnique({
+            where: { feature: "free_proxy_pool" },
+            select: { enabled: true },
         }),
+        readFreeProxyPolicy(),
         db.app_settings.findUnique({
             where: { key: "free_proxy_min_active_per_region" },
             select: { value: true },
@@ -243,10 +246,16 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
         `,
     ]);
 
-    const minActivePerRegion = Number(minActiveSetting?.value ?? 25);
-    const readyTarget = Number(readyTargetSetting?.value ?? 50);
+    const minActivePerRegion = Number(
+        policy?.minActivePerRegion ?? minActiveSetting?.value ?? 25,
+    );
+    const readyTarget = Number(
+        policy?.readyTarget ?? readyTargetSetting?.value ?? 50,
+    );
     const configuredRegions = (
-        starterRegionsSetting?.value ?? DEFAULT_STARTER_REGIONS
+        policy?.starterRegions ??
+        starterRegionsSetting?.value ??
+        DEFAULT_STARTER_REGIONS
     )
         .split(",")
         .map((region) => region.trim().toLowerCase())
@@ -270,7 +279,7 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                     medianLatencyMs: null,
                     lastCheckedAt: null,
                     healthy: false,
-                    state: setting?.value === "true" ? "building" : "disabled",
+                    state: featurePolicy?.enabled ? "building" : "disabled",
                     neverChecked: 0,
                     topErrorCode: null,
                     topErrorStage: null,
@@ -311,14 +320,13 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                         : Math.round(row.median_latency_ms),
                 lastCheckedAt: row.last_checked_at,
                 healthy: usable >= minActivePerRegion,
-                state:
-                    setting?.value !== "true"
-                        ? "disabled"
-                        : usable >= minActivePerRegion
-                          ? "ready"
-                          : row.last_checked_at === null
-                            ? "building"
-                            : "recovering",
+                state: !featurePolicy?.enabled
+                    ? "disabled"
+                    : usable >= minActivePerRegion
+                      ? "ready"
+                      : row.last_checked_at === null
+                        ? "building"
+                        : "recovering",
                 neverChecked: Number(row.never_checked_count),
                 topErrorCode: row.top_error_code,
                 topErrorStage: row.top_error_stage,
@@ -337,7 +345,7 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
         }),
     );
 
-    const enabled = setting?.value === "true";
+    const enabled = featurePolicy?.enabled ?? false;
     const regionValues = Object.values(regions);
     const state: FreeProxyPoolHealth["state"] = !enabled
         ? "disabled"

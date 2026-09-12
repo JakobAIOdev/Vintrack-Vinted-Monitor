@@ -11,9 +11,9 @@ func clearURLSettings(t *testing.T) {
 
 func TestResolveCanonicalPublicURL(t *testing.T) {
 	clearURLSettings(t)
-	t.Setenv("APP_PUBLIC_URL", "https://vintrack.jakobaio.dev/")
+	t.Setenv("AUTH_URL", "https://vintrack.jakobaio.dev/")
 	health := Resolve()
-	if !health.OK || health.Origin != "https://vintrack.jakobaio.dev" || health.Source != "APP_PUBLIC_URL" {
+	if !health.OK || health.Origin != "https://vintrack.jakobaio.dev" || health.Source != "AUTH_URL" {
 		t.Fatalf("unexpected health: %#v", health)
 	}
 	if got := Link("/price-watches?watch=24"); got != "https://vintrack.jakobaio.dev/price-watches?watch=24" {

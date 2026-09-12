@@ -10,6 +10,7 @@ import type { MonitorMaintenance } from "@/lib/monitor-maintenance";
 import { DashboardActivity } from "@/components/layout/dashboard-activity";
 import { Info } from "lucide-react";
 import { MonitorMaintenanceProvider } from "@/components/maintenance/monitor-maintenance-context";
+import type { FeatureAccessResult, FeatureKey } from "@/lib/features";
 
 interface DashboardShellProps {
     children: React.ReactNode;
@@ -17,6 +18,7 @@ interface DashboardShellProps {
     maintenance: MonitorMaintenance;
     inactivityPausedCount: number;
     inactivityPausedPriceWatchCount: number;
+    features: Record<FeatureKey, FeatureAccessResult>;
     user?: {
         name?: string | null;
         image?: string | null;
@@ -32,6 +34,7 @@ export function DashboardShell({
     maintenance,
     inactivityPausedCount,
     inactivityPausedPriceWatchCount,
+    features,
 }: DashboardShellProps) {
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const inactivitySummary = [
@@ -63,6 +66,7 @@ export function DashboardShell({
                         user={user}
                         isOpen={sidebarOpen}
                         onClose={() => setSidebarOpen(false)}
+                        features={features}
                     />
 
                     <div className="flex min-w-0 flex-1 flex-col lg:ml-60">
@@ -89,10 +93,10 @@ export function DashboardShell({
                                                 {inactivityResourceCount === 1
                                                     ? "was"
                                                     : "were"}{" "}
-                                                paused because the dashboard had not
-                                                been used for a while. Review
-                                                and restart them manually when
-                                                you are ready.
+                                                paused because the dashboard had
+                                                not been used for a while.
+                                                Review and restart them manually
+                                                when you are ready.
                                             </p>
                                         </div>
                                     </div>

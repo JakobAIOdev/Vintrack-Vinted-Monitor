@@ -157,7 +157,7 @@ not add CAPTCHA or authentication bypass logic.
 Verify:
 
 - bot token and public username are correct;
-- `DASHBOARD_URL` is public HTTPS;
+- `AUTH_URL` is public HTTPS;
 - the webhook targets `/api/telegram/webhook`;
 - the registered webhook secret matches `TELEGRAM_WEBHOOK_SECRET`;
 - Telegram notifications are enabled for the monitor;

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log"
-	"os"
 	"sort"
 	"sync"
 	"time"
@@ -59,13 +58,6 @@ func newCatalogLatencyMetrics() *catalogLatencyMetrics {
 		fetchUS:   make([]int64, 0, 256),
 		processUS: make([]int64, 0, 256),
 	}
-}
-
-// catalogLatencyMetricsEnabled reports whether the in-worker catalog latency
-// aggregation and its heartbeat should run. Set
-// CATALOG_LATENCY_METRICS=false to turn both off.
-func catalogLatencyMetricsEnabled() bool {
-	return os.Getenv("CATALOG_LATENCY_METRICS") != "false"
 }
 
 // recordFailedFetch counts a cycle whose catalog fetch did not return 200 so the
@@ -178,14 +170,16 @@ func (e *Engine) catalogLatencyHeartbeat() {
 	ticker := time.NewTicker(catalogLatencyHeartbeatInterval)
 	defer ticker.Stop()
 	for {
-		payload, err := json.Marshal(e.catalogLatency.snapshot())
-		if err == nil {
-			ctx, cancel := context.WithTimeout(e.jobsCtx, 3*time.Second)
-			err = e.db.SetSettingValueContext(ctx, catalogLatencySettingKey, string(payload))
-			cancel()
-		}
-		if err != nil {
-			log.Printf("catalog latency metrics heartbeat: %v", err)
+		if e.workerPolicySnapshot().CatalogLatencyMetrics {
+			payload, err := json.Marshal(e.catalogLatency.snapshot())
+			if err == nil {
+				ctx, cancel := context.WithTimeout(e.jobsCtx, 3*time.Second)
+				err = e.db.SetSettingValueContext(ctx, catalogLatencySettingKey, string(payload))
+				cancel()
+			}
+			if err != nil {
+				log.Printf("catalog latency metrics heartbeat: %v", err)
+			}
 		}
 		select {
 		case <-e.jobsCtx.Done():

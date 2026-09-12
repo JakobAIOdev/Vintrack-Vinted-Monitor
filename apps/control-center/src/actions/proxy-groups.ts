@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { REGIONS } from "@/lib/regions";
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
+import { requireFeatureAccessForUser } from "@/lib/features.server";
 
 const VALID_SCHEMES = ["http", "https", "socks4", "socks5"];
 const BYTES_PER_GB = 1024 * 1024 * 1024;
@@ -58,8 +59,7 @@ function isProxyCheckResult(value: unknown): value is ProxyCheckResult {
         (result.status === "working" ||
             result.status === "slow" ||
             result.status === "failed") &&
-        (result.latencyMs === null ||
-            typeof result.latencyMs === "number") &&
+        (result.latencyMs === null || typeof result.latencyMs === "number") &&
         (result.errorCode === null || typeof result.errorCode === "string")
     );
 }
@@ -159,6 +159,7 @@ function parseBandwidthLimitBytes(formData: FormData) {
 export async function getProxyGroups() {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Unauthorized");
+    await requireFeatureAccessForUser("proxy_groups", session.user.id);
 
     return db.proxy_groups.findMany({
         where: { userId: session.user.id },
@@ -172,6 +173,7 @@ export async function getProxyGroups() {
 export async function createProxyGroup(formData: FormData) {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Unauthorized");
+    await requireFeatureAccessForUser("proxy_groups", session.user.id);
 
     const name = (formData.get("name") as string)?.trim();
     const proxies = (formData.get("proxies") as string)?.trim();
@@ -205,6 +207,7 @@ export async function createProxyGroup(formData: FormData) {
 export async function deleteProxyGroup(id: number) {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Unauthorized");
+    await requireFeatureAccessForUser("proxy_groups", session.user.id);
     const userId = session.user.id;
 
     const [group, user, priceWatchSchedules] = await Promise.all([
@@ -296,6 +299,7 @@ export async function deleteProxyGroup(id: number) {
 export async function updateProxyGroup(id: number, formData: FormData) {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Unauthorized");
+    await requireFeatureAccessForUser("proxy_groups", session.user.id);
 
     const name = (formData.get("name") as string)?.trim();
     const proxies = (formData.get("proxies") as string)?.trim();
@@ -341,6 +345,7 @@ export async function updateProxyGroup(id: number, formData: FormData) {
 export async function resetProxyGroupBandwidth(id: number) {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Unauthorized");
+    await requireFeatureAccessForUser("proxy_groups", session.user.id);
 
     await db.proxy_groups.update({
         where: { id, userId: session.user.id },
@@ -360,6 +365,7 @@ export async function startProxyGroupCheck(
 ): Promise<ProxyCheckSnapshot> {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Unauthorized");
+    await requireFeatureAccessForUser("proxy_groups", session.user.id);
     const userId = session.user.id;
 
     const normalizedRegion = region.trim().toLowerCase();
@@ -404,9 +410,8 @@ export async function startProxyGroupCheck(
 
         const total = Math.min(
             MAX_PROXY_CHECK_SIZE,
-            group.proxies
-                .split("\n")
-                .filter((line) => line.trim().length > 0).length,
+            group.proxies.split("\n").filter((line) => line.trim().length > 0)
+                .length,
         );
         const updated = await tx.proxy_groups.update({
             where: { id },
@@ -437,6 +442,7 @@ export async function getProxyGroupCheckStatus(
 ): Promise<ProxyCheckSnapshot> {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Unauthorized");
+    await requireFeatureAccessForUser("proxy_groups", session.user.id);
 
     const group = await db.proxy_groups.findFirst({
         where: { id, userId: session.user.id },

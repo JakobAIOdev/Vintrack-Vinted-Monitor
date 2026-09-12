@@ -22,7 +22,7 @@ func Resolve() Health {
 		key   string
 		value string
 	}, 0, 3)
-	for _, key := range []string{"APP_PUBLIC_URL", "AUTH_URL", "DASHBOARD_URL"} {
+	for _, key := range []string{"AUTH_URL", "APP_PUBLIC_URL", "DASHBOARD_URL"} {
 		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 			configured = append(configured, struct {
 				key   string

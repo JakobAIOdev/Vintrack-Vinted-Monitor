@@ -6,6 +6,7 @@ import {
 import { getExtensionAccountStatus } from "@/lib/vinted-account.server";
 import { getExtensionRecentFeed } from "@/lib/extension-feed.server";
 import { db } from "@/lib/db";
+import { getFeatureCapabilities } from "@/lib/features.server";
 
 export const dynamic = "force-dynamic";
 
@@ -19,19 +20,31 @@ export async function GET(request: Request) {
     const { userId } = authentication.principal;
 
     try {
+        const user = await db.user.findUnique({
+            where: { id: userId },
+            select: { role: true },
+        });
+        const capabilities = await getFeatureCapabilities(user?.role);
         const [account, monitors, priceWatchCount, recentFeed] =
             await Promise.all([
-                getExtensionAccountStatus(userId),
+                capabilities.vinted_account.allowed
+                    ? getExtensionAccountStatus(userId)
+                    : null,
                 db.monitors.findMany({
                     where: { userId },
                     select: { id: true, name: true, status: true },
                     orderBy: { created_at: "desc" },
                 }),
-                db.price_watches.count({ where: { user_id: userId } }),
-                getExtensionRecentFeed(userId, 6),
+                capabilities.price_watch.allowed
+                    ? db.price_watches.count({ where: { user_id: userId } })
+                    : 0,
+                capabilities.live_feed.allowed
+                    ? getExtensionRecentFeed(userId, 6)
+                    : [],
             ]);
 
         return extensionJson({
+            capabilities,
             account,
             monitors: {
                 total: monitors.length,

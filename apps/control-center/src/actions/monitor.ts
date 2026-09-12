@@ -1,6 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
+import { getFeatureAccessForUser } from "@/lib/features.server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
@@ -103,6 +104,10 @@ async function resolveMonitorProxySelection(
     });
 
     if (proxyGroupRaw === "free") {
+        const access = await getFeatureAccessForUser("free_proxy_pool", userId);
+        if (!access.allowed) {
+            throw new Error("Free proxy pool is not available for your role");
+        }
         if (!(await isFreeProxyPoolAvailable(region))) {
             throw new Error("Free proxy pool is currently disabled");
         }
@@ -117,6 +122,10 @@ async function resolveMonitorProxySelection(
     }
 
     if (proxyGroupRaw) {
+        const access = await getFeatureAccessForUser("proxy_groups", userId);
+        if (!access.allowed) {
+            throw new Error("Proxy groups are not available for your role");
+        }
         const pgId = parseInt(proxyGroupRaw);
         if (!Number.isInteger(pgId)) throw new Error("Invalid proxy group");
 
@@ -382,6 +391,17 @@ export async function createPresetMonitor(input: {
         throw new Error("Not logged in!");
     }
     const userId = session.user.id;
+    const freePoolAccess = await getFeatureAccessForUser(
+        "free_proxy_pool",
+        userId,
+    );
+    if (!freePoolAccess.allowed) {
+        return {
+            ok: false,
+            code: "POOL_UNAVAILABLE",
+            message: "The Free Proxy Pool is not available for your role.",
+        };
+    }
 
     const preset = getMonitorPreset(input.presetKey);
     if (!preset) {
@@ -1115,6 +1135,24 @@ export async function toggleMonitorStatus(id: number, currentStatus: string) {
         if (!existing) throw new Error("Monitor not found");
 
         if (newStatus === "active") {
+            const proxyFeature =
+                existing.proxy_source === "free"
+                    ? "free_proxy_pool"
+                    : existing.proxy_source === "group"
+                      ? "proxy_groups"
+                      : null;
+            if (proxyFeature) {
+                const access = await getFeatureAccessForUser(
+                    proxyFeature,
+                    userId,
+                    tx,
+                );
+                if (!access.allowed) {
+                    throw new Error(
+                        "This monitor uses a feature that is not available for your role",
+                    );
+                }
+            }
             await touchDashboardActivity(tx, userId);
             const activationState = await getMonitorActivationState(
                 userId,

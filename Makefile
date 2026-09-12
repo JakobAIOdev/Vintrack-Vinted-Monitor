@@ -1,13 +1,14 @@
 DEV_COMPOSE = COMPOSE_PROFILES= COMPOSE_PARALLEL_LIMIT=1 docker compose -f docker-compose.yml -f docker-compose.dev.yml
 DEV_SEED = $(DEV_COMPOSE) exec -T control-center node scripts/seed-dev.mjs
 
-.PHONY: help init check compose-check dev dev-seed dev-down dev-logs dev-ps up down logs
+.PHONY: help init check config-check compose-check dev dev-seed dev-down dev-logs dev-ps up down logs
 
 help:
 	@printf '%s\n' \
 		'Vintrack development commands:' \
 		'  make init           Create local files and generate missing secrets' \
 		'  make check          Run the standard test suite' \
+		'  make config-check   Validate .env without printing values' \
 		'  make compose-check  Validate Docker Compose configuration quietly' \
 		'  make dev            Build, seed, and start the low-power mock development stack' \
 		'  make dev-seed       Refresh the local admin, monitors, and proxy pool fixtures' \
@@ -23,6 +24,9 @@ init:
 
 check:
 	sh scripts/test-all.sh
+
+config-check:
+	node scripts/config-check.mjs .env
 
 compose-check:
 	docker compose config --quiet

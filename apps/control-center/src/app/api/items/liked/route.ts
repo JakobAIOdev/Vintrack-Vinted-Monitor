@@ -1,3 +1,4 @@
+import { guardApiFeature } from "@/lib/features.server";
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 
@@ -8,6 +9,9 @@ export async function GET() {
     if (!session?.user?.id) {
         return NextResponse.json({ item_ids: [] });
     }
+
+    const featureDenied = await guardApiFeature(session.user.id, "liked_items");
+    if (featureDenied) return featureDenied;
 
     try {
         const res = await fetch(`${API_URL}/api/items/liked`, {

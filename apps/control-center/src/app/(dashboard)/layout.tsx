@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
 import { getMemberAnnouncement } from "@/lib/member-announcement.server";
 import { getMonitorMaintenance } from "@/lib/monitor-maintenance.server";
+import { getFeatureCapabilities } from "@/lib/features.server";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -31,29 +32,29 @@ export default async function DashboardLayout({
         maintenance,
         inactivityPausedCount,
         inactivityPausedPriceWatchCount,
-    ] =
-        await Promise.all([
-            db.user.findUnique({
-                where: { id: session.user.id },
-                select: { role: true },
-            }),
-            getMemberAnnouncement(),
-            getMonitorMaintenance(),
-            db.monitors.count({
-                where: {
-                    userId: session.user.id,
-                    status: "inactivity_paused",
-                },
-            }),
-            db.price_watches.count({
-                where: {
-                    user_id: session.user.id,
-                    status: "paused",
-                    stopped_reason: "inactive_member",
-                },
-            }),
-        ]);
+    ] = await Promise.all([
+        db.user.findUnique({
+            where: { id: session.user.id },
+            select: { role: true },
+        }),
+        getMemberAnnouncement(),
+        getMonitorMaintenance(),
+        db.monitors.count({
+            where: {
+                userId: session.user.id,
+                status: "inactivity_paused",
+            },
+        }),
+        db.price_watches.count({
+            where: {
+                user_id: session.user.id,
+                status: "paused",
+                stopped_reason: "inactive_member",
+            },
+        }),
+    ]);
     const role = dbUser?.role ?? "free";
+    const features = await getFeatureCapabilities(role);
 
     const user = { ...session.user, role };
 
@@ -67,6 +68,7 @@ export default async function DashboardLayout({
                 inactivityPausedPriceWatchCount={
                     inactivityPausedPriceWatchCount
                 }
+                features={features}
             >
                 {children}
             </DashboardShell>

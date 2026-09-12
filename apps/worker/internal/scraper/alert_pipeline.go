@@ -341,7 +341,7 @@ func (e *Engine) enrichAndPersist(job enrichmentJob) {
 	var fetchErr error
 	if job.cachedInfo != nil {
 		info = *job.cachedInfo
-	} else if (e.enrichSeller || job.requireSellerMatch) && job.enricher != nil && job.vintedItem.User.ID > 0 {
+	} else if (e.workerPolicySnapshot().EnrichSellerInfo || job.requireSellerMatch) && job.enricher != nil && job.vintedItem.User.ID > 0 {
 		enrichmentDeadline := itemEnrichmentDeadline(job.item)
 		if job.strictAttempt > 0 || job.backgroundOnly {
 			enrichmentDeadline = time.Now().Add(sellerEnrichmentTimeout())

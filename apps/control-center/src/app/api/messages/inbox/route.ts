@@ -1,3 +1,4 @@
+import { guardApiFeature } from "@/lib/features.server";
 import { auth } from "@/auth";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -8,6 +9,9 @@ export async function GET(req: NextRequest) {
     if (!session?.user?.id) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const featureDenied = await guardApiFeature(session.user.id, "chats");
+    if (featureDenied) return featureDenied;
 
     const search = req.nextUrl.searchParams.toString();
     const url = `${API_URL}/api/messages/inbox${search ? `?${search}` : ""}`;

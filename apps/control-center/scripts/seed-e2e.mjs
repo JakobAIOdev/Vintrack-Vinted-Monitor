@@ -51,6 +51,15 @@ const items = [
 ];
 
 async function main() {
+    await db.feature_policies.updateMany({
+        data: {
+            enabled: true,
+            free_enabled: true,
+            premium_enabled: true,
+            admin_enabled: true,
+        },
+    });
+
     await db.app_settings.deleteMany({
         where: {
             key: {

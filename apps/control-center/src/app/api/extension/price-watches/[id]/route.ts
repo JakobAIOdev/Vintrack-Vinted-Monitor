@@ -1,3 +1,4 @@
+import { getFeatureAccessForUser } from "@/lib/features.server";
 import {
     authenticateExtensionRequest,
     extensionJson,
@@ -20,6 +21,20 @@ type RouteContext = { params: Promise<{ id: string }> };
 export async function PATCH(request: Request, context: RouteContext) {
     const authentication = await authenticateExtensionRequest(request);
     if (!authentication.ok) return authentication.response;
+    const featureAccess = await getFeatureAccessForUser(
+        "price_watch",
+        authentication.principal.userId,
+    );
+    if (!featureAccess.allowed) {
+        return extensionJson(
+            {
+                code: "FEATURE_UNAVAILABLE",
+                feature: featureAccess.feature,
+                reason: featureAccess.reason,
+            },
+            403,
+        );
+    }
     const { id } = await context.params;
     const data = (await request.json().catch(() => null)) as {
         status?: unknown;
@@ -53,6 +68,20 @@ export async function PATCH(request: Request, context: RouteContext) {
 export async function DELETE(request: Request, context: RouteContext) {
     const authentication = await authenticateExtensionRequest(request);
     if (!authentication.ok) return authentication.response;
+    const featureAccess = await getFeatureAccessForUser(
+        "price_watch",
+        authentication.principal.userId,
+    );
+    if (!featureAccess.allowed) {
+        return extensionJson(
+            {
+                code: "FEATURE_UNAVAILABLE",
+                feature: featureAccess.feature,
+                reason: featureAccess.reason,
+            },
+            403,
+        );
+    }
     const { id } = await context.params;
     const result = await deleteExtensionPriceWatch(
         authentication.principal.userId,

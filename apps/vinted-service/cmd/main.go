@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"vintrack-vinted/internal/api"
+	"vintrack-vinted/internal/config"
 	"vintrack-vinted/internal/session"
 	"vintrack-vinted/internal/vinted"
 
@@ -19,13 +20,12 @@ func main() {
 	log.Println("Vintrack Vinted Service starting...")
 	_ = godotenv.Load()
 
-	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
-	redisPassword := getEnv("REDIS_PASSWORD", "")
-	databaseURL := getEnv("DATABASE_URL", "")
-	encryptionKey := getEnv("VINTED_SESSION_ENCRYPTION_KEY", "")
-	listenAddr := getEnv("LISTEN_ADDR", ":4000")
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("Configuration: %v", err)
+	}
 
-	sessionMgr, err := session.NewManager(redisAddr, redisPassword, databaseURL, encryptionKey)
+	sessionMgr, err := session.NewManager(cfg.RedisAddr, cfg.RedisPassword, cfg.DatabaseURL, cfg.EncryptionKey)
 	if err != nil {
 		log.Fatalf("Session manager: %v", err)
 	}
@@ -71,7 +71,7 @@ func main() {
 		return false
 	})
 
-	server := api.NewServer(sessionMgr, listenAddr)
+	server := api.NewServer(sessionMgr, cfg.ListenAddr)
 
 	go func() {
 		if err := server.Start(); err != nil {
@@ -79,17 +79,10 @@ func main() {
 		}
 	}()
 
-	log.Printf("Vinted Service ready on %s", listenAddr)
+	log.Printf("Vinted Service ready on %s", cfg.ListenAddr)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	log.Println("Shutting down...")
-}
-
-func getEnv(key, fallback string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
-	}
-	return fallback
 }

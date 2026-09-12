@@ -117,6 +117,13 @@ func NewManager(redisAddr, redisPassword, databaseURL, encryptionKey string) (*M
 	return manager, nil
 }
 
+func (m *Manager) FeatureAccess(userID string, feature string) (FeatureAccess, error) {
+	if m.store == nil {
+		return FeatureAccess{Reason: "disabled"}, nil
+	}
+	return m.store.FeatureAccess(m.ctx, userID, feature)
+}
+
 func (m *Manager) Close() error {
 	if m.store != nil {
 		_ = m.store.Close()

@@ -4,6 +4,7 @@ import {
     extensionOptions,
 } from "@/lib/extension-auth.server";
 import { inspectExtensionContext } from "@/lib/extension-context.server";
+import { getFeatureAccessForUser } from "@/lib/features.server";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,20 @@ export function OPTIONS() {
 export async function POST(request: Request) {
     const authentication = await authenticateExtensionRequest(request);
     if (!authentication.ok) return authentication.response;
+    const access = await getFeatureAccessForUser(
+        "vinted_account",
+        authentication.principal.userId,
+    );
+    if (!access.allowed) {
+        return extensionJson(
+            {
+                code: "FEATURE_UNAVAILABLE",
+                feature: access.feature,
+                reason: access.reason,
+            },
+            403,
+        );
+    }
 
     const data = (await request.json().catch(() => null)) as {
         url?: unknown;
