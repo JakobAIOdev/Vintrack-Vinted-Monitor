@@ -1,6 +1,6 @@
 {
     "name": "control-center",
-    "version": "2.4.8",
+    "version": "2.4.10",
     "private": true,
     "scripts": {
         "dev": "next dev",
@@ -16,7 +16,8 @@
         "seed:e2e": "node scripts/seed-e2e.mjs",
         "validate:sizes": "node scripts/validate-size-snapshots.mjs",
         "format": "prettier --write .",
-        "format:check": "prettier --check ."
+        "format:check": "prettier --check .",
+        "test:e2e:own-proxy": "E2E_TEST_MODE=true E2E_TEST_USER_ID=e2e-own-proxy-user PLAYWRIGHT_PORT=3105 playwright test tests/e2e/own-proxy-limit.spec.ts --project=chromium --workers=1"
     },
     "dependencies": {
         "@auth/prisma-adapter": "^2.11.1",

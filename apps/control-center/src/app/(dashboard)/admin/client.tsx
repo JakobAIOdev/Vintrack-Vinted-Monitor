@@ -1,4 +1,6 @@
 "use client";
+
+import { OwnProxyLimitCard } from "@/components/admin/own-proxy-limit-card";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -1156,6 +1158,7 @@ export function AdminClient({
     initialWorkerPolicy,
     configDiagnostics,
     monitorLimits: initialMonitorLimits,
+    initialOwnProxyLimit,
 }: {
     users: UserRow[];
     logs: AdminLogRow[];
@@ -1172,6 +1175,7 @@ export function AdminClient({
     initialWorkerPolicy: WorkerPolicy;
     configDiagnostics: DeploymentConfigDiagnostics;
     monitorLimits: MonitorLimits;
+    initialOwnProxyLimit: number;
 }) {
     const [users, setUsers] = useState<UserRow[]>(initialUsers);
     const [overviewState, setOverviewState] =
@@ -5677,6 +5681,8 @@ export function AdminClient({
                             ))}
                         </div>
                     </div>
+
+                    <OwnProxyLimitCard initialLimit={initialOwnProxyLimit} />
 
                     <div className="border-border/60 bg-card rounded-lg border p-5">
                         <div className="mb-4 flex items-center justify-between gap-3">

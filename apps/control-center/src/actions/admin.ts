@@ -1,5 +1,11 @@
 "use server";
 
+import { OWN_PROXY_LIMIT_SETTING_KEY } from "@/lib/own-proxy-limit";
+import {
+    reconcileAllOwnProxyMonitorLimits,
+    reconcileUserOwnProxyMonitorLimit,
+} from "@/lib/own-proxy-limit-reconciliation.server";
+
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { Prisma } from "@prisma/client";
@@ -1476,13 +1482,29 @@ export async function disableMonitorMaintenance() {
         const resumeIds: number[] = [];
         const limitPausedIds: number[] = [];
         for (const [userId, monitors] of byUser) {
-            const [limits, activeCount, activeFreeCount] = await Promise.all([
-                getEffectiveMonitorLimits(userId, tx),
-                tx.monitors.count({ where: { userId, status: "active" } }),
-                tx.monitors.count({
-                    where: { userId, status: "active", proxy_source: "free" },
-                }),
-            ]);
+            const [limits, activeCount, activeFreeCount, activeOwnCount] =
+                await Promise.all([
+                    getEffectiveMonitorLimits(userId, tx),
+                    tx.monitors.count({ where: { userId, status: "active" } }),
+                    tx.monitors.count({
+                        where: {
+                            userId,
+                            status: "active",
+                            proxy_source: "free",
+                        },
+                    }),
+                    tx.monitors.count({
+                        where: {
+                            userId,
+                            status: "active",
+                            proxy_source: "group",
+                        },
+                    }),
+                ]);
+            let ownSlots =
+                limits.ownProxyActiveLimit === null
+                    ? null
+                    : Math.max(limits.ownProxyActiveLimit - activeOwnCount, 0);
             let activeSlots =
                 limits.activeLimit === null
                     ? null
@@ -1497,6 +1519,9 @@ export async function disableMonitorMaintenance() {
             for (const monitor of monitors) {
                 const canResume =
                     (activeSlots === null || activeSlots > 0) &&
+                    (monitor.proxy_source !== "group" ||
+                        ownSlots === null ||
+                        ownSlots > 0) &&
                     (monitor.proxy_source !== "free" ||
                         freeSlots === null ||
                         freeSlots > 0);
@@ -1506,6 +1531,8 @@ export async function disableMonitorMaintenance() {
                 }
                 resumeIds.push(monitor.id);
                 if (activeSlots !== null) activeSlots -= 1;
+                if (monitor.proxy_source === "group" && ownSlots !== null)
+                    ownSlots -= 1;
                 if (monitor.proxy_source === "free" && freeSlots !== null) {
                     freeSlots -= 1;
                 }
@@ -3225,6 +3252,11 @@ export async function setUserRole(userId: string, role: string) {
         data: { role },
     });
 
+    const ownPaused = await reconcileUserOwnProxyMonitorLimit(
+        userId,
+        `role-change:${role}`,
+        adminUserId,
+    );
     const reconciliation = await reconcileFreeProxyLimitsForUsers(
         [userId],
         `role-change:${role}`,
@@ -3233,7 +3265,55 @@ export async function setUserRole(userId: string, role: string) {
 
     revalidatePath("/admin");
     revalidatePath("/dashboard");
-    return reconciliation;
+    return {
+        pausedCount: reconciliation.pausedCount + ownPaused.length,
+        pausedMonitorIds: [
+            ...reconciliation.pausedMonitorIds,
+            ...ownPaused.map((monitor) => monitor.id),
+        ],
+    };
+}
+
+export async function setGlobalOwnProxyMonitorLimit(value: string) {
+    const adminUserId = await requireAdmin();
+    const limit = Number(value);
+    if (!value.trim() || !Number.isSafeInteger(limit) || limit < 0) {
+        throw new Error("Own proxy limit must be a non-negative whole number");
+    }
+    await db.$transaction(async (tx) => {
+        await acquireGlobalMonitorActivationLock(tx);
+        await tx.app_settings.upsert({
+            where: { key: OWN_PROXY_LIMIT_SETTING_KEY },
+            create: { key: OWN_PROXY_LIMIT_SETTING_KEY, value: String(limit) },
+            update: { value: String(limit) },
+        });
+        await tx.audit_events.create({
+            data: {
+                userId: adminUserId,
+                action: "admin.own_proxy_limit_updated",
+                status: "success",
+                target_type: "app_setting",
+                target_id: OWN_PROXY_LIMIT_SETTING_KEY,
+                metadata: { limit },
+            },
+        });
+    });
+    try {
+        return {
+            limit,
+            ...(await reconcileAllOwnProxyMonitorLimits(adminUserId)),
+        };
+    } catch (error) {
+        console.error(
+            "[admin] failed to reconcile own proxy monitor limits",
+            error,
+        );
+        throw new Error(
+            "Limit saved, but applying it to existing monitors failed. Save and apply again to finish.",
+        );
+    } finally {
+        revalidatePath("/", "layout");
+    }
 }
 
 export async function setGlobalActiveMonitorLimit(value: string) {

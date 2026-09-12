@@ -1,5 +1,7 @@
 "use client";
 
+import { OwnProxyUsageSummary } from "@/components/monitors/own-proxy-usage";
+
 import {
     useState,
     useMemo,
@@ -314,6 +316,7 @@ export function DashboardClient({
     initialNow,
     memberBrandLabels,
     freePoolUsage,
+    ownProxyActiveLimit,
 }: {
     initialMonitors: Monitor[];
     userName: string;
@@ -326,6 +329,7 @@ export function DashboardClient({
     initialNow: string;
     memberBrandLabels: Record<string, string>;
     freePoolUsage: FreePoolUsageSummary | null;
+    ownProxyActiveLimit: number | null;
 }) {
     const { maintenance } = useMonitorMaintenance();
     const maintenanceEnabled = maintenance.enabled;
@@ -1221,6 +1225,16 @@ export function DashboardClient({
                     <Package className="h-4 w-4 text-blue-500" />
                     {totalItems.toLocaleString()} items found
                 </div>
+                <OwnProxyUsageSummary
+                    usage={{
+                        activeCount: monitors.filter(
+                            (monitor) =>
+                                monitor.status === "active" &&
+                                monitor.proxy_source === "group",
+                        ).length,
+                        activeLimit: ownProxyActiveLimit,
+                    }}
+                />
                 {freePoolUsage ? (
                     <Link
                         href="/account"

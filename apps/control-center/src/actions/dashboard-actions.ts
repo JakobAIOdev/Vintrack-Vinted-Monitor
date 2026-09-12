@@ -12,7 +12,6 @@ import { getTelegramConnection } from "@/lib/telegram-connection";
 import {
     getMonitorActivationState,
     monitorActivationBlock,
-    monitorActivationErrorMessage,
     rewardNoticeAfterActivation,
     withMonitorActivationLock,
 } from "@/lib/monitor-limits";
@@ -77,6 +76,7 @@ export async function startAllMonitors() {
 
     const {
         activationState,
+        firstBlockedProxySource,
         monitorsToStart,
         demoExpirations,
         skippedCount,
@@ -98,6 +98,7 @@ export async function startAllMonitors() {
 
         let activeSlots = activationState.activeSlots;
         let freeProxySlots = activationState.freeProxyActiveSlots;
+        let ownProxySlots = activationState.ownProxyActiveSlots;
         const monitorsToStart = pausedMonitors.filter((monitor) => {
             if (activationState.maintenanceEnabled) return false;
             if (activeSlots !== null && activeSlots <= 0) return false;
@@ -109,6 +110,14 @@ export async function startAllMonitors() {
                 return false;
             }
 
+            if (
+                monitor.proxy_source === "group" &&
+                ownProxySlots !== null &&
+                ownProxySlots <= 0
+            )
+                return false;
+            if (monitor.proxy_source === "group" && ownProxySlots !== null)
+                ownProxySlots -= 1;
             if (activeSlots !== null) activeSlots -= 1;
             if (monitor.proxy_source === "free" && freeProxySlots !== null) {
                 freeProxySlots -= 1;
@@ -166,6 +175,7 @@ export async function startAllMonitors() {
 
         return {
             activationState,
+            firstBlockedProxySource: pausedMonitors[0]?.proxy_source,
             monitorsToStart,
             demoExpirations,
             skippedCount: pausedMonitors.length - monitorsToStart.length,
@@ -174,10 +184,19 @@ export async function startAllMonitors() {
     });
 
     if (monitorsToStart.length === 0) {
-        const freeLimitOnly =
-            !activationState.activeLimitReached &&
-            activationState.freeProxyActiveSlots === 0 &&
-            skippedCount > 0;
+        const block =
+            skippedCount === 0
+                ? null
+                : monitorActivationBlock(
+                      {
+                          ...activationState,
+                          ownProxyLimitReached:
+                              activationState.ownProxyActiveSlots === 0,
+                          freeProxyLimitReached:
+                              activationState.freeProxyActiveSlots === 0,
+                      },
+                      firstBlockedProxySource,
+                  );
         return {
             success: skippedCount === 0,
             startedCount: 0,
@@ -186,32 +205,8 @@ export async function startAllMonitors() {
             demoExpirations,
             activeLimit: activationState.activeLimit,
             activeCount: activationState.activeCount,
-            block:
-                skippedCount === 0
-                    ? null
-                    : monitorActivationBlock(
-                          freeLimitOnly
-                              ? {
-                                    ...activationState,
-                                    freeProxyLimitReached: true,
-                                }
-                              : activationState,
-                          freeLimitOnly ? "free" : undefined,
-                      ),
-            message:
-                skippedCount === 0
-                    ? "No paused monitors to start."
-                    : activationState.maintenanceEnabled
-                      ? "Monitors are temporarily paused while Vintrack is undergoing maintenance."
-                      : freeLimitOnly
-                        ? monitorActivationErrorMessage(
-                              {
-                                  ...activationState,
-                                  freeProxyLimitReached: true,
-                              },
-                              "free",
-                          )
-                        : `Active monitor limit reached (${activationState.activeCount}/${activationState.activeLimit}).`,
+            block,
+            message: block?.message ?? "No paused monitors to start.",
         };
     }
 

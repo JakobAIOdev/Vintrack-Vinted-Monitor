@@ -1,3 +1,4 @@
+import { reconcileUserOwnProxyMonitorLimit } from "@/lib/own-proxy-limit-reconciliation.server";
 import { db } from "@/lib/db";
 import { enqueueMonitorStatusNotification } from "@/lib/alert-outbox";
 import {
@@ -123,6 +124,7 @@ export async function reconcileUserFreeProxyMonitorLimit(
         );
     }
 
+    await reconcileUserOwnProxyMonitorLimit(userId, scope, actorUserId);
     return result.monitors;
 }
 

@@ -1,4 +1,6 @@
 import { auth } from "@/auth";
+import { getOwnProxyLimit } from "@/lib/own-proxy-limit.server";
+import { DEFAULT_OWN_PROXY_ACTIVE_LIMIT } from "@/lib/own-proxy-limit";
 import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
 import { AdminClient } from "./client";
@@ -171,6 +173,7 @@ export async function renderAdminSection(initialTab: AdminSection) {
         priceWatchPollingState,
         featurePolicyState,
         workerPolicyState,
+        ownProxyLimit,
     ] = await Promise.all([
         isMemberArea
             ? getMonitorLimits([
@@ -210,6 +213,9 @@ export async function renderAdminSection(initialTab: AdminSection) {
         isSystemArea
             ? getWorkerPolicyAdminState()
             : Promise.resolve(DEFAULT_WORKER_POLICY),
+        isMemberArea
+            ? getOwnProxyLimit()
+            : Promise.resolve(DEFAULT_OWN_PROXY_ACTIVE_LIMIT),
     ]);
 
     return (
@@ -228,6 +234,7 @@ export async function renderAdminSection(initialTab: AdminSection) {
             initialFeaturePolicyState={featurePolicyState}
             initialWorkerPolicy={workerPolicyState}
             configDiagnostics={getDeploymentConfigDiagnostics()}
+            initialOwnProxyLimit={ownProxyLimit}
             monitorLimits={{
                 global:
                     limits.get(GLOBAL_MONITOR_LIMIT_SCOPE)?.active_limit ??
