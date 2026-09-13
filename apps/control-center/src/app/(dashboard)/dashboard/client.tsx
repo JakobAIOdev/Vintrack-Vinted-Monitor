@@ -166,7 +166,7 @@ export type Monitor = {
 
 export type FreePoolUsageSummary = {
     activeCount: number;
-    limit: number;
+    limit: number | null;
     tier: string;
     limitReached: boolean;
 };
@@ -1226,6 +1226,7 @@ export function DashboardClient({
                     {totalItems.toLocaleString()} items found
                 </div>
                 <OwnProxyUsageSummary
+                    appearance="inline"
                     usage={{
                         activeCount: monitors.filter(
                             (monitor) =>
@@ -1237,16 +1238,24 @@ export function DashboardClient({
                 />
                 {freePoolUsage ? (
                     <Link
-                        href="/account"
+                        href="/account?connection=github"
                         className={cn(
-                            "text-muted-foreground group flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors hover:bg-muted hover:text-foreground",
+                            "text-muted-foreground group hover:text-foreground flex items-center gap-1.5 text-sm transition-colors",
                             freePoolUsage.limitReached &&
                                 "font-medium text-amber-700 dark:text-amber-300",
                         )}
                     >
-                        <Globe className="h-3.5 w-3.5" />
-                        Free pool {freePoolUsage.activeCount}/{freePoolUsage.limit}
-                        <span className="opacity-70">· {freePoolUsage.tier}</span>
+                        <Globe className="h-4 w-4" />
+                        <span className="text-foreground font-medium">
+                            Free pool:
+                        </span>
+                        <span>
+                            {freePoolUsage.activeCount} /{" "}
+                            {freePoolUsage.limit ?? "Unlimited"} active
+                        </span>
+                        <span className="text-xs opacity-70">
+                            · {freePoolUsage.tier}
+                        </span>
                         <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
                     </Link>
                 ) : null}

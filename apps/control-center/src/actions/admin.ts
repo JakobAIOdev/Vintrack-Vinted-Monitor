@@ -76,6 +76,7 @@ import {
     type PriceWatchPolicy,
     type WorkerPolicy,
 } from "@/lib/runtime-policies";
+import { summarizeProxyRegions } from "@/lib/proxy-region-summary";
 
 const SERVER_PROXIES_SETTING_KEY = "server_proxies";
 const PRICE_WATCH_INTERVAL_SETTING_KEY = "price_watch_interval_seconds";
@@ -510,8 +511,204 @@ type AdminActiveMemberRow = {
     running_monitors: bigint;
 };
 
+type AdminCapacityMemberRow = AdminActiveMemberRow & {
+    active_limit: number | bigint;
+    limit_source: "user" | "role" | "global";
+};
+
+type AdminMemberOverviewRow = {
+    total_members: bigint;
+    new_members_7d: bigint;
+    new_members_previous_7d: bigint;
+    new_members_30d: bigint;
+    new_members_previous_30d: bigint;
+    users_with_monitors: bigint;
+    demo_users: bigint;
+    converted_demo_users: bigint;
+};
+
+type AdminFreeProxyRegionCapacityRow = {
+    region: string;
+    usable_count: bigint;
+};
+
+async function loadAdminProxyRegionSummary() {
+    const [policy, legacyMinimum, rows] = await Promise.all([
+        readFreeProxyPolicy(),
+        db.app_settings.findUnique({
+            where: { key: FREE_PROXY_MIN_ACTIVE_PER_REGION_KEY },
+            select: { value: true },
+        }),
+        db.$queryRaw<AdminFreeProxyRegionCapacityRow[]>`
+            SELECT
+                region,
+                COUNT(*) FILTER (
+                    WHERE (
+                        (
+                            status = 'active'
+                            OR (
+                                status = 'cooldown'
+                                AND success_count > 0
+                                AND failure_streak <= 2
+                            )
+                        )
+                        AND last_success_at >= NOW() - INTERVAL '20 minutes'
+                    )
+                    OR (
+                        (
+                            status = 'active'
+                            OR (
+                                status = 'cooldown'
+                                AND success_count > 0
+                            )
+                        )
+                        AND failure_streak <= 2
+                        AND last_success_at >= NOW() - INTERVAL '90 minutes'
+                        AND last_success_at < NOW() - INTERVAL '20 minutes'
+                    )
+                    OR (
+                        status = 'pending'
+                        AND success_streak > 0
+                        AND last_success_at >= NOW() - INTERVAL '20 minutes'
+                    )
+                )::bigint AS usable_count
+            FROM free_proxy_health
+            WHERE candidate_window_token =
+                FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint
+            GROUP BY region
+        `,
+    ]);
+    const minimumUsable =
+        policy?.minActivePerRegion ??
+        parsePositiveIntSetting(
+            legacyMinimum?.value,
+            DEFAULT_FREE_PROXY_MIN_ACTIVE_PER_REGION,
+            1,
+            1000,
+        );
+    return summarizeProxyRegions(
+        rows.map((row) => ({
+            region: row.region,
+            usable: Number(row.usable_count),
+        })),
+        minimumUsable,
+    );
+}
+
+async function loadAdminMemberOverviewSnapshot() {
+    const rows = await db.$queryRaw<AdminMemberOverviewRow[]>`
+        WITH member_totals AS (
+            SELECT
+                COUNT(*)::bigint AS total_members,
+                COUNT(*) FILTER (
+                    WHERE "createdAt" >= NOW() - INTERVAL '7 days'
+                )::bigint AS new_members_7d,
+                COUNT(*) FILTER (
+                    WHERE "createdAt" >= NOW() - INTERVAL '14 days'
+                      AND "createdAt" < NOW() - INTERVAL '7 days'
+                )::bigint AS new_members_previous_7d,
+                COUNT(*) FILTER (
+                    WHERE "createdAt" >= NOW() - INTERVAL '30 days'
+                )::bigint AS new_members_30d,
+                COUNT(*) FILTER (
+                    WHERE "createdAt" >= NOW() - INTERVAL '60 days'
+                      AND "createdAt" < NOW() - INTERVAL '30 days'
+                )::bigint AS new_members_previous_30d
+            FROM "User"
+        ),
+        monitor_users AS (
+            SELECT COUNT(DISTINCT "userId")::bigint AS users_with_monitors
+            FROM monitors
+        ),
+        demo_users AS (
+            SELECT DISTINCT "userId"
+            FROM monitors
+            WHERE demo_expires_at IS NOT NULL
+
+            UNION
+
+            SELECT DISTINCT "userId"
+            FROM audit_events
+            WHERE "userId" IS NOT NULL
+              AND action IN (
+                'monitor.preset_created',
+                'monitor.demo_extended',
+                'monitor.demo_converted'
+              )
+
+            UNION
+
+            SELECT DISTINCT monitor."userId"
+            FROM monitor_events AS event
+            INNER JOIN monitors AS monitor ON monitor.id = event.monitor_id
+            WHERE event.event_type = 'demo_auto_paused'
+        ),
+        converted_demo_users AS (
+            SELECT DISTINCT "userId"
+            FROM audit_events
+            WHERE "userId" IS NOT NULL
+              AND action = 'monitor.demo_converted'
+        )
+        SELECT
+            member_totals.*,
+            monitor_users.users_with_monitors,
+            (SELECT COUNT(*) FROM demo_users)::bigint AS demo_users,
+            (SELECT COUNT(*) FROM converted_demo_users)::bigint
+                AS converted_demo_users
+        FROM member_totals
+        CROSS JOIN monitor_users
+    `;
+    const row = rows[0];
+    const totalMembers = Number(row?.total_members ?? 0);
+    const newMembers7d = Number(row?.new_members_7d ?? 0);
+    const previous7d = Number(row?.new_members_previous_7d ?? 0);
+    const newMembers30d = Number(row?.new_members_30d ?? 0);
+    const previous30d = Number(row?.new_members_previous_30d ?? 0);
+    const usersWithMonitors = Number(row?.users_with_monitors ?? 0);
+    const demoUsers = Number(row?.demo_users ?? 0);
+    const convertedDemoUsers = Number(row?.converted_demo_users ?? 0);
+
+    return {
+        newMembers7d,
+        signupGrowth7d:
+            previous7d > 0
+                ? Math.round(((newMembers7d - previous7d) / previous7d) * 100)
+                : null,
+        newMembers30d,
+        signupGrowth30d:
+            previous30d > 0
+                ? Math.round(
+                      ((newMembers30d - previous30d) / previous30d) * 100,
+                  )
+                : null,
+        usersWithMonitors,
+        activationRate:
+            totalMembers > 0
+                ? Math.round((usersWithMonitors / totalMembers) * 100)
+                : 0,
+        demoUsers,
+        convertedDemoUsers,
+        demoConversionRate:
+            demoUsers > 0
+                ? Math.round((convertedDemoUsers / demoUsers) * 100)
+                : 0,
+    };
+}
+
+const getCachedAdminMemberOverviewSnapshot = unstable_cache(
+    loadAdminMemberOverviewSnapshot,
+    ["admin-member-overview-v1"],
+    { revalidate: 30 },
+);
+
 async function loadAdminOverviewState() {
-    const [summaryRows, topMemberRows] = await Promise.all([
+    const [
+        summaryRows,
+        topMemberRows,
+        capacityMemberRows,
+        proxyRegions,
+        memberSnapshot,
+    ] = await Promise.all([
         db.$queryRaw<AdminOverviewSummaryRow[]>`
             WITH user_totals AS (
                 SELECT
@@ -583,6 +780,53 @@ async function loadAdminOverviewState() {
             ORDER BY running_monitors DESC, member.id ASC
             LIMIT 5
         `,
+        db.$queryRaw<AdminCapacityMemberRow[]>`
+            WITH active_by_user AS (
+                SELECT
+                    "userId" AS user_id,
+                    COUNT(*) FILTER (WHERE status = 'active')::bigint
+                        AS active_count
+                FROM monitors
+                GROUP BY "userId"
+            ),
+            effective_limits AS (
+                SELECT
+                    member.id AS user_id,
+                    member.name,
+                    member.email,
+                    member.role,
+                    COALESCE(active_by_user.active_count, 0)::bigint
+                        AS running_monitors,
+                    COALESCE(
+                        user_limit.active_limit,
+                        role_limit.active_limit,
+                        global_limit.active_limit
+                    ) AS active_limit,
+                    CASE
+                        WHEN user_limit.active_limit IS NOT NULL THEN 'user'
+                        WHEN role_limit.active_limit IS NOT NULL THEN 'role'
+                        ELSE 'global'
+                    END AS limit_source
+                FROM "User" member
+                LEFT JOIN active_by_user
+                    ON active_by_user.user_id = member.id
+                LEFT JOIN monitor_limits user_limit
+                    ON user_limit.scope = 'user:' || member.id
+                LEFT JOIN monitor_limits role_limit
+                    ON role_limit.scope = 'role:' || member.role
+                LEFT JOIN monitor_limits global_limit
+                    ON global_limit.scope = 'global'
+                WHERE member.role <> 'admin'
+            )
+            SELECT *
+            FROM effective_limits
+            WHERE active_limit IS NOT NULL
+              AND running_monitors >= active_limit
+            ORDER BY running_monitors DESC, user_id ASC
+            LIMIT 8
+        `,
+        loadAdminProxyRegionSummary(),
+        getCachedAdminMemberOverviewSnapshot(),
     ]);
     const summary = summaryRows[0];
     const checks = Number(summary?.checks_24h ?? 0);
@@ -616,7 +860,18 @@ async function loadAdminOverviewState() {
             usersAtLimit: Number(summary?.users_at_limit ?? 0),
             userOverrides: Number(summary?.user_overrides ?? 0),
             roleLimits: Number(summary?.role_limits ?? 0),
+            membersAtLimit: capacityMemberRows.map((row) => ({
+                userId: row.user_id,
+                name: row.name,
+                email: row.email,
+                role: row.role,
+                runningMonitors: Number(row.running_monitors),
+                activeLimit: Number(row.active_limit),
+                limitSource: row.limit_source,
+            })),
         },
+        memberSnapshot,
+        proxyRegions,
         topMembers: topMemberRows.map((row) => ({
             userId: row.user_id,
             name: row.name,
