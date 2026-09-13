@@ -677,11 +677,9 @@ test.describe("account connections", () => {
             /\/account\?connection=github&github=error&reason=AccessDenied/,
         );
         await expect(
-            page
-                .getByRole("alert")
-                .filter({
-                    hasText: "GitHub could not complete the connection",
-                }),
+            page.getByRole("alert").filter({
+                hasText: "GitHub could not complete the connection",
+            }),
         ).toBeVisible();
 
         await page.goto(
@@ -1162,6 +1160,20 @@ test.describe("dashboard monitors", () => {
                 exact: true,
             }),
         ).toBeVisible();
+        const ownProxyUsage = page
+            .getByTestId("monitor-summary")
+            .getByText("Own proxies:", { exact: true })
+            .locator("..");
+        await expect(ownProxyUsage).toContainText("0 / Unlimited active");
+        await expect(ownProxyUsage).not.toHaveClass(/border/);
+        const freePoolUsage = page
+            .getByTestId("monitor-summary")
+            .getByRole("link", { name: /Free pool:/ });
+        await expect(freePoolUsage).toContainText("0 / Unlimited active");
+        await expect(freePoolUsage).toHaveAttribute(
+            "href",
+            "/account?connection=github",
+        );
         await expect(
             page.getByRole("link", { name: "Sponsor Vintrack" }),
         ).toHaveAttribute("href", "https://github.com/sponsors/JakobAIOdev");

@@ -99,7 +99,7 @@ import {
 } from "@/actions/admin";
 import { getRegionCurrencyCode, getRegionLabel, REGIONS } from "@/lib/regions";
 import type { WorkerPolicy } from "@/lib/runtime-policies";
-import type { DeploymentConfigDiagnostics } from "@/lib/deployment-config.server";
+import type { DeploymentConfigDiagnostics } from "@/lib/deployment-config";
 import { getProxyErrorDetails } from "@/lib/proxy-errors";
 import { ADMIN_SECTION_ROUTES, type AdminSection } from "@/lib/admin-sections";
 import { getAdminOperationsState } from "@/actions/admin-operations";
@@ -561,7 +561,7 @@ const ADMIN_TABS: {
     },
     {
         value: "insights",
-        label: "Member Insights",
+        label: "Growth & Conversion",
         icon: TrendingUp,
         description:
             "Member growth, activation, roles, and demo monitor adoption.",
@@ -1511,8 +1511,9 @@ export function AdminClient({
         logsRequestRef.current = request;
     };
 
-    const loadMemberInsights = () => {
-        if (memberInsights || memberInsightsRequestRef.current) return;
+    const loadMemberInsights = (force = false) => {
+        if ((!force && memberInsights) || memberInsightsRequestRef.current)
+            return;
 
         setIsLoadingMemberInsights(true);
         setMemberInsightsLoadFailed(false);
@@ -1647,7 +1648,7 @@ export function AdminClient({
             void loadAdminUsers();
         }
         if (tab === "overview") loadOverview(true);
-        if (tab === "insights") loadMemberInsights();
+        if (tab === "insights") loadMemberInsights(true);
         if (tab === "logs") loadAdminLogs(operationFilter, false, true);
         if (tab === "monitors") loadActiveMonitors();
     };
@@ -1664,12 +1665,16 @@ export function AdminClient({
         const refreshVisibleSection = () => {
             if (document.visibilityState !== "visible") return;
             if (activeTab === "overview") loadOverview(true);
+            if (activeTab === "insights") loadMemberInsights(true);
             if (activeTab === "logs") {
                 loadAdminLogs(operationFilter, false, true);
             }
         };
 
-        const interval = window.setInterval(refreshVisibleSection, 10_000);
+        const interval = window.setInterval(
+            refreshVisibleSection,
+            activeTab === "insights" ? 30_000 : 10_000,
+        );
         window.addEventListener("focus", refreshVisibleSection);
         document.addEventListener("visibilitychange", refreshVisibleSection);
 
@@ -1887,6 +1892,31 @@ export function AdminClient({
             },
         }),
     );
+    const capacityUsers: UserRow[] = (
+        overviewState?.limits.membersAtLimit ?? []
+    ).map((member) => ({
+        id: member.userId,
+        name: member.name,
+        email: member.email,
+        image: null,
+        role: member.role,
+        _count: { monitors: member.runningMonitors, proxy_groups: 0 },
+        monitors: [],
+        activeMonitors: [],
+        metrics: {
+            runningMonitors: member.runningMonitors,
+            runningFreeProxyMonitors: 0,
+            pausedMonitors: 0,
+            newItems24h: 0,
+            checks24h: 0,
+            successfulChecks24h: 0,
+            failedChecks24h: 0,
+            successRate24h: null,
+            avgDurationMs24h: null,
+            lastCheckAt: null,
+            latestError24h: null,
+        },
+    }));
     const normalizedLogSearch = logSearchQuery.trim().toLowerCase();
     const visibleAdminLogs = normalizedLogSearch
         ? adminLogs.filter((log) =>
@@ -2967,9 +2997,17 @@ export function AdminClient({
         (sum, region) => sum + region.dead,
         0,
     );
-    const readyFreeProxyRegionCount = freeProxyState.regions.filter(
+    const systemReadyFreeProxyRegionCount = freeProxyState.regions.filter(
         (region) => region.healthy,
     ).length;
+    const readyFreeProxyRegionCount =
+        overviewState?.proxyRegions.ready ?? systemReadyFreeProxyRegionCount;
+    const trackedFreeProxyRegionCount =
+        overviewState?.proxyRegions.total ?? freeProxyState.regions.length;
+    const proxyRegionMetricsLoaded =
+        overviewState !== null ||
+        activeTab === "settings" ||
+        freeProxyState.regions.length > 0;
     const activePrimaryDefinition =
         ADMIN_PRIMARY_TABS.find((tab) => tab.sections.includes(activeTab)) ??
         ADMIN_PRIMARY_TABS[0];
@@ -3073,7 +3111,9 @@ export function AdminClient({
                         </span>
                     )}
                     <span className="text-muted-foreground">
-                        {readyFreeProxyRegionCount} proxy regions ready
+                        {proxyRegionMetricsLoaded
+                            ? `${readyFreeProxyRegionCount} proxy regions ready`
+                            : "Loading proxy regions..."}
                     </span>
                 </div>
             </div>
@@ -3399,8 +3439,16 @@ export function AdminClient({
                         />
                         <OverviewMetric
                             label="Proxy regions"
-                            value={readyFreeProxyRegionCount}
-                            detail={`${freeProxyState.regions.length} configured regions`}
+                            value={
+                                proxyRegionMetricsLoaded
+                                    ? readyFreeProxyRegionCount
+                                    : "—"
+                            }
+                            detail={
+                                proxyRegionMetricsLoaded
+                                    ? `${trackedFreeProxyRegionCount} tracked regions`
+                                    : "Loading proxy health"
+                            }
                             icon={Globe}
                             iconClassName="bg-amber-500/10 text-amber-600"
                         />
@@ -3577,16 +3625,71 @@ export function AdminClient({
                                 ))}
                             </div>
                             {usersAtLimit > 0 ? (
-                                <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-500/20 dark:bg-amber-500/10">
-                                    <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
-                                        {usersAtLimit} user
-                                        {usersAtLimit === 1 ? "" : "s"} at
-                                        active monitor capacity
-                                    </p>
-                                    <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
-                                        Review role or user overrides in the
-                                        Roles tab.
-                                    </p>
+                                <div className="mt-4 overflow-hidden rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10">
+                                    <div className="px-4 py-3">
+                                        <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                                            {usersAtLimit} user
+                                            {usersAtLimit === 1 ? "" : "s"} at
+                                            active monitor capacity
+                                        </p>
+                                        <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                                            Select a member to review their
+                                            active monitor limit and override.
+                                        </p>
+                                    </div>
+                                    <div className="divide-y divide-amber-200 border-t border-amber-200 dark:divide-amber-500/20 dark:border-amber-500/20">
+                                        {capacityUsers.map((user, index) => {
+                                            const limit =
+                                                overviewState?.limits
+                                                    .membersAtLimit[index];
+                                            return (
+                                                <button
+                                                    key={user.id}
+                                                    type="button"
+                                                    className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-amber-100/70 dark:hover:bg-amber-500/10"
+                                                    onClick={() =>
+                                                        openUserDetails(user)
+                                                    }
+                                                >
+                                                    <div className="min-w-0 flex-1">
+                                                        <p className="truncate text-sm font-medium text-amber-950 dark:text-amber-100">
+                                                            {user.name ??
+                                                                "Unknown member"}
+                                                        </p>
+                                                        <p className="truncate text-xs text-amber-700 dark:text-amber-300">
+                                                            {user.email ??
+                                                                "No email"}
+                                                        </p>
+                                                    </div>
+                                                    <div className="shrink-0 text-right">
+                                                        <p className="text-sm font-semibold text-amber-950 tabular-nums dark:text-amber-100">
+                                                            {
+                                                                user.metrics
+                                                                    .runningMonitors
+                                                            }
+                                                            /
+                                                            {limit?.activeLimit}
+                                                        </p>
+                                                        <p className="text-[10px] text-amber-700 uppercase dark:text-amber-300">
+                                                            {limit?.limitSource}{" "}
+                                                            limit
+                                                        </p>
+                                                    </div>
+                                                    <ChevronRight className="h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" />
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                    {usersAtLimit > capacityUsers.length ? (
+                                        <button
+                                            type="button"
+                                            className="w-full border-t border-amber-200 px-4 py-2.5 text-left text-xs font-medium text-amber-800 hover:bg-amber-100/70 dark:border-amber-500/20 dark:text-amber-200 dark:hover:bg-amber-500/10"
+                                            onClick={() => switchTab("roles")}
+                                        >
+                                            View all {usersAtLimit} members in
+                                            Roles
+                                        </button>
+                                    ) : null}
                                 </div>
                             ) : (
                                 <p className="text-muted-foreground mt-4 rounded-lg border px-4 py-3 text-xs">
@@ -3594,6 +3697,91 @@ export function AdminClient({
                                     monitor limits.
                                 </p>
                             )}
+                        </div>
+                    </div>
+
+                    <div className="border-border/60 bg-card overflow-hidden rounded-lg border">
+                        <div className="border-border/60 flex flex-col gap-3 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <p className="text-foreground text-sm font-semibold">
+                                    Member Growth & Conversion
+                                </p>
+                                <p className="text-muted-foreground text-xs">
+                                    Signups, activation, and demo outcomes at a
+                                    glance.
+                                </p>
+                            </div>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => switchTab("insights")}
+                            >
+                                Open full insights
+                                <ChevronRight className="ml-1 h-4 w-4" />
+                            </Button>
+                        </div>
+                        <div className="bg-border/60 grid gap-px sm:grid-cols-2 xl:grid-cols-4">
+                            <div className="bg-card px-5 py-4">
+                                <p className="text-muted-foreground text-xs">
+                                    New members · 7 days
+                                </p>
+                                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                    {overviewState?.memberSnapshot
+                                        .newMembers7d ?? "—"}
+                                </p>
+                                <p className="text-muted-foreground mt-1 text-xs">
+                                    {overviewState?.memberSnapshot
+                                        .signupGrowth7d == null
+                                        ? "No previous-period baseline"
+                                        : `${overviewState.memberSnapshot.signupGrowth7d > 0 ? "+" : ""}${overviewState.memberSnapshot.signupGrowth7d}% vs previous 7 days`}
+                                </p>
+                            </div>
+                            <div className="bg-card px-5 py-4">
+                                <p className="text-muted-foreground text-xs">
+                                    New members · 30 days
+                                </p>
+                                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                    {overviewState?.memberSnapshot
+                                        .newMembers30d ?? "—"}
+                                </p>
+                                <p className="text-muted-foreground mt-1 text-xs">
+                                    {overviewState?.memberSnapshot
+                                        .signupGrowth30d == null
+                                        ? "No previous-period baseline"
+                                        : `${overviewState.memberSnapshot.signupGrowth30d > 0 ? "+" : ""}${overviewState.memberSnapshot.signupGrowth30d}% vs previous 30 days`}
+                                </p>
+                            </div>
+                            <div className="bg-card px-5 py-4">
+                                <p className="text-muted-foreground text-xs">
+                                    Activation rate
+                                </p>
+                                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                    {overviewState
+                                        ? `${overviewState.memberSnapshot.activationRate}%`
+                                        : "—"}
+                                </p>
+                                <p className="text-muted-foreground mt-1 text-xs">
+                                    {overviewState
+                                        ? `${overviewState.memberSnapshot.usersWithMonitors} members created a monitor`
+                                        : "Loading member activity"}
+                                </p>
+                            </div>
+                            <div className="bg-card px-5 py-4">
+                                <p className="text-muted-foreground text-xs">
+                                    Demo conversion
+                                </p>
+                                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                    {overviewState
+                                        ? `${overviewState.memberSnapshot.demoConversionRate}%`
+                                        : "—"}
+                                </p>
+                                <p className="text-muted-foreground mt-1 text-xs">
+                                    {overviewState
+                                        ? `${overviewState.memberSnapshot.demoUsers} tried · ${overviewState.memberSnapshot.convertedDemoUsers} converted`
+                                        : "Loading demo outcomes"}
+                                </p>
+                            </div>
                         </div>
                     </div>
 
@@ -3708,7 +3896,7 @@ export function AdminClient({
                                 type="button"
                                 variant="outline"
                                 size="sm"
-                                onClick={loadMemberInsights}
+                                onClick={() => loadMemberInsights()}
                             >
                                 Retry
                             </Button>
@@ -6837,11 +7025,11 @@ export function AdminClient({
                             </div>
                             <div className="bg-muted/30 rounded-lg p-3 text-xs">
                                 <p className="text-muted-foreground uppercase">
-                                    Secret slots
+                                    Control Center secrets
                                 </p>
                                 <p className="mt-1 font-medium">
-                                    {configDiagnostics.configuredSecrets}/
-                                    {configDiagnostics.secretSlots} configured
+                                    {configDiagnostics.configuredSecrets}{" "}
+                                    present
                                 </p>
                             </div>
                             <div className="bg-muted/30 rounded-lg p-3 text-xs">
@@ -6862,6 +7050,12 @@ export function AdminClient({
                                     : "A deprecated origin alias is in use."}
                             </p>
                         ) : null}
+                        <p className="text-muted-foreground mt-3 text-xs">
+                            Only this Control Center process is inspected here.
+                            Service-owned secrets, including the Vinted session
+                            encryption key, are validated by their owning
+                            service and by config-check.
+                        </p>
                     </div>
 
                     <div className="border-border/60 bg-card rounded-lg border p-5">

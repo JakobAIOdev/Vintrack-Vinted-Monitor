@@ -1,5 +1,4 @@
-import { getOwnProxyLimit } from "@/lib/own-proxy-limit.server";
-import { resolveOwnProxyLimit } from "@/lib/own-proxy-limit";
+import { getEffectiveMonitorLimits } from "@/lib/monitor-limits";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { getCategoryLabelsForRegion } from "@/lib/categories.server";
@@ -30,8 +29,9 @@ export default async function MonitorsPage() {
         bannedSellerIds,
         githubRewards,
         recentLimitPauses,
-        ownProxyLimit,
+        effectiveMonitorLimits,
         ownProxyPauses,
+        freePoolAccess,
     ] = await Promise.all([
         db.monitors.findMany({
             where: { userId: session.user.id },
@@ -62,7 +62,7 @@ export default async function MonitorsPage() {
             take: 1,
             select: { metadata: true },
         }),
-        getOwnProxyLimit(),
+        getEffectiveMonitorLimits(session.user.id),
         db.audit_events.findFirst({
             where: {
                 action: "member.own_proxy_limit_reconciled",
@@ -72,6 +72,7 @@ export default async function MonitorsPage() {
             orderBy: { created_at: "desc" },
             select: { metadata: true },
         }),
+        getFeatureAccessForUser("free_proxy_pool", session.user.id),
     ]);
     const ownPausedIds =
         (ownProxyPauses?.metadata as { pausedMonitorIds?: number[] } | null)
@@ -166,11 +167,8 @@ export default async function MonitorsPage() {
     const quickStartEligible =
         monitors.length === 0 &&
         (onboardingStatus === "pending" || onboardingStatus === "dismissed");
-    const freePoolAccess = quickStartEligible
-        ? await getFeatureAccessForUser("free_proxy_pool", session.user.id)
-        : null;
     const freeProxyHealth =
-        quickStartEligible && freePoolAccess?.allowed
+        quickStartEligible && freePoolAccess.allowed
             ? await getFreeProxyPoolHealth()
             : null;
     const quickStartPool = freeProxyHealth
@@ -228,24 +226,31 @@ export default async function MonitorsPage() {
                 pausedIds.includes(monitor.id) && monitor.status === "paused",
         )
         .map((monitor) => ({ id: monitor.id, name: monitor.name }));
-    const freePoolUsage: FreePoolUsageSummary | null =
-        githubRewards.policy.enforcementEnabled &&
-        githubRewards.effectiveLimit !== null &&
-        githubRewards.source !== "role_exempt"
-            ? {
-                  activeCount: githubRewards.freeProxyActiveCount,
-                  limit: githubRewards.effectiveLimit,
-                  tier:
-                      githubRewards.source === "donation"
-                          ? "Supporter"
-                          : githubRewards.source === "github_star"
-                            ? "GitHub Star"
-                            : githubRewards.source === "user_override"
-                              ? "Admin limit"
-                              : "Default",
-                  limitReached: githubRewards.limitReached,
-              }
-            : null;
+    const freePoolLimit = effectiveMonitorLimits.freeProxyActiveLimit;
+    const freePoolLimitSource = effectiveMonitorLimits.freeProxyLimitSource;
+    const freePoolUsage: FreePoolUsageSummary | null = freePoolAccess.allowed
+        ? {
+              activeCount: githubRewards.freeProxyActiveCount,
+              limit: freePoolLimit,
+              tier:
+                  freePoolLimitSource === "donation"
+                      ? "Supporter"
+                      : freePoolLimitSource === "github_star"
+                        ? "GitHub Star"
+                        : freePoolLimitSource === "user_override"
+                          ? "Admin limit"
+                          : freePoolLimitSource === "role"
+                            ? "Role limit"
+                            : freePoolLimitSource === "global"
+                              ? "Global limit"
+                              : freePoolLimitSource === "policy_default"
+                                ? "Default"
+                                : "Unlimited",
+              limitReached:
+                  freePoolLimit !== null &&
+                  githubRewards.freeProxyActiveCount >= freePoolLimit,
+          }
+        : null;
 
     return (
         <div className="space-y-5">
@@ -273,11 +278,7 @@ export default async function MonitorsPage() {
                 pausedMonitors={pausedMonitors}
             />
             <DashboardClient
-                ownProxyActiveLimit={resolveOwnProxyLimit(
-                    userSettings?.role ?? "free",
-                    githubRewards.donated,
-                    ownProxyLimit,
-                )}
+                ownProxyActiveLimit={effectiveMonitorLimits.ownProxyActiveLimit}
                 initialMonitors={monitors}
                 userName={session.user.name || "User"}
                 initialDedupeMonitorAlerts={

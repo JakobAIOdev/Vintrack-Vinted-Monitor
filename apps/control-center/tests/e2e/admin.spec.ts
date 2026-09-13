@@ -65,6 +65,15 @@ test.describe("admin running monitors", () => {
         await expect(
             getAdminMain(page).getByText("Runtime Snapshot"),
         ).toHaveCount(0);
+        await expect(
+            getAdminMain(page).getByText("Member Growth & Conversion"),
+        ).toBeVisible();
+        await expect(
+            getAdminMain(page).getByText("Demo conversion", { exact: true }),
+        ).toBeVisible();
+        await expect(
+            getAdminMain(page).getByText("E2E Limit User", { exact: true }),
+        ).toBeVisible();
     });
 
     test("shows global and role Free Proxy Pool monitor limits", async ({
@@ -259,7 +268,7 @@ test.describe("admin running monitors", () => {
         } else {
             await expect(
                 getAdminMain(page).getByRole("button", {
-                    name: "Member Insights",
+                    name: "Growth & Conversion",
                     exact: true,
                 }),
             ).toBeVisible();
