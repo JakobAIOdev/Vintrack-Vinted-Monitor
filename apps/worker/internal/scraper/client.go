@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -471,7 +472,7 @@ func (c *Client) WarmUpRegionContext(ctx context.Context, domain string) error {
 			}
 		}
 
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxCatalogBootstrapBytes))
+		csrfToken, readErr := readCatalogCSRFToken(resp.Body)
 		resp.Body.Close()
 		c.FlushTrackedTraffic()
 		if readErr != nil {
@@ -479,7 +480,7 @@ func (c *Client) WarmUpRegionContext(ctx context.Context, domain string) error {
 		}
 
 		bootstrap := catalogBootstrap{
-			csrfToken: extractCSRFToken(body),
+			csrfToken: csrfToken,
 			anonID:    strings.TrimSpace(resp.Header.Get("X-Anon-Id")),
 		}
 		if bootstrap.csrfToken == "" || bootstrap.anonID == "" {
@@ -528,6 +529,27 @@ func (c *Client) CatalogBootstrap(domain string) (catalogBootstrap, bool) {
 	defer c.warmedMu.Unlock()
 	bootstrap, ok := c.bootstrap[domain]
 	return bootstrap, ok && bootstrap.csrfToken != "" && bootstrap.anonID != ""
+}
+
+func readCatalogCSRFToken(reader io.Reader) (string, error) {
+	limited := io.LimitReader(reader, maxCatalogBootstrapBytes)
+	body := make([]byte, 0, 64*1024)
+	chunk := make([]byte, 32*1024)
+	for {
+		read, err := limited.Read(chunk)
+		if read > 0 {
+			body = append(body, chunk[:read]...)
+			if token := extractCSRFToken(body); token != "" {
+				return token, nil
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return "", nil
+			}
+			return "", err
+		}
+	}
 }
 
 func extractCSRFToken(body []byte) string {

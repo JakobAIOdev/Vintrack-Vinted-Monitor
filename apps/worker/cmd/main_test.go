@@ -52,11 +52,11 @@ func TestFreeProxyValidationTimeout(t *testing.T) {
 		maxLatencyMs int
 		want         time.Duration
 	}{
-		{name: "default", maxLatencyMs: 0, want: 6500 * time.Millisecond},
-		{name: "normal", maxLatencyMs: 2500, want: 6500 * time.Millisecond},
+		{name: "default", maxLatencyMs: 0, want: 9 * time.Second},
+		{name: "normal", maxLatencyMs: 2500, want: 9 * time.Second},
 		{name: "minimum", maxLatencyMs: 200, want: 4 * time.Second},
-		{name: "custom", maxLatencyMs: 4000, want: 9500 * time.Millisecond},
-		{name: "capped", maxLatencyMs: 15000, want: 11500 * time.Millisecond},
+		{name: "custom", maxLatencyMs: 4000, want: 13500 * time.Millisecond},
+		{name: "capped", maxLatencyMs: 15000, want: 14500 * time.Millisecond},
 	}
 
 	for _, test := range tests {

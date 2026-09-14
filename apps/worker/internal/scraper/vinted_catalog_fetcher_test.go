@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"vintrack-worker/internal/model"
@@ -90,6 +91,23 @@ func TestNormalizeCatalogItemsUsesItemBoxFallbacks(t *testing.T) {
 	normalizeCatalogItems(items)
 	if items[0].BrandTitle != "Levi's" || items[0].SizeTitle != "W32" || items[0].Condition != "Very good" {
 		t.Fatalf("normalized item = %#v", items[0])
+	}
+}
+
+func TestReadCatalogCSRFTokenStopsAfterToken(t *testing.T) {
+	const token = "123e4567-e89b-12d3-a456-426614174000"
+	body := strings.Repeat("a", 40*1024) + `CSRF_TOKEN\":\"` + token + strings.Repeat("b", 128*1024)
+	reader := strings.NewReader(body)
+
+	got, err := readCatalogCSRFToken(reader)
+	if err != nil {
+		t.Fatalf("readCatalogCSRFToken() error = %v", err)
+	}
+	if got != token {
+		t.Fatalf("readCatalogCSRFToken() = %q, want %q", got, token)
+	}
+	if reader.Len() == 0 {
+		t.Fatal("readCatalogCSRFToken() consumed the full response after finding the token")
 	}
 }
 
