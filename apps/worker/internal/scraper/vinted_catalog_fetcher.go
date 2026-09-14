@@ -5,8 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strconv"
-	"time"
+	"strings"
 
 	"vintrack-worker/internal/model"
 
@@ -24,8 +23,6 @@ func (VintedCatalogFetcher) RequiresNetwork() bool {
 }
 
 func (VintedCatalogFetcher) FetchCatalog(ctx context.Context, client *Client, apiURL string, domain string) ([]model.VintedItem, int, error) {
-	initialURL := apiURL + "&_=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
-
 	if client == nil {
 		return nil, 0, fmt.Errorf("live catalog fetcher requires a client")
 	}
@@ -34,26 +31,26 @@ func (VintedCatalogFetcher) FetchCatalog(ctx context.Context, client *Client, ap
 		return nil, statusCodeFromError(err), fmt.Errorf("warmup %s via %s: %w", domain, client.ProxyLabel(), err)
 	}
 
-	return fetchCatalogWith401Retry(
+	return fetchCatalogWithSessionRetry(
 		func() error {
 			client.ResetWarm(domain)
 			if err := client.EnsureWarmContext(ctx, domain); err != nil {
-				return fmt.Errorf("401 rewarm %s via %s: %w", domain, client.ProxyLabel(), err)
+				return fmt.Errorf("session rewarm %s via %s: %w", domain, client.ProxyLabel(), err)
 			}
 			return nil
 		},
 		func() ([]model.VintedItem, int, error) {
-			return fetchCatalogAttempt(ctx, client, initialURL, domain)
+			return fetchCatalogAttempt(ctx, client, apiURL, domain)
 		},
 	)
 }
 
-func fetchCatalogWith401Retry(
+func fetchCatalogWithSessionRetry(
 	rewarm func() error,
 	attempt func() ([]model.VintedItem, int, error),
 ) ([]model.VintedItem, int, error) {
 	items, status, err := attempt()
-	if err != nil || status != 401 {
+	if err != nil || (status != 401 && status != 403) {
 		return items, status, err
 	}
 	if err := rewarm(); err != nil {
@@ -63,15 +60,18 @@ func fetchCatalogWith401Retry(
 }
 
 func fetchCatalogAttempt(ctx context.Context, client *Client, initialURL string, domain string) ([]model.VintedItem, int, error) {
+	bootstrap, ok := client.CatalogBootstrap(domain)
+	if !ok {
+		return nil, 0, fmt.Errorf("catalog bootstrap unavailable for %s", domain)
+	}
+
 	reqURL := initialURL
 	for redirects := 0; redirects < 3; redirects++ {
-		currentDomain := hostFromURL(reqURL, domain)
-
 		req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 		if err != nil {
 			return nil, 0, err
 		}
-		req.Header = newAPIHeaders(currentDomain)
+		req.Header = newCatalogAPIHeaders(domain, bootstrap)
 
 		resp, err := client.HttpClient.Do(req)
 		if err != nil {
@@ -113,7 +113,31 @@ func fetchCatalogAttempt(ctx context.Context, client *Client, initialURL string,
 		}
 		resp.Body.Close()
 		client.FlushTrackedTraffic()
+		normalizeCatalogItems(data.Items)
 		return data.Items, 200, nil
 	}
 	return nil, 0, fmt.Errorf("catalog too many redirects for %s", domain)
+}
+
+func normalizeCatalogItems(items []model.VintedItem) {
+	for index := range items {
+		item := &items[index]
+		if item.BrandTitle == "" {
+			item.BrandTitle = item.ItemBox.FirstLine
+		}
+		if item.SizeTitle != "" && item.Condition != "" {
+			continue
+		}
+
+		separator := strings.LastIndex(item.ItemBox.SecondLine, " · ")
+		if separator < 0 {
+			continue
+		}
+		if item.SizeTitle == "" {
+			item.SizeTitle = strings.TrimSpace(item.ItemBox.SecondLine[:separator])
+		}
+		if item.Condition == "" {
+			item.Condition = strings.TrimSpace(item.ItemBox.SecondLine[separator+len(" · "):])
+		}
+	}
 }
