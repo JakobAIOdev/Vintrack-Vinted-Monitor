@@ -178,13 +178,17 @@ func (s *SellerEnrichmentScheduler) Run(ctx context.Context) {
 	}
 
 	for {
-		// Always ingest an already-waiting foreground job before choosing the
-		// next worker assignment. Background producers use a separate bounded
-		// input, so a restart seed burst cannot sit in front of a fresh alert.
+		// Ingest an already-waiting foreground job before choosing the next
+		// worker assignment, but only once per iteration: looping here with
+		// `continue` until s.input goes empty let a steady stream of new
+		// arrivals win this branch forever on a busy system, so the loop
+		// never reached the dispatch select below and nothing was ever
+		// handed to a worker. Background producers use a separate bounded
+		// input, so a restart seed burst still cannot sit in front of a
+		// fresh alert.
 		select {
 		case job := <-s.input:
 			add(job)
-			continue
 		default:
 		}
 

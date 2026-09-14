@@ -128,4 +128,36 @@ func TestSellerEnrichmentSchedulerQueueAgeByPriority(t *testing.T) {
 		scheduler.QueueAge(now), scheduler.StrictRetryQueueAge(now), scheduler.BackgroundQueueAge(now))
 }
 
+// TestSellerEnrichmentSchedulerDispatchesUnderContinuousInputPressure guards
+// against a regression where the dispatch loop's eager, unbounded drain of
+// s.input (`continue`-looping back to the top on every arrival) let a steady
+// stream of new submissions win forever on a busy system. The loop never
+// reached the dispatch select below, so nothing was ever handed to a worker
+// no matter how long it ran.
+func TestSellerEnrichmentSchedulerDispatchesUnderContinuousInputPressure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scheduler := NewSellerEnrichmentScheduler(4096, 1)
+	go scheduler.Run(ctx)
+
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for i := int64(0); ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			scheduler.Submit(ctx, enrichmentJob{proxySource: "free", item: itemWithID(i)})
+		}
+	}()
+
+	select {
+	case <-scheduler.Work():
+	case <-time.After(2 * time.Second):
+		t.Fatal("scheduler never dispatched a job while new submissions kept s.input non-empty")
+	}
+}
+
 func itemWithID(id int64) model.Item { return model.Item{ID: id} }
