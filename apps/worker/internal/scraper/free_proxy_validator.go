@@ -68,8 +68,8 @@ func ValidateFreeProxy(ctx context.Context, proxyURL string, region string, maxL
 	if maxLatencyMs <= 0 {
 		maxLatencyMs = 2500
 	}
-	requestTimeout := freeProxyRequestTimeout(ctx, maxLatencyMs)
-	client, err := NewClientWithTimeout(proxyURL, nil, requestTimeout)
+	warmupTimeout := freeProxyWarmupTimeout(ctx, maxLatencyMs)
+	client, err := NewClientWithTimeout(proxyURL, nil, warmupTimeout)
 	if err != nil {
 		return FreeProxyValidationResult{
 			ErrorCode: "invalid_config",
@@ -96,8 +96,10 @@ func ValidateFreeProxy(ctx context.Context, proxyURL string, region string, maxL
 	warmupLatencyMs := int(time.Since(warmupStartedAt).Milliseconds())
 
 	monitor := model.Monitor{Region: region}
+	catalogCtx, cancelCatalog := context.WithTimeout(ctx, freeProxyRequestTimeout(ctx, maxLatencyMs))
 	catalogStartedAt := time.Now()
-	items, status, err := VintedCatalogFetcher{}.FetchCatalog(ctx, client, BuildVintedURL(monitor), domain)
+	items, status, err := VintedCatalogFetcher{}.FetchCatalog(catalogCtx, client, BuildVintedURL(monitor), domain)
+	cancelCatalog()
 	_ = items
 	catalogLatencyMs := int(time.Since(catalogStartedAt).Milliseconds())
 	result := FreeProxyValidationResult{
@@ -173,6 +175,23 @@ func ClassifyFreeProxyFailure(err error, statusCode int) string {
 	default:
 		return "transport"
 	}
+}
+
+func freeProxyWarmupTimeout(ctx context.Context, maxLatencyMs int) time.Duration {
+	timeout := 2 * freeProxyRequestTimeout(context.Background(), maxLatencyMs)
+	if timeout > 8*time.Second {
+		timeout = 8 * time.Second
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+	if timeout < time.Millisecond {
+		return time.Millisecond
+	}
+	return timeout
 }
 
 func freeProxyRequestTimeout(ctx context.Context, maxLatencyMs int) time.Duration {

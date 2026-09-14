@@ -598,8 +598,8 @@ func TestBuildDiscoveryURLKeepsFiltersAndDropsQuery(t *testing.T) {
 	if query.Get("price_to") != "25" || query.Get("page") != "2" || query.Get("per_page") != "96" {
 		t.Fatalf("discovery query lost server filters: %v", query)
 	}
-	if len(query["attribute_ids[catalog]"]) != 2 {
-		t.Fatalf("catalog filters = %v, want two", query["attribute_ids[catalog]"])
+	if got := query["attribute_ids[catalog]"]; len(got) != 1 || got[0] != "10,20" {
+		t.Fatalf("catalog filters = %v, want one comma-separated value", got)
 	}
 }
 

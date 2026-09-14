@@ -215,3 +215,24 @@ func TestFreeProxyRequestTimeoutUsesConfiguredLatencyBudget(t *testing.T) {
 		})
 	}
 }
+
+func TestFreeProxyWarmupTimeoutAllowsBootstrapHeadroom(t *testing.T) {
+	tests := []struct {
+		name         string
+		maxLatencyMs int
+		want         time.Duration
+	}{
+		{name: "default", maxLatencyMs: 0, want: 5 * time.Second},
+		{name: "configured", maxLatencyMs: 3000, want: 6 * time.Second},
+		{name: "minimum", maxLatencyMs: 200, want: time.Second},
+		{name: "maximum", maxLatencyMs: 6000, want: 8 * time.Second},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := freeProxyWarmupTimeout(context.Background(), test.maxLatencyMs); got != test.want {
+				t.Fatalf("freeProxyWarmupTimeout(%d) = %s, want %s", test.maxLatencyMs, got, test.want)
+			}
+		})
+	}
+}
