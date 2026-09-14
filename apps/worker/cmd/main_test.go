@@ -52,10 +52,11 @@ func TestFreeProxyValidationTimeout(t *testing.T) {
 		maxLatencyMs int
 		want         time.Duration
 	}{
-		{name: "default", maxLatencyMs: 0, want: 4 * time.Second},
-		{name: "normal", maxLatencyMs: 2500, want: 4 * time.Second},
-		{name: "custom", maxLatencyMs: 4000, want: 5500 * time.Millisecond},
-		{name: "capped", maxLatencyMs: 15000, want: 8 * time.Second},
+		{name: "default", maxLatencyMs: 0, want: 6500 * time.Millisecond},
+		{name: "normal", maxLatencyMs: 2500, want: 6500 * time.Millisecond},
+		{name: "minimum", maxLatencyMs: 200, want: 4 * time.Second},
+		{name: "custom", maxLatencyMs: 4000, want: 9500 * time.Millisecond},
+		{name: "capped", maxLatencyMs: 15000, want: 11500 * time.Millisecond},
 	}
 
 	for _, test := range tests {
@@ -72,8 +73,8 @@ func TestFreeProxyTimeoutBatchFitsRecoveryCycleBudget(t *testing.T) {
 	const concurrency = 48
 	waves := (candidates + concurrency - 1) / concurrency
 	worstCase := time.Duration(waves) * freeProxyValidationTimeout(2500)
-	if worstCase > 90*time.Second {
-		t.Fatalf("timeout-only batch budget = %s, want at most 90s", worstCase)
+	if worstCase > freeProxyCheckCycleTimeout {
+		t.Fatalf("timeout-only batch budget = %s, cycle timeout %s", worstCase, freeProxyCheckCycleTimeout)
 	}
 }
 

@@ -1252,14 +1252,10 @@ func freeProxyValidationTimeout(maxLatencyMs int) time.Duration {
 	if maxLatencyMs <= 0 {
 		maxLatencyMs = 2500
 	}
-	timeout := time.Duration(maxLatencyMs+1500) * time.Millisecond
-	if timeout < 4*time.Second {
-		return 4 * time.Second
-	}
-	if timeout > 8*time.Second {
-		return 8 * time.Second
-	}
-	return timeout
+	requestBudget := time.Duration(maxLatencyMs) * time.Millisecond
+	requestBudget = max(500*time.Millisecond, min(requestBudget, 5*time.Second))
+	timeout := 2*requestBudget + 1500*time.Millisecond
+	return max(4*time.Second, min(timeout, 12*time.Second))
 }
 
 func interleaveFreeProxyCandidates(batches [][]database.FreeProxyCandidate) []database.FreeProxyCandidate {
