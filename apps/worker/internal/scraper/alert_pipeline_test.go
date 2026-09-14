@@ -138,3 +138,26 @@ func TestScheduleStrictSellerRetry_FollowsBoundedSchedule(t *testing.T) {
 		}
 	}
 }
+
+// TestScheduleStrictSellerRetry_GivesUpAfterFinalAttempt guards against a
+// regression where a job that already used its last chance (scheduled right
+// at itemAlertDeadline) got resubmitted forever instead of giving up once
+// that final attempt also failed. A chronically slow/overloaded regional
+// proxy pool must not turn into an unbounded retry loop.
+func TestScheduleStrictSellerRetry_GivesUpAfterFinalAttempt(t *testing.T) {
+	scheduler := NewSellerEnrichmentScheduler(16, 1)
+	engine := &Engine{enrichmentScheduler: scheduler}
+	item := model.Item{ID: 1, FoundAt: time.Now().Add(-3 * time.Minute)}
+	job := enrichmentJob{
+		ctx: context.Background(), item: item,
+		requireSellerMatch: true, strictAttempt: 3, readyAt: itemAlertDeadline(item),
+	}
+
+	engine.scheduleStrictSellerRetry(job, errors.New("still missing seller data"))
+
+	select {
+	case resubmitted := <-scheduler.input:
+		t.Fatalf("expected no further retry after the final attempt fails, got resubmit: %+v", resubmitted)
+	case <-time.After(200 * time.Millisecond):
+	}
+}

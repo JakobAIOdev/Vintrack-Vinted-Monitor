@@ -488,7 +488,7 @@ func TestNormalAlertDeadlineIsArmedOnceAndStrictAlertsDoNotFallback(t *testing.T
 		alertJobs: make(chan alertJob, 2),
 	}
 	job := enrichmentJob{
-		item:             model.Item{ID: 123, FoundAt: time.Now().Add(-3 * time.Second)},
+		item:             model.Item{ID: 123, FoundAt: time.Now().Add(-(sellerEnrichmentTimeout() + time.Second))},
 		alertAfterEnrich: true,
 	}
 	engine.armNormalAlertDeadline(&job)
