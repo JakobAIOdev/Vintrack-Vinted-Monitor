@@ -206,7 +206,7 @@ func (s *SellerEnrichmentScheduler) Run(ctx context.Context) {
 			if !candidate.readyAt.IsZero() && candidate.readyAt.After(now) {
 				continue
 			}
-			priority := enrichmentPriority(candidate)
+			priority := enrichmentPriority(candidate, now)
 			if priority >= selectedPriority {
 				continue
 			}
@@ -238,12 +238,25 @@ func (s *SellerEnrichmentScheduler) Run(ctx context.Context) {
 	}
 }
 
-func enrichmentPriority(job enrichmentJob) int {
-	if job.backgroundOnly {
-		return 2
+// strictRetryStarvationAge bounds how long a ready strict-retry or background
+// job can keep losing the dispatch pick to fresh priority-0 foreground work.
+// A busy fleet produces a near-continuous stream of foreground jobs, and pure
+// priority selection has no natural end to that stream, so without aging a
+// lower-priority job that is ready right now could still never be chosen.
+// The bound is well under the 5s first strict-retry delay so a promoted job
+// is dispatched long before its own next scheduled attempt would fire.
+const strictRetryStarvationAge = 3 * time.Second
+
+func enrichmentPriority(job enrichmentJob, now time.Time) int {
+	priority := 0
+	switch {
+	case job.backgroundOnly:
+		priority = 2
+	case job.strictAttempt > 0:
+		priority = 1
 	}
-	if job.strictAttempt > 0 {
-		return 1
+	if priority > 0 && !job.readyAt.IsZero() && now.Sub(job.readyAt) >= strictRetryStarvationAge {
+		return 0
 	}
-	return 0
+	return priority
 }

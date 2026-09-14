@@ -160,4 +160,51 @@ func TestSellerEnrichmentSchedulerDispatchesUnderContinuousInputPressure(t *test
 	}
 }
 
+// TestSellerEnrichmentSchedulerStrictRetryEventuallyDispatchedUnderForegroundFlood
+// guards against a second, independent starvation mode: pure priority
+// selection always dispatches the best-ready lane, so a continuous stream of
+// fresh priority-0 foreground jobs (normal on a busy fleet with several
+// active monitors) can keep outranking an already-ready strict-retry job
+// forever. That job never gets a second attempt, matching the observed
+// symptom of every strict retry logging its first attempt and then vanishing.
+func TestSellerEnrichmentSchedulerStrictRetryEventuallyDispatchedUnderForegroundFlood(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scheduler := NewSellerEnrichmentScheduler(4096, 1)
+	go scheduler.Run(ctx)
+
+	const strictID = int64(999)
+	if !scheduler.Submit(ctx, enrichmentJob{
+		proxySource: "free", item: itemWithID(strictID), strictAttempt: 1,
+		readyAt: time.Now().Add(-time.Millisecond),
+	}) {
+		t.Fatal("strict-retry submit failed")
+	}
+
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for i := int64(1000); ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			scheduler.Submit(ctx, enrichmentJob{proxySource: "free", item: itemWithID(i)})
+		}
+	}()
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case job := <-scheduler.Work():
+			if job.item.ID == strictID {
+				return
+			}
+		case <-deadline:
+			t.Fatal("strict-retry job starved by continuous foreground flood")
+		}
+	}
+}
+
 func itemWithID(id int64) model.Item { return model.Item{ID: id} }
