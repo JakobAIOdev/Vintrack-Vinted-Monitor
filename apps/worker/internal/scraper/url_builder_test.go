@@ -87,8 +87,8 @@ func TestBuildVintedURL_WithSizeIDs(t *testing.T) {
 	parsed, _ := url.Parse(result)
 
 	sizes := parsed.Query()["attribute_ids[size]"]
-	if len(sizes) != 3 {
-		t.Errorf("Expected 3 size_ids, got %d: %v", len(sizes), sizes)
+	if len(sizes) != 1 || sizes[0] != "1,2,3" {
+		t.Errorf("size_ids = %v, want one comma-separated value", sizes)
 	}
 }
 
@@ -106,11 +106,12 @@ func TestBuildVintedURL_WithMaximumMonitorSizeIDs(t *testing.T) {
 	}
 
 	sizes := parsed.Query()["attribute_ids[size]"]
-	if len(sizes) != 100 {
-		t.Fatalf("size_ids count = %d, want 100", len(sizes))
+	if len(sizes) != 1 {
+		t.Fatalf("size_ids values = %v, want one comma-separated value", sizes)
 	}
-	if sizes[0] != "1400" || sizes[99] != "1499" {
-		t.Fatalf("size_ids endpoints = %q, %q", sizes[0], sizes[99])
+	decoded := strings.Split(sizes[0], ",")
+	if len(decoded) != 100 || decoded[0] != "1400" || decoded[99] != "1499" {
+		t.Fatalf("decoded size_ids = %v, want 1400 through 1499", decoded)
 	}
 }
 
@@ -126,8 +127,8 @@ func TestBuildVintedURL_WithBrandIDs(t *testing.T) {
 	parsed, _ := url.Parse(result)
 
 	brands := parsed.Query()["attribute_ids[brand]"]
-	if len(brands) != 2 {
-		t.Errorf("Expected 2 brand_ids, got %d", len(brands))
+	if len(brands) != 1 || brands[0] != "10,20" {
+		t.Errorf("brand_ids = %v, want one comma-separated value", brands)
 	}
 }
 
@@ -143,8 +144,8 @@ func TestBuildVintedURL_WithCatalogIDs(t *testing.T) {
 	parsed, _ := url.Parse(result)
 
 	catalogs := parsed.Query()["attribute_ids[catalog]"]
-	if len(catalogs) != 3 {
-		t.Errorf("Expected 3 catalog_ids, got %d", len(catalogs))
+	if len(catalogs) != 1 || catalogs[0] != "100,200,300" {
+		t.Errorf("catalog_ids = %v, want one comma-separated value", catalogs)
 	}
 }
 
@@ -160,8 +161,8 @@ func TestBuildVintedURL_WithColorIDs(t *testing.T) {
 	parsed, _ := url.Parse(result)
 
 	colors := parsed.Query()["attribute_ids[color]"]
-	if len(colors) != 2 {
-		t.Errorf("Expected 2 color_ids, got %d", len(colors))
+	if len(colors) != 1 || colors[0] != "5,6" {
+		t.Errorf("color_ids = %v, want one comma-separated value", colors)
 	}
 }
 
@@ -177,8 +178,8 @@ func TestBuildVintedURL_WithStatusIDs(t *testing.T) {
 	parsed, _ := url.Parse(result)
 
 	statuses := parsed.Query()["attribute_ids[status]"]
-	if len(statuses) != 3 {
-		t.Errorf("Expected 3 status_ids, got %d", len(statuses))
+	if len(statuses) != 1 || statuses[0] != "1,4,6" {
+		t.Errorf("status_ids = %v, want one comma-separated value", statuses)
 	}
 }
 
@@ -195,8 +196,8 @@ func TestBuildVintedURL_WithAdditionalVintedFilters(t *testing.T) {
 		t.Fatalf("parse URL: %v", err)
 	}
 	query := parsed.Query()
-	if got := query["attribute_ids[material]"]; len(got) != 2 || got[0] != "12" || got[1] != "13" {
-		t.Fatalf("material_ids = %v, want [12 13]", got)
+	if got := query["attribute_ids[material]"]; len(got) != 1 || got[0] != "12,13" {
+		t.Fatalf("material_ids = %v, want one comma-separated value", got)
 	}
 	if got := query.Get("currency"); got != "EUR" {
 		t.Fatalf("currency = %q, want EUR", got)
@@ -231,8 +232,8 @@ func TestBuildVintedURL_WithVideoGamePlatformIDs(t *testing.T) {
 	parsed, _ := url.Parse(result)
 
 	platforms := parsed.Query()["attribute_ids[video_game_platform]"]
-	if len(platforms) != 2 {
-		t.Errorf("Expected 2 video_game_platform_ids, got %d", len(platforms))
+	if len(platforms) != 1 || platforms[0] != "1277,1278" {
+		t.Errorf("video_game_platform_ids = %v, want one comma-separated value", platforms)
 	}
 	catalogs := parsed.Query()["attribute_ids[catalog]"]
 	if len(catalogs) != 1 || catalogs[0] != videoGamePlatformCatalogID {

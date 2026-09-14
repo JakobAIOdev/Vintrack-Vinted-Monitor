@@ -86,14 +86,8 @@ func buildVintedURL(m model.Monitor, perPage string, includeQuery bool, page int
 		params.Add("price_to", fmt.Sprintf("%d", *m.PriceMax))
 	}
 
-	if m.SizeID != nil && *m.SizeID != "" {
-		sizes := strings.Split(*m.SizeID, ",")
-		for _, s := range sizes {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				params.Add("attribute_ids[size]", s)
-			}
-		}
+	if m.SizeID != nil {
+		setVintedAttributeIDs(params, "size", *m.SizeID)
 	}
 
 	var videoGamePlatformIDs []string
@@ -106,50 +100,21 @@ func buildVintedURL(m model.Monitor, perPage string, includeQuery bool, page int
 	}
 
 	if len(videoGamePlatformIDs) > 0 {
-		params.Add("attribute_ids[catalog]", videoGamePlatformCatalogID)
-	} else if m.CatalogIDs != nil && *m.CatalogIDs != "" {
-		cats := strings.Split(*m.CatalogIDs, ",")
-		for _, c := range cats {
-			c = strings.TrimSpace(c)
-			if c != "" {
-				params.Add("attribute_ids[catalog]", c)
-			}
-		}
+		setVintedAttributeIDs(params, "catalog", videoGamePlatformCatalogID)
+	} else if m.CatalogIDs != nil {
+		setVintedAttributeIDs(params, "catalog", *m.CatalogIDs)
 	}
 
-	if m.BrandIDs != nil && *m.BrandIDs != "" {
-		brands := strings.Split(*m.BrandIDs, ",")
-		for _, b := range brands {
-			b = strings.TrimSpace(b)
-			if b != "" {
-				params.Add("attribute_ids[brand]", b)
-			}
-		}
+	if m.BrandIDs != nil {
+		setVintedAttributeIDs(params, "brand", *m.BrandIDs)
 	}
-
-	if m.ColorIDs != nil && *m.ColorIDs != "" {
-		colors := strings.Split(*m.ColorIDs, ",")
-		for _, c := range colors {
-			c = strings.TrimSpace(c)
-			if c != "" {
-				params.Add("attribute_ids[color]", c)
-			}
-		}
+	if m.ColorIDs != nil {
+		setVintedAttributeIDs(params, "color", *m.ColorIDs)
 	}
-
-	if m.StatusIDs != nil && *m.StatusIDs != "" {
-		statuses := strings.Split(*m.StatusIDs, ",")
-		for _, s := range statuses {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				params.Add("attribute_ids[status]", s)
-			}
-		}
+	if m.StatusIDs != nil {
+		setVintedAttributeIDs(params, "status", *m.StatusIDs)
 	}
-
-	for _, platform := range videoGamePlatformIDs {
-		params.Add("attribute_ids[video_game_platform]", platform)
-	}
+	setVintedAttributeIDs(params, "video_game_platform", videoGamePlatformIDs...)
 
 	appendVintedExtraParams(params, m.VintedExtraParams)
 
@@ -161,6 +126,24 @@ func catalogAPIHost(domain string) string {
 		return "api." + strings.TrimPrefix(domain, "www.")
 	}
 	return domain
+}
+
+func setVintedAttributeIDs(params url.Values, attribute string, rawValues ...string) {
+	key := fmt.Sprintf("attribute_ids[%s]", attribute)
+	values := make([]string, 0, len(rawValues))
+	if existing := strings.TrimSpace(params.Get(key)); existing != "" {
+		values = append(values, strings.Split(existing, ",")...)
+	}
+	for _, raw := range rawValues {
+		for _, value := range strings.Split(raw, ",") {
+			if value = strings.TrimSpace(value); value != "" {
+				values = append(values, value)
+			}
+		}
+	}
+	if len(values) > 0 {
+		params.Set(key, strings.Join(values, ","))
+	}
 }
 
 func appendVintedExtraParams(params url.Values, raw *string) {
@@ -197,7 +180,11 @@ func appendVintedExtraParams(params url.Values, raw *string) {
 			if value == "" || len(value) > 256 || accepted >= 50 {
 				continue
 			}
-			params.Add(targetKey, value)
+			if targetKey == "attribute_ids[material]" {
+				setVintedAttributeIDs(params, "material", value)
+			} else {
+				params.Add(targetKey, value)
+			}
 			accepted++
 		}
 	}
