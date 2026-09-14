@@ -407,9 +407,9 @@ func NewSellerEnricher(pm *proxy.Manager, db *database.Store, domain string, poo
 }
 
 func sellerEnrichmentTimeout() time.Duration {
-	timeout := time.Duration(getEnvInt("SELLER_ENRICHMENT_TIMEOUT_MS", 2000)) * time.Millisecond
+	timeout := time.Duration(getEnvInt("SELLER_ENRICHMENT_TIMEOUT_MS", 4500)) * time.Millisecond
 	if timeout <= 0 {
-		return 2 * time.Second
+		return 4500 * time.Millisecond
 	}
 	return timeout
 }

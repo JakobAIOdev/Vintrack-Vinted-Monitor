@@ -470,15 +470,28 @@ func itemEnrichmentDeadline(item model.Item) time.Time {
 
 func (e *Engine) scheduleStrictSellerRetry(job enrichmentJob, fetchErr error) {
 	delays := [...]time.Duration{5 * time.Second, 20 * time.Second, 60 * time.Second}
+	deadline := itemAlertDeadline(job.item)
 	if job.strictAttempt >= len(delays) {
+		// The final chance is scheduled to run right at the deadline. If this
+		// job was already that final chance (readyAt at or past the deadline)
+		// and it still failed, give up instead of resubmitting forever.
+		if !job.readyAt.Before(deadline) {
+			if job.alertAfterEnrich {
+				e.recordStaleItemAlert(alertJob{item: job.item, monitor: job.monitor}, "seller_enrichment_stale")
+			}
+			if fetchErr != nil {
+				log.Printf("[%d] strict seller retry exhausted for item %d, giving up: %v", job.monitor.ID, job.item.ID, fetchErr)
+			}
+			return
+		}
 		job.strictAttempt++
-		job.readyAt = itemAlertDeadline(job.item)
+		job.readyAt = deadline
 		job.enqueuedAt = time.Now()
 		e.enrichmentScheduler.Submit(job.ctx, job)
 		return
 	}
 	next := time.Now().Add(delays[job.strictAttempt])
-	if !next.Before(itemAlertDeadline(job.item)) {
+	if !next.Before(deadline) {
 		if job.alertAfterEnrich {
 			e.recordStaleItemAlert(alertJob{item: job.item, monitor: job.monitor}, "seller_enrichment_stale")
 		}
