@@ -67,7 +67,7 @@ func BuildDiscoveryURLWithPerPage(m model.Monitor, page int, perPage int) string
 
 func buildVintedURL(m model.Monitor, perPage string, includeQuery bool, page int) string {
 	domain := model.RegionDomain(m.Region)
-	baseURL := fmt.Sprintf("https://%s/api/v2/catalog/items", domain)
+	baseURL := fmt.Sprintf("https://%s/svc-catalogue/items", catalogAPIHost(domain))
 	params := url.Values{}
 
 	if includeQuery && m.Query != "" {
@@ -91,7 +91,7 @@ func buildVintedURL(m model.Monitor, perPage string, includeQuery bool, page int
 		for _, s := range sizes {
 			s = strings.TrimSpace(s)
 			if s != "" {
-				params.Add("size_ids[]", s)
+				params.Add("attribute_ids[size]", s)
 			}
 		}
 	}
@@ -106,13 +106,13 @@ func buildVintedURL(m model.Monitor, perPage string, includeQuery bool, page int
 	}
 
 	if len(videoGamePlatformIDs) > 0 {
-		params.Add("catalog_ids[]", videoGamePlatformCatalogID)
+		params.Add("attribute_ids[catalog]", videoGamePlatformCatalogID)
 	} else if m.CatalogIDs != nil && *m.CatalogIDs != "" {
 		cats := strings.Split(*m.CatalogIDs, ",")
 		for _, c := range cats {
 			c = strings.TrimSpace(c)
 			if c != "" {
-				params.Add("catalog_ids[]", c)
+				params.Add("attribute_ids[catalog]", c)
 			}
 		}
 	}
@@ -122,7 +122,7 @@ func buildVintedURL(m model.Monitor, perPage string, includeQuery bool, page int
 		for _, b := range brands {
 			b = strings.TrimSpace(b)
 			if b != "" {
-				params.Add("brand_ids[]", b)
+				params.Add("attribute_ids[brand]", b)
 			}
 		}
 	}
@@ -132,7 +132,7 @@ func buildVintedURL(m model.Monitor, perPage string, includeQuery bool, page int
 		for _, c := range colors {
 			c = strings.TrimSpace(c)
 			if c != "" {
-				params.Add("color_ids[]", c)
+				params.Add("attribute_ids[color]", c)
 			}
 		}
 	}
@@ -142,18 +142,25 @@ func buildVintedURL(m model.Monitor, perPage string, includeQuery bool, page int
 		for _, s := range statuses {
 			s = strings.TrimSpace(s)
 			if s != "" {
-				params.Add("status_ids[]", s)
+				params.Add("attribute_ids[status]", s)
 			}
 		}
 	}
 
 	for _, platform := range videoGamePlatformIDs {
-		params.Add("video_game_platform_ids[]", platform)
+		params.Add("attribute_ids[video_game_platform]", platform)
 	}
 
 	appendVintedExtraParams(params, m.VintedExtraParams)
 
 	return fmt.Sprintf("%s?%s", baseURL, params.Encode())
+}
+
+func catalogAPIHost(domain string) string {
+	if strings.HasPrefix(domain, "www.") {
+		return "api." + strings.TrimPrefix(domain, "www.")
+	}
+	return domain
 }
 
 func appendVintedExtraParams(params url.Values, raw *string) {
@@ -180,12 +187,17 @@ func appendVintedExtraParams(params url.Values, raw *string) {
 			continue
 		}
 
+		targetKey := key
+		if strings.TrimSuffix(key, "[]") == "material_ids" {
+			targetKey = "attribute_ids[material]"
+		}
+
 		for _, value := range values {
 			value = strings.TrimSpace(value)
 			if value == "" || len(value) > 256 || accepted >= 50 {
 				continue
 			}
-			params.Add(key, value)
+			params.Add(targetKey, value)
 			accepted++
 		}
 	}

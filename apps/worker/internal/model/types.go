@@ -302,6 +302,12 @@ type VintedItem struct {
 	BrandTitle     string        `json:"brand_title,omitempty"`
 	Condition      string        `json:"status"`
 	User           VintedUser    `json:"user"`
+	ItemBox        VintedItemBox `json:"item_box,omitempty"`
+}
+
+type VintedItemBox struct {
+	FirstLine  string `json:"first_line"`
+	SecondLine string `json:"second_line"`
 }
 
 type VintedUser struct {

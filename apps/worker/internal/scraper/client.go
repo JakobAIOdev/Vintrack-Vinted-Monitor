@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +20,15 @@ import (
 	"github.com/bogdanfinn/tls-client/profiles"
 	"golang.org/x/net/proxy"
 )
+
+const maxCatalogBootstrapBytes = 512 * 1024
+
+var csrfTokenPattern = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+
+type catalogBootstrap struct {
+	csrfToken string
+	anonID    string
+}
 
 type clientFingerprint struct {
 	name    string
@@ -150,6 +161,31 @@ func newAPIHeaders(domain string) http.Header {
 	}
 }
 
+func newCatalogAPIHeaders(domain string, bootstrap catalogBootstrap) http.Header {
+	fingerprint := configuredClientFingerprint()
+	locale := strings.SplitN(acceptLanguageForDomain(domain), ",", 2)[0]
+	return http.Header{
+		"User-Agent":         {configuredChromeUA()},
+		"Accept":             {"application/json, text/plain, */*"},
+		"Accept-Language":    {acceptLanguageForDomain(domain)},
+		"Cache-Control":      {"no-cache"},
+		"Pragma":             {"no-cache"},
+		"Origin":             {fmt.Sprintf("https://%s", domain)},
+		"Referer":            {fmt.Sprintf("https://%s/", domain)},
+		"Locale":             {locale},
+		"Platform":           {"web"},
+		"X-Anon-Id":          {bootstrap.anonID},
+		"X-Csrf-Token":       {bootstrap.csrfToken},
+		"X-Next-App":         {"marketplace-web"},
+		"Sec-Ch-Ua":          {fmt.Sprintf(`"Google Chrome";v="%s", "Chromium";v="%s", "Not_A Brand";v="24"`, fingerprint.version, fingerprint.version)},
+		"Sec-Ch-Ua-Mobile":   {"?0"},
+		"Sec-Ch-Ua-Platform": {`"macOS"`},
+		"Sec-Fetch-Dest":     {"empty"},
+		"Sec-Fetch-Mode":     {"cors"},
+		"Sec-Fetch-Site":     {"same-site"},
+	}
+}
+
 type Client struct {
 	HttpClient      tls_client.HttpClient
 	ProxyURL        string
@@ -159,6 +195,7 @@ type Client struct {
 	lastRxBytes     int64
 	warmedMu        sync.Mutex
 	warmed          map[string]bool
+	bootstrap       map[string]catalogBootstrap
 }
 
 func NewClient(proxyURL string, trafficRecorder func(txBytes int64, rxBytes int64)) (*Client, error) {
@@ -187,7 +224,10 @@ func NewClientWithTimeout(proxyURL string, trafficRecorder func(txBytes int64, r
 		return nil, err
 	}
 
-	return &Client{HttpClient: httpClient, ProxyURL: proxyURL, trafficRecorder: trafficRecorder, warmed: make(map[string]bool)}, nil
+	return &Client{
+		HttpClient: httpClient, ProxyURL: proxyURL, trafficRecorder: trafficRecorder,
+		warmed: make(map[string]bool), bootstrap: make(map[string]catalogBootstrap),
+	}, nil
 }
 
 func NewSellerClient(proxyURL string, trafficRecorder func(txBytes int64, rxBytes int64)) (*Client, error) {
@@ -208,7 +248,10 @@ func NewSellerClient(proxyURL string, trafficRecorder func(txBytes int64, rxByte
 		return nil, err
 	}
 
-	return &Client{HttpClient: httpClient, ProxyURL: proxyURL, trafficRecorder: trafficRecorder, warmed: make(map[string]bool)}, nil
+	return &Client{
+		HttpClient: httpClient, ProxyURL: proxyURL, trafficRecorder: trafficRecorder,
+		warmed: make(map[string]bool), bootstrap: make(map[string]catalogBootstrap),
+	}, nil
 }
 
 func proxyClientOptions(proxyURL string) []tls_client.HttpClientOption {
@@ -428,9 +471,23 @@ func (c *Client) WarmUpRegionContext(ctx context.Context, domain string) error {
 			}
 		}
 
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxCatalogBootstrapBytes))
 		resp.Body.Close()
 		c.FlushTrackedTraffic()
+		if readErr != nil {
+			return fmt.Errorf("read warmup %s: %w", currentDomain, readErr)
+		}
+
+		bootstrap := catalogBootstrap{
+			csrfToken: extractCSRFToken(body),
+			anonID:    strings.TrimSpace(resp.Header.Get("X-Anon-Id")),
+		}
+		if bootstrap.csrfToken == "" || bootstrap.anonID == "" {
+			return fmt.Errorf("warmup %s missing catalog bootstrap metadata", currentDomain)
+		}
+		c.warmedMu.Lock()
+		c.bootstrap[domain] = bootstrap
+		c.warmedMu.Unlock()
 		return nil
 	}
 
@@ -462,7 +519,24 @@ func (c *Client) EnsureWarmContext(ctx context.Context, domain string) error {
 func (c *Client) ResetWarm(domain string) {
 	c.warmedMu.Lock()
 	delete(c.warmed, domain)
+	delete(c.bootstrap, domain)
 	c.warmedMu.Unlock()
+}
+
+func (c *Client) CatalogBootstrap(domain string) (catalogBootstrap, bool) {
+	c.warmedMu.Lock()
+	defer c.warmedMu.Unlock()
+	bootstrap, ok := c.bootstrap[domain]
+	return bootstrap, ok && bootstrap.csrfToken != "" && bootstrap.anonID != ""
+}
+
+func extractCSRFToken(body []byte) string {
+	index := bytes.Index(body, []byte("CSRF_TOKEN"))
+	if index < 0 {
+		return ""
+	}
+	end := min(len(body), index+256)
+	return string(csrfTokenPattern.Find(body[index:end]))
 }
 
 // Close releases the client's pooled connections.

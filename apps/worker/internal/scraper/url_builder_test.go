@@ -16,7 +16,7 @@ func TestBuildVintedURL_BasicQuery(t *testing.T) {
 
 	result := BuildVintedURL(m)
 
-	if !strings.HasPrefix(result, "https://www.vinted.de/api/v2/catalog/items?") {
+	if !strings.HasPrefix(result, "https://api.vinted.de/svc-catalogue/items?") {
 		t.Errorf("URL should start with vinted.de API base, got: %s", result)
 	}
 
@@ -86,7 +86,7 @@ func TestBuildVintedURL_WithSizeIDs(t *testing.T) {
 	result := BuildVintedURL(m)
 	parsed, _ := url.Parse(result)
 
-	sizes := parsed.Query()["size_ids[]"]
+	sizes := parsed.Query()["attribute_ids[size]"]
 	if len(sizes) != 3 {
 		t.Errorf("Expected 3 size_ids, got %d: %v", len(sizes), sizes)
 	}
@@ -105,7 +105,7 @@ func TestBuildVintedURL_WithMaximumMonitorSizeIDs(t *testing.T) {
 		t.Fatalf("parse URL: %v", err)
 	}
 
-	sizes := parsed.Query()["size_ids[]"]
+	sizes := parsed.Query()["attribute_ids[size]"]
 	if len(sizes) != 100 {
 		t.Fatalf("size_ids count = %d, want 100", len(sizes))
 	}
@@ -125,7 +125,7 @@ func TestBuildVintedURL_WithBrandIDs(t *testing.T) {
 	result := BuildVintedURL(m)
 	parsed, _ := url.Parse(result)
 
-	brands := parsed.Query()["brand_ids[]"]
+	brands := parsed.Query()["attribute_ids[brand]"]
 	if len(brands) != 2 {
 		t.Errorf("Expected 2 brand_ids, got %d", len(brands))
 	}
@@ -142,7 +142,7 @@ func TestBuildVintedURL_WithCatalogIDs(t *testing.T) {
 	result := BuildVintedURL(m)
 	parsed, _ := url.Parse(result)
 
-	catalogs := parsed.Query()["catalog_ids[]"]
+	catalogs := parsed.Query()["attribute_ids[catalog]"]
 	if len(catalogs) != 3 {
 		t.Errorf("Expected 3 catalog_ids, got %d", len(catalogs))
 	}
@@ -159,7 +159,7 @@ func TestBuildVintedURL_WithColorIDs(t *testing.T) {
 	result := BuildVintedURL(m)
 	parsed, _ := url.Parse(result)
 
-	colors := parsed.Query()["color_ids[]"]
+	colors := parsed.Query()["attribute_ids[color]"]
 	if len(colors) != 2 {
 		t.Errorf("Expected 2 color_ids, got %d", len(colors))
 	}
@@ -176,7 +176,7 @@ func TestBuildVintedURL_WithStatusIDs(t *testing.T) {
 	result := BuildVintedURL(m)
 	parsed, _ := url.Parse(result)
 
-	statuses := parsed.Query()["status_ids[]"]
+	statuses := parsed.Query()["attribute_ids[status]"]
 	if len(statuses) != 3 {
 		t.Errorf("Expected 3 status_ids, got %d", len(statuses))
 	}
@@ -195,7 +195,7 @@ func TestBuildVintedURL_WithAdditionalVintedFilters(t *testing.T) {
 		t.Fatalf("parse URL: %v", err)
 	}
 	query := parsed.Query()
-	if got := query["material_ids[]"]; len(got) != 2 || got[0] != "12" || got[1] != "13" {
+	if got := query["attribute_ids[material]"]; len(got) != 2 || got[0] != "12" || got[1] != "13" {
 		t.Fatalf("material_ids = %v, want [12 13]", got)
 	}
 	if got := query.Get("currency"); got != "EUR" {
@@ -212,7 +212,7 @@ func TestBuildVintedURL_WithAdditionalVintedFilters(t *testing.T) {
 	if got := query.Get("page"); got != "" {
 		t.Fatalf("page = %q, want worker-controlled first page", got)
 	}
-	if got := query["brand_ids[]"]; len(got) != 0 {
+	if got := query["attribute_ids[brand]"]; len(got) != 0 {
 		t.Fatalf("extra brand_ids should be blocked, got %v", got)
 	}
 }
@@ -230,11 +230,11 @@ func TestBuildVintedURL_WithVideoGamePlatformIDs(t *testing.T) {
 	result := BuildVintedURL(m)
 	parsed, _ := url.Parse(result)
 
-	platforms := parsed.Query()["video_game_platform_ids[]"]
+	platforms := parsed.Query()["attribute_ids[video_game_platform]"]
 	if len(platforms) != 2 {
 		t.Errorf("Expected 2 video_game_platform_ids, got %d", len(platforms))
 	}
-	catalogs := parsed.Query()["catalog_ids[]"]
+	catalogs := parsed.Query()["attribute_ids[catalog]"]
 	if len(catalogs) != 1 || catalogs[0] != videoGamePlatformCatalogID {
 		t.Errorf(
 			"catalog_ids = %v, want only platform catalog %s",
@@ -259,7 +259,7 @@ func TestBuildVintedURL_NilFilters(t *testing.T) {
 	if parsed.Query().Get("price_to") != "" {
 		t.Error("price_to should not be set for nil PriceMax")
 	}
-	if len(parsed.Query()["size_ids[]"]) != 0 {
+	if len(parsed.Query()["attribute_ids[size]"]) != 0 {
 		t.Error("size_ids should not be set for nil SizeID")
 	}
 }
@@ -280,12 +280,12 @@ func TestBuildVintedURL_EmptyQuery(t *testing.T) {
 
 func TestBuildVintedURL_Regions(t *testing.T) {
 	regions := map[string]string{
-		"de": "www.vinted.de",
-		"fr": "www.vinted.fr",
-		"uk": "www.vinted.co.uk",
-		"ie": "www.vinted.ie",
-		"it": "www.vinted.it",
-		"nl": "www.vinted.nl",
+		"de": "api.vinted.de",
+		"fr": "api.vinted.fr",
+		"uk": "api.vinted.co.uk",
+		"ie": "api.vinted.ie",
+		"it": "api.vinted.it",
+		"nl": "api.vinted.nl",
 	}
 
 	for region, expectedDomain := range regions {
@@ -310,7 +310,7 @@ func TestBuildVintedURL_EmptySizeID(t *testing.T) {
 	result := BuildVintedURL(m)
 	parsed, _ := url.Parse(result)
 
-	if len(parsed.Query()["size_ids[]"]) != 0 {
+	if len(parsed.Query()["attribute_ids[size]"]) != 0 {
 		t.Error("Empty sizeID should not produce size_ids params")
 	}
 }
