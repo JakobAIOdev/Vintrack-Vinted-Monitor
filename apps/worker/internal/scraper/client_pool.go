@@ -57,7 +57,15 @@ type ClientPool struct {
 	maxInFlight     int
 	quarantineAfter int
 	now             func() time.Time
+	lastNoReplacementLog time.Time
 }
+
+// noHealthyReplacementLogInterval bounds how often Replace() logs its
+// failure per pool. When a regional proxy pool is fully exhausted, every
+// concurrent client's replacement attempt fails and previously logged
+// unconditionally, producing on the order of 100k lines/hour and burying any
+// other signal in the same log stream.
+const noHealthyReplacementLogInterval = 10 * time.Second
 
 func NewClientPool(pm *proxy.Manager, domain string, size int, trafficRecorder func(txBytes int64, rxBytes int64)) *ClientPool {
 	return NewClientPoolWithTimeout(pm, domain, size, trafficRecorder, 3*time.Second)
@@ -290,8 +298,15 @@ func (p *ClientPool) Replace(bad *Client) {
 		if err != nil {
 			p.mu.Lock()
 			target.replacing = false
+			now := p.currentTime()
+			shouldLog := now.Sub(p.lastNoReplacementLog) >= noHealthyReplacementLogInterval
+			if shouldLog {
+				p.lastNoReplacementLog = now
+			}
 			p.mu.Unlock()
-			log.Printf("pool: no healthy replacement for %s: %v", p.domain, err)
+			if shouldLog {
+				log.Printf("pool: no healthy replacement for %s: %v", p.domain, err)
+			}
 			return
 		}
 

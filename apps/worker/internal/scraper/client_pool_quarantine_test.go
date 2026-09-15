@@ -288,3 +288,60 @@ func TestWaitForProxyRetryHonorsCancellation(t *testing.T) {
 		t.Fatal("waitForProxyRetry() ignored cancellation")
 	}
 }
+
+// TestClientPoolRateLimitsNoHealthyReplacementLog guards a production
+// incident: when a regional pool is fully exhausted, every client's
+// concurrent Replace() call used to log unconditionally, producing on the
+// order of 100k lines/hour and burying every other signal in the same
+// stream. Only the first failure per rate-limit window should be logged.
+func TestClientPoolRateLimitsNoHealthyReplacementLog(t *testing.T) {
+	now := time.Date(2026, time.July, 28, 8, 0, 0, 0, time.UTC)
+	manager := proxy.FromString("http://1.2.3.4:8080")
+	client := &Client{ProxyURL: "http://1.2.3.4:8080", warmed: make(map[string]bool)}
+	pool := &ClientPool{
+		states:       []*clientState{{client: client}},
+		pm:           manager,
+		domain:       "www.vinted.de",
+		requireProxy: true,
+		quarantined:  make(map[string]proxyQuarantine),
+		reserved:     make(map[string]bool),
+		now:          func() time.Time { return now },
+	}
+	pool.quarantined["http://1.2.3.4:8080"] = proxyQuarantine{until: now.Add(time.Hour)}
+
+	waitForReplace := func() {
+		deadline := time.Now().Add(time.Second)
+		for {
+			pool.mu.Lock()
+			replacing := pool.states[0].replacing
+			pool.mu.Unlock()
+			if !replacing {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("replacement attempt did not finish")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	pool.Replace(client)
+	waitForReplace()
+	if pool.lastNoReplacementLog.IsZero() {
+		t.Fatal("first failed replacement did not record a log timestamp")
+	}
+	firstLog := pool.lastNoReplacementLog
+
+	pool.Replace(client)
+	waitForReplace()
+	if pool.lastNoReplacementLog != firstLog {
+		t.Fatal("replacement attempt inside the rate-limit window updated the log timestamp")
+	}
+
+	now = now.Add(noHealthyReplacementLogInterval + time.Millisecond)
+	pool.Replace(client)
+	waitForReplace()
+	if !pool.lastNoReplacementLog.After(firstLog) {
+		t.Fatal("replacement attempt after the rate-limit window did not update the log timestamp")
+	}
+}
