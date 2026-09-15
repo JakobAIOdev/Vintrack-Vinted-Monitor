@@ -30,6 +30,7 @@ import {
     getMonitorQueryValidationError,
     normalizeMonitorQuery,
 } from "@/lib/monitor-query";
+import { getMonitorPriceRangeValidationError } from "@/lib/monitor-price";
 import { VIDEO_GAME_PLATFORM_CATALOG_ID } from "@/lib/video-game-platforms";
 import {
     getMonitorAntiKeywordsValidationError,
@@ -209,6 +210,10 @@ export async function createMonitor(
         getMonitorQueryValidationError(normalizedQuery);
     const antiKeywordsValidationError =
         getMonitorAntiKeywordsValidationError(antiKeywords);
+    const priceRangeValidationError = getMonitorPriceRangeValidationError(
+        priceMin,
+        priceMax,
+    );
 
     if (!normalizedName) return { ok: false, message: "Name is required." };
     if (normalizedName.length > 255) {
@@ -219,6 +224,9 @@ export async function createMonitor(
     }
     if (antiKeywordsValidationError) {
         return { ok: false, message: antiKeywordsValidationError };
+    }
+    if (priceRangeValidationError) {
+        return { ok: false, message: priceRangeValidationError };
     }
 
     const normalizedSizeIds = await normalizeSizeIdsForRegion(
@@ -828,6 +836,13 @@ export async function updateMonitor(id: number, formData: FormData) {
     if (antiKeywordsValidationError) {
         throw new Error(antiKeywordsValidationError);
     }
+    const priceRangeValidationError = getMonitorPriceRangeValidationError(
+        priceMin,
+        priceMax,
+    );
+    if (priceRangeValidationError) {
+        throw new Error(priceRangeValidationError);
+    }
 
     const normalizedSizeIds = await normalizeSizeIdsForRegion(
         rawSizeIds,
@@ -1016,6 +1031,10 @@ export async function updateMonitorAndReturn(
         getMonitorQueryValidationError(normalizedQuery);
     const antiKeywordsValidationError =
         getMonitorAntiKeywordsValidationError(antiKeywords);
+    const priceRangeValidationError = getMonitorPriceRangeValidationError(
+        priceMin,
+        priceMax,
+    );
 
     if (!normalizedName) {
         return { success: false, message: "Name is required." };
@@ -1028,6 +1047,9 @@ export async function updateMonitorAndReturn(
     }
     if (antiKeywordsValidationError) {
         return { success: false, message: antiKeywordsValidationError };
+    }
+    if (priceRangeValidationError) {
+        return { success: false, message: priceRangeValidationError };
     }
 
     const normalizedSizeIds = await normalizeSizeIdsForRegion(
