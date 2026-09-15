@@ -151,6 +151,7 @@ export async function getEffectiveMonitorLimits(
             freeProxyLimitSource: null,
             priceWatchLimit: null,
             priceWatchLimitSource: null,
+            isAdmin: true,
         };
     }
 
@@ -220,6 +221,7 @@ export async function getEffectiveMonitorLimits(
         freeProxyLimitSource: freeProxy.source,
         priceWatchLimit: priceWatch.value,
         priceWatchLimitSource: priceWatch.source,
+        isAdmin: false,
         reward:
             reward.enabled && "starred" in reward
                 ? {
@@ -364,7 +366,7 @@ export async function getMonitorActivationState(
                       0,
                   ),
         canActivate:
-            !maintenance.enabled &&
+            (!maintenance.enabled || limit.isAdmin) &&
             withinActiveLimit &&
             (proxySource !== "group" || withinOwnProxyLimit) &&
             (proxySource !== "free" || withinFreeProxyLimit),
@@ -441,7 +443,7 @@ export function monitorActivationBlock(
     state: Awaited<ReturnType<typeof getMonitorActivationState>>,
     proxySource?: string | null,
 ): MonitorActivationBlock {
-    if (state.maintenanceEnabled) {
+    if (state.maintenanceEnabled && !state.isAdmin) {
         return {
             code: "maintenance",
             title: "Monitor starts are paused",

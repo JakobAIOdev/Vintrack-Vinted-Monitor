@@ -1610,8 +1610,10 @@ export async function enableMonitorMaintenance(input: {
         if (existing.enabled) {
             throw new Error("Monitor maintenance is already enabled");
         }
+        // Admins need their own monitors to keep running through maintenance
+        // so they can verify a fix while everyone else is paused.
         const result = await tx.monitors.updateMany({
-            where: { status: "active" },
+            where: { status: "active", user: { role: { not: "admin" } } },
             data: { status: "maintenance_paused" },
         });
         const maintenance: MonitorMaintenance = {
