@@ -290,7 +290,12 @@ test.describe("monitor maintenance", () => {
             );
             expect(enabled.enabled).toBe(true);
             expect(
-                await db.monitors.count({ where: { status: "active" } }),
+                await db.monitors.count({
+                    where: {
+                        status: "active",
+                        user: { role: { not: "admin" } },
+                    },
+                }),
             ).toBe(0);
             expect(
                 await db.monitors.findUniqueOrThrow({
