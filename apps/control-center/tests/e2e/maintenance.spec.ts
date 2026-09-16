@@ -685,7 +685,17 @@ test.describe("monitor maintenance", () => {
             });
             expect(created.length).toBeLessThanOrEqual(1);
             if (created.length === 1) {
-                expect(created[0].status).toBe("maintenance_paused");
+                // Admin monitors are intentionally exempt from the maintenance
+                // bulk-pause; they stay active so admins can verify fixes.
+                const e2eUser = await db.user.findUniqueOrThrow({
+                    where: { id: "e2e-user" },
+                    select: { role: true },
+                });
+                const expectedStatus =
+                    e2eUser.role === "admin"
+                        ? "active"
+                        : "maintenance_paused";
+                expect(created[0].status).toBe(expectedStatus);
             }
             await createPage.close();
         } finally {
