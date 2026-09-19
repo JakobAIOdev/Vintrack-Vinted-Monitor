@@ -147,6 +147,61 @@ test.describe("dashboard feed", () => {
         expect((await feedResponse).ok()).toBe(true);
     });
 
+    test("resets the feed persistently and keeps new live items", async ({
+        page,
+    }) => {
+        await installBrowserAlertMocks(page);
+        await page.goto("/feed");
+
+        await expect(page.getByText("E2E Nike Dunk Low Retro")).toBeVisible();
+        await page.getByRole("button", { name: "Reset feed" }).click();
+
+        await expect(page.getByText("Waiting for items...")).toBeVisible();
+        await expect(
+            page.getByText("E2E Nike Dunk Low Retro"),
+        ).not.toBeVisible();
+
+        expect(
+            await page.evaluate(() =>
+                localStorage.getItem("vintrack.liveFeed.resetAt"),
+            ),
+        ).toMatch(/^\d+$/);
+
+        await page.reload();
+        await expect(page.getByText("Waiting for items...")).toBeVisible();
+
+        await page.evaluate(() => {
+            const emit = (
+                window as typeof window & {
+                    __emitVintrackItem: (item: Record<string, unknown>) => void;
+                }
+            ).__emitVintrackItem;
+
+            emit({
+                id: "9999100",
+                monitor_id: 910001,
+                title: "Item after feed reset",
+                brand: "Test Brand",
+                price: "20.00 EUR",
+                total_price: "23.70 EUR",
+                size: "M",
+                condition: "Very good",
+                url: "https://www.vinted.de/items/9999100",
+                image_url: "/mock-images/vinted-1.svg",
+                extra_images: null,
+                found_at: new Date().toISOString(),
+                monitor_name: "E2E Mock Feed",
+                location: "DE",
+                rating: "5.0",
+                seller_id: "990100",
+                seller_login: "feed_reset_test",
+                seller_profile_url: null,
+            });
+        });
+
+        await expect(page.getByText("Item after feed reset")).toBeVisible();
+    });
+
     test("opens and closes the item image preview", async ({ page }) => {
         await page.goto("/feed");
 

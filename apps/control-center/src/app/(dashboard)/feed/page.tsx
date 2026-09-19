@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Search, Settings2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { RotateCcw, Search, Settings2 } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import {
     ItemCard,
     ItemCardSkeleton,
@@ -10,8 +12,10 @@ import {
 import {
     capFeedItems,
     DEFAULT_LIVE_FEED_ITEM_CAP,
+    isFeedItemAfterReset,
     LIVE_FEED_ITEM_CAP_OPTIONS,
     normalizeLiveFeedItemCap,
+    normalizeLiveFeedResetAt,
 } from "@/lib/live-feed";
 import { useMonitorItemStream } from "@/components/monitors/monitor-stream-context";
 
@@ -21,6 +25,7 @@ type FeedSummary = {
 };
 
 const LIVE_FEED_CAP_STORAGE_KEY = "vintrack.liveFeed.itemCap";
+const LIVE_FEED_RESET_STORAGE_KEY = "vintrack.liveFeed.resetAt";
 
 export default function FeedPage() {
     const [items, setItems] = useState<ItemData[]>([]);
@@ -33,20 +38,38 @@ export default function FeedPage() {
                   window.localStorage.getItem(LIVE_FEED_CAP_STORAGE_KEY),
               ),
     );
+    const [resetAt, setResetAt] = useState(() =>
+        typeof window === "undefined"
+            ? null
+            : normalizeLiveFeedResetAt(
+                  window.localStorage.getItem(LIVE_FEED_RESET_STORAGE_KEY),
+              ),
+    );
+    const resetAtRef = useRef(resetAt);
 
     useEffect(() => {
+        const controller = new AbortController();
+
         const fetchFeed = async () => {
             try {
                 const [feedRes, summaryRes] = await Promise.all([
-                    fetch(`/api/feed?limit=${itemCap}`),
-                    fetch("/api/monitors/summary"),
+                    fetch(`/api/feed?limit=${itemCap}`, {
+                        signal: controller.signal,
+                    }),
+                    fetch("/api/monitors/summary", {
+                        signal: controller.signal,
+                    }),
                 ]);
 
                 if (feedRes.ok) {
                     const data: ItemData[] = await feedRes.json();
                     setItems(
                         capFeedItems(
-                            data.map((i) => ({ ...i, isLive: false })),
+                            data
+                                .filter((item) =>
+                                    isFeedItemAfterReset(item, resetAt),
+                                )
+                                .map((i) => ({ ...i, isLive: false })),
                             itemCap,
                         ),
                     );
@@ -57,15 +80,19 @@ export default function FeedPage() {
                     setSummary(data);
                 }
             } catch (err) {
-                console.error(err);
+                if (!controller.signal.aborted) console.error(err);
             } finally {
-                setLoading(false);
+                if (!controller.signal.aborted) setLoading(false);
             }
         };
-        fetchFeed();
-    }, [itemCap]);
+        void fetchFeed();
+
+        return () => controller.abort();
+    }, [itemCap, resetAt]);
 
     useMonitorItemStream((newItem) => {
+        if (!isFeedItemAfterReset(newItem, resetAtRef.current)) return;
+
         const newId = String(newItem.id);
         const liveItem: ItemData = {
             ...newItem,
@@ -115,6 +142,18 @@ export default function FeedPage() {
         setItems((current) => capFeedItems(current, nextCap));
     };
 
+    const handleResetFeed = () => {
+        const nextResetAt = Date.now();
+        resetAtRef.current = nextResetAt;
+        setResetAt(nextResetAt);
+        setItems([]);
+        window.localStorage.setItem(
+            LIVE_FEED_RESET_STORAGE_KEY,
+            String(nextResetAt),
+        );
+        toast.success("Live feed reset. New items will appear here.");
+    };
+
     const handleSellerBanned = (sellerId: string) => {
         setItems((current) =>
             current.filter((item) => item.seller_id !== sellerId),
@@ -139,6 +178,17 @@ export default function FeedPage() {
                     </p>
                 </div>
                 <div className="flex w-full flex-wrap items-center justify-start gap-2 sm:w-auto sm:justify-end">
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleResetFeed}
+                        disabled={loading || items.length === 0}
+                        className="rounded-full"
+                    >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        Reset feed
+                    </Button>
                     <label className="border-input bg-background text-muted-foreground inline-flex h-8 items-center gap-2 rounded-full border px-2.5 text-xs shadow-xs">
                         <Settings2 className="h-3.5 w-3.5" />
                         <span className="sr-only">Live feed item limit</span>
