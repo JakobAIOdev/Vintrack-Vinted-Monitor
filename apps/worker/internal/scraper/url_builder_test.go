@@ -31,6 +31,20 @@ func TestBuildVintedURL_BasicQuery(t *testing.T) {
 	if got := parsed.Query().Get("order"); got != "newest_first" {
 		t.Errorf("order = %q, want %q", got, "newest_first")
 	}
+	if got := parsed.Query().Get("currency"); got != "EUR" {
+		t.Errorf("currency = %q, want EUR", got)
+	}
+}
+
+func TestBuildVintedURLForcesRegionCurrency(t *testing.T) {
+	extra := "currency=USD"
+	parsed, err := url.Parse(BuildVintedURL(model.Monitor{Region: "uk", VintedExtraParams: &extra}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parsed.Query()["currency"]; len(got) != 1 || got[0] != "GBP" {
+		t.Fatalf("currency = %v, want worker-controlled GBP", got)
+	}
 }
 
 func TestBuildVintedURLUsesFirstQueryAlternative(t *testing.T) {

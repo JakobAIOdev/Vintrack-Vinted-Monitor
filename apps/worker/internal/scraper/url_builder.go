@@ -22,6 +22,7 @@ var reservedVintedParams = map[string]struct{}{
 	"catalog_ids[]":             {},
 	"color_ids":                 {},
 	"color_ids[]":               {},
+	"currency":                  {},
 	"order":                     {},
 	"page":                      {},
 	"per_page":                  {},
@@ -75,6 +76,7 @@ func buildVintedURL(m model.Monitor, perPage string, includeQuery bool, page int
 	}
 	params.Add("order", "newest_first")
 	params.Add("per_page", perPage)
+	params.Add("currency", model.RegionCurrency(m.Region))
 	if page > 1 {
 		params.Add("page", fmt.Sprintf("%d", page))
 	}

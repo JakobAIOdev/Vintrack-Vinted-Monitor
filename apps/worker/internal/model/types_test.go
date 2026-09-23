@@ -54,3 +54,16 @@ func TestRegionDomain_EmptyString(t *testing.T) {
 		t.Errorf("RegionDomain(\"\") = %q, want %q", got, "www.vinted.de")
 	}
 }
+
+func TestRegionCurrency(t *testing.T) {
+	for region, want := range map[string]string{
+		"de": "EUR", "uk": "GBP", "pl": "PLN", "cz": "CZK", "se": "SEK", "dk": "DKK", "ro": "RON", "hu": "HUF",
+	} {
+		if got := RegionCurrency(region); got != want {
+			t.Errorf("RegionCurrency(%q) = %q, want %q", region, got, want)
+		}
+		if got := DomainCurrency(RegionDomain(region)); got != want {
+			t.Errorf("DomainCurrency(%q) = %q, want %q", RegionDomain(region), got, want)
+		}
+	}
+}

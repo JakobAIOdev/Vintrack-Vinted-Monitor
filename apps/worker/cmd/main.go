@@ -508,7 +508,7 @@ func freeProxyUKServingDecision(
 	return true, "ready", "", max(2, canary.CapacityObservations)
 }
 
-const freeProxyValidationRevision = "catalog-cookie-domain-sync-v6-score80-recovery-cohort"
+const freeProxyValidationRevision = "catalog-region-currency-v7"
 
 func ensureFreeProxyValidationRevision(ctx context.Context, store *database.Store, regions []string) error {
 	const settingKey = "free_proxy_validation_revision"
@@ -519,7 +519,7 @@ func ensureFreeProxyValidationRevision(ctx context.Context, store *database.Stor
 	if ok && current == freeProxyValidationRevision {
 		return nil
 	}
-	requeued, err := store.RequeueFreeProxyRegionalAccessFailuresContext(ctx, regions)
+	requeued, err := store.ResetFreeProxyValidationEvidenceContext(ctx, regions)
 	if err != nil {
 		return err
 	}
