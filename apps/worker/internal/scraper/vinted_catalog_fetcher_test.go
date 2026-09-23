@@ -118,6 +118,18 @@ func TestNormalizeCatalogItemsUsesItemBoxFallbacks(t *testing.T) {
 	}
 }
 
+func TestValidateCatalogCurrencyRejectsWrongMarketplaceSession(t *testing.T) {
+	items := []model.VintedItem{{Price: model.VintedPrice{Amount: "10", Currency: "GBP"}}}
+	if err := validateCatalogCurrency("www.vinted.de", items); err == nil {
+		t.Fatal("expected DE catalog with GBP prices to be rejected")
+	}
+	items[0].Price.Currency = "EUR"
+	items[0].TotalItemPrice = &model.VintedPrice{Amount: "11", Currency: "EUR"}
+	if err := validateCatalogCurrency("www.vinted.de", items); err != nil {
+		t.Fatalf("valid DE catalog rejected: %v", err)
+	}
+}
+
 func TestCatalogAPIHeadersMatchMarketplaceWeb(t *testing.T) {
 	headers := newCatalogAPIHeaders("www.vinted.co.uk")
 	for key, want := range map[string]string{

@@ -113,9 +113,32 @@ func fetchCatalogAttempt(ctx context.Context, client *Client, initialURL string,
 		resp.Body.Close()
 		client.FlushTrackedTraffic()
 		normalizeCatalogItems(data.Items)
+		if err := validateCatalogCurrency(domain, data.Items); err != nil {
+			return nil, 200, err
+		}
 		return data.Items, 200, nil
 	}
 	return nil, 0, fmt.Errorf("catalog too many redirects for %s", domain)
+}
+
+func validateCatalogCurrency(domain string, items []model.VintedItem) error {
+	expected := model.DomainCurrency(domain)
+	if expected == "" {
+		return nil
+	}
+	for _, item := range items {
+		currency := strings.ToUpper(strings.TrimSpace(item.Price.Currency))
+		if currency != "" && currency != expected {
+			return fmt.Errorf("catalog currency mismatch for %s: got %s, want %s", domain, currency, expected)
+		}
+		if item.TotalItemPrice != nil {
+			currency = strings.ToUpper(strings.TrimSpace(item.TotalItemPrice.Currency))
+			if currency != "" && currency != expected {
+				return fmt.Errorf("catalog total currency mismatch for %s: got %s, want %s", domain, currency, expected)
+			}
+		}
+	}
+	return nil
 }
 
 func normalizeCatalogItems(items []model.VintedItem) {
