@@ -17,7 +17,6 @@ import {
     Clock3,
 } from "lucide-react";
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
 import { getCategoryLabelsForRegion } from "@/lib/categories.server";
 import { getBrandLabels } from "@/lib/brands";
 import { getColorLabels } from "@/lib/colors";
@@ -36,7 +35,10 @@ import {
     getMonitorActivationState,
     monitorActivationErrorMessage,
 } from "@/lib/monitor-limits";
-import { ProxyHealthCard } from "@/components/monitors/proxy-health";
+import {
+    MonitorLifecycleStatus,
+    ProxyHealthCard,
+} from "@/components/monitors/proxy-health";
 import { MonitorLiveProvider } from "@/components/monitors/monitor-live-context";
 import { MonitorItemCount } from "@/components/monitors/monitor-item-count";
 import { MonitorMetricsDialog } from "@/components/monitors/monitor-metrics-dialog";
@@ -160,34 +162,21 @@ export default async function MonitorPage({
                         </Link>
 
                         <div>
-                            <div className="flex items-center gap-2.5">
-                                <h1 className="text-2xl font-bold tracking-tight">
+                            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+                                <h1 className="min-w-0 text-2xl font-bold tracking-tight">
                                     {monitor.name}
                                 </h1>
-                                <Badge
-                                    variant={
-                                        monitor.status === "active"
-                                            ? "default"
-                                            : "secondary"
-                                    }
-                                    className={`text-[10px] font-medium ${
-                                        monitor.status === "active"
-                                            ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-400"
-                                            : "bg-muted text-muted-foreground"
-                                    }`}
-                                >
-                                    {monitor.status === "active" ? (
-                                        <span className="flex items-center gap-1">
-                                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                                            Running
-                                        </span>
-                                    ) : (
-                                        (monitor.status
-                                            ?.charAt(0)
-                                            .toUpperCase() ?? "") +
-                                        (monitor.status?.slice(1) ?? "Paused")
-                                    )}
-                                </Badge>
+                                {monitor.status === "active" ? (
+                                    <ProxyHealthCard
+                                        monitorId={monitor.id}
+                                        className="shrink-0"
+                                    />
+                                ) : (
+                                    <MonitorLifecycleStatus
+                                        status={monitor.status ?? "paused"}
+                                        className="shrink-0"
+                                    />
+                                )}
                             </div>
 
                             <div className="text-muted-foreground mt-1 flex flex-wrap items-center gap-3 text-sm">
@@ -456,10 +445,6 @@ export default async function MonitorPage({
                         initialNow={new Date().toISOString()}
                         maintenanceEnabled={maintenanceEnabled}
                     />
-                )}
-
-                {monitor.status === "active" && (
-                    <ProxyHealthCard monitorId={monitor.id} />
                 )}
 
                 <div>

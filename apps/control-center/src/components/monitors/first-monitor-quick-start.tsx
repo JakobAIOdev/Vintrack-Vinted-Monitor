@@ -35,13 +35,23 @@ import { MONITOR_CREATION_MAINTENANCE_TITLE } from "@/components/maintenance/cre
 export type QuickStartPool = {
     enabled: boolean;
     minActivePerRegion: number;
-    regions: Record<string, { healthy: boolean; usable: number }>;
+    regions: Record<string, { healthy: boolean; mature: number }>;
 };
 
 function getDefaultReadyRegion(pool: QuickStartPool | null) {
     if (!pool?.enabled) return "";
+    const readyRegion = REGIONS.find(
+        (region) => pool.regions[region.code]?.healthy,
+    );
+    if (readyRegion) return readyRegion.code;
     if (pool.regions.de) return "de";
-    return REGIONS.find((region) => pool.regions[region.code])?.code ?? "";
+    return (
+        REGIONS.find(
+            (region) =>
+                pool.regions[region.code] &&
+                (region.code !== "uk" || pool.regions[region.code]?.healthy),
+        )?.code ?? ""
+    );
 }
 
 export function FirstMonitorQuickStart({
@@ -74,7 +84,13 @@ export function FirstMonitorQuickStart({
             ? preferredRegion
             : getDefaultReadyRegion(pool);
     const selectedRegionReady = Boolean(
-        pool?.enabled && selectedRegion && pool.regions[selectedRegion],
+        pool?.enabled &&
+        selectedRegion &&
+        pool.regions[selectedRegion] &&
+        (selectedRegion !== "uk" || pool.regions[selectedRegion]?.healthy),
+    );
+    const selectedRegionServing = Boolean(
+        selectedRegionReady && pool?.regions[selectedRegion]?.healthy,
     );
     const selectedPresetDefinition = useMemo(
         () => getMonitorPreset(selectedPreset)?.name ?? null,
@@ -218,7 +234,7 @@ export function FirstMonitorQuickStart({
                                 </p>
                             </div>
                             <div className="flex min-w-0 items-center gap-2 sm:w-64">
-                                {selectedRegionReady && (
+                                {selectedRegionServing && (
                                     <CheckCircle2 className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
                                 )}
                                 <select
@@ -241,11 +257,15 @@ export function FirstMonitorQuickStart({
                                             <option
                                                 key={region.code}
                                                 value={region.code}
+                                                disabled={
+                                                    region.code === "uk" &&
+                                                    !health?.healthy
+                                                }
                                             >
                                                 {region.flag} {region.label} ·{" "}
                                                 {health?.healthy
-                                                    ? `Ready (${health.usable})`
-                                                    : `Recovering (${health?.usable ?? 0})`}
+                                                    ? `Ready (${health.mature})`
+                                                    : `Recovering (${health?.mature ?? 0})`}
                                             </option>
                                         );
                                     })}

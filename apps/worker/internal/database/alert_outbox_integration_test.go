@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"vintrack-worker/internal/model"
+
+	"github.com/lib/pq"
 )
 
 func TestAlertOutboxAgainstPostgres(t *testing.T) {
@@ -343,5 +345,128 @@ func TestAlertOutboxAgainstPostgres(t *testing.T) {
 	}
 	if waits != 2 || reason != "recovered" {
 		t.Fatalf("incident waits=%d reason=%q", waits, reason)
+	}
+
+}
+
+func TestFreeProxyIncidentGroupingAgainstPostgres(t *testing.T) {
+	databaseURL := os.Getenv("ALERT_OUTBOX_INTEGRATION_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("ALERT_OUTBOX_INTEGRATION_DATABASE_URL is not set")
+	}
+	store, err := NewStore(databaseURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	suffix := time.Now().UnixNano()
+	userID := fmt.Sprintf("proxy-incident-test-%d", suffix)
+	initialTarget := fmt.Sprintf("https://discord.test/api/webhooks/%d/incidents", suffix)
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO "User" (id, email, role) VALUES ($1, $2, 'free')`,
+		userID, fmt.Sprintf("%s@example.test", userID)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = store.db.Exec(`DELETE FROM "User" WHERE id = $1`, userID)
+	})
+
+	var groupedMonitorA int
+	var groupedMonitorB int
+	for _, destination := range []*int{&groupedMonitorA, &groupedMonitorB} {
+		if err := store.db.QueryRowContext(ctx, `
+			INSERT INTO monitors (
+				"userId", name, query, status, region, proxy_source,
+				discord_webhook, webhook_active, notifications_enabled
+			) VALUES ($1, 'Grouped outage', 'boots', 'active', 'gb', 'free', $2, TRUE, TRUE)
+			RETURNING id`, userID, initialTarget).Scan(destination); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, groupedMonitorID := range []int{groupedMonitorA, groupedMonitorB} {
+		if err := store.OpenOrUpdateProxyIncident(
+			ctx,
+			groupedMonitorID,
+			"www.vinted.co.uk",
+			"free",
+			time.Now().Add(time.Minute),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		UPDATE monitor_proxy_incidents
+		SET started_at = NOW() - INTERVAL '6 minutes'
+		WHERE monitor_id = ANY($1) AND recovered_at IS NULL`,
+		pq.Array([]int{groupedMonitorA, groupedMonitorB}),
+	); err != nil {
+		t.Fatal(err)
+	}
+	group, ok, err := store.GetOpenProxyIncidentGroup(
+		ctx,
+		userID,
+		"gb",
+		"www.vinted.co.uk",
+	)
+	if err != nil || !ok {
+		t.Fatalf("grouped proxy incident = %#v, %v", group, err)
+	}
+	if group.MonitorCount != 2 || group.RepresentativeMonitor != min(groupedMonitorA, groupedMonitorB) {
+		t.Fatalf("grouped proxy incident = %#v, want two monitors and stable representative", group)
+	}
+
+	var outageNotificationID int64
+	outageKey := fmt.Sprintf("proxy-incident-test:%d:free-proxy-outage", suffix)
+	if err := store.db.QueryRowContext(ctx, `
+		INSERT INTO alert_notifications (
+			user_id, monitor_id, kind, payload_version, payload,
+			idempotency_key, expires_at
+		) VALUES (
+			$1, $2, 'free_proxy_outage', 1,
+			jsonb_build_object('version', 1, 'kind', 'free_proxy_outage', 'region', 'gb'),
+			$3, NOW() + INTERVAL '1 hour'
+		)
+		RETURNING id`, userID, group.RepresentativeMonitor, outageKey).Scan(&outageNotificationID); err != nil {
+		t.Fatal(err)
+	}
+	group, ok, err = store.GetOpenProxyIncidentGroup(ctx, userID, "gb", "www.vinted.co.uk")
+	if err != nil || !ok || group.OutageNotificationID != outageNotificationID {
+		t.Fatalf("outage notification was not attached to group: %#v, %v", group, err)
+	}
+
+	if err := store.CloseProxyIncident(ctx, groupedMonitorA, "recovered"); err != nil {
+		t.Fatal(err)
+	}
+	openCount, err := store.CountOpenProxyIncidentsForUserRegion(ctx, userID, "gb")
+	if err != nil || openCount != 1 {
+		t.Fatalf("open grouped incidents after first recovery = %d, %v", openCount, err)
+	}
+	if err := store.CloseProxyIncident(ctx, groupedMonitorB, "recovered"); err != nil {
+		t.Fatal(err)
+	}
+	openCount, err = store.CountOpenProxyIncidentsForUserRegion(ctx, userID, "gb")
+	if err != nil || openCount != 0 {
+		t.Fatalf("open grouped incidents after full recovery = %d, %v", openCount, err)
+	}
+	latestOutageID, unrecovered, err := store.LatestUnrecoveredProxyOutageNotification(ctx, userID, "gb")
+	if err != nil || !unrecovered || latestOutageID != outageNotificationID {
+		t.Fatalf("unrecovered outage = %d/%v, %v", latestOutageID, unrecovered, err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO alert_notifications (
+			user_id, monitor_id, kind, payload_version, payload,
+			idempotency_key, expires_at
+		) VALUES (
+			$1, $2, 'free_proxy_recovered', 1,
+			jsonb_build_object('version', 1, 'kind', 'free_proxy_recovered', 'region', 'gb'),
+			$3, NOW() + INTERVAL '1 hour'
+		)`, userID, group.RepresentativeMonitor, fmt.Sprintf("free-proxy-recovered:%d", outageNotificationID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, unrecovered, err := store.LatestUnrecoveredProxyOutageNotification(ctx, userID, "gb"); err != nil || unrecovered {
+		t.Fatalf("recovered outage remained eligible: unrecovered=%v err=%v", unrecovered, err)
 	}
 }

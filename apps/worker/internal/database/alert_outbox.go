@@ -621,6 +621,101 @@ func (s *Store) PruneAlertTelemetry(successDays int, failureDays int, statsDays 
 	}
 }
 
+type ProxyIncidentGroup struct {
+	GroupID               int64
+	RepresentativeMonitor int
+	StartedAt             time.Time
+	MonitorCount          int
+	OutageNotificationID  int64
+}
+
+func (s *Store) GetOpenProxyIncidentGroup(
+	ctx context.Context,
+	userID string,
+	region string,
+	domain string,
+) (ProxyIncidentGroup, bool, error) {
+	var group ProxyIncidentGroup
+	err := s.db.QueryRowContext(ctx, `
+		WITH grouped AS (
+			SELECT
+				MIN(incident.id)::bigint AS group_id,
+				MIN(incident.monitor_id) AS representative_monitor,
+				MIN(incident.started_at) AS started_at,
+				COUNT(*)::int AS monitor_count
+			FROM monitor_proxy_incidents incident
+			JOIN monitors monitor ON monitor.id = incident.monitor_id
+			WHERE monitor."userId" = $1
+			  AND monitor.status = 'active'
+			  AND monitor.proxy_source = 'free'
+			  AND monitor.region = $2
+			  AND incident.domain = $3
+			  AND incident.proxy_source = 'free'
+			  AND incident.recovered_at IS NULL
+		)
+		SELECT
+			grouped.group_id,
+			grouped.representative_monitor,
+			grouped.started_at,
+			grouped.monitor_count,
+			COALESCE((
+				SELECT MAX(notification.id)
+				FROM alert_notifications notification
+				WHERE notification.user_id = $1
+				  AND notification.kind = 'free_proxy_outage'
+				  AND notification.payload->>'region' = $2
+				  AND notification.created_at >= grouped.started_at - INTERVAL '1 minute'
+			), 0)::bigint
+		FROM grouped
+		WHERE grouped.group_id IS NOT NULL`, userID, region, domain).Scan(
+		&group.GroupID,
+		&group.RepresentativeMonitor,
+		&group.StartedAt,
+		&group.MonitorCount,
+		&group.OutageNotificationID,
+	)
+	if err == sql.ErrNoRows {
+		return ProxyIncidentGroup{}, false, nil
+	}
+	return group, err == nil, err
+}
+
+func (s *Store) CountOpenProxyIncidentsForUserRegion(ctx context.Context, userID string, region string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM monitor_proxy_incidents incident
+		JOIN monitors monitor ON monitor.id = incident.monitor_id
+		WHERE monitor."userId" = $1
+		  AND monitor.region = $2
+		  AND monitor.proxy_source = 'free'
+		  AND incident.proxy_source = 'free'
+		  AND incident.recovered_at IS NULL`, userID, region).Scan(&count)
+	return count, err
+}
+
+func (s *Store) LatestUnrecoveredProxyOutageNotification(ctx context.Context, userID string, region string) (int64, bool, error) {
+	var notificationID int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT outage.id
+		FROM alert_notifications outage
+		WHERE outage.user_id = $1
+		  AND outage.kind = 'free_proxy_outage'
+		  AND outage.payload->>'region' = $2
+		  AND outage.created_at >= NOW() - INTERVAL '24 hours'
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM alert_notifications recovered
+			WHERE recovered.idempotency_key = 'free-proxy-recovered:' || outage.id::text
+		  )
+		ORDER BY outage.id DESC
+		LIMIT 1`, userID, region).Scan(&notificationID)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	return notificationID, err == nil, err
+}
+
 func (s *Store) OpenOrUpdateProxyIncident(
 	ctx context.Context,
 	monitorID int,

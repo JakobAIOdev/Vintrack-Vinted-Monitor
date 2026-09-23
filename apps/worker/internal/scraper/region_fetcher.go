@@ -79,6 +79,11 @@ func sellerCacheKey(domain string, userID int64) string {
 }
 
 func (c *sellerInfoCache) Get(domain string, userID int64, ttl time.Duration) (SellerInfo, bool) {
+	info, _, ok := c.GetWithFetchedAt(domain, userID, ttl)
+	return info, ok
+}
+
+func (c *sellerInfoCache) GetWithFetchedAt(domain string, userID int64, ttl time.Duration) (SellerInfo, time.Time, bool) {
 	key := sellerCacheKey(domain, userID)
 	c.mu.RLock()
 	entry, ok := c.cache[key]
@@ -87,7 +92,7 @@ func (c *sellerInfoCache) Get(domain string, userID int64, ttl time.Duration) (S
 		c.mu.Lock()
 		delete(c.cache, key)
 		c.mu.Unlock()
-		return SellerInfo{}, false
+		return SellerInfo{}, time.Time{}, false
 	}
 	if ok {
 		n := atomic.AddUint64(&c.counter, 1)
@@ -98,7 +103,7 @@ func (c *sellerInfoCache) Get(domain string, userID int64, ttl time.Duration) (S
 		}
 		c.mu.Unlock()
 	}
-	return entry.info, ok
+	return entry.info, entry.fetchedAt, ok
 }
 
 func (c *sellerInfoCache) Set(domain string, userID int64, info SellerInfo, fetchedAt time.Time) {
@@ -137,13 +142,38 @@ var isoCountryMap = map[string]string{
 }
 
 func logSellerEnrichmentSuccess(source string, userID int64, info SellerInfo) {
+	if sellerSuccessLogCounter.Add(1)%100 != 1 {
+		return
+	}
 	log.Printf("[seller-enrich] user=%d source=%s success region=%q rating=%q rating_available=%v", userID, source, info.Region, info.Rating, info.RatingAvailable)
 }
 
 func logSellerEnrichmentFailure(source string, userID int64, format string, args ...interface{}) {
+	key := fmt.Sprintf("%s:%d", source, userID)
+	now := time.Now()
+	sellerFailureLogMu.Lock()
+	if last := sellerFailureLogAt[key]; now.Sub(last) < 30*time.Second {
+		sellerFailureLogMu.Unlock()
+		return
+	}
+	sellerFailureLogAt[key] = now
+	if len(sellerFailureLogAt) > 10000 {
+		for candidate, at := range sellerFailureLogAt {
+			if now.Sub(at) > time.Minute {
+				delete(sellerFailureLogAt, candidate)
+			}
+		}
+	}
+	sellerFailureLogMu.Unlock()
 	msg := fmt.Sprintf(format, args...)
 	log.Printf("[seller-enrich] user=%d source=%s failed %s", userID, source, msg)
 }
+
+var (
+	sellerSuccessLogCounter atomic.Uint64
+	sellerFailureLogMu      sync.Mutex
+	sellerFailureLogAt      = make(map[string]time.Time)
+)
 
 func isSellerInfoComplete(info SellerInfo) bool {
 	return info.Region != "" && info.RatingAvailable
@@ -367,12 +397,40 @@ type SellerEnricher struct {
 	db              *database.Store
 	domain          string
 	trafficRecorder func(txBytes int64, rxBytes int64)
-	flightMu        sync.Mutex
-	inflight        map[int64]*sellerFetchFlight
+	cacheConfigMu   sync.RWMutex
 	cacheTTL        time.Duration
+	staleTTL        time.Duration
 	hedgeDelay      time.Duration
 	negativeTTL     time.Duration
 	remoteFetch     func(context.Context, int64) (SellerInfo, error)
+}
+
+func (s *SellerEnricher) configureCacheTTLs(policy workerPolicy) {
+	freshTTL := time.Duration(policy.SellerFreshTTLMinutes) * time.Minute
+	staleTTL := time.Duration(policy.SellerStaleTTLMinutes) * time.Minute
+	if freshTTL <= 0 {
+		freshTTL = 30 * time.Minute
+	}
+	if staleTTL < freshTTL {
+		staleTTL = freshTTL
+	}
+	s.cacheConfigMu.Lock()
+	s.cacheTTL = freshTTL
+	s.staleTTL = staleTTL
+	s.cacheConfigMu.Unlock()
+}
+
+func (s *SellerEnricher) cacheTTLs() (time.Duration, time.Duration) {
+	s.cacheConfigMu.RLock()
+	freshTTL, staleTTL := s.cacheTTL, s.staleTTL
+	s.cacheConfigMu.RUnlock()
+	if freshTTL <= 0 {
+		freshTTL = 30 * time.Minute
+	}
+	if staleTTL < freshTTL {
+		staleTTL = freshTTL
+	}
+	return freshTTL, staleTTL
 }
 
 type sellerFetchFlight struct {
@@ -390,16 +448,20 @@ func NewSellerEnricher(pm *proxy.Manager, db *database.Store, domain string, poo
 	if cacheTTL <= 0 {
 		cacheTTL = 30 * time.Minute
 	}
-	hedgeDelay := time.Duration(getEnvInt("SELLER_HEDGE_DELAY_MS", 350)) * time.Millisecond
+	staleTTL := time.Duration(getEnvInt("SELLER_STALE_TTL_MINUTES", 1440)) * time.Minute
+	if staleTTL < cacheTTL {
+		staleTTL = cacheTTL
+	}
+	hedgeDelay := time.Duration(getEnvInt("SELLER_HEDGE_DELAY_MS", 450)) * time.Millisecond
 	if hedgeDelay < 0 {
-		hedgeDelay = 350 * time.Millisecond
+		hedgeDelay = 450 * time.Millisecond
 	}
 	pool := NewClientPoolWithTimeout(pm, domain, poolSize, trafficRecorder, requestTimeout)
 	pool.SetMaxInFlightPerClient(1)
 	s := &SellerEnricher{
 		pool: pool, pm: pm, db: db, domain: domain, trafficRecorder: trafficRecorder,
-		inflight:    make(map[int64]*sellerFetchFlight),
 		cacheTTL:    cacheTTL,
+		staleTTL:    staleTTL,
 		hedgeDelay:  hedgeDelay,
 		negativeTTL: negativeCacheTTLFromEnv(),
 	}
@@ -414,53 +476,72 @@ func sellerEnrichmentTimeout() time.Duration {
 	return timeout
 }
 
+type sellerCacheStatus uint8
+
+const (
+	sellerCacheMiss sellerCacheStatus = iota
+	sellerCacheFresh
+	sellerCacheStale
+)
+
 func LookupCachedSellerInfo(ctx context.Context, db *database.Store, domain string, userID int64, ttl time.Duration) (SellerInfo, bool) {
+	info, status, _ := lookupCachedSellerInfo(ctx, db, domain, userID, ttl, ttl)
+	return info, status != sellerCacheMiss
+}
+
+func lookupCachedSellerInfo(
+	ctx context.Context,
+	db *database.Store,
+	domain string,
+	userID int64,
+	freshTTL time.Duration,
+	staleTTL time.Duration,
+) (SellerInfo, sellerCacheStatus, string) {
 	if userID <= 0 {
-		return SellerInfo{}, false
+		return SellerInfo{}, sellerCacheMiss, ""
 	}
-	if info, ok := sellerCache.Get(domain, userID, ttl); ok {
-		// An in-process cache hit is the expected path and happens for every
-		// detected item. Logging it put one line per item through Go's global
-		// log mutex and into the container log driver for no diagnostic value;
-		// only the incomplete case is worth reporting.
-		if !isSellerInfoComplete(info) {
-			log.Printf("[seller-enrich] user=%d source=memory-cache partial region=%q rating=%q", userID, info.Region, info.Rating)
+	if staleTTL < freshTTL {
+		staleTTL = freshTTL
+	}
+	classify := func(fetchedAt time.Time) sellerCacheStatus {
+		if fetchedAt.IsZero() || time.Since(fetchedAt) <= freshTTL {
+			return sellerCacheFresh
 		}
-		return info, true
+		return sellerCacheStale
+	}
+	if info, fetchedAt, ok := sellerCache.GetWithFetchedAt(domain, userID, staleTTL); ok {
+		return info, classify(fetchedAt), "memory"
 	}
 	cacheCtx, cancel := context.WithTimeout(ctx, 40*time.Millisecond)
 	cached, ok := db.GetSellerInfoCache(cacheCtx, domain, userID)
 	cancel()
-	if ok && (cached.FetchedAt.IsZero() || time.Since(cached.FetchedAt) <= ttl) {
+	if ok && (cached.FetchedAt.IsZero() || time.Since(cached.FetchedAt) <= staleTTL) {
 		info := sellerInfoFromCache(cached)
 		sellerCache.Set(domain, userID, info, cached.FetchedAt)
-		logSellerEnrichmentSuccess("redis-cache", userID, info)
-		return info, true
+		return info, classify(cached.FetchedAt), "redis"
 	}
-	// The old region-only cache remains readable during rollout. It is partial
-	// data, so callers may use it as their best effort while a remote fetch runs.
-	regionCtx, cancel := context.WithTimeout(ctx, 40*time.Millisecond)
-	region, ok := db.GetUserRegionContext(regionCtx, userID)
+	dbCtx, cancel := context.WithTimeout(ctx, 80*time.Millisecond)
+	persisted, ok := db.GetSellerProfile(dbCtx, domain, userID)
 	cancel()
-	if ok && region != "" {
-		info := SellerInfo{Region: region}
-		log.Printf("[seller-enrich] user=%d source=db-cache partial region=%q rating=%q", userID, info.Region, info.Rating)
-		return info, true
+	if ok && time.Since(persisted.FetchedAt) <= staleTTL {
+		info := sellerInfoFromCache(persisted)
+		sellerCache.Set(domain, userID, info, persisted.FetchedAt)
+		return info, classify(persisted.FetchedAt), "postgres"
 	}
-	return SellerInfo{}, false
+	return SellerInfo{}, sellerCacheMiss, ""
 }
 
 func (s *SellerEnricher) FetchSellerInfo(ctx context.Context, userID int64) (SellerInfo, error) {
+	return s.fetchSellerInfo(ctx, userID, true)
+}
+
+func (s *SellerEnricher) RefreshSellerInfo(ctx context.Context, userID int64, allowHedge bool) (SellerInfo, error) {
+	return s.fetchSellerInfo(ctx, userID, allowHedge)
+}
+
+func (s *SellerEnricher) fetchSellerInfo(ctx context.Context, userID int64, allowHedge bool) (SellerInfo, error) {
 	if userID <= 0 {
 		return SellerInfo{}, errors.New("invalid seller id")
-	}
-	if info, ok := sellerCache.Get(s.domain, userID, s.cacheTTL); ok && isSellerInfoComplete(info) {
-		return info, nil
-	}
-	if s.db != nil {
-		if info, ok := LookupCachedSellerInfo(ctx, s.db, s.domain, userID, s.cacheTTL); ok && isSellerInfoComplete(info) {
-			return info, nil
-		}
 	}
 	// A recent, definitive failure short-circuits without a network call. This
 	// only ever returns the same sentinel-failure shape a fresh attempt would
@@ -471,37 +552,22 @@ func (s *SellerEnricher) FetchSellerInfo(ctx context.Context, userID int64) (Sel
 		return SellerInfo{Region: "NaN"}, entry.err
 	}
 
-	s.flightMu.Lock()
-	if s.inflight == nil {
-		s.inflight = make(map[int64]*sellerFetchFlight)
-	}
-	if flight, ok := s.inflight[userID]; ok {
-		s.flightMu.Unlock()
-		select {
-		case <-flight.done:
-			return flight.info, flight.err
-		case <-ctx.Done():
-			return SellerInfo{}, ctx.Err()
-		}
-	}
-	flight := &sellerFetchFlight{done: make(chan struct{})}
-	s.inflight[userID] = flight
-	s.flightMu.Unlock()
-
 	var info SellerInfo
 	var err error
 	if s.remoteFetch != nil {
 		info, err = s.remoteFetch(ctx, userID)
-	} else {
+	} else if allowHedge {
 		info, err = s.fetchHedged(ctx, userID)
+	} else {
+		info, err = s.fetchSingle(ctx, userID)
 	}
 	if info.Region != "" && info.Region != "NaN" {
 		fetchedAt := time.Now()
 		sellerCache.Set(s.domain, userID, info, fetchedAt)
 		if s.db != nil {
-			s.db.SetUserRegion(userID, info.Region)
-			cacheCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-			cacheErr := s.db.SetSellerInfoCache(cacheCtx, s.domain, userID, sellerInfoToCache(info, fetchedAt), s.cacheTTL)
+			cacheCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			_, cacheTTL := s.cacheTTLs()
+			cacheErr := s.db.SetSellerInfoCache(cacheCtx, s.domain, userID, sellerInfoToCache(info, fetchedAt), cacheTTL)
 			cancel()
 			if cacheErr != nil {
 				log.Printf("[seller-enrich] user=%d full cache write failed: %v", userID, cacheErr)
@@ -517,12 +583,26 @@ func (s *SellerEnricher) FetchSellerInfo(ctx context.Context, userID int64) (Sel
 		}
 	}
 
-	s.flightMu.Lock()
-	flight.info, flight.err = info, err
-	delete(s.inflight, userID)
-	close(flight.done)
-	s.flightMu.Unlock()
 	return info, err
+}
+
+func (s *SellerEnricher) fetchSingle(ctx context.Context, userID int64) (SellerInfo, error) {
+	results := make(chan sellerFetchResult, 1)
+	if _, ok := s.startSellerFetch(ctx, userID, nil, results, true); !ok {
+		if err := ctx.Err(); err != nil {
+			return SellerInfo{Region: "NaN"}, err
+		}
+		return SellerInfo{Region: "NaN"}, &sellerFetchError{kind: failureNoClient, err: errors.New("no healthy seller client available")}
+	}
+	select {
+	case result := <-results:
+		if result.info.Region != "" {
+			return result.info, nil
+		}
+		return SellerInfo{Region: "NaN"}, result.err
+	case <-ctx.Done():
+		return SellerInfo{Region: "NaN"}, ctx.Err()
+	}
 }
 
 func sellerInfoFromCache(info cache.SellerInfo) SellerInfo {

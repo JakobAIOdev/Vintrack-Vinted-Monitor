@@ -326,6 +326,8 @@ model free_proxy_source_health_stats {
   checked_count   Int       @default(0)
   success_count   Int       @default(0)
   failure_count   Int       @default(0)
+  success_ewma    Float     @default(0.5)
+  ewma_samples    Int       @default(0)
   last_checked_at DateTime? @db.Timestamp(6)
   last_success_at DateTime? @db.Timestamp(6)
   created_at      DateTime  @default(now()) @db.Timestamp(6)
@@ -333,6 +335,22 @@ model free_proxy_source_health_stats {
 
   @@id([region, source, protocol])
   @@index([region, success_count, checked_count], map: "free_proxy_source_health_stats_region_yield_idx")
+}
+
+model seller_profiles {
+  domain           String   @db.VarChar(255)
+  seller_id        BigInt
+  region           String   @default("")
+  rating           String   @default("") @db.VarChar(50)
+  rating_stars     Float    @default(0)
+  rating_count     Int      @default(0)
+  rating_available Boolean  @default(false)
+  fetched_at       DateTime @db.Timestamp(6)
+  created_at       DateTime @default(now()) @db.Timestamp(6)
+  updated_at       DateTime @updatedAt @db.Timestamp(6)
+
+  @@id([domain, seller_id])
+  @@index([fetched_at])
 }
 
 model monitor_runs {

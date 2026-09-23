@@ -155,7 +155,11 @@ export default function NewMonitorPage() {
         setSelectedColors([...preset.colorIds]);
         setSelectedStatuses([...preset.statusIds]);
         setSelectedPlatforms([]);
-        setSelectedAllowedCountries([selectedRegion]);
+        // The selected Vinted region already chooses the marketplace. Enabling
+        // the strict seller-location gate here silently drops cross-border
+        // catalogue matches (and makes presets appear broken, especially in
+        // UK). Users can still opt into that stricter filter below.
+        setSelectedAllowedCountries([]);
         setPriceMin(String(preset.priceMin));
         setPriceMax(String(preset.priceMax));
         setSellerQualityEnabled(false);
@@ -405,8 +409,11 @@ export default function NewMonitorPage() {
         selectedRegion,
     );
     const selectedRegionFreeProxyCount =
-        selectedRegionFreeProxyHealth?.usable ?? 0;
-    const isFreeProxyAvailableForRegion = freeProxy.enabled;
+        selectedRegionFreeProxyHealth?.mature ?? 0;
+    const isFreeProxyAvailableForRegion = Boolean(
+        freeProxy.enabled &&
+        (selectedRegion !== "uk" || selectedRegionFreeProxyHealth?.healthy),
+    );
     const isFreeProxyReadyForRegion = Boolean(
         freeProxy.enabled && selectedRegionFreeProxyHealth?.healthy,
     );
@@ -1225,7 +1232,7 @@ export default function NewMonitorPage() {
                                                     {
                                                         selectedRegionFreeProxyCount
                                                     }{" "}
-                                                    usable
+                                                    safe
                                                     {isFreeProxyAvailableForRegion
                                                         ? isFreeProxyReadyForRegion
                                                             ? ""

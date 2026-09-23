@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"reflect"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"vintrack-worker/internal/database"
+	"vintrack-worker/internal/proxy"
 	"vintrack-worker/internal/scraper"
 )
 
@@ -68,6 +70,23 @@ func TestFreeProxyValidationTimeout(t *testing.T) {
 	}
 }
 
+func TestMergeFreeProxyRegionsAlwaysIncludesUKCanary(t *testing.T) {
+	got := mergeFreeProxyRegions("de", []string{"fr", "DE"})
+	want := []string{"de", "fr", "uk"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("regions = %#v, want %#v", got, want)
+	}
+}
+
+func TestFreeProxyServingPoolLimitUsesValidatedUKCohort(t *testing.T) {
+	if got := freeProxyServingPoolLimit("uk", 10, 100); got != 10 {
+		t.Fatalf("UK serving limit = %d, want 10", got)
+	}
+	if got := freeProxyServingPoolLimit("de", 10, 100); got != 100 {
+		t.Fatalf("DE serving limit = %d, want 100", got)
+	}
+}
+
 func TestFreeProxyTimeoutBatchFitsRecoveryCycleBudget(t *testing.T) {
 	const candidates = 960
 	const concurrency = 48
@@ -75,6 +94,39 @@ func TestFreeProxyTimeoutBatchFitsRecoveryCycleBudget(t *testing.T) {
 	worstCase := time.Duration(waves) * freeProxyValidationTimeout(2500)
 	if worstCase > freeProxyCheckCycleTimeout {
 		t.Fatalf("timeout-only batch budget = %s, cycle timeout %s", worstCase, freeProxyCheckCycleTimeout)
+	}
+}
+
+func TestFreeProxyTargetCapacity(t *testing.T) {
+	for _, test := range []struct {
+		rps  float64
+		want int
+	}{{0, 50}, {20, 50}, {30, 75}, {100, 100}} {
+		if got := freeProxyTargetCapacity(test.rps); got != test.want {
+			t.Fatalf("target(%v) = %d, want %d", test.rps, got, test.want)
+		}
+	}
+}
+
+func TestFreeProxyValidationBudgetUsesConcurrencyAndP95(t *testing.T) {
+	if got := freeProxyValidationBudget(64, 4*time.Second); got != 4320 {
+		t.Fatalf("budget = %d, want 4320", got)
+	}
+}
+
+func TestCapFreeProxyRegionBudgetsIsBoundedAndDemandWeighted(t *testing.T) {
+	got := capFreeProxyRegionBudgets(
+		map[string]int{"de": 600, "fr": 600},
+		map[string]int{"de": 100, "fr": 100},
+		map[string]int{"de": 20, "fr": 90},
+		map[string]float64{"de": 30, "fr": 10},
+		100,
+	)
+	if got["de"] <= got["fr"] {
+		t.Fatalf("higher demand/deficit region was not favored: %#v", got)
+	}
+	if got["de"]+got["fr"] != 100 {
+		t.Fatalf("allocation = %#v, want exactly 100", got)
 	}
 }
 
@@ -551,6 +603,7 @@ func TestIPLocateCountryFromURL(t *testing.T) {
 		"https://raw.githubusercontent.com/iplocate/free-proxy-list/main/countries/DE/proxies.txt": "de",
 		"https://raw.githubusercontent.com/iplocate/free-proxy-list/main/countries/GB/proxies.txt": "uk",
 		"https://raw.githubusercontent.com/iplocate/free-proxy-list/main/all-proxies.txt":          "",
+		proxiflyCountryBaseURL + "GB/data.txt":                                                     "",
 		"https://example.test/countries/invalid":                                                   "",
 	}
 
@@ -561,16 +614,32 @@ func TestIPLocateCountryFromURL(t *testing.T) {
 	}
 }
 
+func TestProxiflyCountryFromURL(t *testing.T) {
+	tests := map[string]string{
+		proxiflyCountryBaseURL + "DE/data.txt":  "de",
+		proxiflyCountryBaseURL + "GB/data.txt":  "uk",
+		proxiflyHTTPListURL:                     "",
+		proxiflyCountryBaseURL + "GB/data.json": "",
+	}
+
+	for rawURL, want := range tests {
+		if got := proxiflyCountryFromURL(rawURL); got != want {
+			t.Errorf("proxiflyCountryFromURL(%q) = %q, want %q", rawURL, got, want)
+		}
+	}
+}
+
 func TestFreeProxySourcePrefersKnownURLProvider(t *testing.T) {
 	tests := map[string]string{
 		"https://raw.githubusercontent.com/iplocate/free-proxy-list/main/all-proxies.txt": "iplocate",
-		proxyScrapeFallbackURL: "proxyscrape",
-		proxiflyHTTPListURL:    "proxifly",
-		proxiflyHTTPSListURL:   "proxifly",
-		databayHTTPListURL:     "databay:http",
-		databaySOCKS4ListURL:   "databay:socks4",
-		databaySOCKS5ListURL:   "databay:socks5",
-		monosansProxyListURL:   "monosans",
+		proxyScrapeFallbackURL:                 "proxyscrape",
+		proxiflyHTTPListURL:                    "proxifly",
+		proxiflyHTTPSListURL:                   "proxifly",
+		proxiflyCountryBaseURL + "GB/data.txt": "proxifly:uk",
+		databayHTTPListURL:                     "databay:http",
+		databaySOCKS4ListURL:                   "databay:socks4",
+		databaySOCKS5ListURL:                   "databay:socks5",
+		monosansProxyListURL:                   "monosans",
 	}
 
 	for importURL, want := range tests {
@@ -595,5 +664,61 @@ func TestDefaultSchemeForImportURL(t *testing.T) {
 		if got := defaultSchemeForImportURL(importURL); got != want {
 			t.Errorf("defaultSchemeForImportURL(%q) = %q, want %q", importURL, got, want)
 		}
+	}
+}
+
+func TestFreeProxyRegionalCircuitBreakerAndRecovery(t *testing.T) {
+	region := "circuit-test"
+	freeProxyRegionRates.Lock()
+	delete(freeProxyRegionRates.regions, region)
+	freeProxyRegionRates.Unlock()
+	defer func() {
+		freeProxyRegionRates.Lock()
+		delete(freeProxyRegionRates.regions, region)
+		freeProxyRegionRates.Unlock()
+	}()
+
+	started := time.Now().Add(-5 * time.Minute)
+	for index := 0; index < 50; index++ {
+		source := fmt.Sprintf("source-%d", index%3)
+		observeFreeProxyRegionRate(region, source, "vinted_403", started.Add(time.Duration(index)*time.Millisecond))
+	}
+	observeFreeProxyRegionRate(region, "source-0", "vinted_403", time.Now())
+	if got := freeProxyRegionConcurrency(region, 12, time.Now()); got != 2 {
+		t.Fatalf("circuit concurrency = %d, want 2", got)
+	}
+	for range 3 {
+		observeFreeProxyRegionRate(region, "source-0", "", time.Now())
+	}
+	if got := freeProxyRegionConcurrency(region, 12, time.Now()); got == 2 {
+		t.Fatalf("circuit remained at probe concurrency after three successes")
+	}
+}
+
+func TestFreeProxyServingDecisionRequiresConfirmationAndUsesHysteresis(t *testing.T) {
+	serving, state, reason, observations := freeProxyServingDecision(proxy.PoolSnapshot{}, 0, 10)
+	if serving || state != "building" || reason != "below_minimum_mature" || observations != 0 {
+		t.Fatalf("empty initial decision = %v/%s/%s/%d", serving, state, reason, observations)
+	}
+
+	serving, state, reason, observations = freeProxyServingDecision(proxy.PoolSnapshot{}, 10, 10)
+	if serving || state != "recovering" || reason != "confirming_readiness" || observations != 1 {
+		t.Fatalf("first ready observation = %v/%s/%s/%d", serving, state, reason, observations)
+	}
+
+	previous := proxy.PoolSnapshot{State: "recovering", ReadyObservations: observations, Version: 1}
+	serving, state, reason, observations = freeProxyServingDecision(previous, 10, 10)
+	if !serving || state != "ready" || reason != "" || observations != 2 {
+		t.Fatalf("second ready observation = %v/%s/%s/%d", serving, state, reason, observations)
+	}
+
+	previous = proxy.PoolSnapshot{State: "ready", ReadyObservations: 2, Version: 2}
+	serving, state, reason, observations = freeProxyServingDecision(previous, 8, 10)
+	if !serving || state != "ready" || reason != "" || observations != 2 {
+		t.Fatalf("hysteresis floor decision = %v/%s/%s/%d", serving, state, reason, observations)
+	}
+	serving, state, reason, observations = freeProxyServingDecision(previous, 7, 10)
+	if serving || state != "recovering" || reason != "below_hysteresis_floor" || observations != 0 {
+		t.Fatalf("below hysteresis decision = %v/%s/%s/%d", serving, state, reason, observations)
 	}
 }

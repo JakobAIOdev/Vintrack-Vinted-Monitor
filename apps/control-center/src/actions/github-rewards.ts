@@ -32,7 +32,6 @@ import {
     getMonitorActivationState,
     withMonitorActivationLock,
 } from "@/lib/monitor-limits";
-import { enqueueMonitorStatusNotification } from "@/lib/alert-outbox";
 import {
     fetchStargazers,
     hasUserStarredRepository,
@@ -132,7 +131,6 @@ export async function resumeFreeProxyMonitorsAfterUpgrade() {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Unauthorized");
     const userId = session.user.id;
-    const transitionKey = Date.now().toString();
 
     const started = await withMonitorActivationLock(userId, async (tx) => {
         const state = await getMonitorActivationState(userId, "free", tx);
@@ -171,14 +169,6 @@ export async function resumeFreeProxyMonitorsAfterUpgrade() {
             where: { id: { in: monitors.map((monitor) => monitor.id) } },
             data: { status: "active" },
         });
-        for (const monitor of monitors) {
-            await enqueueMonitorStatusNotification(tx, monitor, {
-                kind: "monitor_started",
-                title: "Monitor started",
-                message: `The monitor ${monitor.name} was started after your Free Proxy Pool limit increased.`,
-                idempotencyKey: `reward-resume:${monitor.id}:${transitionKey}`,
-            });
-        }
         return monitors;
     });
 

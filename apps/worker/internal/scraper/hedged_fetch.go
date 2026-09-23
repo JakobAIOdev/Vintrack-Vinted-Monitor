@@ -30,6 +30,14 @@ func (e *Engine) fetchCatalogHedged(ctx context.Context, pool *ClientPool, apiUR
 }
 
 func (e *Engine) fetchCatalogHedgedWithDelay(ctx context.Context, pool *ClientPool, apiURL string, domain string, hedgeDelay time.Duration) catalogFetchResult {
+	return e.fetchCatalogHedgedWithCapacity(ctx, pool, apiURL, domain, hedgeDelay, true)
+}
+
+func (e *Engine) fetchCatalogHedgedWithCapacity(ctx context.Context, pool *ClientPool, apiURL string, domain string, hedgeDelay time.Duration, allowHedge bool) catalogFetchResult {
+	return e.fetchCatalogHedgedWithPrimary(ctx, pool, apiURL, domain, hedgeDelay, allowHedge, nil)
+}
+
+func (e *Engine) fetchCatalogHedgedWithPrimary(ctx context.Context, pool *ClientPool, apiURL string, domain string, hedgeDelay time.Duration, allowHedge bool, admittedPrimary *Client) catalogFetchResult {
 	if pool == nil {
 		startedAt := time.Now()
 		items, status, err := e.fetcher.FetchCatalog(ctx, nil, apiURL, domain)
@@ -45,9 +53,13 @@ func (e *Engine) fetchCatalogHedgedWithDelay(ctx context.Context, pool *ClientPo
 	}
 
 	attempted := make(map[*Client]bool, maxAttempts)
-	primary, acquireErr := acquireCatalogPrimary(ctx, pool, attempted)
-	if acquireErr != nil {
-		return catalogFetchResult{err: acquireErr}
+	primary := admittedPrimary
+	if primary == nil {
+		var acquireErr error
+		primary, acquireErr = acquireCatalogPrimary(ctx, pool, attempted)
+		if acquireErr != nil {
+			return catalogFetchResult{err: acquireErr}
+		}
 	}
 
 	requestCtx, cancel := context.WithCancel(ctx)
@@ -86,6 +98,9 @@ func (e *Engine) fetchCatalogHedgedWithDelay(ctx context.Context, pool *ClientPo
 	}
 
 	launchNext := func() bool {
+		if !allowHedge {
+			return false
+		}
 		if launched >= maxAttempts {
 			return false
 		}

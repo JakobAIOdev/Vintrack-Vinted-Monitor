@@ -42,6 +42,23 @@ func TestSellerInfoCache_IsolatedByDomainAndExpires(t *testing.T) {
 	}
 }
 
+func TestSellerInfoCacheFreshStaleAndTwentyFourHourBoundary(t *testing.T) {
+	cache := &sellerInfoCache{cache: make(map[string]sellerCacheEntry, 4)}
+	info := SellerInfo{Region: "🇩🇪 DE", RatingAvailable: true}
+	cache.Set("www.vinted.de", 9, info, time.Now().Add(-31*time.Minute))
+	if _, ok := cache.Get("www.vinted.de", 9, 30*time.Minute); ok {
+		t.Fatal("31 minute entry was fresh")
+	}
+	cache.Set("www.vinted.de", 9, info, time.Now().Add(-31*time.Minute))
+	if _, ok := cache.Get("www.vinted.de", 9, 24*time.Hour); !ok {
+		t.Fatal("31 minute entry was not available as stale")
+	}
+	cache.Set("www.vinted.de", 10, info, time.Now().Add(-24*time.Hour-time.Second))
+	if _, ok := cache.Get("www.vinted.de", 10, 24*time.Hour); ok {
+		t.Fatal("entry beyond the 24 hour boundary was returned")
+	}
+}
+
 func TestConcurrentItemsForSellerUseOneRemoteFetch(t *testing.T) {
 	var fetches atomic.Int32
 	sellerID := time.Now().UnixNano()

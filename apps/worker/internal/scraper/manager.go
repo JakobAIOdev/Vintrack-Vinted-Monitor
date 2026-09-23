@@ -79,8 +79,13 @@ func (m *Manager) Sync(ctx context.Context) {
 		returnedIDs[mon.ID] = true
 		if mon.ProxySource == "free" {
 			mon.FreeProxyVersion = m.engine.FreeProxyRegionVersion(mon.Region)
-		} else if mon.ProxyGroupID == nil {
-			mon.ServerProxyVersion = m.engine.ServerProxyVersion()
+		} else {
+			if err := m.store.CloseProxyIncident(ctx, mon.ID, "proxy_source_changed"); err != nil {
+				log.Printf("Close proxy incident for monitor [%d]: %v", mon.ID, err)
+			}
+			if mon.ProxyGroupID == nil {
+				mon.ServerProxyVersion = m.engine.ServerProxyVersion()
+			}
 		}
 		quietHoursActive := monitorQuietHoursActive(*mon, now)
 		if !quietHoursActive {
@@ -127,6 +132,9 @@ func (m *Manager) Sync(ctx context.Context) {
 
 	for id, task := range m.running {
 		if !activeIDs[id] {
+			if err := m.store.CloseProxyIncident(ctx, id, "monitor_stopped"); err != nil {
+				log.Printf("Close proxy incident for monitor [%d]: %v", id, err)
+			}
 			if !task.stopping {
 				log.Printf("Stopping monitor [%d] (removed/paused)", id)
 				task.cancel()

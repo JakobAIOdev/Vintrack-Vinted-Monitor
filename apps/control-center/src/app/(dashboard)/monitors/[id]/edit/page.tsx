@@ -380,8 +380,11 @@ export default function EditMonitorPage() {
         selectedRegion,
     );
     const selectedRegionFreeProxyCount =
-        selectedRegionFreeProxyHealth?.usable ?? 0;
-    const isFreeProxyAvailableForRegion = freeProxy.enabled;
+        selectedRegionFreeProxyHealth?.mature ?? 0;
+    const isFreeProxyAvailableForRegion = Boolean(
+        freeProxy.enabled &&
+        (selectedRegion !== "uk" || selectedRegionFreeProxyHealth?.healthy),
+    );
     const isFreeProxyReadyForRegion = Boolean(
         freeProxy.enabled && selectedRegionFreeProxyHealth?.healthy,
     );
@@ -1145,7 +1148,7 @@ export default function EditMonitorPage() {
                                                     {
                                                         selectedRegionFreeProxyCount
                                                     }{" "}
-                                                    usable
+                                                    safe
                                                     {isFreeProxyAvailableForRegion
                                                         ? isFreeProxyReadyForRegion
                                                             ? ""

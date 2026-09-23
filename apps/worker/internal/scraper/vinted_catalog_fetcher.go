@@ -60,9 +60,8 @@ func fetchCatalogWithSessionRetry(
 }
 
 func fetchCatalogAttempt(ctx context.Context, client *Client, initialURL string, domain string) ([]model.VintedItem, int, error) {
-	bootstrap, ok := client.CatalogBootstrap(domain)
-	if !ok {
-		return nil, 0, fmt.Errorf("catalog bootstrap unavailable for %s", domain)
+	if !client.CatalogReady(domain) {
+		return nil, 0, fmt.Errorf("catalog cookie session unavailable for %s", domain)
 	}
 
 	reqURL := initialURL
@@ -71,7 +70,7 @@ func fetchCatalogAttempt(ctx context.Context, client *Client, initialURL string,
 		if err != nil {
 			return nil, 0, err
 		}
-		req.Header = newCatalogAPIHeaders(domain, bootstrap)
+		req.Header = newCatalogAPIHeaders(domain)
 
 		resp, err := client.HttpClient.Do(req)
 		if err != nil {

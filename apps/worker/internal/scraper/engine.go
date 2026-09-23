@@ -46,10 +46,14 @@ type Engine struct {
 	enrichersMu            sync.RWMutex
 	sellerFlightsMu        sync.Mutex
 	sellerFlights          map[string]*sellerFetchFlight
+	sellerRefreshes        sync.Map
 	notificationPolicies   map[int]notificationPolicy
 	notificationPoliciesMu sync.RWMutex
 	freeProxySuccessSeen   map[string]time.Time
 	freeProxySuccessSeenMu sync.Mutex
+	freePacingPolicy       freeProxyPacingPolicy
+	freePacersMu           sync.Mutex
+	freePacers             map[string]*freeProxyRegionPacer
 	jobsCtx                context.Context
 	jobsCancel             context.CancelFunc
 	alertJobs              chan alertJob
@@ -116,6 +120,8 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 		sellerFlights:          make(map[string]*sellerFetchFlight),
 		notificationPolicies:   make(map[int]notificationPolicy),
 		freeProxySuccessSeen:   make(map[string]time.Time),
+		freePacingPolicy:       loadFreeProxyPacingPolicy(db),
+		freePacers:             make(map[string]*freeProxyRegionPacer),
 		jobsCtx:                jobsCtx,
 		jobsCancel:             jobsCancel,
 		alertJobs:              make(chan alertJob, 4096),
@@ -141,6 +147,21 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 	engine.jobsWG.Add(1)
 	go engine.catalogLatencyHeartbeat()
 	return engine
+}
+
+func (e *Engine) freeProxyPacer(region string) *freeProxyRegionPacer {
+	region = strings.ToLower(strings.TrimSpace(region))
+	e.freePacersMu.Lock()
+	defer e.freePacersMu.Unlock()
+	if !e.freePacingPolicy.applies(region) {
+		return nil
+	}
+	if pacer := e.freePacers[region]; pacer != nil {
+		return pacer
+	}
+	pacer := newFreeProxyRegionPacer(region, e.freePacingPolicy)
+	e.freePacers[region] = pacer
+	return pacer
 }
 
 func (e *Engine) SyncNotificationPolicies(monitors []model.Monitor) {
@@ -198,6 +219,10 @@ func (e *Engine) GetOrCreateEnricher(pm *proxy.Manager, domain string, proxyKey 
 	e.enrichersMu.RUnlock()
 
 	if ok {
+		if strings.HasPrefix(proxyLabel, "free") {
+			s.pool.Reconcile(configuredSellerPoolSize(proxyLabel))
+		}
+		s.configureCacheTTLs(e.workerPolicySnapshot())
 		return s
 	}
 
@@ -205,17 +230,33 @@ func (e *Engine) GetOrCreateEnricher(pm *proxy.Manager, domain string, proxyKey 
 	defer e.enrichersMu.Unlock()
 
 	if s, ok = e.enrichers[key]; ok {
+		if strings.HasPrefix(proxyLabel, "free") {
+			s.pool.Reconcile(configuredSellerPoolSize(proxyLabel))
+		}
+		s.configureCacheTTLs(e.workerPolicySnapshot())
 		return s
 	}
 
 	log.Printf("Creating new seller enricher for %s (source: %s)", domain, proxyLabel)
-	sellerPoolSize := getEnvInt("SELLER_CLIENT_POOL_SIZE", 16)
-	if sellerPoolSize < 1 {
-		sellerPoolSize = 1
-	}
+	sellerPoolSize := configuredSellerPoolSize(proxyLabel)
 	s = NewSellerEnricher(pm, e.db, domain, sellerPoolSize, trafficRecorder)
+	s.configureCacheTTLs(e.workerPolicySnapshot())
 	e.enrichers[key] = s
 	return s
+}
+
+func configuredSellerPoolSize(proxyLabel string) int {
+	size := getEnvInt("SELLER_CLIENT_POOL_SIZE", 16)
+	if strings.HasPrefix(proxyLabel, "free") {
+		size = getEnvInt("FREE_SELLER_CLIENT_POOL_SIZE", 24)
+	}
+	if size < 1 {
+		return 1
+	}
+	if size > 100 {
+		return 100
+	}
+	return size
 }
 
 func (e *Engine) GetOrCreatePool(pm *proxy.Manager, domain string, proxyKey string, trafficRecorder func(txBytes int64, rxBytes int64), proxyLabel string) *ClientPool {
@@ -343,45 +384,75 @@ func shortProxyHash(raw string) string {
 func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	pm, proxySource, proxyKey, trafficRecorder := e.proxyContext(m)
 	domain := model.RegionDomain(m.Region)
-	if err := e.db.CloseProxyIncident(ctx, m.ID, "worker_restarted"); err != nil {
-		log.Printf("[%d] reconcile stale proxy incident: %v", m.ID, err)
-	}
 	var pool *ClientPool
+	initialProxyWait := false
 	if proxySource == "free" {
 		pool = e.existingPool(domain, proxyKey)
+		if pool != nil {
+			pool.Reconcile(e.freePoolSize)
+		}
 	}
 
 	if e.fetcher.RequiresNetwork() && pm.Count() == 0 && (pool == nil || pool.Size() == 0) {
-		log.Printf("[%d] ❌ ERROR: no valid proxies available (source: %s)", m.ID, proxySource)
-		e.db.UpdateMonitorHealth(model.MonitorHealth{
-			MonitorID:       m.ID,
-			ConsecutiveErrs: -1,
-			LastError:       "no valid proxies available",
-			LastErrorCode:   proxyErrorNoValidProxies,
-			ProxyState:      "unavailable",
-			UpdatedAt:       time.Now().UTC().Format(time.RFC3339),
-		})
-		e.db.RecordMonitorRun(model.MonitorRun{
-			MonitorID:    m.ID,
-			Status:       "failed",
-			ErrorMessage: "no valid proxies available",
-			ProxySource:  proxySource,
-			Region:       m.Region,
-		})
-		e.db.RecordMonitorEvent(model.MonitorEvent{
-			MonitorID: m.ID,
-			EventType: "proxy_unavailable",
-			Severity:  "error",
-			Message:   "No valid proxies available for monitor",
-		})
+		log.Printf("[%d] no safe proxies available (source: %s)", m.ID, proxySource)
+		now := time.Now().UTC()
 		if proxySource == "free" {
+			e.db.UpdateMonitorHealth(model.MonitorHealth{
+				MonitorID:           m.ID,
+				ConsecutiveErrs:     0,
+				LastError:           "free proxy pool is waiting for safe capacity",
+				LastErrorCode:       proxyErrorPoolWaiting,
+				ProxyState:          "waiting_for_proxy",
+				RuntimeState:        "waiting_for_pool",
+				StateSince:          now.Format(time.RFC3339),
+				EffectiveIntervalMS: int(monitorQueryInterval(m, now).Milliseconds()),
+				UpdatedAt:           now.Format(time.RFC3339),
+			})
+		} else {
+			e.db.UpdateMonitorHealth(model.MonitorHealth{
+				MonitorID:       m.ID,
+				ConsecutiveErrs: -1,
+				LastError:       "no valid proxies available",
+				LastErrorCode:   proxyErrorNoValidProxies,
+				ProxyState:      "unavailable",
+				RuntimeState:    "degraded",
+				StateSince:      now.Format(time.RFC3339),
+				UpdatedAt:       now.Format(time.RFC3339),
+			})
+			e.db.RecordMonitorRun(model.MonitorRun{
+				MonitorID:    m.ID,
+				Status:       "failed",
+				ErrorMessage: "no valid proxies available",
+				ProxySource:  proxySource,
+				Region:       m.Region,
+			})
 			e.db.RecordMonitorEvent(model.MonitorEvent{
 				MonitorID: m.ID,
-				EventType: "free_proxy_pool_degraded",
-				Severity:  "warning",
-				Message:   fmt.Sprintf("Free proxy pool for region %s is empty; monitor is waiting for recovery", m.Region),
+				EventType: "proxy_unavailable",
+				Severity:  "error",
+				Message:   "No valid proxies available for monitor",
 			})
-			if !waitForProxyManager(ctx, pm, 15*time.Second) {
+		}
+		if proxySource == "free" {
+			initialProxyWait = true
+			if err := e.db.OpenOrUpdateProxyIncident(ctx, m.ID, domain, proxySource, time.Now().Add(15*time.Second)); err != nil {
+				log.Printf("[%d] open initial proxy incident: %v", m.ID, err)
+			}
+			if !waitForProxyManagerObserved(ctx, pm, 15*time.Second, func() {
+				updatedAt := time.Now().UTC()
+				e.db.UpdateMonitorHealth(model.MonitorHealth{
+					MonitorID:           m.ID,
+					ConsecutiveErrs:     0,
+					LastError:           "free proxy pool is waiting for safe capacity",
+					LastErrorCode:       proxyErrorPoolWaiting,
+					ProxyState:          "waiting_for_proxy",
+					RuntimeState:        "waiting_for_pool",
+					StateSince:          now.Format(time.RFC3339),
+					EffectiveIntervalMS: int(monitorQueryInterval(m, updatedAt).Milliseconds()),
+					UpdatedAt:           updatedAt.Format(time.RFC3339),
+				})
+				e.maybeNotifyFreeProxyOutage(ctx, m, domain)
+			}) {
 				return
 			}
 			proxyKey = fmt.Sprintf("free:%s", m.Region)
@@ -435,29 +506,37 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	)
 	var totalErrors int64
 	localSeen := make(map[int64]time.Time, 128)
-	waitingForProxy := false
-	managerDegraded := false
+	waitingForProxy := initialProxyWait
+	proxyRecoverySuccesses := 0
+	proxyRecoveryStartedAt := time.Time{}
 
 	log.Printf("[%d] started | name=%q | queries=%d | delay=%s | hedge=%dms | url=%s", m.ID, m.Name, len(monitorQueries), interval, getEnvInt("CATALOG_HEDGE_DELAY_MS", 250), queryURLs[0])
-	notificationsEnabled := e.monitorNotificationsEnabled(m)
-	if notificationsEnabled && !m.SuppressStartupNotice {
-		e.enqueueStatusNotification(
-			m, "monitor_started", "Monitor started",
-			fmt.Sprintf("The monitor %s is initialized. The initial scan is muted.", m.Name),
-			fmt.Sprintf("%d", time.Now().Unix()/60),
-		)
+	runtimeState := "starting"
+	stateSince := time.Now().UTC()
+	lastSuccessAt := time.Time{}
+	setRuntimeState := func(next string) {
+		if next != "" && next != runtimeState {
+			runtimeState = next
+			stateSince = time.Now().UTC()
+		}
 	}
 
 	reportHealth := func(lastErr string, lastErrorCode string, proxyState string, retryAt time.Time, proxyLabel string) {
 		h := model.MonitorHealth{
-			MonitorID:       m.ID,
-			TotalChecks:     int64(checks),
-			TotalErrors:     totalErrors,
-			ConsecutiveErrs: consecutiveErrors,
-			LastErrorCode:   lastErrorCode,
-			ProxyState:      proxyState,
-			ProxyLabel:      proxyLabel,
-			UpdatedAt:       time.Now().UTC().Format(time.RFC3339),
+			MonitorID:           m.ID,
+			TotalChecks:         int64(checks),
+			TotalErrors:         totalErrors,
+			ConsecutiveErrs:     consecutiveErrors,
+			LastErrorCode:       lastErrorCode,
+			ProxyState:          proxyState,
+			RuntimeState:        runtimeState,
+			StateSince:          stateSince.Format(time.RFC3339),
+			EffectiveIntervalMS: int(interval.Milliseconds()),
+			ProxyLabel:          proxyLabel,
+			UpdatedAt:           time.Now().UTC().Format(time.RFC3339),
+		}
+		if !lastSuccessAt.IsZero() {
+			h.LastSuccessAt = lastSuccessAt.Format(time.RFC3339)
 		}
 		if lastErr != "" {
 			h.LastError = lastErr
@@ -468,12 +547,8 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		e.db.UpdateMonitorHealth(h)
 	}
 
-	defer func() {
-		if waitingForProxy {
-			_ = e.db.CloseProxyIncident(context.Background(), m.ID, "monitor_stopped")
-		}
-		e.db.ClearMonitorHealth(m.ID)
-	}()
+	defer e.db.ClearMonitorHealth(m.ID)
+	reportHealth("", "", "", time.Time{}, "")
 
 	for {
 		cycleStart := time.Now()
@@ -484,46 +559,29 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			return
 		default:
 		}
-		if proxySource == "free" && pm.Count() == 0 {
-			if pool != nil && pool.Size() > 0 {
-				if !managerDegraded {
-					managerDegraded = true
-					log.Printf("[%d] free proxy manager became empty; continuing with %d validated clients", m.ID, pool.Size())
-					reportHealth("free proxy manager is rebuilding; using validated reserve clients", proxyErrorPoolWaiting, "degraded", time.Time{}, "")
-					e.db.RecordMonitorEvent(model.MonitorEvent{
-						MonitorID: m.ID,
-						EventType: "free_proxy_recovery_started",
-						Severity:  "warning",
-						Message:   fmt.Sprintf("Free proxy pool for region %s is rebuilding; validated reserve clients remain active", m.Region),
-					})
-				}
-			} else {
-				log.Printf("[%d] free proxy pool became empty; waiting for recovery", m.ID)
-				reportHealth("free proxy pool is waiting for recovery", proxyErrorPoolWaiting, "waiting_for_proxy", time.Time{}, "")
+		if proxySource == "free" {
+			if pool != nil {
+				pool.Reconcile(e.freePoolSize)
+			}
+			if pm.Count() == 0 || pool == nil || pool.Size() == 0 {
+				log.Printf("[%d] free proxy pool became unavailable; waiting for safe capacity", m.ID)
+				setRuntimeState("waiting_for_pool")
+				reportHealth("free proxy pool is waiting for safe capacity", proxyErrorPoolWaiting, "waiting_for_proxy", time.Time{}, "")
 				waitingForProxy = true
 				if err := e.db.OpenOrUpdateProxyIncident(ctx, m.ID, domain, proxySource, time.Now().Add(15*time.Second)); err != nil {
 					log.Printf("[%d] open proxy incident: %v", m.ID, err)
 				}
-				if !waitForProxyManager(ctx, pm, 15*time.Second) {
+				if !waitForProxyManagerObserved(ctx, pm, 15*time.Second, func() {
+					reportHealth("free proxy pool is waiting for safe capacity", proxyErrorPoolWaiting, "waiting_for_proxy", time.Time{}, "")
+					e.maybeNotifyFreeProxyOutage(ctx, m, domain)
+				}) {
 					return
 				}
 				pool = e.GetOrCreatePool(pm, domain, proxyKey, trafficRecorder, proxySource)
+				pool.Reconcile(e.freePoolSize)
 				consecutiveErrors = 0
-				if err := e.db.CloseProxyIncident(ctx, m.ID, "recovered"); err != nil {
-					log.Printf("[%d] close proxy incident: %v", m.ID, err)
-				}
-				waitingForProxy = false
-				log.Printf("[%d] free proxy pool recovered with %d proxies", m.ID, pm.Count())
+				log.Printf("[%d] free proxy pool published %d mature proxies", m.ID, pm.Count())
 			}
-		} else if proxySource == "free" && managerDegraded {
-			managerDegraded = false
-			pool.Reconcile(e.freePoolSize)
-			e.db.RecordMonitorEvent(model.MonitorEvent{
-				MonitorID: m.ID,
-				EventType: "free_proxy_pool_recovered",
-				Severity:  "info",
-				Message:   fmt.Sprintf("Free proxy pool for region %s received validated capacity", m.Region),
-			})
 		}
 
 		nextCheck := checks + 1
@@ -581,27 +639,76 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		if proxySource == "free" {
 			pool.Reconcile(e.freePoolSize)
 		}
+		var pacer *freeProxyRegionPacer
+		if proxySource == "free" {
+			pacer = e.freeProxyPacer(m.Region)
+		}
+		if pacer != nil {
+			if _, admitted := pacer.admit(ctx, m.ID, monitorQueryInterval(m, time.Now()), pool.Size()); !admitted {
+				sleepMonitorCycle(ctx, cycleStart, monitorQueryInterval(m, time.Now()))
+				continue
+			}
+			perProxyRate, _ := pacer.limits()
+			pool.SetMaxRequestsPerSecond(perProxyRate)
+		} else if proxySource == "free" {
+			pool.SetMaxRequestsPerSecond(0)
+		}
+		var admittedPrimary *Client
+		if pacer != nil {
+			_, maxAdmissionDelay := pacer.limits()
+			var admissionErr error
+			admittedPrimary, _, admissionErr = pool.AcquireWithAdmission(
+				ctx,
+				nil,
+				maxAdmissionDelay,
+			)
+			if admissionErr != nil {
+				pacer.recordPoolWait()
+				sleepMonitorCycle(ctx, cycleStart, monitorQueryInterval(m, time.Now()))
+				continue
+			}
+		}
 		fetchCtx, cancelFetch := context.WithTimeout(ctx, timeoutDuration)
-		result := e.fetchCatalogHedgedWithDelay(
+		allowHedge := pacer == nil || pacer.allowHedge()
+		result := e.fetchCatalogHedgedWithPrimary(
 			fetchCtx,
 			pool,
 			apiURL,
 			domain,
 			catalogHedgeDelayForProxySource(proxySource),
+			allowHedge,
+			admittedPrimary,
 		)
 		cancelFetch()
+		if pacer != nil {
+			if len(result.attempts) == 0 {
+				pacer.recordResult(result.status, result.err == nil && result.status == 200, pool.Size())
+			} else {
+				for _, attempt := range result.attempts {
+					pacer.recordResult(attempt.status, attempt.err == nil && attempt.status == 200, pool.Size())
+				}
+			}
+			var pacingWaitErr *proxyPoolWaitError
+			if errors.As(result.err, &pacingWaitErr) {
+				pacer.recordPoolWait()
+			}
+		}
 		var waitErr *proxyPoolWaitError
 		if errors.As(result.err, &waitErr) {
 			retryAt := waitErr.RetryAt
 			if retryAt.IsZero() || !retryAt.After(time.Now()) {
 				retryAt = time.Now().Add(time.Second)
 			}
+			setRuntimeState("waiting_for_pool")
 			reportHealth(waitErr.Error(), waitErr.ErrorCode, "waiting_for_proxy", retryAt, waitErr.ProxyLabel)
 			if err := e.db.OpenOrUpdateProxyIncident(ctx, m.ID, domain, proxySource, retryAt); err != nil {
 				log.Printf("[%d] open proxy incident: %v", m.ID, err)
 			}
+			e.maybeNotifyFreeProxyOutage(ctx, m, domain)
 			if !waitingForProxy {
 				waitingForProxy = true
+				proxyRecoverySuccesses = 0
+				proxyRecoveryStartedAt = time.Time{}
 				log.Printf("[%d] all proxies for %s are temporarily unavailable; retrying at %s", m.ID, domain, retryAt.UTC().Format(time.RFC3339))
 			}
 			if !waitForProxyRetry(ctx, retryAt) {
@@ -639,6 +746,10 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		if !gotSuccess {
+			if waitingForProxy {
+				proxyRecoverySuccesses = 0
+				proxyRecoveryStartedAt = time.Time{}
+			}
 			e.catalogLatency.recordFailedFetch(len(result.attempts))
 			failureMessage := catalogFailureMessage(result)
 			failureCode := catalogFailureCode(result.status, result.err)
@@ -656,9 +767,10 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			consecutiveErrors++
 			totalErrors++
 			if consecutiveErrors%5 == 0 {
+				setRuntimeState("degraded")
 				reportHealth(failureMessage, failureCode, "degraded", time.Time{}, proxyLabel)
 				log.Printf("[%d] %d consecutive failures (%s), backing off...", m.ID, consecutiveErrors, failureMessage)
-				if consecutiveErrors == 15 || consecutiveErrors == 30 {
+				if proxySource != "free" && (consecutiveErrors == 15 || consecutiveErrors == 30) {
 					e.enqueueStatusNotification(
 						m, "proxy_warning", "Proxy warning",
 						fmt.Sprintf("Monitor %s has %d consecutive proxy errors.", m.Name, consecutiveErrors),
@@ -694,12 +806,23 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		consecutiveErrors = 0
-		recoveredFromProxyWait := waitingForProxy
-		if recoveredFromProxyWait {
-			if err := e.db.CloseProxyIncident(ctx, m.ID, "recovered"); err != nil {
-				log.Printf("[%d] close proxy incident: %v", m.ID, err)
+		lastSuccessAt = time.Now().UTC()
+		setRuntimeState("running")
+		recoveredFromProxyWait := false
+		if waitingForProxy {
+			if proxyRecoveryStartedAt.IsZero() {
+				proxyRecoveryStartedAt = time.Now()
 			}
-			waitingForProxy = false
+			proxyRecoverySuccesses++
+			if proxyRecoverySuccesses >= 3 && time.Since(proxyRecoveryStartedAt) >= time.Minute {
+				if err := e.db.CloseProxyIncident(ctx, m.ID, "recovered"); err != nil {
+					log.Printf("[%d] close proxy incident: %v", m.ID, err)
+				} else {
+					waitingForProxy = false
+					recoveredFromProxyWait = true
+					e.maybeNotifyFreeProxyRecovery(ctx, m)
+				}
+			}
 		}
 		if recoveredFromProxyWait || checks%5 == 0 || checks <= 3 {
 			reportHealth("", "", "", time.Time{}, "")
@@ -729,40 +852,14 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 		now := time.Now()
 		if !initializedQueries[queryIndex] {
-			seedIDs := make([]int64, len(items))
-			for i, item := range items {
-				seedIDs[i] = item.ID
-				localSeen[item.ID] = now
-			}
-			existingSeedIDs, err := e.db.BatchExistingItemIDs(m.ID, seedIDs)
-			if err != nil {
-				// A failed durable-state lookup must not turn a transient database
-				// problem into thousands of foreground seller requests. The next
-				// successful monitor start can seed any genuinely missing items.
-				log.Printf("[%d] initial seed lookup failed; skipping seed enrichment: %v", m.ID, err)
-				existingSeedIDs = make(map[int64]bool, len(seedIDs))
-				for _, id := range seedIDs {
-					existingSeedIDs[id] = true
-				}
-			}
+			seedIDs := markInitialBaseline(items, localSeen, now)
 			e.db.MarkItemsSeen(m.ID, seedIDs)
-			filteredSeeds, _ := filterAntiKeywordItems(items, m.AntiKeywords)
-			filteredSeeds, _ = filterBannedSellerItems(filteredSeeds, m.BannedSellerIDs)
-			seeded := 0
-			for _, seed := range filteredSeeds {
-				if existingSeedIDs[seed.ID] {
-					continue
-				}
-				built := e.buildItems(m, []model.VintedItem{seed})[0]
-				requireSellerMatch := requiresSellerEnrichment(m)
-				e.enqueueItem(enrichmentJob{
-					ctx: ctx, item: built, vintedItem: seed, monitor: m, proxySource: proxySource,
-					enricher: enricher, publishUpdate: false, backgroundOnly: true,
-					requireSellerMatch: requireSellerMatch,
-				}, false)
-				seeded++
-			}
-			log.Printf("[%d] initial scan saw %d items; queued %d unpersisted seeds in background without notifications", m.ID, len(items), seeded)
+			// The first successful response defines the monitor baseline. These
+			// items existed before monitoring began, so they must not enter any
+			// downstream path: enrichment persists items and strict seller filters
+			// may publish them, which would make muted startup results appear in the
+			// dashboard even though external notifications stay disabled.
+			log.Printf("[%d] initial scan established a muted baseline with %d items", m.ID, len(items))
 			initializedQueries[queryIndex] = true
 			recordCatalogCycle(len(items), 0)
 			e.db.RecordMonitorRun(model.MonitorRun{
@@ -781,11 +878,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 				itemIDs[index] = item.ID
 				localSeen[item.ID] = now
 			}
-			newItems, _ = splitIncomingItems(
-				items,
-				e.db.BatchIsNew(m.ID, itemIDs),
-				true,
-			)
+			newItems = filterNewItems(items, e.db.BatchIsNew(m.ID, itemIDs))
 			resumeQueries[queryIndex] = false
 			log.Printf(
 				"[%d] quiet-hours resume scan found %d unseen items out of %d",
@@ -874,6 +967,10 @@ func catalogFailureMessage(result catalogFetchResult) string {
 }
 
 func waitForProxyManager(ctx context.Context, manager *proxy.Manager, interval time.Duration) bool {
+	return waitForProxyManagerObserved(ctx, manager, interval, nil)
+}
+
+func waitForProxyManagerObserved(ctx context.Context, manager *proxy.Manager, interval time.Duration, observe func()) bool {
 	if manager.Count() > 0 {
 		return true
 	}
@@ -888,6 +985,9 @@ func waitForProxyManager(ctx context.Context, manager *proxy.Manager, interval t
 		case <-ctx.Done():
 			return false
 		case <-ticker.C:
+			if observe != nil {
+				observe()
+			}
 			if manager.Count() > 0 {
 				return true
 			}
@@ -1028,19 +1128,23 @@ func resolveRedirectURL(currentURL string, location string) (string, error) {
 	return base.ResolveReference(next).String(), nil
 }
 
-func splitIncomingItems(items []model.VintedItem, newMap map[int64]bool, initialized bool) ([]model.VintedItem, []model.VintedItem) {
-	if !initialized {
-		return nil, items
-	}
-
+func filterNewItems(items []model.VintedItem, newMap map[int64]bool) []model.VintedItem {
 	newItems := make([]model.VintedItem, 0, len(items))
 	for _, item := range items {
 		if newMap[item.ID] {
 			newItems = append(newItems, item)
 		}
 	}
+	return newItems
+}
 
-	return newItems, nil
+func markInitialBaseline(items []model.VintedItem, localSeen map[int64]time.Time, seenAt time.Time) []int64 {
+	itemIDs := make([]int64, len(items))
+	for index, item := range items {
+		itemIDs[index] = item.ID
+		localSeen[item.ID] = seenAt
+	}
+	return itemIDs
 }
 
 func initialQueryTracking(queryCount int, resumeAfterQuietHours bool) ([]bool, []bool) {

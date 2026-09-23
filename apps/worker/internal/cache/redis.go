@@ -5,19 +5,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
 type RedisCache struct {
-	client   *redis.Client
-	ctx      context.Context
-	opts     *redis.Options
-	mu       sync.Mutex
-	readonly bool
+	client           *redis.Client
+	ctx              context.Context
+	opts             *redis.Options
+	mu               sync.Mutex
+	readonly         bool
+	scanMu           sync.Mutex
+	scanCursor       uint64
+	scanCounts       map[string]uint64
+	lastPrefixCounts map[string]uint64
+	lastPrefixScanAt time.Time
+	v2Claims         atomic.Uint64
 }
 
 type SellerInfo struct {
@@ -50,7 +58,11 @@ func NewRedisCache(addr, password string, db int) (*RedisCache, error) {
 	}
 
 	log.Printf("Redis connected: %s", addr)
-	return &RedisCache{client: client, ctx: ctx, opts: opts}, nil
+	return &RedisCache{
+		client: client, ctx: ctx, opts: opts,
+		scanCounts:       make(map[string]uint64),
+		lastPrefixCounts: make(map[string]uint64),
+	}, nil
 }
 
 func isReadOnlyErr(err error) bool {
@@ -88,16 +100,46 @@ func (r *RedisCache) writeWithRetry(op func() error) error {
 	return err
 }
 
+const (
+	seenBucketDays = 8
+	seenItemTTL    = seenBucketDays * 24 * time.Hour
+)
+
+func seenBucketKey(monitorID int, day time.Time) string {
+	return fmt.Sprintf("item:seen:v2:%d:%s", monitorID, day.UTC().Format("2006-01-02"))
+}
+
+func seenBucketKeys(monitorID int, now time.Time) []string {
+	keys := make([]string, 0, seenBucketDays)
+	day := now.UTC()
+	for offset := 0; offset < seenBucketDays; offset++ {
+		keys = append(keys, seenBucketKey(monitorID, day.AddDate(0, 0, -offset)))
+	}
+	return keys
+}
+
+func seenBucketExpiresAt(now time.Time) time.Time {
+	day := now.UTC()
+	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.UTC)
+	return start.AddDate(0, 0, seenBucketDays)
+}
+
 func (r *RedisCache) BatchIsNew(monitorID int, itemIDs []int64) (map[int64]bool, error) {
 	if len(itemIDs) == 0 {
 		return make(map[int64]bool), nil
 	}
 
 	pipe := r.client.Pipeline()
-	cmds := make(map[int64]*redis.IntCmd, len(itemIDs))
+	legacy := make(map[int64]*redis.IntCmd, len(itemIDs))
+	members := make([]interface{}, 0, len(itemIDs))
 
 	for _, id := range itemIDs {
-		cmds[id] = pipe.Exists(r.ctx, fmt.Sprintf("item:seen:%d:%d", monitorID, id))
+		legacy[id] = pipe.Exists(r.ctx, fmt.Sprintf("item:seen:%d:%d", monitorID, id))
+		members = append(members, id)
+	}
+	bucketCommands := make([]*redis.BoolSliceCmd, 0, seenBucketDays)
+	for _, key := range seenBucketKeys(monitorID, time.Now()) {
+		bucketCommands = append(bucketCommands, pipe.SMIsMember(r.ctx, key, members...))
 	}
 
 	if _, err := pipe.Exec(r.ctx); err != nil && err != redis.Nil {
@@ -105,25 +147,34 @@ func (r *RedisCache) BatchIsNew(monitorID int, itemIDs []int64) (map[int64]bool,
 	}
 
 	result := make(map[int64]bool, len(itemIDs))
-	for id, cmd := range cmds {
+	for index, id := range itemIDs {
+		cmd := legacy[id]
 		val, _ := cmd.Result()
-		result[id] = val == 0 // 0 = not seen = new
+		seen := val > 0
+		for _, bucket := range bucketCommands {
+			values, bucketErr := bucket.Result()
+			if bucketErr != nil {
+				return nil, fmt.Errorf("smismember: %w", bucketErr)
+			}
+			if index < len(values) && values[index] {
+				seen = true
+				break
+			}
+		}
+		result[id] = !seen
 	}
 	return result, nil
 }
 
-// seenItemTTL bounds how long a claimed item stays in Redis.
-//
-// This keyspace dominates Redis memory: it holds one key per (monitor, item)
-// pair. Against a maxmemory limit with an allkeys-lru policy, letting it grow
-// means Redis evicts the very keys that prevent an already-alerted item from
-// being detected again. Seven days keeps the working set well inside the limit,
-// and anything older is still covered by the Postgres fallback in BatchIsNew.
-const seenItemTTL = 7 * 24 * time.Hour
-
 func (r *RedisCache) MarkAsSeen(monitorID int, itemID int64) error {
 	return r.writeWithRetry(func() error {
-		return r.client.Set(r.ctx, fmt.Sprintf("item:seen:%d:%d", monitorID, itemID), "1", seenItemTTL).Err()
+		now := time.Now()
+		pipe := r.client.TxPipeline()
+		key := seenBucketKey(monitorID, now)
+		pipe.SAdd(r.ctx, key, itemID)
+		pipe.ExpireAt(r.ctx, key, seenBucketExpiresAt(now))
+		_, err := pipe.Exec(r.ctx)
+		return err
 	})
 }
 
@@ -132,10 +183,15 @@ func (r *RedisCache) BatchMarkAsSeen(monitorID int, itemIDs []int64) error {
 		return nil
 	}
 	return r.writeWithRetry(func() error {
-		pipe := r.client.Pipeline()
+		now := time.Now()
+		key := seenBucketKey(monitorID, now)
+		members := make([]interface{}, 0, len(itemIDs))
 		for _, id := range itemIDs {
-			pipe.Set(r.ctx, fmt.Sprintf("item:seen:%d:%d", monitorID, id), "1", seenItemTTL)
+			members = append(members, id)
 		}
+		pipe := r.client.TxPipeline()
+		pipe.SAdd(r.ctx, key, members...)
+		pipe.ExpireAt(r.ctx, key, seenBucketExpiresAt(now))
 		_, err := pipe.Exec(r.ctx)
 		if err != nil && err != redis.Nil {
 			return fmt.Errorf("batch mark-seen pipeline: %w", err)
@@ -145,15 +201,29 @@ func (r *RedisCache) BatchMarkAsSeen(monitorID int, itemIDs []int64) error {
 }
 
 func (r *RedisCache) ClaimMonitorItem(monitorID int, itemID int64, source string) (bool, error) {
-	key := fmt.Sprintf("item:seen:%d:%d", monitorID, itemID)
 	if strings.TrimSpace(source) == "" {
 		source = "canonical"
 	}
+	now := time.Now()
+	keys := append(
+		[]string{fmt.Sprintf("item:seen:%d:%d", monitorID, itemID)},
+		seenBucketKeys(monitorID, now)...,
+	)
 
 	var claimed bool
 	err := r.writeWithRetry(func() error {
-		ok, err := r.client.SetNX(r.ctx, key, source, seenItemTTL).Result()
-		claimed = ok
+		value, err := claimMonitorItemScript.Run(
+			r.ctx,
+			r.client,
+			keys,
+			strconv.FormatInt(itemID, 10),
+			source,
+			seenBucketExpiresAt(now).Unix(),
+		).Int()
+		claimed = value == 1
+		if claimed {
+			r.v2Claims.Add(1)
+		}
 		return err
 	})
 	if err != nil {
@@ -161,6 +231,90 @@ func (r *RedisCache) ClaimMonitorItem(monitorID int, itemID int64, source string
 	}
 	return claimed, nil
 }
+
+func redisMetricValue(info string, key string) uint64 {
+	for _, line := range strings.Split(info, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, key+":") {
+			continue
+		}
+		value, _ := strconv.ParseUint(strings.TrimSpace(strings.TrimPrefix(line, key+":")), 10, 64)
+		return value
+	}
+	return 0
+}
+
+func redisKeyPrefix(key string) string {
+	switch {
+	case strings.HasPrefix(key, "item:seen:v2:"):
+		return "item_seen_v2"
+	case strings.HasPrefix(key, "item:seen:"):
+		return "item_seen_legacy"
+	case strings.HasPrefix(key, "seller:info:"):
+		return "seller_info"
+	case strings.HasPrefix(key, "user:region:"):
+		return "user_region_legacy"
+	case strings.HasPrefix(key, "monitor:health:"):
+		return "monitor_health"
+	default:
+		return "other"
+	}
+}
+
+// RuntimeMetrics performs at most 20 bounded SCAN pages. Prefix counts become
+// an exact snapshot whenever a full cursor pass completes; INFO/DBSIZE values
+// are current on every call.
+func (r *RedisCache) RuntimeMetrics(ctx context.Context) map[string]any {
+	info, _ := r.client.Info(ctx, "memory", "stats").Result()
+	dbSize, _ := r.client.DBSize(ctx).Result()
+	r.scanMu.Lock()
+	for page := 0; page < 20; page++ {
+		keys, cursor, err := r.client.Scan(ctx, r.scanCursor, "*", 1000).Result()
+		if err != nil {
+			break
+		}
+		for _, key := range keys {
+			r.scanCounts[redisKeyPrefix(key)]++
+		}
+		r.scanCursor = cursor
+		if cursor == 0 {
+			r.lastPrefixCounts = r.scanCounts
+			r.lastPrefixScanAt = time.Now().UTC()
+			r.scanCounts = make(map[string]uint64)
+			break
+		}
+	}
+	prefixCounts := make(map[string]uint64, len(r.lastPrefixCounts))
+	for prefix, count := range r.lastPrefixCounts {
+		prefixCounts[prefix] = count
+	}
+	scannedAt := r.lastPrefixScanAt
+	r.scanMu.Unlock()
+	return map[string]any{
+		"dbSize":                  dbSize,
+		"usedMemoryBytes":         redisMetricValue(info, "used_memory"),
+		"maxMemoryBytes":          redisMetricValue(info, "maxmemory"),
+		"evictedKeys":             redisMetricValue(info, "evicted_keys"),
+		"keyCountsByPrefix":       prefixCounts,
+		"prefixCountsCompletedAt": scannedAt.Format(time.RFC3339Nano),
+		"v2Claims":                r.v2Claims.Load(),
+		"updatedAt":               time.Now().UTC().Format(time.RFC3339Nano),
+	}
+}
+
+var claimMonitorItemScript = redis.NewScript(`
+if redis.call("EXISTS", KEYS[1]) == 1 then
+  return 0
+end
+for index = 2, #KEYS do
+  if redis.call("SISMEMBER", KEYS[index], ARGV[1]) == 1 then
+    return 0
+  end
+end
+redis.call("SADD", KEYS[2], ARGV[1])
+redis.call("EXPIREAT", KEYS[2], ARGV[3])
+return 1
+`)
 
 func (r *RedisCache) GetUserRegion(userID int64) (string, bool) {
 	return r.GetUserRegionContext(r.ctx, userID)
@@ -175,9 +329,8 @@ func (r *RedisCache) GetUserRegionContext(ctx context.Context, userID int64) (st
 }
 
 func (r *RedisCache) SetUserRegion(userID int64, region string) {
-	_ = r.writeWithRetry(func() error {
-		return r.client.Set(r.ctx, fmt.Sprintf("user:region:%d", userID), region, 7*24*time.Hour).Err()
-	})
+	// Kept as a no-op during the dual-read rollout. Existing region-only keys
+	// remain readable and naturally expire; all new writes use seller:info.
 }
 
 func sellerInfoKey(domain string, userID int64) string {

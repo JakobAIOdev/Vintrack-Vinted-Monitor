@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"vintrack-worker/internal/database"
 	"vintrack-worker/internal/model"
 )
 
@@ -31,10 +32,16 @@ type enrichmentJob struct {
 	alertAfterEnrich   bool
 	cachedInfo         *SellerInfo
 	backgroundOnly     bool
+	refreshOnly        bool
+	refreshKey         string
 	strictAttempt      int
 	enqueuedAt         time.Time
 	readyAt            time.Time
 	notificationTimer  *time.Timer
+}
+
+func sellerHedgeAllowed(job enrichmentJob) bool {
+	return !job.backgroundOnly
 }
 
 // alertDeliveryWorkerCount is the single source of truth for delivery
@@ -86,6 +93,8 @@ func (e *Engine) startPipelines() {
 	}
 	e.jobsWG.Add(1)
 	go e.enrichmentMetricsHeartbeat()
+	e.jobsWG.Add(1)
+	go e.freeProxyRuntimeMetricsHeartbeat()
 	for i := 0; i < enrichmentWorkers; i++ {
 		e.jobsWG.Add(1)
 		go e.enrichmentWorker()
@@ -118,12 +127,47 @@ func (e *Engine) enqueueItem(job enrichmentJob, publishNow bool) {
 
 	if job.enricher != nil && job.vintedItem.User.ID > 0 {
 		cacheCtx, cancel := context.WithTimeout(job.ctx, 90*time.Millisecond)
-		if info, ok := LookupCachedSellerInfo(cacheCtx, e.db, job.enricher.domain, job.vintedItem.User.ID, job.enricher.cacheTTL); ok && isSellerInfoComplete(info) {
+		freshTTL, staleTTL := job.enricher.cacheTTLs()
+		info, cacheStatus, cacheSource := lookupCachedSellerInfo(
+			cacheCtx,
+			e.db,
+			job.enricher.domain,
+			job.vintedItem.User.ID,
+			freshTTL,
+			staleTTL,
+		)
+		if cacheStatus != sellerCacheMiss && isSellerInfoComplete(info) {
 			job.cachedInfo = &info
+			if e.enrichmentMetrics != nil {
+				e.enrichmentMetrics.recordCacheResult(cacheStatus, cacheSource, job.monitor.Region, job.proxySource)
+			}
+			if cacheStatus == sellerCacheStale {
+				refreshKey := sellerCacheKey(job.enricher.domain, job.vintedItem.User.ID)
+				if _, loaded := e.sellerRefreshes.LoadOrStore(refreshKey, struct{}{}); !loaded {
+					if e.enrichmentMetrics != nil {
+						e.enrichmentMetrics.recordRefresh()
+					}
+					refresh := job
+					refresh.cachedInfo = nil
+					refresh.alertAfterEnrich = false
+					refresh.publishUpdate = false
+					refresh.requireSellerMatch = false
+					refresh.backgroundOnly = true
+					refresh.refreshOnly = true
+					refresh.refreshKey = refreshKey
+					refresh.readyAt = time.Time{}
+					refresh.enqueuedAt = time.Now()
+					if !e.enrichmentScheduler.Submit(refresh.ctx, refresh) {
+						e.sellerRefreshes.Delete(refreshKey)
+					}
+				}
+			}
 		}
 		cancel()
 		if e.enrichmentMetrics != nil {
-			e.enrichmentMetrics.recordCache(job.cachedInfo != nil)
+			if job.cachedInfo == nil {
+				e.enrichmentMetrics.recordCacheResult(sellerCacheMiss, "", job.monitor.Region, job.proxySource)
+			}
 		}
 	}
 	if job.cachedInfo != nil {
@@ -297,6 +341,102 @@ func (e *Engine) enqueueStatusNotification(
 	}
 }
 
+func (e *Engine) enqueueProxyIncidentNotification(
+	monitor model.Monitor,
+	kind string,
+	idempotencyKey string,
+	title string,
+	message string,
+	region string,
+	affectedMonitors int,
+) {
+	if !e.monitorNotificationsEnabled(monitor) {
+		return
+	}
+	discordEnabled, telegramEnabled := effectiveExternalAlerts(monitor, true)
+	if !discordEnabled && !telegramEnabled {
+		return
+	}
+	request := model.AlertNotificationRequest{
+		UserID: monitor.UserID, MonitorID: monitor.ID, Kind: kind,
+		IdempotencyKey: idempotencyKey,
+		ExpiresAt:      time.Now().Add(time.Hour),
+		Payload: model.AlertNotificationPayload{
+			Version: 1, Kind: kind, MonitorName: monitor.Name,
+			Title: title, Message: message, Region: region,
+			AffectedMonitors: affectedMonitors,
+		},
+	}
+	if discordEnabled {
+		request.DiscordTarget = monitor.DiscordWebhook.String
+	}
+	if telegramEnabled {
+		request.TelegramTarget = monitor.TelegramChatID.String
+	}
+	ctx, cancel := context.WithTimeout(e.jobsCtx, 5*time.Second)
+	defer cancel()
+	if _, err := e.db.EnqueueAlertNotification(ctx, request); err != nil {
+		log.Printf("[%d] enqueue %s notification: %v", monitor.ID, kind, err)
+	}
+}
+
+func shouldNotifyFreeProxyOutage(group database.ProxyIncidentGroup, monitorID int, now time.Time) bool {
+	return group.OutageNotificationID == 0 &&
+		group.RepresentativeMonitor == monitorID &&
+		!now.Before(group.StartedAt.Add(5*time.Minute))
+}
+
+func (e *Engine) maybeNotifyFreeProxyOutage(ctx context.Context, monitor model.Monitor, domain string) {
+	group, ok, err := e.db.GetOpenProxyIncidentGroup(ctx, monitor.UserID, monitor.Region, domain)
+	if err != nil {
+		log.Printf("[%d] read proxy incident group: %v", monitor.ID, err)
+		return
+	}
+	if !ok || !shouldNotifyFreeProxyOutage(group, monitor.ID, time.Now()) {
+		return
+	}
+	message := fmt.Sprintf(
+		"The shared proxy pool for %s has been unavailable for more than five minutes. %d active monitor(s) are waiting safely and will resume automatically.",
+		strings.ToUpper(monitor.Region), group.MonitorCount,
+	)
+	e.enqueueProxyIncidentNotification(
+		monitor,
+		"free_proxy_outage",
+		fmt.Sprintf("free-proxy-outage:%s:%s:%d", monitor.UserID, monitor.Region, group.GroupID),
+		"Free proxy pool is recovering",
+		message,
+		monitor.Region,
+		group.MonitorCount,
+	)
+}
+
+func (e *Engine) maybeNotifyFreeProxyRecovery(ctx context.Context, monitor model.Monitor) {
+	open, err := e.db.CountOpenProxyIncidentsForUserRegion(ctx, monitor.UserID, monitor.Region)
+	if err != nil || open > 0 {
+		if err != nil {
+			log.Printf("[%d] count open proxy incidents: %v", monitor.ID, err)
+		}
+		return
+	}
+	outageNotificationID, ok, err := e.db.LatestUnrecoveredProxyOutageNotification(ctx, monitor.UserID, monitor.Region)
+	if err != nil {
+		log.Printf("[%d] read outage notification: %v", monitor.ID, err)
+		return
+	}
+	if !ok {
+		return
+	}
+	e.enqueueProxyIncidentNotification(
+		monitor,
+		"free_proxy_recovered",
+		fmt.Sprintf("free-proxy-recovered:%d", outageNotificationID),
+		"Free proxy pool recovered",
+		fmt.Sprintf("The shared proxy pool for %s is stable again. Waiting monitors resumed automatically.", strings.ToUpper(monitor.Region)),
+		monitor.Region,
+		0,
+	)
+}
+
 func (e *Engine) enrichmentWorker() {
 	defer e.jobsWG.Done()
 	for {
@@ -325,6 +465,9 @@ func (e *Engine) enrichmentFastWorker() {
 }
 
 func (e *Engine) enrichAndPersist(job enrichmentJob) {
+	if job.refreshKey != "" {
+		defer e.sellerRefreshes.Delete(job.refreshKey)
+	}
 	if !itemAlertDeadline(job.item).After(time.Now()) {
 		if job.alertAfterEnrich {
 			e.recordStaleItemAlert(alertJob{item: job.item, monitor: job.monitor}, "seller_enrichment_stale")
@@ -350,12 +493,18 @@ func (e *Engine) enrichAndPersist(job enrichmentJob) {
 			enrichmentDeadline = staleDeadline
 		}
 		fetchCtx, cancel := context.WithDeadline(job.ctx, enrichmentDeadline)
-		remoteStarted := time.Now()
-		info, fetchErr = e.fetchSellerInfo(fetchCtx, job.enricher, job.vintedItem.User.ID)
-		if e.enrichmentMetrics != nil {
-			e.enrichmentMetrics.recordRemote(time.Since(remoteStarted), classifySellerFetchError(fetchErr))
-		}
+		info, fetchErr = e.fetchSellerInfoMeasured(
+			fetchCtx,
+			job.enricher,
+			job.vintedItem.User.ID,
+			sellerHedgeAllowed(job),
+			job.monitor.Region,
+			job.proxySource,
+		)
 		cancel()
+	}
+	if job.refreshOnly {
+		return
 	}
 	if info.Region != "" && info.Region != "NaN" {
 		job.item.Location = info.Region
@@ -425,6 +574,14 @@ func (e *Engine) enrichAndPersist(job enrichmentJob) {
 }
 
 func (e *Engine) fetchSellerInfo(ctx context.Context, enricher *SellerEnricher, sellerID int64) (SellerInfo, error) {
+	return e.fetchSellerInfoMode(ctx, enricher, sellerID, true)
+}
+
+func (e *Engine) fetchSellerInfoMode(ctx context.Context, enricher *SellerEnricher, sellerID int64, allowHedge bool) (SellerInfo, error) {
+	return e.fetchSellerInfoMeasured(ctx, enricher, sellerID, allowHedge, "", "")
+}
+
+func (e *Engine) fetchSellerInfoMeasured(ctx context.Context, enricher *SellerEnricher, sellerID int64, allowHedge bool, region string, proxySource string) (SellerInfo, error) {
 	key := fmt.Sprintf("%s:%d", enricher.domain, sellerID)
 	e.sellerFlightsMu.Lock()
 	if e.sellerFlights == nil {
@@ -443,7 +600,16 @@ func (e *Engine) fetchSellerInfo(ctx context.Context, enricher *SellerEnricher, 
 	e.sellerFlights[key] = flight
 	e.sellerFlightsMu.Unlock()
 
-	info, err := enricher.FetchSellerInfo(ctx, sellerID)
+	started := time.Now()
+	info, err := enricher.RefreshSellerInfo(ctx, sellerID, allowHedge)
+	if e.enrichmentMetrics != nil {
+		e.enrichmentMetrics.recordRemoteFor(
+			time.Since(started),
+			classifySellerFetchError(err),
+			region,
+			proxySource,
+		)
+	}
 	e.sellerFlightsMu.Lock()
 	flight.info, flight.err = info, err
 	delete(e.sellerFlights, key)

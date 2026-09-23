@@ -27,7 +27,6 @@ import {
     ArrowRight,
     Globe,
     Zap,
-    AlertTriangle,
     Pencil,
     Send,
     Search,
@@ -41,7 +40,6 @@ import {
     ListChecks,
     Loader2,
     RefreshCw,
-    Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -113,19 +111,10 @@ import {
 } from "@/components/maintenance/create-monitor-link";
 import { FreePoolLimitDialog } from "@/components/free-pool-limit-dialog";
 import type { MonitorActivationBlock } from "@/lib/monitor-limits";
-
-type MonitorHealth = {
-    monitor_id: number;
-    total_checks: number;
-    total_errors: number;
-    consecutive_errors: number;
-    last_error?: string;
-    last_error_code?: string;
-    proxy_state?: string;
-    retry_at?: string;
-    proxy_label?: string;
-    updated_at: string;
-};
+import {
+    MonitorLifecycleStatus,
+    type MonitorHealth,
+} from "@/components/monitors/proxy-health";
 
 export type Monitor = {
     id: number;
@@ -223,17 +212,6 @@ async function readApiError(res: Response, fallback: string) {
     } catch {
         return `${fallback} (${res.status})`;
     }
-}
-
-function hasProxyWarning(h?: MonitorHealth): boolean {
-    if (!h) return false;
-    if (
-        h.proxy_state === "waiting_for_proxy" ||
-        h.proxy_state === "unavailable"
-    )
-        return true;
-    if (h.consecutive_errors === -1 || h.consecutive_errors >= 3) return true;
-    return false;
 }
 
 function formatTimestamp(value: string) {
@@ -1383,52 +1361,22 @@ export function DashboardClient({
                                             className="mt-0.5"
                                         />
                                         <div className="min-w-0 flex-1">
-                                            <h3
-                                                className="text-foreground truncate text-[15px] font-semibold"
-                                                title={m.name}
-                                            >
-                                                {m.name}
-                                            </h3>
-                                            <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                                                <Badge
-                                                    variant="outline"
-                                                    className={`text-[10px] font-medium ${
-                                                        m.status === "active"
-                                                            ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
-                                                            : m.status ===
-                                                                "error"
-                                                              ? "border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-400"
-                                                              : "bg-muted/60 text-muted-foreground"
-                                                    }`}
+                                            <div className="flex min-w-0 items-center gap-2.5">
+                                                <h3
+                                                    className="text-foreground min-w-0 flex-1 truncate text-[15px] font-semibold"
+                                                    title={m.name}
                                                 >
-                                                    {m.status === "active" ? (
-                                                        <span className="flex items-center gap-1">
-                                                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                                                            Running
-                                                        </span>
-                                                    ) : m.status ===
-                                                      "maintenance_paused" ? (
-                                                        <span className="flex items-center gap-1">
-                                                            <Wrench className="h-3 w-3" />
-                                                            Maintenance
-                                                        </span>
-                                                    ) : m.status ===
-                                                      "inactivity_paused" ? (
-                                                        <span className="flex items-center gap-1">
-                                                            <Clock3 className="h-3 w-3" />
-                                                            Paused due to
-                                                            inactivity
-                                                        </span>
-                                                    ) : m.status === "error" ? (
-                                                        <span className="flex items-center gap-1">
-                                                            <AlertTriangle className="h-3 w-3" />
-                                                            Proxy Error
-                                                        </span>
-                                                    ) : (
-                                                        "Paused"
-                                                    )}
-                                                </Badge>
-                                                {m.demo_expires_at && (
+                                                    {m.name}
+                                                </h3>
+                                                <MonitorLifecycleStatus
+                                                    status={m.status}
+                                                    health={healthMap[m.id]}
+                                                    compact
+                                                    className="shrink-0"
+                                                />
+                                            </div>
+                                            {m.demo_expires_at && (
+                                                <div className="mt-1.5 flex items-center">
                                                     <Badge
                                                         variant="outline"
                                                         className="border-amber-500/25 bg-amber-500/10 text-[10px] font-medium text-amber-700 dark:text-amber-300"
@@ -1439,20 +1387,8 @@ export function DashboardClient({
                                                             demoNow,
                                                         )}
                                                     </Badge>
-                                                )}
-                                                {m.status === "active" &&
-                                                    hasProxyWarning(
-                                                        healthMap[m.id],
-                                                    ) && (
-                                                        <Badge
-                                                            variant="outline"
-                                                            className="border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-400"
-                                                        >
-                                                            <AlertTriangle className="size-3" />
-                                                            Proxy issue
-                                                        </Badge>
-                                                    )}
-                                            </div>
+                                                </div>
+                                            )}
                                         </div>
                                         <div className="flex shrink-0 items-center">
                                             <Link

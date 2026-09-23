@@ -187,6 +187,15 @@ async function loadAdminOperationsSummary() {
         remoteP95Ms: number;
         timeouts: number;
         updatedAt: string | null;
+        freshHits: number;
+        staleHits: number;
+        redisHits: number;
+        dbHits: number;
+        refreshes: number;
+        remoteP50Ms: number;
+        remoteSuccessRate: number;
+        strictRetryQueueAgeMs: number;
+        backgroundQueueAgeMs: number;
     } | null = null;
     if (enrichmentRaw) {
         try {
@@ -202,6 +211,19 @@ async function loadAdminOperationsSummary() {
                     typeof value.updatedAt === "string"
                         ? value.updatedAt
                         : null,
+                freshHits: Number(value.freshHits ?? value.cacheHits ?? 0),
+                staleHits: Number(value.staleHits ?? 0),
+                redisHits: Number(value.redisHits ?? 0),
+                dbHits: Number(value.dbHits ?? 0),
+                refreshes: Number(value.refreshes ?? 0),
+                remoteP50Ms: Number(value.remoteP50Ms ?? 0),
+                remoteSuccessRate: Number(value.remoteSuccessRate ?? 0),
+                strictRetryQueueAgeMs: Number(
+                    value.strictRetryQueueAgeMs ?? 0,
+                ),
+                backgroundQueueAgeMs: Number(
+                    value.backgroundQueueAgeMs ?? 0,
+                ),
             };
         } catch {
             enrichment = null;

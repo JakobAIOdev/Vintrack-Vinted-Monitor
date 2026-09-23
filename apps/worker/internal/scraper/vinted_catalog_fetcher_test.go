@@ -1,12 +1,36 @@
 package scraper
 
 import (
+	"context"
 	"errors"
-	"strings"
+	"net/url"
 	"testing"
+	"time"
 
 	"vintrack-worker/internal/model"
+
+	http "github.com/bogdanfinn/fhttp"
 )
+
+func TestWarmupFallbackPolicy(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "not found", err: &httpStatusError{statusCode: 404}, want: true},
+		{name: "gone", err: &httpStatusError{statusCode: 410}, want: true},
+		{name: "forbidden", err: &httpStatusError{statusCode: 403}, want: false},
+		{name: "timeout", err: context.DeadlineExceeded, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := shouldFallbackCatalogWarmup(test.err)
+			if got != test.want {
+				t.Fatalf("fallback = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
 
 func TestFetchCatalogWithSessionRetryRewarmsAndRetriesOnce(t *testing.T) {
 	attempts := 0
@@ -94,50 +118,57 @@ func TestNormalizeCatalogItemsUsesItemBoxFallbacks(t *testing.T) {
 	}
 }
 
-func TestReadCatalogCSRFTokenStopsAfterToken(t *testing.T) {
-	const token = "123e4567-e89b-12d3-a456-426614174000"
-	body := strings.Repeat("a", 40*1024) + `CSRF_TOKEN\":\"` + token + strings.Repeat("b", 128*1024)
-	reader := strings.NewReader(body)
-
-	got, err := readCatalogCSRFToken(reader)
-	if err != nil {
-		t.Fatalf("readCatalogCSRFToken() error = %v", err)
-	}
-	if got != token {
-		t.Fatalf("readCatalogCSRFToken() = %q, want %q", got, token)
-	}
-	if reader.Len() == 0 {
-		t.Fatal("readCatalogCSRFToken() consumed the full response after finding the token")
-	}
-}
-
-func TestExtractCSRFTokenFromNextBootstrap(t *testing.T) {
-	body := []byte(`self.__next_f.push([1,"{\"CSRF_TOKEN\":\"123e4567-e89b-12d3-a456-426614174000\"}"])`)
-	if got := extractCSRFToken(body); got != "123e4567-e89b-12d3-a456-426614174000" {
-		t.Fatalf("extractCSRFToken() = %q", got)
-	}
-	if got := extractCSRFToken([]byte("missing")); got != "" {
-		t.Fatalf("missing token = %q, want empty", got)
-	}
-}
-
 func TestCatalogAPIHeadersMatchMarketplaceWeb(t *testing.T) {
-	headers := newCatalogAPIHeaders("www.vinted.co.uk", catalogBootstrap{
-		csrfToken: "csrf-fixture",
-		anonID:    "anon-fixture",
-	})
+	headers := newCatalogAPIHeaders("www.vinted.co.uk")
 	for key, want := range map[string]string{
-		"Origin":         "https://www.vinted.co.uk",
-		"Referer":        "https://www.vinted.co.uk/",
-		"Locale":         "en-GB",
-		"Platform":       "web",
-		"X-Anon-Id":      "anon-fixture",
-		"X-Csrf-Token":   "csrf-fixture",
-		"X-Next-App":     "marketplace-web",
-		"Sec-Fetch-Site": "same-site",
+		"Origin":          "https://www.vinted.co.uk",
+		"Referer":         "https://www.vinted.co.uk/",
+		"Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+		"Priority":        "u=1, i",
+		"Sec-Fetch-Site":  "same-site",
 	} {
 		if got := headers.Get(key); got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
 	}
+	for _, legacyHeader := range []string{
+		"Cache-Control", "Pragma", "Locale", "Platform",
+		"X-Anon-Id", "X-Csrf-Token", "X-Next-App",
+	} {
+		if got := headers.Get(legacyHeader); got != "" {
+			t.Errorf("%s = %q, want omitted for current catalogue requests", legacyHeader, got)
+		}
+	}
+}
+
+func TestSynchronizeCatalogCookiesCopiesMarketplaceSessionToAPIHost(t *testing.T) {
+	client, err := NewClientWithTimeout("", nil, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	marketplaceURL, _ := url.Parse("https://www.vinted.co.uk/")
+	catalogURL, _ := url.Parse("https://api.vinted.co.uk/")
+	client.HttpClient.SetCookies(marketplaceURL, []*http.Cookie{
+		{Name: "access_token_web", Value: "anonymous-session", Path: "/"},
+		{Name: "anon_id", Value: "anonymous-id", Path: "/"},
+	})
+	if got := client.HttpClient.GetCookies(catalogURL); len(got) != 0 {
+		t.Fatalf("catalog cookies before synchronization = %v, want none", cookieNames(got))
+	}
+
+	client.synchronizeCatalogCookies("www.vinted.co.uk")
+	got := cookieNames(client.HttpClient.GetCookies(catalogURL))
+	if len(got) != 2 || got[0] != "access_token_web" || got[1] != "anon_id" {
+		t.Fatalf("catalog cookies after synchronization = %v", got)
+	}
+}
+
+func cookieNames(cookies []*http.Cookie) []string {
+	names := make([]string, len(cookies))
+	for index, cookie := range cookies {
+		names[index] = cookie.Name
+	}
+	return names
 }

@@ -33,6 +33,14 @@ func (p *RegionPools) Replace(region string, raw string) bool {
 	return p.Manager(region).ReplaceFromString(raw)
 }
 
+func (p *RegionPools) Publish(region string, raw string, state string, mature int, reason string, readyObservations int) bool {
+	return p.Manager(region).ReplaceSnapshot(raw, state, mature, reason, readyObservations)
+}
+
+func (p *RegionPools) Snapshot(region string) PoolSnapshot {
+	return p.Manager(region).PoolSnapshot()
+}
+
 // Retain removes pools that are no longer configured. Managers are emptied
 // before removal so existing references cannot keep using a stale region.
 func (p *RegionPools) Retain(regions []string) {

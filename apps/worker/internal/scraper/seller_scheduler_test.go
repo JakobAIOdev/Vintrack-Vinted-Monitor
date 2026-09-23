@@ -77,6 +77,31 @@ func TestSellerEnrichmentSchedulerDoesNotPrefetchBackgroundWork(t *testing.T) {
 	}
 }
 
+func TestScheduledRetryDoesNotBlockReadyJobInSameLane(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scheduler := NewSellerEnrichmentScheduler(8, 1)
+	go scheduler.Run(ctx)
+	if !scheduler.Submit(ctx, enrichmentJob{
+		proxySource: "free", item: itemWithID(1), readyAt: time.Now().Add(time.Hour),
+	}) {
+		t.Fatal("future submit failed")
+	}
+	if !scheduler.Submit(ctx, enrichmentJob{
+		proxySource: "free", item: itemWithID(2),
+	}) {
+		t.Fatal("ready submit failed")
+	}
+	select {
+	case job := <-scheduler.Work():
+		if job.item.ID != 2 {
+			t.Fatalf("dispatched item %d, want ready item 2", job.item.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ready job was blocked behind scheduled retry")
+	}
+}
+
 func TestSellerEnrichmentSchedulerBackgroundInputCannotBlockNewAlert(t *testing.T) {
 	scheduler := NewSellerEnrichmentScheduler(1, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -90,10 +115,8 @@ func TestSellerEnrichmentSchedulerBackgroundInputCannotBlockNewAlert(t *testing.
 	}
 }
 
-// TestSellerEnrichmentSchedulerQueueAgeByPriority pins that QueueAge only
-// ever reflects the foreground lane (as documented), while the new
-// StrictRetryQueueAge/BackgroundQueueAge accessors independently surface the
-// other two priority classes instead of leaving them invisible.
+// Scheduled retry delay is intentional and must not look like executable
+// backlog. Queue ages therefore remain zero until a job is ready.
 func TestSellerEnrichmentSchedulerQueueAgeByPriority(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -113,19 +136,12 @@ func TestSellerEnrichmentSchedulerQueueAgeByPriority(t *testing.T) {
 		t.Fatal("foreground submit failed")
 	}
 
-	// Give the scheduler goroutine a moment to ingest the submissions and
-	// recompute the per-priority oldest timestamps.
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		now := time.Now()
-		if scheduler.QueueAge(now) > 0 && scheduler.StrictRetryQueueAge(now) > 0 && scheduler.BackgroundQueueAge(now) > 0 {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	time.Sleep(25 * time.Millisecond)
 	now := time.Now()
-	t.Fatalf("expected all three queue ages to become positive; foreground=%v strict=%v background=%v",
-		scheduler.QueueAge(now), scheduler.StrictRetryQueueAge(now), scheduler.BackgroundQueueAge(now))
+	if scheduler.QueueAge(now) != 0 || scheduler.StrictRetryQueueAge(now) != 0 || scheduler.BackgroundQueueAge(now) != 0 {
+		t.Fatalf("future jobs counted as ready backlog; foreground=%v strict=%v background=%v",
+			scheduler.QueueAge(now), scheduler.StrictRetryQueueAge(now), scheduler.BackgroundQueueAge(now))
+	}
 }
 
 // TestSellerEnrichmentSchedulerDispatchesUnderContinuousInputPressure guards

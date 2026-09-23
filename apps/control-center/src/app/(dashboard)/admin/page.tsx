@@ -49,6 +49,7 @@ const EMPTY_FREE_PROXY_STATE: Awaited<
     settings: { ...DEFAULT_FREE_PROXY_POLICY, enabled: false },
     degradationReason: null,
     maintainerRuntime: null,
+    runtimeMetrics: [],
     counts: { active: 0, pending: 0, quarantined: 0, disabled: 0, total: 0 },
     regions: [],
     sourceDiagnostics: [],

@@ -7,6 +7,7 @@ import (
 	"hash/fnv"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -33,6 +34,7 @@ var (
 	freeProxyImportRunning       atomic.Bool
 	freeProxyEgressLimited       atomic.Bool
 	freeProxyEgressRecoveryWaves atomic.Int32
+	lastFreeProxyVacuumUnix      atomic.Int64
 	telemetryCleanupRunning      atomic.Bool
 	freeProxyRegionRates         = struct {
 		sync.Mutex
@@ -46,6 +48,7 @@ const (
 	proxiflyHTTPSListURL   = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/https/data.txt"
 	proxiflySOCKS4ListURL  = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks4/data.txt"
 	proxiflySOCKS5ListURL  = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt"
+	proxiflyCountryBaseURL = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/countries/"
 	databayHTTPListURL     = "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/http.txt"
 	databaySOCKS4ListURL   = "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/socks4.txt"
 	databaySOCKS5ListURL   = "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/socks5.txt"
@@ -53,7 +56,7 @@ const (
 )
 
 const (
-	freeProxyCheckCycleTimeout = 5 * time.Minute
+	freeProxyCheckCycleTimeout = 270 * time.Second
 	freeProxyImportTimeout     = 2 * time.Minute
 	freeProxySourceTimeout     = 15 * time.Second
 	freeProxyWriteTimeout      = 5 * time.Second
@@ -71,11 +74,15 @@ type freeProxyImportCandidate struct {
 }
 
 type freeProxyRegionRateState struct {
-	windowStarted time.Time
-	checked       int
-	rateLimited   int
-	throttleUntil time.Time
-	recoveryUntil time.Time
+	windowStarted         time.Time
+	checked               int
+	rateLimited           int
+	errorCounts           map[string]int
+	errorSources          map[string]map[string]bool
+	throttleUntil         time.Time
+	recoveryUntil         time.Time
+	hardCircuitUntil      time.Time
+	hardRecoverySuccesses int
 }
 
 func main() {
@@ -255,6 +262,13 @@ func publishMonitorWorkerRuntime(ctx context.Context, store *database.Store, mgr
 }
 
 func runProxyMaintainer(ctx context.Context, cancel context.CancelFunc, sigChan <-chan os.Signal, store *database.Store) {
+	ukCanary := newFreeProxyUKCanaryRunner(store, scraper.ValidateFreeProxy)
+	ukCanaryDone := make(chan struct{})
+	go func() {
+		defer close(ukCanaryDone)
+		ukCanary.run(ctx)
+	}()
+
 	pruneTelemetry := func() {
 		if !telemetryCleanupRunning.CompareAndSwap(false, true) {
 			log.Println("Telemetry cleanup is still running; skipping overlapping cycle")
@@ -298,6 +312,7 @@ func runProxyMaintainer(ctx context.Context, cancel context.CancelFunc, sigChan 
 		case <-sigChan:
 			log.Println("Shutdown signal received, stopping proxy maintainer...")
 			cancel()
+			<-ukCanaryDone
 			return
 		case <-healthTicker.C:
 			go checkFreeProxies(ctx, store)
@@ -362,47 +377,205 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 	regions, err := freeProxyRegionsContext(refreshCtx, store)
 	if err != nil {
 		log.Printf("free proxy region refresh failed: %v", err)
+		freeProxyPools.Retain(nil)
 		return
 	}
 	freeProxyPools.Retain(regions)
 	enabled, err := store.FeatureGloballyEnabledContext(refreshCtx, "free_proxy_pool", "free_proxy_enabled", false)
 	if err != nil {
 		log.Printf("free proxy enabled setting refresh failed: %v", err)
+		freeProxyPools.Retain(nil)
 		return
 	}
 	if !enabled {
 		freeProxyPools.Retain(nil)
 		return
 	}
+	if demoted, normalizeErr := store.NormalizeFreeProxyPromotionStateContext(refreshCtx); normalizeErr != nil {
+		log.Printf("free proxy promotion normalization failed: %v", normalizeErr)
+		for _, region := range regions {
+			freeProxyPools.Publish(region, "", "recovering", 0, "validation_state_unavailable", 0)
+		}
+		return
+	} else if demoted > 0 {
+		log.Printf("free proxy promotion normalization: moved %d one-check proxies back to warming", demoted)
+	}
 	regionDemand, err := store.GetFreeProxyRegionDemandContext(refreshCtx)
 	if err != nil {
 		log.Printf("free proxy region demand refresh failed: %v", err)
-		return
+		regionDemand = make(map[string]int)
 	}
+	minActive, _ := settingIntContext(refreshCtx, store, "free_proxy_min_active_per_region", 25)
 	readyTarget, _ := settingIntContext(refreshCtx, store, "free_proxy_ready_target_active_region", 50)
 	reserveTarget, _ := settingIntContext(refreshCtx, store, "free_proxy_reserve_target_active_region", 50)
 	idleTarget, _ := settingIntContext(refreshCtx, store, "free_proxy_idle_region_target", 10)
 	for _, region := range regions {
-		activeCount, err := store.CountActiveFreeProxiesContext(refreshCtx, region)
+		var ukProxies []string
+		activeCount := 0
+		if region == freeProxyUKCanaryRegion {
+			ukProxies, err = store.GetDiverseActiveFreeProxiesContext(refreshCtx, region, max(1, minActive))
+			activeCount = len(ukProxies)
+		} else {
+			activeCount, err = store.CountActiveFreeProxiesContext(refreshCtx, region)
+		}
 		if err != nil {
 			log.Printf("free proxy active count failed for %s: %v", region, err)
+			freeProxyPools.Publish(region, "", "recovering", 0, "active_count_unavailable", 0)
 			continue
 		}
-		if activeCount == 0 {
-			freeProxyPools.Replace(region, "")
+
+		previous := freeProxyPools.Snapshot(region)
+		serving, state, reason, readyObservations := freeProxyServingDecision(
+			previous,
+			activeCount,
+			minActive,
+		)
+		if region == freeProxyUKCanaryRegion {
+			serving, state, reason, readyObservations = freeProxyUKServingDecision(
+				refreshCtx,
+				store,
+				activeCount,
+				minActive,
+			)
+		}
+		if !serving {
+			freeProxyPools.Publish(region, "", state, activeCount, reason, readyObservations)
+			_ = publishFreeProxyRegionServingState(refreshCtx, store, region, state, activeCount, reason)
 			continue
 		}
+
 		poolLimit := max(1, idleTarget*2)
 		if regionDemand[region] > 0 {
 			poolLimit = max(1, readyTarget+reserveTarget)
 		}
-		proxies, err := store.GetActiveFreeProxiesContext(refreshCtx, region, poolLimit)
+		poolLimit = freeProxyServingPoolLimit(region, minActive, poolLimit)
+		var proxies []string
+		if region == freeProxyUKCanaryRegion {
+			proxies = ukProxies
+		} else {
+			proxies, err = store.GetActiveFreeProxiesContext(refreshCtx, region, poolLimit)
+		}
 		if err != nil {
 			log.Printf("free proxy refresh failed for %s: %v", region, err)
+			freeProxyPools.Publish(region, "", "recovering", activeCount, "snapshot_query_failed", 0)
+			_ = publishFreeProxyRegionServingState(refreshCtx, store, region, "recovering", activeCount, "snapshot_query_failed")
 			continue
 		}
-		freeProxyPools.Replace(region, strings.Join(proxies, "\n"))
+		freeProxyPools.Publish(region, strings.Join(proxies, "\n"), "ready", activeCount, "", readyObservations)
+		_ = publishFreeProxyRegionServingState(refreshCtx, store, region, "ready", activeCount, "")
 	}
+}
+
+func freeProxyServingPoolLimit(region string, minimum int, defaultLimit int) int {
+	if region == freeProxyUKCanaryRegion {
+		return max(1, minimum)
+	}
+	return max(1, defaultLimit)
+}
+
+func freeProxyUKServingDecision(
+	ctx context.Context,
+	store *database.Store,
+	activeCount int,
+	minActive int,
+) (bool, string, string, int) {
+	canary, err := readFreeProxyUKCanaryStateContext(ctx, store, time.Now())
+	if err != nil {
+		return false, "recovering", "uk_canary_state_unavailable", 0
+	}
+	exitThreshold := max(1, (max(1, minActive)*80+99)/100)
+	if activeCount < exitThreshold {
+		return false, "recovering", "below_hysteresis_floor", 0
+	}
+	if !canary.CapacityReady {
+		state := "recovering"
+		if activeCount == 0 {
+			state = "building"
+		}
+		reason := canary.ReadinessReason
+		if reason == "" {
+			reason = "confirming_readiness"
+		}
+		return false, state, reason, canary.CapacityObservations
+	}
+	if !canary.CanaryPassed {
+		reason := canary.ReadinessReason
+		if reason == "" {
+			reason = "collecting_uk_canary"
+		}
+		return false, "recovering", reason, canary.CapacityObservations
+	}
+	return true, "ready", "", max(2, canary.CapacityObservations)
+}
+
+const freeProxyValidationRevision = "catalog-cookie-domain-sync-v6-score80-recovery-cohort"
+
+func ensureFreeProxyValidationRevision(ctx context.Context, store *database.Store, regions []string) error {
+	const settingKey = "free_proxy_validation_revision"
+	current, ok, err := store.GetSettingValueContext(ctx, settingKey)
+	if err != nil {
+		return err
+	}
+	if ok && current == freeProxyValidationRevision {
+		return nil
+	}
+	requeued, err := store.RequeueFreeProxyRegionalAccessFailuresContext(ctx, regions)
+	if err != nil {
+		return err
+	}
+	if err := store.SetSettingValueContext(ctx, settingKey, freeProxyValidationRevision); err != nil {
+		return err
+	}
+	log.Printf("free proxy validation revision %s requeued %d regional access failures", freeProxyValidationRevision, requeued)
+	return nil
+}
+
+func freeProxyServingDecision(previous proxy.PoolSnapshot, activeCount int, minActive int) (bool, string, string, int) {
+	minimum := max(1, minActive)
+	exitThreshold := max(1, (minimum*80+99)/100)
+	readyObservations := previous.ReadyObservations
+	serving := previous.State == "ready"
+	reason := "below_minimum_mature"
+	if serving {
+		if activeCount < exitThreshold {
+			serving = false
+			readyObservations = 0
+			reason = "below_hysteresis_floor"
+		} else {
+			readyObservations = max(2, readyObservations)
+			reason = ""
+		}
+	} else if activeCount >= minimum {
+		readyObservations++
+		if readyObservations >= 2 {
+			serving = true
+			reason = ""
+		} else {
+			reason = "confirming_readiness"
+		}
+	} else {
+		readyObservations = 0
+	}
+
+	state := "recovering"
+	if activeCount == 0 && previous.Version == 0 {
+		state = "building"
+	}
+	if serving {
+		state = "ready"
+	}
+	return serving, state, reason, readyObservations
+}
+
+func publishFreeProxyRegionServingState(ctx context.Context, store *database.Store, region string, state string, mature int, reason string) error {
+	payload, err := json.Marshal(map[string]any{
+		"state": state, "serving": state == "ready", "mature": mature,
+		"reason": reason, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return err
+	}
+	return store.SetSettingValueContext(ctx, "free_proxy_serving_state:"+region, string(payload))
 }
 
 func checkFreeProxies(ctx context.Context, store *database.Store) {
@@ -444,6 +617,11 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 		log.Printf("free proxy region demand load failed: %v", err)
 		return
 	}
+	requestedRPS, err := store.GetFreeProxyRegionRequestedRPSContext(cycleCtx)
+	if err != nil {
+		log.Printf("free proxy requested RPS load failed: %v", err)
+		return
+	}
 	activeCandidateLimit, err := settingIntContext(cycleCtx, store, "free_proxy_candidate_limit_active_region", 10000)
 	if err != nil {
 		log.Printf("free proxy active candidate limit load failed: %v", err)
@@ -463,6 +641,10 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 	}
 	if err := store.EnsureFreeProxyHealthRowsWithLimitsContext(cycleCtx, candidateLimits); err != nil {
 		log.Printf("free proxy health row sync failed: %v", err)
+		return
+	}
+	if err := ensureFreeProxyValidationRevision(cycleCtx, store, regions); err != nil {
+		log.Printf("free proxy validation revision failed: %v", err)
 		return
 	}
 	perRegionBatch, err := settingIntContext(cycleCtx, store, "FREE_PROXY_HEALTH_BATCH_PER_REGION", 100)
@@ -514,6 +696,10 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 		return
 	}
 	validationTimeout := freeProxyValidationTimeout(maxLatencyMs)
+	validationP95 := validationTimeout
+	if measuredP95, p95Err := store.FreeProxyValidationP95Context(cycleCtx); p95Err == nil && measuredP95 > 0 {
+		validationP95 = min(validationTimeout, max(100*time.Millisecond, measuredP95))
+	}
 	concurrency, err := settingIntContext(cycleCtx, store, "FREE_PROXY_HEALTH_CONCURRENCY", 64)
 	if err != nil {
 		log.Printf("free proxy health concurrency setting load failed: %v", err)
@@ -532,10 +718,16 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 	remainingByRegion := make(map[string]int, len(regions))
 	bootstrapByRegion := make(map[string]bool, len(regions))
 	targetByRegion := make(map[string]int, len(regions))
+	activeByRegion := make(map[string]int, len(regions))
 	for _, region := range regions {
 		target := idleTarget
 		if regionDemand[region] > 0 {
-			target = readyTarget + reserveTarget
+			target = freeProxyTargetCapacity(requestedRPS[region])
+			configuredTarget := max(50, readyTarget+reserveTarget)
+			if !emergencyRecoveryEnabled {
+				configuredTarget = max(50, readyTarget)
+			}
+			target = min(target, configuredTarget)
 		}
 		target = min(target, candidateLimits[region])
 		targetByRegion[region] = target
@@ -544,6 +736,7 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 			log.Printf("free proxy active count failed for %s: %v", region, err)
 			continue
 		}
+		activeByRegion[region] = activeCount
 		if activeCount < target {
 			remainingByRegion[region] = bootstrapBatch
 			bootstrapByRegion[region] = true
@@ -551,6 +744,15 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 			remainingByRegion[region] = perRegionBatch
 		}
 	}
+
+	maxValidationBudget := freeProxyValidationBudget(concurrency, validationP95)
+	remainingByRegion = capFreeProxyRegionBudgets(
+		remainingByRegion,
+		targetByRegion,
+		activeByRegion,
+		requestedRPS,
+		maxValidationBudget,
+	)
 
 	if value, ok, settingErr := store.GetSettingValueContext(
 		cycleCtx,
@@ -719,6 +921,23 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 		}
 	}
 	cancelEvents()
+	pruneCtx, cancelPrune := context.WithTimeout(ctx, freeProxyWriteTimeout)
+	if pruned, pruneErr := store.PruneFreeProxyHealthContext(pruneCtx, 5000); pruneErr != nil {
+		log.Printf("free proxy health prune failed: %v", pruneErr)
+	} else if pruned > 0 {
+		log.Printf("free proxy health pruned: %d stale rows", pruned)
+		nowUnix := time.Now().Unix()
+		lastVacuum := lastFreeProxyVacuumUnix.Load()
+		if nowUnix-lastVacuum >= int64(time.Hour/time.Second) &&
+			lastFreeProxyVacuumUnix.CompareAndSwap(lastVacuum, nowUnix) {
+			vacuumCtx, cancelVacuum := context.WithTimeout(ctx, 45*time.Second)
+			if vacuumErr := store.VacuumAnalyzeFreeProxyHealthContext(vacuumCtx); vacuumErr != nil {
+				log.Printf("free proxy health vacuum analyze failed: %v", vacuumErr)
+			}
+			cancelVacuum()
+		}
+	}
+	cancelPrune()
 	publishFreeProxyMaintainerRuntime(
 		ctx,
 		store,
@@ -745,6 +964,77 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 		protocolCounts,
 		sourceCounts,
 	)
+}
+
+func freeProxyTargetCapacity(requestedRPS float64) int {
+	target := int(math.Ceil(requestedRPS / 0.5 * 1.25))
+	return max(50, min(100, target))
+}
+
+func freeProxyValidationBudget(concurrency int, validationP95 time.Duration) int {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if validationP95 < 100*time.Millisecond {
+		validationP95 = 100 * time.Millisecond
+	}
+	return max(concurrency, int(float64(concurrency)*float64(freeProxyCheckCycleTimeout)/float64(validationP95)))
+}
+
+func capFreeProxyRegionBudgets(
+	requested map[string]int,
+	targets map[string]int,
+	active map[string]int,
+	rps map[string]float64,
+	limit int,
+) map[string]int {
+	result := make(map[string]int, len(requested))
+	totalRequested := 0
+	for _, count := range requested {
+		totalRequested += count
+	}
+	if totalRequested <= limit {
+		for region, count := range requested {
+			result[region] = count
+		}
+		return result
+	}
+	weights := make(map[string]float64, len(requested))
+	totalWeight := 0.0
+	for region, count := range requested {
+		if count <= 0 {
+			continue
+		}
+		target := max(1, targets[region])
+		deficit := max(0, target-active[region])
+		weight := math.Max(0.1, rps[region]) * (1 + float64(deficit)/float64(target))
+		weights[region] = weight
+		totalWeight += weight
+	}
+	remaining := limit
+	for region, weight := range weights {
+		share := max(1, int(math.Floor(float64(limit)*weight/totalWeight)))
+		share = min(share, requested[region])
+		result[region] = share
+		remaining -= share
+	}
+	for remaining > 0 {
+		progress := false
+		for region, count := range requested {
+			if remaining == 0 {
+				break
+			}
+			if result[region] < count {
+				result[region]++
+				remaining--
+				progress = true
+			}
+		}
+		if !progress {
+			break
+		}
+	}
+	return result
 }
 
 func publishFreeProxyMaintainerRuntime(
@@ -919,14 +1209,38 @@ type freeProxyValidationOutcome struct {
 	stage                  string
 }
 
-func observeFreeProxyRegionRate(region string, errorCode string, now time.Time) {
+func observeFreeProxyRegionRate(region string, source string, errorCode string, now time.Time) {
 	freeProxyRegionRates.Lock()
 	defer freeProxyRegionRates.Unlock()
 	state := freeProxyRegionRates.regions[region]
 	if state == nil {
-		state = &freeProxyRegionRateState{windowStarted: now}
+		state = &freeProxyRegionRateState{
+			windowStarted: now,
+			errorCounts:   make(map[string]int),
+			errorSources:  make(map[string]map[string]bool),
+		}
 		freeProxyRegionRates.regions[region] = state
 	}
+	if state.errorCounts == nil {
+		state.errorCounts = make(map[string]int)
+	}
+	if state.errorSources == nil {
+		state.errorSources = make(map[string]map[string]bool)
+	}
+
+	if state.hardCircuitUntil.After(now) {
+		if errorCode == "" {
+			state.hardRecoverySuccesses++
+			if state.hardRecoverySuccesses >= 3 {
+				state.hardCircuitUntil = time.Time{}
+				state.hardRecoverySuccesses = 0
+				log.Printf("free proxy regional circuit recovered for %s after three successful probes", region)
+			}
+		} else {
+			state.hardRecoverySuccesses = 0
+		}
+	}
+
 	if now.Sub(state.windowStarted) >= 5*time.Minute {
 		if state.checked > 0 && state.rateLimited*100 > state.checked*20 {
 			state.throttleUntil = now.Add(10 * time.Minute)
@@ -938,13 +1252,40 @@ func observeFreeProxyRegionRate(region string, errorCode string, now time.Time) 
 				state.checked,
 			)
 		}
+		dominantCode, dominantCount, dominantSources := "", 0, 0
+		for code, count := range state.errorCounts {
+			if count > dominantCount {
+				dominantCode = code
+				dominantCount = count
+				dominantSources = len(state.errorSources[code])
+			}
+		}
+		if state.checked >= 50 && dominantCount*100 >= state.checked*95 && dominantSources >= 3 {
+			state.hardCircuitUntil = now.Add(10 * time.Minute)
+			state.hardRecoverySuccesses = 0
+			log.Printf(
+				"free proxy regional circuit opened for %s: %d/%d %s failures across %d sources",
+				region, dominantCount, state.checked, dominantCode, dominantSources,
+			)
+		}
 		state.windowStarted = now
 		state.checked = 0
 		state.rateLimited = 0
+		state.errorCounts = make(map[string]int)
+		state.errorSources = make(map[string]map[string]bool)
 	}
 	state.checked++
 	if errorCode == "vinted_429" {
 		state.rateLimited++
+	}
+	if errorCode != "" {
+		state.errorCounts[errorCode]++
+		if state.errorSources[errorCode] == nil {
+			state.errorSources[errorCode] = make(map[string]bool)
+		}
+		if source != "" {
+			state.errorSources[errorCode][source] = true
+		}
 	}
 }
 
@@ -955,6 +1296,9 @@ func freeProxyRegionConcurrency(region string, configured int, now time.Time) in
 	state := freeProxyRegionRates.regions[region]
 	if state == nil {
 		return configured
+	}
+	if state.hardCircuitUntil.After(now) {
+		return min(configured, 2)
 	}
 	return freeProxyAdaptiveRegionConcurrency(
 		configured,
@@ -1075,7 +1419,7 @@ func validateFreeProxyWaveWithValidator(
 				outcome.canceled = true
 				return
 			}
-			observeFreeProxyRegionRate(candidate.Region, result.ErrorCode, time.Now())
+			observeFreeProxyRegionRate(candidate.Region, candidate.Source, result.ErrorCode, time.Now())
 
 			stage := string(result.Stage)
 			if stage == "" {
@@ -1364,6 +1708,7 @@ func importFreeProxies(ctx context.Context, store *database.Store) {
 	}
 
 	sourceCandidates := make([][]freeProxyImportCandidate, 0, len(importURLs))
+	refreshedSourceSet := make(map[string]bool)
 	allSeenProxyURLs := make(map[string]bool)
 	for index, sourceURL := range importURLs {
 		if !downloaded[index] {
@@ -1375,6 +1720,7 @@ func importFreeProxies(ctx context.Context, store *database.Store) {
 			continue
 		}
 		source := freeProxySourceContext(importCtx, store, sourceURL)
+		refreshedSourceSet[source] = true
 		defaultScheme := defaultSchemeForImportURL(sourceURL)
 		candidates := make([]freeProxyImportCandidate, 0)
 		seenSourceProxies := make(map[string]bool)
@@ -1427,6 +1773,16 @@ func importFreeProxies(ctx context.Context, store *database.Store) {
 	processed, err := store.UpsertFreeProxiesContext(importCtx, selectedCandidates)
 	if err != nil {
 		log.Printf("free proxy batch import failed after %d candidates: %v", processed, err)
+		return
+	}
+	refreshedSources := make([]string, 0, len(refreshedSourceSet))
+	for source := range refreshedSourceSet {
+		refreshedSources = append(refreshedSources, source)
+	}
+	sort.Strings(refreshedSources)
+	currentMemberships := currentFreeProxySourceMemberships(sourceCandidates, canonicalInventory)
+	if err := store.RefreshFreeProxySourcesContext(importCtx, refreshedSources, currentMemberships); err != nil {
+		log.Printf("free proxy source membership refresh failed: %v", err)
 		return
 	}
 	selectedProxyURLs := make([]string, 0, len(selectedCandidates))
@@ -1542,6 +1898,46 @@ func selectFreeProxyImportCandidatesAt(
 	}
 
 	return selectedCandidates, newCandidates
+}
+
+func currentFreeProxySourceMemberships(
+	sources [][]freeProxyImportCandidate,
+	inventory map[string]database.FreeProxyInventoryRecord,
+) []database.FreeProxyRecord {
+	recordsByURL := make(map[string]database.FreeProxyRecord)
+	for _, sourceCandidates := range sources {
+		for _, candidate := range sourceCandidates {
+			stored, exists := inventory[candidate.ProxyURL]
+			if !exists {
+				continue
+			}
+			record, exists := recordsByURL[stored.ProxyURL]
+			if !exists {
+				record = database.FreeProxyRecord{
+					ProxyURL: stored.ProxyURL,
+					Protocol: candidate.Protocol,
+					Host:     candidate.Host,
+					Port:     candidate.Port,
+					Source:   candidate.Source,
+				}
+			}
+			for _, sourceName := range append(candidate.Sources, candidate.Source) {
+				if sourceName == "" || containsString(record.Sources, sourceName) {
+					continue
+				}
+				record.Sources = append(record.Sources, sourceName)
+			}
+			recordsByURL[stored.ProxyURL] = record
+		}
+	}
+	records := make([]database.FreeProxyRecord, 0, len(recordsByURL))
+	for _, record := range recordsByURL {
+		records = append(records, record)
+	}
+	sort.Slice(records, func(left int, right int) bool {
+		return records[left].ProxyURL < records[right].ProxyURL
+	})
+	return records
 }
 
 func freeProxyImportRotationScore(proxyURL string, now time.Time) uint64 {
@@ -1772,10 +2168,15 @@ func freeProxyRegionsContext(ctx context.Context, store *database.Store) ([]stri
 	} else if ok {
 		starterRegionValue = value
 	}
+	return mergeFreeProxyRegions(starterRegionValue, activeRegions), nil
+}
+
+func mergeFreeProxyRegions(starterRegionValue string, activeRegions []string) []string {
 	starterRegions := strings.Split(starterRegionValue, ",")
 	seen := make(map[string]bool)
-	regions := make([]string, 0, len(activeRegions)+len(starterRegions))
-	for _, region := range append(starterRegions, activeRegions...) {
+	regions := make([]string, 0, len(activeRegions)+len(starterRegions)+1)
+	validationRegions := append(append(starterRegions, activeRegions...), freeProxyUKCanaryRegion)
+	for _, region := range validationRegions {
 		region = strings.TrimSpace(strings.ToLower(region))
 		if region == "" || seen[region] {
 			continue
@@ -1783,7 +2184,7 @@ func freeProxyRegionsContext(ctx context.Context, store *database.Store) ([]stri
 		seen[region] = true
 		regions = append(regions, region)
 	}
-	return regions, nil
+	return regions
 }
 
 func freeProxyImportURLs(store *database.Store, importURL string) []string {
@@ -1825,6 +2226,11 @@ func freeProxyImportURLsContext(ctx context.Context, store *database.Store, impo
 		}
 		seen[countryURL] = true
 		urls = append(urls, countryURL)
+		proxiflyCountryURL := proxiflyCountryBaseURL + strings.ToUpper(country) + "/data.txt"
+		if !seen[proxiflyCountryURL] {
+			seen[proxiflyCountryURL] = true
+			urls = append(urls, proxiflyCountryURL)
+		}
 	}
 	if !seen[importURL] {
 		urls = append(urls, importURL)
@@ -1858,6 +2264,9 @@ func freeProxySource(store *database.Store, importURL string) string {
 func freeProxySourceContext(ctx context.Context, store *database.Store, importURL string) string {
 	if region := iplocateCountryFromURL(importURL); region != "" {
 		return "iplocate:" + region
+	}
+	if region := proxiflyCountryFromURL(importURL); region != "" {
+		return "proxifly:" + region
 	}
 	if strings.Contains(importURL, "iplocate/free-proxy-list") {
 		return "iplocate"
@@ -1895,6 +2304,9 @@ func freeProxySourceContext(ctx context.Context, store *database.Store, importUR
 }
 
 func iplocateCountryFromURL(importURL string) string {
+	if !strings.Contains(importURL, "iplocate/free-proxy-list") {
+		return ""
+	}
 	const marker = "/countries/"
 	markerIndex := strings.Index(importURL, marker)
 	if markerIndex < 0 {
@@ -1903,6 +2315,27 @@ func iplocateCountryFromURL(importURL string) string {
 	remainder := importURL[markerIndex+len(marker):]
 	separatorIndex := strings.IndexByte(remainder, '/')
 	if separatorIndex <= 0 {
+		return ""
+	}
+	country := strings.ToLower(strings.TrimSpace(remainder[:separatorIndex]))
+	if len(country) != 2 {
+		return ""
+	}
+	if country == "gb" {
+		return "uk"
+	}
+	return country
+}
+
+func proxiflyCountryFromURL(importURL string) string {
+	const marker = "/proxies/countries/"
+	markerIndex := strings.Index(importURL, marker)
+	if markerIndex < 0 {
+		return ""
+	}
+	remainder := importURL[markerIndex+len(marker):]
+	separatorIndex := strings.IndexByte(remainder, '/')
+	if separatorIndex <= 0 || remainder[separatorIndex:] != "/data.txt" {
 		return ""
 	}
 	country := strings.ToLower(strings.TrimSpace(remainder[:separatorIndex]))

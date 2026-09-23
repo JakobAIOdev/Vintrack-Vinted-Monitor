@@ -7,7 +7,6 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { isValidDiscordWebhook } from "@/lib/validation";
 import { getTelegramConnection } from "@/lib/telegram-connection";
-import { enqueueMonitorStatusNotification } from "@/lib/alert-outbox";
 import {
     DEFAULT_QUERY_DELAY_MS,
     normalizeQueryDelayMs,
@@ -88,15 +87,18 @@ const MONITOR_CREATION_MAINTENANCE_MESSAGE =
     "Monitor creation is paused while Vintrack is undergoing maintenance.";
 
 async function isFreeProxyPoolAvailable(region: string) {
-    void region;
     const health = await getFreeProxyPoolHealth();
-    return health.enabled;
+    if (!health.enabled) return false;
+    const normalizedRegion = region.trim().toLowerCase();
+    if (normalizedRegion !== "uk") return true;
+    return health.regions.uk?.healthy === true;
 }
 
 async function resolveMonitorProxySelection(
     userId: string,
     rawValue: string,
     region: string,
+    allowExistingFreeRegion = false,
 ) {
     const proxyGroupRaw = rawValue?.trim() ?? "";
     const user = await db.user.findUnique({
@@ -109,8 +111,15 @@ async function resolveMonitorProxySelection(
         if (!access.allowed) {
             throw new Error("Free proxy pool is not available for your role");
         }
-        if (!(await isFreeProxyPoolAvailable(region))) {
-            throw new Error("Free proxy pool is currently disabled");
+        if (
+            !allowExistingFreeRegion &&
+            !(await isFreeProxyPoolAvailable(region))
+        ) {
+            throw new Error(
+                region.trim().toLowerCase() === "uk"
+                    ? "UK Free Proxy Pool is still validating safe capacity"
+                    : "Free proxy pool is currently disabled",
+            );
         }
         return { proxyGroupId: null, proxySource: "free" };
     }
@@ -306,15 +315,6 @@ export async function createMonitor(
             data: { monitor_onboarding_status: "completed" },
         });
 
-        if (initialStatus === "active") {
-            await enqueueMonitorStatusNotification(tx, createdMonitor, {
-                kind: "monitor_created",
-                title: "Monitor created and started",
-                message: `The monitor ${createdMonitor.name} was created and is now active.`,
-                idempotencyKey: `monitor-created:${createdMonitor.id}`,
-            });
-        }
-
         const rewardNotice =
             initialStatus === "active"
                 ? rewardNoticeAfterActivation(activationState, proxySource)
@@ -448,12 +448,17 @@ export async function createPresetMonitor(input: {
     }
 
     const freeProxy = await getFreeProxyPoolHealth();
-    if (!freeProxy.enabled) {
+    if (
+        !freeProxy.enabled ||
+        (region === "uk" && freeProxy.regions.uk?.healthy !== true)
+    ) {
         return {
             ok: false,
             code: "POOL_UNAVAILABLE",
             message:
-                "The Free Proxy Pool is currently disabled. Set up the monitor manually.",
+                region === "uk"
+                    ? "UK is still validating safe proxy capacity. Choose another region for now."
+                    : "The Free Proxy Pool is currently disabled. Set up the monitor manually.",
         };
     }
 
@@ -529,7 +534,10 @@ export async function createPresetMonitor(input: {
                         color_ids: preset.colorIds.join(",") || null,
                         status_ids: preset.statusIds.join(",") || null,
                         region,
-                        allowed_countries: region,
+                        // Region selects the Vinted marketplace; it must not
+                        // implicitly enable the stricter seller-location gate.
+                        // Presets should alert on catalogue matches by default.
+                        allowed_countries: null,
                         discord_webhook: null,
                         webhook_active: false,
                         telegram_active: false,
@@ -862,6 +870,7 @@ export async function updateMonitor(id: number, formData: FormData) {
         userId,
         proxyGroupRaw,
         region,
+        existing.proxy_source === "free" && existing.region === region,
     );
 
     const urlToSave = discordWebhook?.trim() || null;
@@ -1069,6 +1078,7 @@ export async function updateMonitorAndReturn(
         userId,
         proxyGroupRaw,
         region,
+        existing.proxy_source === "free" && existing.region === region,
     );
 
     const urlToSave = discordWebhook?.trim() || null;
@@ -1255,13 +1265,6 @@ export async function toggleMonitorStatus(id: number, currentStatus: string) {
                     ? { demo_expires_at: getNextDemoMonitorExpiry() }
                     : {}),
             },
-        });
-        await enqueueMonitorStatusNotification(tx, monitor, {
-            kind: newStatus === "active" ? "monitor_started" : "monitor_paused",
-            title:
-                newStatus === "active" ? "Monitor started" : "Monitor paused",
-            message: `The monitor ${monitor.name} was ${newStatus === "active" ? "started" : "paused"}.`,
-            idempotencyKey: `monitor-${newStatus}:${monitor.id}:${Date.now()}`,
         });
         return monitor;
     });
