@@ -153,6 +153,9 @@ func ClassifyFreeProxyFailure(err error, statusCode int) string {
 	switch {
 	case strings.Contains(message, "json decode"):
 		return "decode"
+	case strings.Contains(message, "catalog currency mismatch"),
+		strings.Contains(message, "catalog total currency mismatch"):
+		return "region_mismatch"
 	case strings.Contains(message, "x509"),
 		strings.Contains(message, "tls"),
 		strings.Contains(message, "certificate"):

@@ -444,10 +444,11 @@ test.describe("monitor maintenance", () => {
             );
 
             await page.goto("/monitors");
-            await expect(
-                page.getByRole("status").filter({ hasText: updatedMessage }),
-            ).toBeVisible();
-            await expect(page.getByRole("status")).toContainText(
+            const updatedMaintenanceBanner = page
+                .getByRole("status")
+                .filter({ hasText: updatedMessage });
+            await expect(updatedMaintenanceBanner).toBeVisible();
+            await expect(updatedMaintenanceBanner).toContainText(
                 "Estimated completion",
             );
 

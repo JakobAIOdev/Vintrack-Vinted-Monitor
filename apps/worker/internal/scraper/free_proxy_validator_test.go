@@ -181,6 +181,7 @@ func TestClassifyFreeProxyFailure(t *testing.T) {
 		{name: "canceled", err: context.Canceled, want: "canceled"},
 		{name: "timeout", err: context.DeadlineExceeded, want: "timeout"},
 		{name: "decode", err: fmt.Errorf("json decode: malformed"), want: "decode"},
+		{name: "region mismatch", err: errors.New("catalog currency mismatch for www.vinted.de: got GBP, want EUR"), status: 200, want: "region_mismatch"},
 		{name: "tls", err: errors.New("x509: unknown authority"), want: "tls"},
 		{name: "proxy handshake", err: errors.New("SOCKS handshake rejected"), want: "proxy_handshake"},
 		{name: "connect", err: errors.New("dial tcp: connection refused"), want: "connect"},

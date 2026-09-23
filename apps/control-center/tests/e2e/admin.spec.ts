@@ -231,9 +231,20 @@ test.describe("admin running monitors", () => {
             .getByLabel("Shared minimum")
             .selectOption("300");
         await getAdminMain(page).getByLabel("Shared max RPM").fill("24");
+        await expect(
+            getAdminMain(page).getByLabel("Shared minimum"),
+        ).toHaveValue("300");
+        await expect(
+            getAdminMain(page).getByLabel("Shared max RPM"),
+        ).toHaveValue("24");
         await getAdminMain(page)
             .getByRole("button", { name: "Save worker settings" })
             .click();
+        await expect(
+            getAdminMain(page).getByText(
+                "Price Watch worker configuration saved",
+            ),
+        ).toBeVisible();
         await expect(
             getAdminMain(page).getByLabel("Shared minimum"),
         ).toHaveValue("300");

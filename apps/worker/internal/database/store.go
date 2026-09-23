@@ -2448,7 +2448,8 @@ func (s *Store) RecordFreeProxyFailureStageContext(
 		return err
 	}
 
-	regionalAccessFailure := errorCode == "vinted_401" ||
+	regionalAccessFailure := errorCode == "region_mismatch" ||
+		errorCode == "vinted_401" ||
 		errorCode == "vinted_403" ||
 		errorCode == "vinted_429"
 	globalTransportFailure := errorCode == "proxy_handshake" || errorCode == "invalid_config"
@@ -2569,6 +2570,30 @@ func (s *Store) RecordFreeProxyFailureStageContext(
 		return err
 	}
 	return s.recordFreeProxySourceOutcomeContext(ctx, proxyURL, region, false)
+}
+
+func (s *Store) ResetFreeProxyValidationEvidenceContext(ctx context.Context, regions []string) (int64, error) {
+	if len(regions) == 0 {
+		return 0, nil
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE free_proxy_health
+		SET status = 'pending',
+			success_streak = 0,
+			failure_streak = 0,
+			last_status_code = NULL,
+			last_error = NULL,
+			last_error_code = NULL,
+			last_error_stage = NULL,
+			last_success_at = NULL,
+			next_check_at = NOW(),
+			candidate_window_token = FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint,
+			updated_at = NOW()
+		WHERE region = ANY($1)`, pq.Array(regions))
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // RequeueFreeProxyRegionalAccessFailuresContext invalidates access-denial

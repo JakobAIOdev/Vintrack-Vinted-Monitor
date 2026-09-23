@@ -100,11 +100,35 @@ var regionDomains = map[string]string{
 	"gr": "www.vinted.gr",
 }
 
+var regionCurrencies = map[string]string{
+	"de": "EUR", "fr": "EUR", "it": "EUR", "es": "EUR", "nl": "EUR",
+	"pl": "PLN", "pt": "EUR", "be": "EUR", "at": "EUR", "lu": "EUR",
+	"uk": "GBP", "cz": "CZK", "sk": "EUR", "lt": "EUR", "se": "SEK",
+	"dk": "DKK", "ro": "RON", "hu": "HUF", "hr": "EUR", "fi": "EUR",
+	"ie": "EUR", "si": "EUR", "ee": "EUR", "lv": "EUR", "gr": "EUR",
+}
+
 func RegionDomain(region string) string {
 	if d, ok := regionDomains[region]; ok {
 		return d
 	}
 	return "www.vinted.de"
+}
+
+func RegionCurrency(region string) string {
+	if currency, ok := regionCurrencies[region]; ok {
+		return currency
+	}
+	return "EUR"
+}
+
+func DomainCurrency(domain string) string {
+	for region, candidate := range regionDomains {
+		if candidate == domain {
+			return RegionCurrency(region)
+		}
+	}
+	return ""
 }
 
 // Item represents a found Vinted listing stored in the database.
