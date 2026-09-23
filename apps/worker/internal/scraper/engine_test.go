@@ -2,8 +2,10 @@ package scraper
 
 import (
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
+
 	"vintrack-worker/internal/model"
 )
 
@@ -254,27 +256,7 @@ func TestBuildItems_MultipleItems(t *testing.T) {
 	}
 }
 
-func TestSplitIncomingItems_InitialScanMuted(t *testing.T) {
-	items := []model.VintedItem{
-		{ID: 1},
-		{ID: 2},
-	}
-	newMap := map[int64]bool{
-		1: true,
-		2: true,
-	}
-
-	processItems, seedItems := splitIncomingItems(items, newMap, false)
-
-	if len(processItems) != 0 {
-		t.Fatalf("processItems = %d, want 0 during initial scan", len(processItems))
-	}
-	if len(seedItems) != 2 {
-		t.Fatalf("seedItems = %d, want 2 during initial scan", len(seedItems))
-	}
-}
-
-func TestSplitIncomingItems_AfterInitializationOnlyNewItems(t *testing.T) {
+func TestFilterNewItemsOnlyReturnsUnseenItems(t *testing.T) {
 	items := []model.VintedItem{
 		{ID: 1},
 		{ID: 2},
@@ -286,16 +268,30 @@ func TestSplitIncomingItems_AfterInitializationOnlyNewItems(t *testing.T) {
 		3: false,
 	}
 
-	processItems, seedItems := splitIncomingItems(items, newMap, true)
-
-	if len(seedItems) != 0 {
-		t.Fatalf("seedItems = %d, want 0 after initialization", len(seedItems))
-	}
+	processItems := filterNewItems(items, newMap)
 	if len(processItems) != 1 {
 		t.Fatalf("processItems = %d, want 1 after initialization", len(processItems))
 	}
 	if processItems[0].ID != 2 {
 		t.Fatalf("processItems[0].ID = %d, want 2", processItems[0].ID)
+	}
+}
+
+func TestMarkInitialBaselineOnlyRecordsSeenIDs(t *testing.T) {
+	items := []model.VintedItem{{ID: 11}, {ID: 22}}
+	seenAt := time.Date(2026, time.September, 23, 20, 0, 0, 0, time.UTC)
+	localSeen := make(map[int64]time.Time)
+
+	itemIDs := markInitialBaseline(items, localSeen, seenAt)
+
+	if !reflect.DeepEqual(itemIDs, []int64{11, 22}) {
+		t.Fatalf("baseline IDs = %#v, want [11 22]", itemIDs)
+	}
+	if len(localSeen) != 2 || !localSeen[11].Equal(seenAt) || !localSeen[22].Equal(seenAt) {
+		t.Fatalf("baseline seen state = %#v, want both items at %s", localSeen, seenAt)
+	}
+	if processItems := filterNewItems(items, map[int64]bool{11: false, 22: false}); len(processItems) != 0 {
+		t.Fatalf("baseline produced %d process items, want none", len(processItems))
 	}
 }
 
@@ -318,10 +314,7 @@ func TestInitialQueryTrackingResumesQuietHoursWithoutInitialMute(t *testing.T) {
 
 	items := []model.VintedItem{{ID: 1}, {ID: 2}, {ID: 3}}
 	newMap := map[int64]bool{1: false, 2: true, 3: false}
-	processItems, seedItems := splitIncomingItems(items, newMap, initialized[0])
-	if len(seedItems) != 0 {
-		t.Fatalf("resume scan seeded %d muted items, want 0", len(seedItems))
-	}
+	processItems := filterNewItems(items, newMap)
 	if len(processItems) != 1 || processItems[0].ID != 2 {
 		t.Fatalf("resume scan items = %#v, want only unseen item 2", processItems)
 	}
@@ -463,7 +456,7 @@ func TestAcceptLanguageForDomain(t *testing.T) {
 		domain string
 		want   string
 	}{
-		{"www.vinted.co.uk", "en-GB,en;q=0.9"},
+		{"www.vinted.co.uk", "en-GB,en-US;q=0.9,en;q=0.8"},
 		{"www.vinted.ie", "en-IE,en;q=0.9"},
 		{"www.vinted.fr", "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7"},
 		{"www.vinted.de", "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"},

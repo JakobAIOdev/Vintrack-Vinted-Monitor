@@ -179,7 +179,7 @@ export default async function MonitorsPage() {
                   Object.entries(freeProxyHealth.regions).map(
                       ([code, health]) => [
                           code,
-                          { healthy: health.healthy, usable: health.usable },
+                          { healthy: health.healthy, mature: health.mature },
                       ],
                   ),
               ),

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"vintrack-worker/internal/database"
 	"vintrack-worker/internal/model"
 )
 
@@ -108,6 +109,26 @@ func TestDetectedItemAlertPlan_NonStrictNeverBlocked(t *testing.T) {
 	}
 }
 
+func TestSellerHedgeAllowedOnlyForForegroundJobs(t *testing.T) {
+	tests := []struct {
+		name string
+		job  enrichmentJob
+		want bool
+	}{
+		{name: "ordinary foreground", job: enrichmentJob{}, want: true},
+		{name: "strict foreground retry", job: enrichmentJob{strictAttempt: 1}, want: true},
+		{name: "background retry", job: enrichmentJob{backgroundOnly: true}, want: false},
+		{name: "stale refresh", job: enrichmentJob{backgroundOnly: true, refreshOnly: true}, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := sellerHedgeAllowed(test.job); got != test.want {
+				t.Fatalf("sellerHedgeAllowed(%+v) = %v, want %v", test.job, got, test.want)
+			}
+		})
+	}
+}
+
 // TestScheduleStrictSellerRetry_FollowsBoundedSchedule pins the documented
 // 5s/20s/60s strict-retry backoff so a future change to this file cannot
 // silently speed it up (wasting requests) or slow it down (missing the
@@ -159,5 +180,28 @@ func TestScheduleStrictSellerRetry_GivesUpAfterFinalAttempt(t *testing.T) {
 	case resubmitted := <-scheduler.input:
 		t.Fatalf("expected no further retry after the final attempt fails, got resubmit: %+v", resubmitted)
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestShouldNotifyFreeProxyOutageWaitsFiveMinutesAndUsesRepresentative(t *testing.T) {
+	started := time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
+	group := database.ProxyIncidentGroup{
+		GroupID:               41,
+		RepresentativeMonitor: 7,
+		StartedAt:             started,
+		MonitorCount:          3,
+	}
+	if shouldNotifyFreeProxyOutage(group, 7, started.Add(5*time.Minute-time.Millisecond)) {
+		t.Fatal("outage was externally notifyable before five continuous minutes")
+	}
+	if !shouldNotifyFreeProxyOutage(group, 7, started.Add(5*time.Minute)) {
+		t.Fatal("outage was not notifyable after five continuous minutes")
+	}
+	if shouldNotifyFreeProxyOutage(group, 8, started.Add(6*time.Minute)) {
+		t.Fatal("non-representative monitor could emit grouped outage")
+	}
+	group.OutageNotificationID = 99
+	if shouldNotifyFreeProxyOutage(group, 7, started.Add(6*time.Minute)) {
+		t.Fatal("group with an existing outage notification emitted again")
 	}
 }

@@ -239,6 +239,15 @@ type AdminOperationsSummary = {
         remoteP95Ms: number;
         timeouts: number;
         updatedAt: string | null;
+        freshHits: number;
+        staleHits: number;
+        redisHits: number;
+        dbHits: number;
+        refreshes: number;
+        remoteP50Ms: number;
+        remoteSuccessRate: number;
+        strictRetryQueueAgeMs: number;
+        backgroundQueueAgeMs: number;
     } | null;
     notificationLatency: {
         p50Ms: number | null;
@@ -358,6 +367,20 @@ type FreeProxyState = {
         canceled: number;
         durationMs: number;
     } | null;
+    runtimeMetrics: {
+        region: string;
+        requestedRps: number;
+        admittedRps: number;
+        activeClients: number;
+        capacityRps: number;
+        successRate: number;
+        rateLimitedRate: number;
+        poolWaitRate: number;
+        admissionP95Ms: number;
+        observedEffectiveIntervalMs: number;
+        capacityFactor: number;
+        reason: string | null;
+    }[];
     settings: {
         enabled: boolean;
         autoImportEnabled: boolean;
@@ -377,6 +400,10 @@ type FreeProxyState = {
         reserveTarget: number;
         idleTarget: number;
         emergencyRecoveryEnabled: boolean;
+        adaptivePacingEnabled: boolean;
+        adaptiveRegions: string[];
+        maxRequestsPerProxySecond: number;
+        maxAdmissionDelayMs: number;
     };
     counts: {
         active: number;
@@ -407,6 +434,14 @@ type FreeProxyState = {
         recoveryMode: boolean;
         dueNow: number;
         neverChecked: number;
+        serving: boolean;
+        capacityReady: boolean;
+        canaryState: "building" | "collecting" | "passed" | "failed" | null;
+        canarySampleCount: number;
+        canarySuccessRate: number | null;
+        canaryWindowMinutes: number;
+        canaryLastProbeAt: Date | null;
+        canaryReadinessReason: string | null;
     }[];
     sourceDiagnostics: {
         region: string;
@@ -1421,6 +1456,14 @@ export function AdminClient({
                   recoveryMode: false,
                   dueNow: 0,
                   neverChecked: 0,
+                  serving: false,
+                  capacityReady: false,
+                  canaryState: null,
+                  canarySampleCount: 0,
+                  canarySuccessRate: null,
+                  canaryWindowMinutes: 0,
+                  canaryLastProbeAt: null,
+                  canaryReadinessReason: null,
                   initializing: true,
               };
     });
@@ -2747,6 +2790,8 @@ export function AdminClient({
                 discoveryAllowFreeActive: workerPolicy.discoveryAllowFreeActive,
                 enrichSellerInfo: workerPolicy.enrichSellerInfo,
                 catalogLatencyMetrics: workerPolicy.catalogLatencyMetrics,
+                sellerFreshTtlMinutes: workerPolicy.sellerFreshTtlMinutes,
+                sellerStaleTtlMinutes: workerPolicy.sellerStaleTtlMinutes,
             });
             setWorkerPolicy(next);
             toast.success("Worker policy saved");
@@ -2872,6 +2917,22 @@ export function AdminClient({
         formData.set(
             "emergencyRecoveryEnabled",
             String(freeProxySettings.emergencyRecoveryEnabled),
+        );
+        formData.set(
+            "adaptivePacingEnabled",
+            String(freeProxySettings.adaptivePacingEnabled),
+        );
+        formData.set(
+            "adaptiveRegions",
+            freeProxySettings.adaptiveRegions.join(","),
+        );
+        formData.set(
+            "maxRequestsPerProxySecond",
+            String(freeProxySettings.maxRequestsPerProxySecond),
+        );
+        formData.set(
+            "maxAdmissionDelayMs",
+            String(freeProxySettings.maxAdmissionDelayMs),
         );
 
         try {
@@ -7108,6 +7169,54 @@ export function AdminClient({
                                         </label>
                                     ))}
                                 </div>
+                                <div className="mt-4 grid max-w-xl gap-3 sm:grid-cols-2">
+                                    <div className="space-y-1">
+                                        <Label htmlFor="seller-fresh-ttl">
+                                            Seller fresh TTL (minutes)
+                                        </Label>
+                                        <Input
+                                            id="seller-fresh-ttl"
+                                            type="number"
+                                            min={1}
+                                            value={
+                                                workerPolicy.sellerFreshTtlMinutes
+                                            }
+                                            onChange={(event) =>
+                                                setWorkerPolicy((current) => ({
+                                                    ...current,
+                                                    sellerFreshTtlMinutes:
+                                                        Number(
+                                                            event.target.value,
+                                                        ),
+                                                }))
+                                            }
+                                        />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label htmlFor="seller-stale-ttl">
+                                            Seller stale TTL (minutes)
+                                        </Label>
+                                        <Input
+                                            id="seller-stale-ttl"
+                                            type="number"
+                                            min={
+                                                workerPolicy.sellerFreshTtlMinutes
+                                            }
+                                            value={
+                                                workerPolicy.sellerStaleTtlMinutes
+                                            }
+                                            onChange={(event) =>
+                                                setWorkerPolicy((current) => ({
+                                                    ...current,
+                                                    sellerStaleTtlMinutes:
+                                                        Number(
+                                                            event.target.value,
+                                                        ),
+                                                }))
+                                            }
+                                        />
+                                    </div>
+                                </div>
                             </div>
                             <div className="flex items-end gap-2">
                                 <div className="space-y-1">
@@ -7774,6 +7883,112 @@ export function AdminClient({
                                             </div>
                                         ))}
                                     </div>
+                                    <div className="border-border/60 mt-4 grid gap-3 border-t pt-4 sm:grid-cols-2 lg:grid-cols-4">
+                                        <label className="flex items-center gap-2 text-xs">
+                                            <input
+                                                type="checkbox"
+                                                checked={
+                                                    freeProxySettings.adaptivePacingEnabled
+                                                }
+                                                onChange={(event) =>
+                                                    setFreeProxySettings(
+                                                        (prev) => ({
+                                                            ...prev,
+                                                            adaptivePacingEnabled:
+                                                                event.target
+                                                                    .checked,
+                                                        }),
+                                                    )
+                                                }
+                                            />
+                                            Adaptive pacing
+                                        </label>
+                                        <div className="space-y-2">
+                                            <Label htmlFor="free-proxy-adaptive-regions">
+                                                Canary regions
+                                            </Label>
+                                            <Input
+                                                id="free-proxy-adaptive-regions"
+                                                value={freeProxySettings.adaptiveRegions.join(
+                                                    ",",
+                                                )}
+                                                onChange={(event) =>
+                                                    setFreeProxySettings(
+                                                        (prev) => ({
+                                                            ...prev,
+                                                            adaptiveRegions:
+                                                                event.target.value
+                                                                    .split(",")
+                                                                    .map(
+                                                                        (
+                                                                            value,
+                                                                        ) =>
+                                                                            value
+                                                                                .trim()
+                                                                                .toLowerCase(),
+                                                                    )
+                                                                    .filter(
+                                                                        Boolean,
+                                                                    ),
+                                                        }),
+                                                    )
+                                                }
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label htmlFor="free-proxy-rps">
+                                                Requests / proxy / second
+                                            </Label>
+                                            <Input
+                                                id="free-proxy-rps"
+                                                type="number"
+                                                min={0.05}
+                                                max={10}
+                                                step={0.05}
+                                                value={
+                                                    freeProxySettings.maxRequestsPerProxySecond
+                                                }
+                                                onChange={(event) =>
+                                                    setFreeProxySettings(
+                                                        (prev) => ({
+                                                            ...prev,
+                                                            maxRequestsPerProxySecond:
+                                                                Number(
+                                                                    event.target
+                                                                        .value,
+                                                                ),
+                                                        }),
+                                                    )
+                                                }
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label htmlFor="free-proxy-admission-delay">
+                                                Max admission delay (ms)
+                                            </Label>
+                                            <Input
+                                                id="free-proxy-admission-delay"
+                                                type="number"
+                                                min={0}
+                                                max={30000}
+                                                value={
+                                                    freeProxySettings.maxAdmissionDelayMs
+                                                }
+                                                onChange={(event) =>
+                                                    setFreeProxySettings(
+                                                        (prev) => ({
+                                                            ...prev,
+                                                            maxAdmissionDelayMs:
+                                                                Number(
+                                                                    event.target
+                                                                        .value,
+                                                                ),
+                                                        }),
+                                                    )
+                                                }
+                                            />
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </details>
@@ -7815,6 +8030,12 @@ export function AdminClient({
                             <div className="divide-border/60 divide-y">
                                 {displayedFreeProxyRegions.length > 0 ? (
                                     displayedFreeProxyRegions.map((region) => {
+                                        const runtime =
+                                            freeProxyState.runtimeMetrics.find(
+                                                (metric) =>
+                                                    metric.region ===
+                                                    region.region,
+                                            );
                                         const used =
                                             region.activeMonitorCount > 0;
                                         const readyTarget = used
@@ -7841,21 +8062,24 @@ export function AdminClient({
                                         );
                                         const status = region.initializing
                                             ? "Waiting"
-                                            : region.recoveryMode
-                                              ? "Recovery"
-                                              : region.stalled
-                                                ? "Stalled"
-                                                : freeProxySettings.enabled &&
-                                                    freeProxyState.degradationReason ===
-                                                        "host_egress_limited"
-                                                  ? "Egress limited"
-                                                  : usable === 0 && used
-                                                    ? "Outage"
-                                                    : usable < readyTarget
-                                                      ? "Building"
-                                                      : used
-                                                        ? "Ready"
-                                                        : "Standby";
+                                            : region.region === "uk" &&
+                                                region.canaryState !== "passed"
+                                              ? "Validating"
+                                              : region.recoveryMode
+                                                ? "Recovery"
+                                                : region.stalled
+                                                  ? "Stalled"
+                                                  : freeProxySettings.enabled &&
+                                                      freeProxyState.degradationReason ===
+                                                          "host_egress_limited"
+                                                    ? "Egress limited"
+                                                    : usable === 0 && used
+                                                      ? "Outage"
+                                                      : usable < readyTarget
+                                                        ? "Building"
+                                                        : used
+                                                          ? "Ready"
+                                                          : "Standby";
                                         return (
                                             <button
                                                 key={region.region}
@@ -7947,17 +8171,48 @@ export function AdminClient({
                                                     </p>
                                                 </div>
                                                 <div>
-                                                    <p className="font-medium">
-                                                        {region.successRate ===
-                                                        null
-                                                            ? "n/a"
-                                                            : `${region.successRate}%`}{" "}
-                                                        pass rate
-                                                    </p>
+                                                    {region.region === "uk" ? (
+                                                        <p className="font-medium">
+                                                            {
+                                                                region.canarySampleCount
+                                                            }
+                                                            /200 canary ·{" "}
+                                                            {region.canarySuccessRate ===
+                                                            null
+                                                                ? "n/a"
+                                                                : `${Math.round(region.canarySuccessRate)}%`}
+                                                        </p>
+                                                    ) : (
+                                                        <p className="font-medium">
+                                                            {region.successRate ===
+                                                            null
+                                                                ? "n/a"
+                                                                : `${region.successRate}%`}{" "}
+                                                            pass rate
+                                                        </p>
+                                                    )}
                                                     <p className="text-muted-foreground text-[11px]">
-                                                        {region.dueNow} due ·{" "}
-                                                        {region.neverChecked}{" "}
-                                                        unchecked
+                                                        {region.region === "uk"
+                                                            ? `${region.canaryWindowMinutes.toFixed(1)}m window · ${region.capacityReady ? "capacity ready" : "capacity building"}`
+                                                            : runtime
+                                                              ? Math.round(
+                                                                    1000 /
+                                                                        Math.max(
+                                                                            0.001,
+                                                                            runtime.requestedRps,
+                                                                        ),
+                                                                ) +
+                                                                "ms requested · " +
+                                                                Math.round(
+                                                                    runtime.observedEffectiveIntervalMs,
+                                                                ) +
+                                                                "ms effective · " +
+                                                                (runtime.reason ??
+                                                                    "configured")
+                                                              : region.dueNow +
+                                                                " due · " +
+                                                                region.neverChecked +
+                                                                " unchecked"}
                                                     </p>
                                                 </div>
                                                 <ChevronRight className="text-muted-foreground hidden size-4 lg:block" />
@@ -8153,36 +8408,93 @@ export function AdminClient({
                     </DialogHeader>
 
                     {selectedFreeProxyHealth ? (
-                        <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
-                            {[
-                                ["Ready", selectedFreeProxyHealth.active],
-                                ["Reserve", selectedFreeProxyHealth.reserve],
-                                [
-                                    "Monitors",
-                                    selectedFreeProxyHealth.activeMonitorCount,
-                                ],
-                                [
-                                    "Checked 1h",
-                                    selectedFreeProxyHealth.checkedLastHour,
-                                ],
-                                ["Due now", selectedFreeProxyHealth.dueNow],
-                                [
-                                    "Unchecked",
-                                    selectedFreeProxyHealth.neverChecked,
-                                ],
-                            ].map(([label, value]) => (
-                                <div
-                                    key={label}
-                                    className="border-border/60 rounded-lg border px-3 py-2"
-                                >
-                                    <p className="text-muted-foreground text-[10px] uppercase">
-                                        {label}
+                        <div className="space-y-3">
+                            {selectedFreeProxyHealth.region === "uk" ? (
+                                <div className="border-border/60 bg-muted/20 rounded-lg border px-4 py-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <p className="text-sm font-semibold">
+                                            UK shadow canary
+                                        </p>
+                                        <Badge
+                                            variant={
+                                                selectedFreeProxyHealth.canaryState ===
+                                                "passed"
+                                                    ? "secondary"
+                                                    : "outline"
+                                            }
+                                            className="rounded-md uppercase"
+                                        >
+                                            {selectedFreeProxyHealth.canaryState ??
+                                                "waiting"}
+                                        </Badge>
+                                    </div>
+                                    <p className="text-muted-foreground mt-1 text-xs">
+                                        {
+                                            selectedFreeProxyHealth.canarySampleCount
+                                        }
+                                        /200 probes ·{" "}
+                                        {selectedFreeProxyHealth.canarySuccessRate ===
+                                        null
+                                            ? "success rate collecting"
+                                            : `${selectedFreeProxyHealth.canarySuccessRate.toFixed(1)}% success`}{" "}
+                                        ·{" "}
+                                        {selectedFreeProxyHealth.canaryWindowMinutes.toFixed(
+                                            1,
+                                        )}
+                                        m window · last probe{" "}
+                                        {selectedFreeProxyHealth.canaryLastProbeAt
+                                            ? formatMetricDate(
+                                                  selectedFreeProxyHealth.canaryLastProbeAt,
+                                              )
+                                            : "not yet"}
                                     </p>
-                                    <p className="mt-1 text-lg font-semibold">
-                                        {value}
+                                    <p className="text-muted-foreground mt-1 text-xs">
+                                        Capacity:{" "}
+                                        {selectedFreeProxyHealth.active} mature
+                                        ·{" "}
+                                        {selectedFreeProxyHealth.capacityReady
+                                            ? "confirmed"
+                                            : "building"}
+                                        {selectedFreeProxyHealth.canaryReadinessReason
+                                            ? ` · ${selectedFreeProxyHealth.canaryReadinessReason}`
+                                            : ""}
                                     </p>
                                 </div>
-                            ))}
+                            ) : null}
+                            <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                                {[
+                                    ["Ready", selectedFreeProxyHealth.active],
+                                    [
+                                        "Reserve",
+                                        selectedFreeProxyHealth.reserve,
+                                    ],
+                                    [
+                                        "Monitors",
+                                        selectedFreeProxyHealth.activeMonitorCount,
+                                    ],
+                                    [
+                                        "Checked 1h",
+                                        selectedFreeProxyHealth.checkedLastHour,
+                                    ],
+                                    ["Due now", selectedFreeProxyHealth.dueNow],
+                                    [
+                                        "Unchecked",
+                                        selectedFreeProxyHealth.neverChecked,
+                                    ],
+                                ].map(([label, value]) => (
+                                    <div
+                                        key={label}
+                                        className="border-border/60 rounded-lg border px-3 py-2"
+                                    >
+                                        <p className="text-muted-foreground text-[10px] uppercase">
+                                            {label}
+                                        </p>
+                                        <p className="mt-1 text-lg font-semibold">
+                                            {value}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     ) : null}
 

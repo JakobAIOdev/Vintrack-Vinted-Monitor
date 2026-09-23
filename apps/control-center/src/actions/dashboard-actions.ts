@@ -4,10 +4,7 @@ import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { revalidatePath } from "next/cache";
 import { isValidDiscordWebhook } from "@/lib/validation";
-import {
-    cancelPendingMonitorNotifications,
-    enqueueMonitorStatusNotification,
-} from "@/lib/alert-outbox";
+import { cancelPendingMonitorNotifications } from "@/lib/alert-outbox";
 import { getTelegramConnection } from "@/lib/telegram-connection";
 import {
     getMonitorActivationState,
@@ -45,23 +42,11 @@ export async function stopAllMonitors() {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Unauthorized");
     const userId = session.user.id;
-    const transitionKey = Date.now().toString();
     await withMonitorActivationLock(userId, async (tx) => {
-        const monitorsToStop = await tx.monitors.findMany({
-            where: { userId, status: "active" },
-        });
         await tx.monitors.updateMany({
             where: { userId, status: "active" },
             data: { status: "paused" },
         });
-        for (const monitor of monitorsToStop) {
-            await enqueueMonitorStatusNotification(tx, monitor, {
-                kind: "monitor_paused",
-                title: "Monitor paused",
-                message: `The monitor ${monitor.name} was paused via Stop All.`,
-                idempotencyKey: `monitor-paused:${monitor.id}:${transitionKey}`,
-            });
-        }
     });
 
     revalidatePath("/dashboard");
@@ -72,7 +57,6 @@ export async function startAllMonitors() {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Unauthorized");
     const userId = session.user.id;
-    const transitionKey = Date.now().toString();
 
     const {
         activationState,
@@ -136,7 +120,7 @@ export async function startAllMonitors() {
         );
 
         for (const monitor of monitorsToStart) {
-            const startedMonitor = await tx.monitors.update({
+            await tx.monitors.update({
                 where: { id: monitor.id, userId },
                 data: {
                     status: "active",
@@ -148,12 +132,6 @@ export async function startAllMonitors() {
                           }
                         : {}),
                 },
-            });
-            await enqueueMonitorStatusNotification(tx, startedMonitor, {
-                kind: "monitor_started",
-                title: "Monitor started",
-                message: `The monitor ${startedMonitor.name} was started via Start All.`,
-                idempotencyKey: `monitor-started:${startedMonitor.id}:${transitionKey}`,
             });
         }
         const freeProxyStartedCount = monitorsToStart.filter(
@@ -273,13 +251,6 @@ export async function toggleMonitor(id: number, currentStatus: string) {
                     ? { demo_expires_at: getNextDemoMonitorExpiry() }
                     : {}),
             },
-        });
-        await enqueueMonitorStatusNotification(tx, monitor, {
-            kind: newStatus === "active" ? "monitor_started" : "monitor_paused",
-            title:
-                newStatus === "active" ? "Monitor started" : "Monitor paused",
-            message: `The monitor ${monitor.name} was ${newStatus === "active" ? "started" : "paused"}.`,
-            idempotencyKey: `monitor-${newStatus}:${monitor.id}:${Date.now()}`,
         });
         const rewardNotice = activationState
             ? rewardNoticeAfterActivation(

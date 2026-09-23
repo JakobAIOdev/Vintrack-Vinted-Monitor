@@ -10,7 +10,9 @@ export type AlertNotificationKind =
     | "monitor_paused"
     | "monitor_auto_stopped"
     | "proxy_warning"
-    | "free_proxy_limit_pause";
+    | "free_proxy_limit_pause"
+    | "free_proxy_outage"
+    | "free_proxy_recovered";
 
 export type AlertOutboxMonitor = {
     id: number;

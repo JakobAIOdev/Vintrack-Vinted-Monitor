@@ -327,6 +327,27 @@ func TestWaitForProxyManagerRecovers(t *testing.T) {
 	}
 }
 
+func TestWaitForProxyManagerObservedRefreshesWhileWaiting(t *testing.T) {
+	manager := &proxy.Manager{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	observations := 0
+	go func() {
+		time.Sleep(12 * time.Millisecond)
+		manager.ReplaceFromString("http://1.2.3.4:8080")
+	}()
+
+	if !waitForProxyManagerObserved(ctx, manager, 2*time.Millisecond, func() {
+		observations++
+	}) {
+		t.Fatal("observed proxy manager did not recover")
+	}
+	if observations == 0 {
+		t.Fatal("waiting proxy manager did not refresh its observer")
+	}
+}
+
 func TestWaitForProxyManagerStopsWithContext(t *testing.T) {
 	manager := &proxy.Manager{}
 	ctx, cancel := context.WithCancel(context.Background())

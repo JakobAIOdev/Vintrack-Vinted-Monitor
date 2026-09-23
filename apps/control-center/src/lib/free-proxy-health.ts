@@ -1,4 +1,9 @@
 import { db } from "@/lib/db";
+import {
+    parseFreeProxyCanarySnapshot,
+    resolveFreeProxyRegionReadiness,
+    withRequiredFreeProxyCanaryRegions,
+} from "@/lib/free-proxy-readiness";
 import { readFreeProxyPolicy } from "@/lib/runtime-policies.server";
 
 const DEFAULT_STARTER_REGIONS = "de,fr,it,es,nl,be,at";
@@ -10,6 +15,16 @@ export type FreeProxyRegionHealth = {
     reserve: number;
     warming: number;
     usable: number;
+    serving: boolean;
+    mature: number;
+    runtimeSuccessRate: number | null;
+    runtimeSampleCount: number;
+    canaryState: "building" | "collecting" | "passed" | "failed" | null;
+    canarySampleCount: number;
+    canarySuccessRate: number | null;
+    canaryWindowMinutes: number;
+    canaryLastProbeAt: Date | null;
+    readinessReason: string | null;
     pending: number;
     cooldown: number;
     dead: number;
@@ -57,6 +72,9 @@ type FreeProxyHealthRow = {
     promoted_last_hour: bigint;
     minutes_since_last_success: number | null;
     active_monitor_count: bigint;
+    runtime_check_count: bigint;
+    runtime_success_count: bigint;
+    runtime_window_minutes: number | null;
 };
 
 export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
@@ -79,6 +97,16 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                     reserve: 0,
                     warming: 0,
                     usable: 1,
+                    serving: true,
+                    mature: 1,
+                    runtimeSuccessRate: 100,
+                    runtimeSampleCount: 200,
+                    canaryState: null,
+                    canarySampleCount: 0,
+                    canarySuccessRate: null,
+                    canaryWindowMinutes: 0,
+                    canaryLastProbeAt: null,
+                    readinessReason: null,
                     pending: 0,
                     cooldown: 0,
                     dead: 0,
@@ -107,6 +135,9 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
         readyTargetSetting,
         starterRegionsSetting,
         degradationSetting,
+        servingSettings,
+        canarySettings,
+        runtimeMetricsSetting,
         rows,
     ] = await Promise.all([
         db.feature_policies.findUnique({
@@ -130,19 +161,46 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
             where: { key: "free_proxy_degradation_reason" },
             select: { value: true },
         }),
+        db.app_settings.findMany({
+            where: { key: { startsWith: "free_proxy_serving_state:" } },
+            select: { key: true, value: true },
+        }),
+        db.app_settings.findMany({
+            where: { key: { startsWith: "free_proxy_canary_state:" } },
+            select: { key: true, value: true },
+        }),
+        db.app_settings.findUnique({
+            where: { key: "free_proxy_runtime_metrics" },
+            select: { value: true },
+        }),
         db.$queryRaw<FreeProxyHealthRow[]>`
+            WITH runtime_region AS (
+                SELECT
+                    region,
+                    COUNT(*)::bigint AS runtime_check_count,
+                    COUNT(*) FILTER (
+                        WHERE status = 'success' AND status_code = 200
+                    )::bigint AS runtime_success_count,
+                    EXTRACT(EPOCH FROM (NOW() - MIN(checked_at))) / 60.0
+                        AS runtime_window_minutes
+                FROM monitor_runs
+                WHERE proxy_source = 'free'
+                  AND fetch_source = 'canonical'
+                  AND checked_at >= NOW() - INTERVAL '30 minutes'
+                GROUP BY region
+            )
             SELECT
-                region,
+                free_proxy_health.region AS region,
                 COUNT(*) FILTER (
-                    WHERE (
-                        status = 'active'
-                        OR (
-                            status = 'cooldown'
-                            AND success_count > 0
-                            AND failure_streak <= 2
-                        )
-                      )
+                    WHERE status = 'active'
+                      AND success_streak >= 2
+                      AND failure_streak = 0
                       AND last_success_at >= NOW() - INTERVAL '20 minutes'
+                      AND proxy_global_status <> 'disabled'
+                      AND (
+                          proxy_quarantined_until IS NULL
+                          OR proxy_quarantined_until <= NOW()
+                      )
                 )::bigint AS active_count,
                 COUNT(*) FILTER (
                     WHERE (
@@ -155,11 +213,21 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                       AND failure_streak <= 2
                       AND last_success_at >= NOW() - INTERVAL '90 minutes'
                       AND last_success_at < NOW() - INTERVAL '20 minutes'
+                      AND proxy_global_status <> 'disabled'
+                      AND (
+                          proxy_quarantined_until IS NULL
+                          OR proxy_quarantined_until <= NOW()
+                      )
                 )::bigint AS reserve_count,
                 COUNT(*) FILTER (
                     WHERE status = 'pending'
                       AND success_streak > 0
                       AND last_success_at >= NOW() - INTERVAL '20 minutes'
+                      AND proxy_global_status <> 'disabled'
+                      AND (
+                          proxy_quarantined_until IS NULL
+                          OR proxy_quarantined_until <= NOW()
+                      )
                 )::bigint AS warming_count,
                 COUNT(*) FILTER (
                     WHERE status = 'pending'
@@ -231,8 +299,21 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                 EXTRACT(EPOCH FROM (NOW() - MAX(last_success_at))) / 60.0
                     AS minutes_since_last_success,
                 COALESCE(MAX(region_demand.active_monitor_count), 0)::bigint
-                    AS active_monitor_count
-            FROM free_proxy_health
+                    AS active_monitor_count,
+                COALESCE(MAX(runtime_region.runtime_check_count), 0)::bigint
+                    AS runtime_check_count,
+                COALESCE(MAX(runtime_region.runtime_success_count), 0)::bigint
+                    AS runtime_success_count,
+                MAX(runtime_region.runtime_window_minutes)
+                    AS runtime_window_minutes
+            FROM (
+                SELECT
+                    health.*,
+                    proxy.status AS proxy_global_status,
+                    proxy.quarantined_until AS proxy_quarantined_until
+                FROM free_proxy_health health
+                JOIN free_proxies proxy ON proxy.id = health.proxy_id
+            ) free_proxy_health
             LEFT JOIN LATERAL (
                 SELECT COUNT(*)::bigint AS active_monitor_count
                 FROM monitors monitor
@@ -240,9 +321,11 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                   AND monitor.proxy_source = 'free'
                   AND monitor.region = free_proxy_health.region
             ) region_demand ON TRUE
+            LEFT JOIN runtime_region
+              ON runtime_region.region = free_proxy_health.region
             WHERE candidate_window_token =
                 FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint
-            GROUP BY region
+            GROUP BY free_proxy_health.region
         `,
     ]);
 
@@ -252,18 +335,66 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
     const readyTarget = Number(
         policy?.readyTarget ?? readyTargetSetting?.value ?? 50,
     );
-    const configuredRegions = (
-        policy?.starterRegions ??
-        starterRegionsSetting?.value ??
-        DEFAULT_STARTER_REGIONS
-    )
-        .split(",")
-        .map((region) => region.trim().toLowerCase())
-        .filter(Boolean);
+    const configuredRegions = withRequiredFreeProxyCanaryRegions(
+        (
+            policy?.starterRegions ??
+            starterRegionsSetting?.value ??
+            DEFAULT_STARTER_REGIONS
+        )
+            .split(",")
+            .map((region) => region.trim().toLowerCase())
+            .filter(Boolean),
+    );
+    const servingByRegion = new Map<
+        string,
+        { serving: boolean; mature: number; reason: string | null }
+    >();
+    for (const setting of servingSettings) {
+        try {
+            const parsed = JSON.parse(setting.value) as {
+                serving?: boolean;
+                mature?: number;
+                reason?: string;
+            };
+            servingByRegion.set(
+                setting.key.replace("free_proxy_serving_state:", ""),
+                {
+                    serving: parsed.serving === true,
+                    mature: Number(parsed.mature ?? 0),
+                    reason: parsed.reason || null,
+                },
+            );
+        } catch {}
+    }
+    const canaryByRegion = new Map(
+        canarySettings.flatMap((setting) => {
+            const parsed = parseFreeProxyCanarySnapshot(setting.value);
+            return parsed
+                ? [
+                      [
+                          setting.key.replace("free_proxy_canary_state:", ""),
+                          parsed,
+                      ] as const,
+                  ]
+                : [];
+        }),
+    );
+    const runtimeSuccessByRegion = new Map<string, number>();
+    try {
+        const parsed = JSON.parse(runtimeMetricsSetting?.value ?? "{}") as {
+            regions?: Array<{ region?: string; successRate?: number }>;
+        };
+        for (const metric of parsed.regions ?? []) {
+            if (metric.region && Number.isFinite(metric.successRate)) {
+                runtimeSuccessByRegion.set(metric.region, metric.successRate!);
+            }
+        }
+    } catch {}
     const rowsByRegion = new Map(rows.map((row) => [row.region, row]));
     const regions = Object.fromEntries(
         configuredRegions.map((region) => {
             const row = rowsByRegion.get(region);
+            const canary = canaryByRegion.get(region) ?? null;
             if (!row) {
                 const emptyHealth: FreeProxyRegionHealth = {
                     region,
@@ -272,6 +403,19 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                     reserve: 0,
                     warming: 0,
                     usable: 0,
+                    serving: false,
+                    mature: 0,
+                    runtimeSuccessRate:
+                        runtimeSuccessByRegion.get(region) ?? null,
+                    runtimeSampleCount: 0,
+                    canaryState: canary?.state ?? null,
+                    canarySampleCount: canary?.sampleCount ?? 0,
+                    canarySuccessRate: canary?.successRate ?? null,
+                    canaryWindowMinutes: canary?.windowMinutes ?? 0,
+                    canaryLastProbeAt: canary?.lastProbeAt ?? null,
+                    readinessReason: !featurePolicy?.enabled
+                        ? "disabled"
+                        : (canary?.readinessReason ?? "no_validated_capacity"),
                     pending: 0,
                     cooldown: 0,
                     dead: 0,
@@ -296,6 +440,31 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
             const reserve = Number(row.reserve_count);
             const warming = Number(row.warming_count);
             const usable = active + reserve + warming;
+            const servingState = servingByRegion.get(region);
+            const serving = Boolean(
+                featurePolicy?.enabled && servingState?.serving === true,
+            );
+            const runtimeSampleCount = Number(row.runtime_check_count);
+            const durableRuntimeSuccessRate =
+                runtimeSampleCount > 0
+                    ? Math.round(
+                          (Number(row.runtime_success_count) /
+                              runtimeSampleCount) *
+                              10000,
+                      ) / 100
+                    : null;
+            const runtimeSuccessRate =
+                durableRuntimeSuccessRate ??
+                runtimeSuccessByRegion.get(region) ??
+                null;
+            const readiness = resolveFreeProxyRegionReadiness({
+                region,
+                featureEnabled: featurePolicy?.enabled ?? false,
+                serving,
+                servingReason: servingState?.reason ?? null,
+                canary,
+            });
+            const ready = readiness.ready;
             const recentSuccessCount = Number(row.recent_success_count);
             const recentCheckCount = Number(row.recent_check_count);
             const health: FreeProxyRegionHealth = {
@@ -305,6 +474,16 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                 reserve,
                 warming,
                 usable,
+                serving,
+                mature: servingState?.mature ?? active,
+                runtimeSuccessRate,
+                runtimeSampleCount,
+                canaryState: canary?.state ?? null,
+                canarySampleCount: canary?.sampleCount ?? 0,
+                canarySuccessRate: canary?.successRate ?? null,
+                canaryWindowMinutes: canary?.windowMinutes ?? 0,
+                canaryLastProbeAt: canary?.lastProbeAt ?? null,
+                readinessReason: readiness.reason,
                 pending: Number(row.pending_count),
                 cooldown: Number(row.cooldown_count),
                 dead: Number(row.dead_count),
@@ -319,10 +498,10 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                         ? null
                         : Math.round(row.median_latency_ms),
                 lastCheckedAt: row.last_checked_at,
-                healthy: usable >= minActivePerRegion,
+                healthy: ready,
                 state: !featurePolicy?.enabled
                     ? "disabled"
-                    : usable >= minActivePerRegion
+                    : ready
                       ? "ready"
                       : row.last_checked_at === null
                         ? "building"
@@ -360,7 +539,10 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
         state,
         minActivePerRegion,
         regions,
-        activeCount: regions.de?.usable ?? 0,
+        activeCount: Object.values(regions).reduce(
+            (total, region) => total + region.mature,
+            0,
+        ),
         degradationReason:
             enabled && degradationSetting?.value === "host_egress_limited"
                 ? "host_egress_limited"

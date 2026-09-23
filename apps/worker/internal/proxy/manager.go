@@ -12,11 +12,24 @@ import (
 	"sync/atomic"
 )
 
+type PoolSnapshot struct {
+	Proxies           []string
+	State             string
+	Mature            int
+	Reason            string
+	ReadyObservations int
+	Version           uint64
+}
+
 type Manager struct {
-	proxies []string
-	index   int
-	mu      sync.Mutex
-	version atomic.Uint64
+	proxies           []string
+	index             int
+	state             string
+	mature            int
+	reason            string
+	readyObservations int
+	mu                sync.Mutex
+	version           atomic.Uint64
 }
 
 var validProxySchemes = map[string]bool{
@@ -144,22 +157,40 @@ func parseProxyLines(raw string) ([]string, int) {
 }
 
 func (m *Manager) ReplaceFromString(raw string) bool {
+	state := "recovering"
+	if strings.TrimSpace(raw) != "" {
+		state = "ready"
+	}
+	return m.ReplaceSnapshot(raw, state, 0, "", 0)
+}
+
+func (m *Manager) ReplaceSnapshot(raw string, state string, mature int, reason string, readyObservations int) bool {
 	proxies, skipped := parseProxyLines(raw)
 	if skipped > 0 {
 		log.Printf("⚠ Skipped %d invalid proxy lines from server setting", skipped)
+	}
+	if state == "" {
+		state = "recovering"
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if strings.Join(m.proxies, "\n") == strings.Join(proxies, "\n") {
+	changed := strings.Join(m.proxies, "\n") != strings.Join(proxies, "\n") ||
+		m.state != state || m.mature != mature || m.reason != reason ||
+		m.readyObservations != readyObservations
+	if !changed {
 		return false
 	}
 
 	m.proxies = proxies
 	m.index = 0
+	m.state = state
+	m.mature = mature
+	m.reason = reason
+	m.readyObservations = readyObservations
 	m.version.Add(1)
-	log.Printf("Reloaded %d valid proxies", len(proxies))
+	log.Printf("Reloaded %d valid proxies (state=%s, mature=%d)", len(proxies), state, mature)
 	return true
 }
 
@@ -177,6 +208,19 @@ func (m *Manager) Snapshot() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]string(nil), m.proxies...)
+}
+
+func (m *Manager) PoolSnapshot() PoolSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return PoolSnapshot{
+		Proxies:           append([]string(nil), m.proxies...),
+		State:             m.state,
+		Mature:            m.mature,
+		Reason:            m.reason,
+		ReadyObservations: m.readyObservations,
+		Version:           m.version.Load(),
+	}
 }
 
 func (m *Manager) Next() string {

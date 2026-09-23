@@ -249,7 +249,7 @@ func TestClientPoolCapsConcurrentRequestsPerProxy(t *testing.T) {
 	}
 }
 
-func TestFreeClientPoolRetainsValidatedClientsForEmptyManagerSnapshot(t *testing.T) {
+func TestFreeClientPoolDrainsForEmptyManagerSnapshot(t *testing.T) {
 	manager := proxy.FromString("http://1.2.3.4:8080")
 	pool := NewClientPool(manager, "www.vinted.de", 1, nil)
 	if pool.Size() != 1 {
@@ -257,8 +257,29 @@ func TestFreeClientPoolRetainsValidatedClientsForEmptyManagerSnapshot(t *testing
 	}
 	manager.ReplaceFromString("")
 	pool.Reconcile(1)
-	if pool.Size() != 1 {
-		t.Fatalf("pool size after empty snapshot = %d, want retained client", pool.Size())
+	if pool.Size() != 0 {
+		t.Fatalf("pool size after empty snapshot = %d, want fail-closed drain", pool.Size())
+	}
+}
+
+func TestFreeClientPoolRetiresInFlightClientAfterReport(t *testing.T) {
+	manager := proxy.FromString("http://1.2.3.4:8080")
+	client := &Client{ProxyURL: "http://1.2.3.4:8080"}
+	pool := &ClientPool{
+		states: []*clientState{{client: client, inFlight: 1}},
+		pm:     manager,
+	}
+	manager.ReplaceFromString("")
+	pool.Reconcile(1)
+	if pool.Size() != 0 {
+		t.Fatalf("retiring client remained available: size=%d", pool.Size())
+	}
+	pool.Report(client, 200, 10*time.Millisecond, nil)
+	pool.mu.Lock()
+	remaining := len(pool.states)
+	pool.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("retired client remained after Report: states=%d", remaining)
 	}
 }
 
@@ -286,6 +307,32 @@ func TestWaitForProxyRetryHonorsCancellation(t *testing.T) {
 	cancel()
 	if waitForProxyRetry(ctx, time.Now().Add(time.Hour)) {
 		t.Fatal("waitForProxyRetry() ignored cancellation")
+	}
+}
+
+func TestClientPoolRateLimitsEachExitIndependently(t *testing.T) {
+	now := time.Now()
+	first := &Client{ProxyURL: "http://1.2.3.4:8080"}
+	second := &Client{ProxyURL: "http://5.6.7.8:8080"}
+	pool := &ClientPool{
+		states:      []*clientState{{client: first}, {client: second}},
+		quarantined: make(map[string]proxyQuarantine),
+		reserved:    make(map[string]bool),
+		now:         func() time.Time { return now },
+	}
+	pool.SetMaxRequestsPerSecond(0.5)
+	if got := pool.Acquire(nil); got == nil {
+		t.Fatal("first exit was not admitted")
+	}
+	if got := pool.Acquire(nil); got == nil {
+		t.Fatal("second independent exit was not admitted")
+	}
+	if got := pool.Acquire(nil); got != nil {
+		t.Fatalf("exit was reused inside two-second window: %v", got)
+	}
+	now = now.Add(2 * time.Second)
+	if got := pool.Acquire(nil); got == nil {
+		t.Fatal("exit did not recover after two-second window")
 	}
 }
 

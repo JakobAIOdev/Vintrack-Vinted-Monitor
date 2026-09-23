@@ -76,9 +76,10 @@ func TestFreeProxyCandidateWindowWork(t *testing.T) {
 func TestFreeProxyLaneQuotas(t *testing.T) {
 	bootstrap := freeProxyLaneQuotas(100, true)
 	wantBootstrap := []freeProxyLaneQuota{
-		{name: "fanout", limit: 50},
-		{name: "keepalive", limit: 30},
-		{name: "explore", limit: 20},
+		{name: "keepalive", limit: 40},
+		{name: "region_affine", limit: 30},
+		{name: "fanout", limit: 20},
+		{name: "explore", limit: 10},
 	}
 	if len(bootstrap) != len(wantBootstrap) {
 		t.Fatalf("bootstrap lanes = %#v, want %#v", bootstrap, wantBootstrap)
@@ -91,12 +92,25 @@ func TestFreeProxyLaneQuotas(t *testing.T) {
 
 	maintenance := freeProxyLaneQuotas(40, false)
 	wantMaintenance := []freeProxyLaneQuota{
-		{name: "keepalive", limit: 32},
-		{name: "explore", limit: 8},
+		{name: "keepalive", limit: 28},
+		{name: "fanout", limit: 8},
+		{name: "explore", limit: 4},
 	}
 	for index := range wantMaintenance {
 		if maintenance[index] != wantMaintenance[index] {
 			t.Fatalf("maintenance lanes = %#v, want %#v", maintenance, wantMaintenance)
+		}
+	}
+}
+
+func TestFreeProxyLaneQuotasNeverExceedSmallBudget(t *testing.T) {
+	for limit := 1; limit < 10; limit++ {
+		total := 0
+		for _, lane := range freeProxyLaneQuotas(limit, true) {
+			total += lane.limit
+		}
+		if total != limit {
+			t.Fatalf("limit %d allocated %d", limit, total)
 		}
 	}
 }

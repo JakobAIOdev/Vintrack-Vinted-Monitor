@@ -10,7 +10,6 @@ import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import { revalidatePath, unstable_cache } from "next/cache";
-import { enqueueMonitorStatusNotification } from "@/lib/alert-outbox";
 import {
     getAdminOperationsPage,
     getAdminOperationsSummary,
@@ -77,6 +76,7 @@ import {
     type WorkerPolicy,
 } from "@/lib/runtime-policies";
 import { summarizeProxyRegions } from "@/lib/proxy-region-summary";
+import { parseFreeProxyCanarySnapshot } from "@/lib/free-proxy-readiness";
 
 const SERVER_PROXIES_SETTING_KEY = "server_proxies";
 const PRICE_WATCH_INTERVAL_SETTING_KEY = "price_watch_interval_seconds";
@@ -218,6 +218,10 @@ type FreeProxySettings = {
     reserveTarget: number;
     idleTarget: number;
     emergencyRecoveryEnabled: boolean;
+    adaptivePacingEnabled: boolean;
+    adaptiveRegions: string[];
+    maxRequestsPerProxySecond: number;
+    maxAdmissionDelayMs: number;
 };
 
 type FreeProxyRegionRow = {
@@ -272,6 +276,52 @@ type FreeProxyMaintainerRuntime = {
     canceled: number;
     durationMs: number;
 };
+
+type FreeProxyRuntimeMetric = {
+    region: string;
+    requestedRps: number;
+    admittedRps: number;
+    activeClients: number;
+    capacityRps: number;
+    successRate: number;
+    rateLimitedRate: number;
+    poolWaitRate: number;
+    admissionP95Ms: number;
+    observedEffectiveIntervalMs: number;
+    capacityFactor: number;
+    reason: string | null;
+};
+
+function parseFreeProxyRuntimeMetrics(value: string | undefined) {
+    if (!value) return [] as FreeProxyRuntimeMetric[];
+    try {
+        const parsed = JSON.parse(value) as {
+            regions?: Array<Record<string, unknown>>;
+        };
+        if (!Array.isArray(parsed.regions)) return [];
+        return parsed.regions
+            .filter((entry) => typeof entry.region === "string")
+            .slice(0, 50)
+            .map((entry) => ({
+                region: String(entry.region),
+                requestedRps: Number(entry.requestedRps ?? 0),
+                admittedRps: Number(entry.admittedRps ?? 0),
+                activeClients: Number(entry.activeClients ?? 0),
+                capacityRps: Number(entry.capacityRps ?? 0),
+                successRate: Number(entry.successRate ?? 0),
+                rateLimitedRate: Number(entry.rateLimitedRate ?? 0),
+                poolWaitRate: Number(entry.poolWaitRate ?? 0),
+                admissionP95Ms: Number(entry.admissionP95Ms ?? 0),
+                observedEffectiveIntervalMs: Number(
+                    entry.observedEffectiveIntervalMs ?? 0,
+                ),
+                capacityFactor: Number(entry.capacityFactor ?? 1),
+                reason: typeof entry.reason === "string" ? entry.reason : null,
+            }));
+    } catch {
+        return [];
+    }
+}
 
 function parseFreeProxyMaintainerRuntime(
     value: string | undefined,
@@ -1182,6 +1232,14 @@ export async function updateWorkerPolicy(
     ]) {
         if (typeof value !== "boolean")
             throw new Error("Invalid worker policy");
+    }
+    if (
+        !Number.isInteger(input.sellerFreshTtlMinutes) ||
+        !Number.isInteger(input.sellerStaleTtlMinutes) ||
+        input.sellerFreshTtlMinutes < 1 ||
+        input.sellerStaleTtlMinutes < input.sellerFreshTtlMinutes
+    ) {
+        throw new Error("Invalid seller cache TTL policy");
     }
     const policy = await writePolicyDocument<WorkerPolicy>(
         RUNTIME_POLICY_KEYS.worker,
@@ -2286,6 +2344,10 @@ async function getFreeProxySettings(): Promise<FreeProxySettings> {
             values[FREE_PROXY_EMERGENCY_RECOVERY_KEY],
             true,
         ),
+        adaptivePacingEnabled: false,
+        adaptiveRegions: ["de", "fr"],
+        maxRequestsPerProxySecond: 0.5,
+        maxAdmissionDelayMs: 1500,
     };
 }
 
@@ -2489,6 +2551,8 @@ export async function getFreeProxyAdminState() {
         recent,
         degradationSetting,
         runtimeSetting,
+        pacingRuntimeSetting,
+        poolStateSettings,
     ] = await Promise.all([
         getFreeProxySettings(),
         db.$queryRaw<FreeProxyStatusCountRow[]>`
@@ -2647,7 +2711,46 @@ export async function getFreeProxyAdminState() {
             where: { key: "free_proxy_maintainer_runtime" },
             select: { value: true },
         }),
+        db.app_settings.findUnique({
+            where: { key: "free_proxy_runtime_metrics" },
+            select: { value: true },
+        }),
+        db.app_settings.findMany({
+            where: {
+                OR: [
+                    { key: { startsWith: "free_proxy_canary_state:" } },
+                    { key: { startsWith: "free_proxy_serving_state:" } },
+                ],
+            },
+            select: { key: true, value: true },
+        }),
     ]);
+
+    const canaryByRegion = new Map(
+        poolStateSettings.flatMap((setting) => {
+            if (!setting.key.startsWith("free_proxy_canary_state:")) return [];
+            const canary = parseFreeProxyCanarySnapshot(setting.value);
+            return canary
+                ? [
+                      [
+                          setting.key.replace("free_proxy_canary_state:", ""),
+                          canary,
+                      ] as const,
+                  ]
+                : [];
+        }),
+    );
+    const servingByRegion = new Map<string, boolean>();
+    for (const setting of poolStateSettings) {
+        if (!setting.key.startsWith("free_proxy_serving_state:")) continue;
+        try {
+            const state = JSON.parse(setting.value) as { serving?: boolean };
+            servingByRegion.set(
+                setting.key.replace("free_proxy_serving_state:", ""),
+                state.serving === true,
+            );
+        } catch {}
+    }
 
     const countsByStatus = Object.fromEntries(
         counts.map((row) => [row.status, Number(row.proxy_count)]),
@@ -2675,6 +2778,9 @@ export async function getFreeProxyAdminState() {
         maintainerRuntime: parseFreeProxyMaintainerRuntime(
             runtimeSetting?.value,
         ),
+        runtimeMetrics: parseFreeProxyRuntimeMetrics(
+            pacingRuntimeSetting?.value,
+        ),
         counts: {
             active: activeHealthCount,
             pending: pendingHealthCount || (countsByStatus.pending ?? 0),
@@ -2693,6 +2799,8 @@ export async function getFreeProxyAdminState() {
                 Number(row.active_count) +
                 Number(row.reserve_count) +
                 Number(row.warming_count);
+            const canary = canaryByRegion.get(row.region) ?? null;
+            const serving = servingByRegion.get(row.region) === true;
 
             return {
                 region: row.region,
@@ -2729,11 +2837,19 @@ export async function getFreeProxyAdminState() {
                     usableCount < settings.readyTarget,
                 dueNow: Number(row.due_now_count),
                 neverChecked: Number(row.never_checked_count),
-                healthy:
-                    Number(row.active_count) +
-                        Number(row.reserve_count) +
-                        Number(row.warming_count) >=
-                    settings.minActivePerRegion,
+                serving,
+                capacityReady:
+                    row.region === "uk"
+                        ? (canary?.capacityReady ?? false)
+                        : Number(row.active_count) >=
+                          settings.minActivePerRegion,
+                canaryState: canary?.state ?? null,
+                canarySampleCount: canary?.sampleCount ?? 0,
+                canarySuccessRate: canary?.successRate ?? null,
+                canaryWindowMinutes: canary?.windowMinutes ?? 0,
+                canaryLastProbeAt: canary?.lastProbeAt ?? null,
+                canaryReadinessReason: canary?.readinessReason ?? null,
+                healthy: serving,
             };
         }),
         sourceDiagnostics: [],
@@ -2945,6 +3061,25 @@ export async function updateFreeProxySettings(formData: FormData) {
     );
     const emergencyRecoveryEnabled =
         formData.get("emergencyRecoveryEnabled") !== "false";
+    const adaptivePacingEnabled =
+        formData.get("adaptivePacingEnabled") === "true";
+    const adaptiveRegions = String(formData.get("adaptiveRegions") ?? "de,fr")
+        .split(",")
+        .map((region) => region.trim().toLowerCase())
+        .filter(Boolean);
+    const maxRequestsPerProxySecond = Math.min(
+        10,
+        Math.max(
+            0.05,
+            Number(formData.get("maxRequestsPerProxySecond")) || 0.5,
+        ),
+    );
+    const maxAdmissionDelayMs = parsePositiveIntSetting(
+        formData.get("maxAdmissionDelayMs") as string | undefined,
+        1500,
+        0,
+        30000,
+    );
     const starterRegionsValue = formData.get("starterRegions");
     const starterRegions = (
         typeof starterRegionsValue === "string"
@@ -2980,6 +3115,10 @@ export async function updateFreeProxySettings(formData: FormData) {
         reserveTarget,
         idleTarget,
         emergencyRecoveryEnabled,
+        adaptivePacingEnabled,
+        adaptiveRegions,
+        maxRequestsPerProxySecond,
+        maxAdmissionDelayMs,
     });
 
     const activeMonitorRegions = await db.monitors.findMany({
@@ -3830,35 +3969,20 @@ export async function setUserFreeProxyMonitorLimit(
 }
 
 export async function stopUserActiveMonitors(userId: string) {
-    await requireAdmin();
-    const transitionKey = Date.now().toString();
+    const adminUserId = await requireAdmin();
     const stoppedCount = await withMonitorActivationLock(userId, async (tx) => {
-        const monitorsToStop = await tx.monitors.findMany({
-            where: { userId, status: "active" },
-            select: {
-                id: true,
-                name: true,
-                userId: true,
-                discord_webhook: true,
-                webhook_active: true,
-                telegram_active: true,
-                notifications_enabled: true,
-            },
-        });
-        if (monitorsToStop.length === 0) return 0;
-        await tx.monitors.updateMany({
+        const result = await tx.monitors.updateMany({
             where: { userId, status: "active" },
             data: { status: "paused" },
         });
-        for (const monitor of monitorsToStop) {
-            await enqueueMonitorStatusNotification(tx, monitor, {
-                kind: "monitor_paused",
-                title: "Monitor paused",
-                message: `The monitor ${monitor.name} was paused via User Management.`,
-                idempotencyKey: `admin-pause:${monitor.id}:${transitionKey}`,
-            });
-        }
-        return monitorsToStop.length;
+        return result.count;
+    });
+    await logAuditEvent({
+        userId: adminUserId,
+        action: "admin.user_monitors_paused",
+        targetType: "user",
+        targetId: userId,
+        metadata: { stoppedCount },
     });
 
     revalidatePath("/admin");
@@ -3870,37 +3994,23 @@ export async function stopUserActiveMonitors(userId: string) {
 }
 
 export async function stopSingleUserMonitor(userId: string, monitorId: number) {
-    await requireAdmin();
+    const adminUserId = await requireAdmin();
     const stopped = await withMonitorActivationLock(userId, async (tx) => {
-        const monitor = await tx.monitors.findFirst({
-            where: {
-                id: monitorId,
-                userId,
-                status: "active",
-            },
-            select: {
-                id: true,
-                name: true,
-                userId: true,
-                discord_webhook: true,
-                webhook_active: true,
-                telegram_active: true,
-                notifications_enabled: true,
-            },
-        });
-        if (!monitor) return false;
-        await tx.monitors.update({
-            where: { id: monitorId, userId },
+        const result = await tx.monitors.updateMany({
+            where: { id: monitorId, userId, status: "active" },
             data: { status: "paused" },
         });
-        await enqueueMonitorStatusNotification(tx, monitor, {
-            kind: "monitor_paused",
-            title: "Monitor paused",
-            message: `The monitor ${monitor.name} was paused via User Management.`,
-            idempotencyKey: `admin-pause:${monitor.id}:${Date.now()}`,
-        });
-        return true;
+        return result.count > 0;
     });
+    if (stopped) {
+        await logAuditEvent({
+            userId: adminUserId,
+            action: "admin.monitor_paused",
+            targetType: "monitor",
+            targetId: String(monitorId),
+            metadata: { memberUserId: userId },
+        });
+    }
 
     revalidatePath("/admin");
 

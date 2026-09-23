@@ -186,13 +186,7 @@ test.describe("first monitor onboarding", () => {
             quickStart.getByRole("combobox", { name: "Quick start region" }),
         ).toHaveValue("de");
 
-        const dismissalResponse = page.waitForResponse(
-            (response) =>
-                response.request().method() === "POST" &&
-                response.url().includes("/dashboard"),
-        );
         await quickStart.getByRole("button", { name: "Close" }).click();
-        await dismissalResponse;
         await expect(quickStart).toBeHidden();
 
         await page.reload();
@@ -215,6 +209,12 @@ test.describe("first monitor onboarding", () => {
         ).toBeVisible();
         await expect(page.getByText("Keywords: Dunk Low")).toBeVisible();
         await expect(page.getByText("Free Proxy Pool")).toBeVisible();
+        const presetMonitor = await db.monitors.findFirst({
+            where: { userId: "e2e-user", name: "Nike Dunk Low" },
+            orderBy: { id: "desc" },
+            select: { allowed_countries: true },
+        });
+        expect(presetMonitor?.allowed_countries).toBeNull();
         const demoLease = page.getByTestId("demo-monitor-lease");
         await expect(demoLease).toBeVisible();
         await expect(demoLease.getByText("Demo monitor")).toBeVisible();
@@ -311,7 +311,7 @@ test.describe("first monitor onboarding", () => {
         );
         await expect(
             page.locator('input[name="allowed_countries"]'),
-        ).toHaveValue("de");
+        ).toHaveValue("");
         await expect(page.locator('input[name="price_min"]')).toHaveValue("10");
         await expect(page.locator('input[name="price_max"]')).toHaveValue(
             "100",
@@ -345,10 +345,13 @@ test.describe("first monitor onboarding", () => {
         ).toBeVisible();
 
         await page.getByText("Filters", { exact: true }).click();
-        await expect(page.getByText("7 active", { exact: true })).toBeVisible();
+        await expect(page.getByText("6 active", { exact: true })).toBeVisible();
+
+        await expect(
+            page.getByTestId("location-filter-field"),
+        ).toHaveAttribute("data-state", "inactive");
 
         const activeFilterExpectations = [
-            ["location-filter-field", "1 country"],
             ["category-filter-field", "2 categories"],
             ["brand-filter-field", "1 brand"],
             ["color-filter-field", "4 colors"],

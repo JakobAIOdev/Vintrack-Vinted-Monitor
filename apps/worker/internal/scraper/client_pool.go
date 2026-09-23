@@ -17,7 +17,9 @@ type clientState struct {
 	failures      int
 	inFlight      int
 	cooldownUntil time.Time
+	nextAdmission time.Time
 	replacing     bool
+	retiring      bool
 }
 
 type proxyQuarantine struct {
@@ -43,20 +45,21 @@ func (e *proxyPoolWaitError) Error() string {
 }
 
 type ClientPool struct {
-	states          []*clientState
-	index           int
-	mu              sync.Mutex
-	pm              *proxy.Manager
-	domain          string
-	trafficRecorder func(txBytes int64, rxBytes int64)
-	requestTimeout  time.Duration
-	requireProxy    bool
-	quarantined     map[string]proxyQuarantine
-	reserved        map[string]bool
-	resizing        bool
-	maxInFlight     int
-	quarantineAfter int
-	now             func() time.Time
+	states               []*clientState
+	index                int
+	mu                   sync.Mutex
+	pm                   *proxy.Manager
+	domain               string
+	trafficRecorder      func(txBytes int64, rxBytes int64)
+	requestTimeout       time.Duration
+	requireProxy         bool
+	quarantined          map[string]proxyQuarantine
+	reserved             map[string]bool
+	resizing             bool
+	maxInFlight          int
+	maxRequestsPerSecond float64
+	quarantineAfter      int
+	now                  func() time.Time
 	lastNoReplacementLog time.Time
 }
 
@@ -161,7 +164,9 @@ func (p *ClientPool) AcquireExcluding(excluded map[*Client]bool) *Client {
 	bestScore := float64(0)
 	for _, state := range p.states {
 		if excluded[state.client] ||
+			state.retiring ||
 			state.cooldownUntil.After(now) ||
+			(p.maxRequestsPerSecond > 0 && state.nextAdmission.After(now)) ||
 			state.replacing ||
 			(p.maxInFlight > 0 && state.inFlight >= p.maxInFlight) ||
 			p.proxyIsQuarantinedLocked(state.client.ProxyURL, now) {
@@ -181,7 +186,44 @@ func (p *ClientPool) AcquireExcluding(excluded map[*Client]bool) *Client {
 		return nil
 	}
 	best.inFlight++
+	if p.maxRequestsPerSecond > 0 {
+		best.nextAdmission = now.Add(time.Duration(float64(time.Second) / p.maxRequestsPerSecond))
+	}
 	return best.client
+}
+
+func (p *ClientPool) SetMaxRequestsPerSecond(rate float64) {
+	p.mu.Lock()
+	if rate < 0 {
+		rate = 0
+	}
+	p.maxRequestsPerSecond = rate
+	p.mu.Unlock()
+}
+
+func (p *ClientPool) AcquireWithAdmission(ctx context.Context, excluded map[*Client]bool, maxDelay time.Duration) (*Client, time.Duration, error) {
+	started := time.Now()
+	deadline := started.Add(maxDelay)
+	for {
+		if client := p.AcquireExcluding(excluded); client != nil {
+			return client, time.Since(started), nil
+		}
+		if waitErr := p.WaitError(); waitErr != nil {
+			return nil, time.Since(started), waitErr
+		}
+		if maxDelay <= 0 || !time.Now().Before(deadline) {
+			return nil, time.Since(started), &proxyPoolWaitError{
+				RetryAt: deadline, ErrorCode: "proxy_admission_wait", ProxyLabel: "free",
+			}
+		}
+		timer := time.NewTimer(min(10*time.Millisecond, time.Until(deadline)))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, time.Since(started), ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // AcquireRoundRobin spreads low-rate background traffic over all available
@@ -199,7 +241,8 @@ func (p *ClientPool) AcquireRoundRobin() *Client {
 	for offset := 0; offset < len(p.states); offset++ {
 		index := (p.index + offset) % len(p.states)
 		state := p.states[index]
-		if state.cooldownUntil.After(now) ||
+		if state.retiring ||
+			state.cooldownUntil.After(now) ||
 			state.replacing ||
 			(p.maxInFlight > 0 && state.inFlight >= p.maxInFlight) ||
 			p.proxyIsQuarantinedLocked(state.client.ProxyURL, now) {
@@ -225,6 +268,12 @@ func (p *ClientPool) Report(client *Client, status int, latency time.Duration, e
 	}
 	if state.inFlight > 0 {
 		state.inFlight--
+	}
+	if state.retiring && state.inFlight == 0 {
+		p.removeStateLocked(state)
+		p.mu.Unlock()
+		client.Close()
+		return
 	}
 
 	if errors.Is(err, context.Canceled) {
@@ -286,7 +335,7 @@ func (p *ClientPool) Replace(bad *Client) {
 
 	p.mu.Lock()
 	state := p.findState(bad)
-	if state == nil || state.replacing {
+	if state == nil || state.replacing || state.retiring {
 		p.mu.Unlock()
 		return
 	}
@@ -426,7 +475,7 @@ func (p *ClientPool) EnsureSize(size int) {
 	}
 
 	p.mu.Lock()
-	if p.resizing || len(p.states) >= size {
+	if p.resizing || p.availableStateCountLocked() >= size {
 		p.mu.Unlock()
 		return
 	}
@@ -442,7 +491,7 @@ func (p *ClientPool) EnsureSize(size int) {
 	failed := make(map[string]bool)
 	for {
 		p.mu.Lock()
-		if len(p.states) >= size {
+		if p.availableStateCountLocked() >= size {
 			p.mu.Unlock()
 			return
 		}
@@ -480,38 +529,42 @@ func (p *ClientPool) EnsureSize(size int) {
 	}
 }
 
-// Reconcile grows the pool and gradually replaces clients that are no longer
-// present in the manager snapshot. An empty manager is treated as a temporary
-// control-plane outage: existing region-validated clients are retained and
-// their request outcomes continue to drive local quarantine decisions.
+// Reconcile makes the live client set match the manager snapshot. Removed
+// endpoints are retired immediately and an empty fail-closed snapshot drains
+// the pool instead of silently retaining stale reserve clients.
 func (p *ClientPool) Reconcile(size int) {
 	if p == nil || p.pm == nil {
 		return
 	}
 	allowedProxies := p.pm.Snapshot()
-	if len(allowedProxies) == 0 {
-		return
-	}
-	p.EnsureSize(size)
-
 	allowed := make(map[string]bool, len(allowedProxies))
 	for _, proxyURL := range allowedProxies {
 		allowed[proxyURL] = true
 	}
+
 	p.mu.Lock()
-	stale := make([]*Client, 0)
+	closed := make([]*Client, 0)
+	retained := p.states[:0]
 	for _, state := range p.states {
-		if state.client == nil || state.replacing || state.inFlight > 0 {
+		if state.client == nil || allowed[state.client.ProxyURL] {
+			retained = append(retained, state)
 			continue
 		}
-		if !allowed[state.client.ProxyURL] {
-			stale = append(stale, state.client)
+		state.retiring = true
+		state.replacing = false
+		if state.inFlight > 0 {
+			retained = append(retained, state)
+			continue
 		}
+		closed = append(closed, state.client)
 	}
+	p.states = retained
 	p.mu.Unlock()
-
-	for _, client := range stale {
-		p.Replace(client)
+	for _, client := range closed {
+		client.Close()
+	}
+	if len(allowedProxies) > 0 {
+		p.EnsureSize(size)
 	}
 }
 
@@ -537,6 +590,25 @@ func (p *ClientPool) proxyIsQuarantinedLocked(proxyURL string, now time.Time) bo
 	return ok && quarantine.until.After(now)
 }
 
+func (p *ClientPool) availableStateCountLocked() int {
+	count := 0
+	for _, state := range p.states {
+		if !state.retiring {
+			count++
+		}
+	}
+	return count
+}
+
+func (p *ClientPool) removeStateLocked(target *clientState) {
+	for index, state := range p.states {
+		if state == target {
+			p.states = append(p.states[:index], p.states[index+1:]...)
+			return
+		}
+	}
+}
+
 func (p *ClientPool) findState(client *Client) *clientState {
 	for _, state := range p.states {
 		if state.client == client {
@@ -549,5 +621,5 @@ func (p *ClientPool) findState(client *Client) *clientState {
 func (p *ClientPool) Size() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return len(p.states)
+	return p.availableStateCountLocked()
 }

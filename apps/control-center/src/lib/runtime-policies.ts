@@ -34,6 +34,10 @@ export type FreeProxyPolicy = VersionedPolicy & {
     reserveTarget: number;
     idleTarget: number;
     emergencyRecoveryEnabled: boolean;
+    adaptivePacingEnabled: boolean;
+    adaptiveRegions: string[];
+    maxRequestsPerProxySecond: number;
+    maxAdmissionDelayMs: number;
 };
 
 export type WorkerPolicy = VersionedPolicy & {
@@ -41,6 +45,8 @@ export type WorkerPolicy = VersionedPolicy & {
     discoveryAllowFreeActive: boolean;
     enrichSellerInfo: boolean;
     catalogLatencyMetrics: boolean;
+    sellerFreshTtlMinutes: number;
+    sellerStaleTtlMinutes: number;
 };
 
 export const DEFAULT_PRICE_WATCH_POLICY: PriceWatchPolicy = {
@@ -59,6 +65,8 @@ export const DEFAULT_WORKER_POLICY: WorkerPolicy = {
     discoveryAllowFreeActive: false,
     enrichSellerInfo: true,
     catalogLatencyMetrics: true,
+    sellerFreshTtlMinutes: 30,
+    sellerStaleTtlMinutes: 1440,
 };
 
 export const DEFAULT_FREE_PROXY_POLICY: FreeProxyPolicy = {
@@ -82,6 +90,10 @@ export const DEFAULT_FREE_PROXY_POLICY: FreeProxyPolicy = {
     reserveTarget: 50,
     idleTarget: 10,
     emergencyRecoveryEnabled: true,
+    adaptivePacingEnabled: false,
+    adaptiveRegions: ["de", "fr"],
+    maxRequestsPerProxySecond: 0.5,
+    maxAdmissionDelayMs: 1500,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -125,7 +137,10 @@ export function parsePriceWatchPolicy(value: string | null | undefined) {
 
 export function parseWorkerPolicy(value: string | null | undefined) {
     return parsePolicyDocument(value, (candidate) => {
-        const policy = candidate as Partial<WorkerPolicy>;
+        const policy = {
+            ...DEFAULT_WORKER_POLICY,
+            ...candidate,
+        } as Partial<WorkerPolicy>;
         if (!Number.isInteger(policy.revision) || Number(policy.revision) < 1)
             return null;
 
@@ -139,13 +154,24 @@ export function parseWorkerPolicy(value: string | null | undefined) {
             ].some((value) => typeof value !== "boolean")
         )
             return null;
+        if (
+            !Number.isInteger(policy.sellerFreshTtlMinutes) ||
+            !Number.isInteger(policy.sellerStaleTtlMinutes) ||
+            Number(policy.sellerFreshTtlMinutes) < 1 ||
+            Number(policy.sellerStaleTtlMinutes) <
+                Number(policy.sellerFreshTtlMinutes)
+        )
+            return null;
         return policy as WorkerPolicy;
     });
 }
 
 export function parseFreeProxyPolicy(value: string | null | undefined) {
     return parsePolicyDocument(value, (candidate) => {
-        const policy = candidate as Partial<FreeProxyPolicy>;
+        const policy = {
+            ...DEFAULT_FREE_PROXY_POLICY,
+            ...candidate,
+        } as Partial<FreeProxyPolicy>;
         const numeric = [
             policy.revision,
             policy.maxPoolSize,
@@ -169,7 +195,20 @@ export function parseFreeProxyPolicy(value: string | null | undefined) {
             return null;
         if (
             typeof policy.autoImportEnabled !== "boolean" ||
-            typeof policy.emergencyRecoveryEnabled !== "boolean"
+            typeof policy.emergencyRecoveryEnabled !== "boolean" ||
+            typeof policy.adaptivePacingEnabled !== "boolean"
+        )
+            return null;
+        if (
+            !Array.isArray(policy.adaptiveRegions) ||
+            !policy.adaptiveRegions.every(
+                (region) => typeof region === "string" && region.length > 0,
+            ) ||
+            typeof policy.maxRequestsPerProxySecond !== "number" ||
+            !Number.isFinite(policy.maxRequestsPerProxySecond) ||
+            policy.maxRequestsPerProxySecond <= 0 ||
+            !Number.isInteger(policy.maxAdmissionDelayMs) ||
+            Number(policy.maxAdmissionDelayMs) < 0
         )
             return null;
         if (

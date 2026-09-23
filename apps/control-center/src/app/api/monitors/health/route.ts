@@ -13,6 +13,10 @@ export type MonitorHealth = {
     last_error?: string;
     last_error_code?: string;
     proxy_state?: string;
+    runtime_state?: "starting" | "running" | "degraded" | "waiting_for_pool";
+    state_since?: string;
+    last_success_at?: string;
+    effective_interval_ms?: number;
     retry_at?: string;
     proxy_label?: string;
     updated_at: string;

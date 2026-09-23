@@ -132,16 +132,20 @@ type Item struct {
 }
 
 type MonitorHealth struct {
-	MonitorID       int    `json:"monitor_id"`
-	TotalChecks     int64  `json:"total_checks"`
-	TotalErrors     int64  `json:"total_errors"`
-	ConsecutiveErrs int    `json:"consecutive_errors"`
-	LastError       string `json:"last_error,omitempty"`
-	LastErrorCode   string `json:"last_error_code,omitempty"`
-	ProxyState      string `json:"proxy_state,omitempty"`
-	RetryAt         string `json:"retry_at,omitempty"`
-	ProxyLabel      string `json:"proxy_label,omitempty"`
-	UpdatedAt       string `json:"updated_at"`
+	MonitorID           int    `json:"monitor_id"`
+	TotalChecks         int64  `json:"total_checks"`
+	TotalErrors         int64  `json:"total_errors"`
+	ConsecutiveErrs     int    `json:"consecutive_errors"`
+	LastError           string `json:"last_error,omitempty"`
+	LastErrorCode       string `json:"last_error_code,omitempty"`
+	ProxyState          string `json:"proxy_state,omitempty"`
+	RuntimeState        string `json:"runtime_state,omitempty"`
+	StateSince          string `json:"state_since,omitempty"`
+	LastSuccessAt       string `json:"last_success_at,omitempty"`
+	EffectiveIntervalMS int    `json:"effective_interval_ms,omitempty"`
+	RetryAt             string `json:"retry_at,omitempty"`
+	ProxyLabel          string `json:"proxy_label,omitempty"`
+	UpdatedAt           string `json:"updated_at"`
 }
 
 type MonitorRun struct {
@@ -202,16 +206,18 @@ type PriceDropAlert struct {
 }
 
 type AlertNotificationPayload struct {
-	Version       int                      `json:"version"`
-	Kind          string                   `json:"kind"`
-	MonitorName   string                   `json:"monitorName"`
-	ProxySource   string                   `json:"proxySource,omitempty"`
-	DiscordStyle  NotificationMessageStyle `json:"discordStyle,omitempty"`
-	TelegramStyle NotificationMessageStyle `json:"telegramStyle,omitempty"`
-	Title         string                   `json:"title,omitempty"`
-	Message       string                   `json:"message,omitempty"`
-	Item          *Item                    `json:"item,omitempty"`
-	PriceDrop     *PriceDropAlert          `json:"priceDrop,omitempty"`
+	Version          int                      `json:"version"`
+	Kind             string                   `json:"kind"`
+	MonitorName      string                   `json:"monitorName"`
+	ProxySource      string                   `json:"proxySource,omitempty"`
+	DiscordStyle     NotificationMessageStyle `json:"discordStyle,omitempty"`
+	TelegramStyle    NotificationMessageStyle `json:"telegramStyle,omitempty"`
+	Title            string                   `json:"title,omitempty"`
+	Message          string                   `json:"message,omitempty"`
+	Region           string                   `json:"region,omitempty"`
+	AffectedMonitors int                      `json:"affectedMonitors,omitempty"`
+	Item             *Item                    `json:"item,omitempty"`
+	PriceDrop        *PriceDropAlert          `json:"priceDrop,omitempty"`
 }
 
 type AlertNotificationRequest struct {

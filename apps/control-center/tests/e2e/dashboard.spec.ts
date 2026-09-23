@@ -1199,7 +1199,19 @@ test.describe("dashboard monitors", () => {
             .first();
 
         await expect(monitorCard).toBeVisible();
-        await expect(monitorCard.getByText("Running")).toBeVisible();
+        const runtimeStatus = monitorCard.getByRole("status");
+        await expect(runtimeStatus).toBeVisible();
+        await expect(
+            monitorCard
+                .getByRole("heading", { name: "E2E Mock Feed" })
+                .locator("..")
+                .getByRole("status"),
+        ).toBeVisible();
+        await expect(runtimeStatus).not.toHaveClass(/rounded-full|border/);
+        await expect(runtimeStatus).toHaveAttribute(
+            "data-runtime-state",
+            /^(running|starting|waiting|degraded)$/,
+        );
         await expect(monitorCard.getByText("Server Proxies")).toBeVisible();
         await expect(monitorCard.getByText(/items found/i)).toBeVisible();
         await expect(
@@ -1217,6 +1229,14 @@ test.describe("dashboard monitors", () => {
 
         await monitorCard.getByRole("link", { name: /View/i }).click();
         await expect(page.getByText("★ ≥ 4.5 · 5+ ratings")).toBeVisible();
+        const detailRuntimeStatus = page
+            .getByRole("heading", { name: "E2E Mock Feed" })
+            .locator("..")
+            .getByRole("status");
+        await expect(detailRuntimeStatus).toBeVisible();
+        await expect(detailRuntimeStatus).not.toHaveClass(
+            /rounded-full|border/,
+        );
         await page.getByRole("link", { name: "Edit" }).click();
 
         const editQueryField = page.getByTestId("query-filter-field");

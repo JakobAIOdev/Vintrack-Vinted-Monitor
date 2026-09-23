@@ -88,7 +88,7 @@ services:
       - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --maxmemory ${REDIS_MAXMEMORY:-192mb} --maxmemory-policy allkeys-lru --stop-writes-on-bgsave-error no
+    command: redis-server --appendonly yes --maxmemory ${REDIS_MAXMEMORY:-768mb} --maxmemory-policy allkeys-lfu --stop-writes-on-bgsave-error no
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -96,7 +96,7 @@ services:
       retries: 5
     # Leave headroom above maxmemory for the AOF rewrite fork, which transiently
     # increases resident memory.
-    mem_limit: ${REDIS_MEM_LIMIT:-320m}
+    mem_limit: ${REDIS_MEM_LIMIT:-896m}
     logging: *default-logging
     restart: unless-stopped
 
@@ -252,8 +252,10 @@ services:
       - ENRICHMENT_WORKERS=${ENRICHMENT_WORKERS:-24}
       - SELLER_ENRICHMENT_TIMEOUT_MS=${SELLER_ENRICHMENT_TIMEOUT_MS:-4500}
       - SELLER_CLIENT_POOL_SIZE=${SELLER_CLIENT_POOL_SIZE:-16}
+      - FREE_SELLER_CLIENT_POOL_SIZE=${FREE_SELLER_CLIENT_POOL_SIZE:-24}
       - SELLER_CACHE_TTL_MINUTES=${SELLER_CACHE_TTL_MINUTES:-30}
-      - SELLER_HEDGE_DELAY_MS=${SELLER_HEDGE_DELAY_MS:-350}
+      - SELLER_STALE_TTL_MINUTES=${SELLER_STALE_TTL_MINUTES:-1440}
+      - SELLER_HEDGE_DELAY_MS=${SELLER_HEDGE_DELAY_MS:-450}
       - SELLER_NEGATIVE_CACHE_TTL_MS=${SELLER_NEGATIVE_CACHE_TTL_MS:-3000}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - AUTH_URL=${AUTH_URL:-http://localhost:3000}
