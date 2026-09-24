@@ -448,17 +448,12 @@ export async function createPresetMonitor(input: {
     }
 
     const freeProxy = await getFreeProxyPoolHealth();
-    if (
-        !freeProxy.enabled ||
-        (region === "uk" && freeProxy.regions.uk?.healthy !== true)
-    ) {
+    if (!freeProxy.enabled) {
         return {
             ok: false,
             code: "POOL_UNAVAILABLE",
             message:
-                region === "uk"
-                    ? "UK is still validating safe proxy capacity. Choose another region for now."
-                    : "The Free Proxy Pool is currently disabled. Set up the monitor manually.",
+                "The Free Proxy Pool is currently disabled. Set up the monitor manually.",
         };
     }
 

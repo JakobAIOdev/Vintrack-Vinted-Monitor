@@ -458,11 +458,9 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                 runtimeSuccessByRegion.get(region) ??
                 null;
             const readiness = resolveFreeProxyRegionReadiness({
-                region,
                 featureEnabled: featurePolicy?.enabled ?? false,
                 serving,
                 servingReason: servingState?.reason ?? null,
-                canary,
             });
             const ready = readiness.ready;
             const recentSuccessCount = Number(row.recent_success_count);

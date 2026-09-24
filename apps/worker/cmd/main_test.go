@@ -78,15 +78,6 @@ func TestMergeFreeProxyRegionsAlwaysIncludesUKCanary(t *testing.T) {
 	}
 }
 
-func TestFreeProxyServingPoolLimitUsesValidatedUKCohort(t *testing.T) {
-	if got := freeProxyServingPoolLimit("uk", 10, 100); got != 10 {
-		t.Fatalf("UK serving limit = %d, want 10", got)
-	}
-	if got := freeProxyServingPoolLimit("de", 10, 100); got != 100 {
-		t.Fatalf("DE serving limit = %d, want 100", got)
-	}
-}
-
 func TestFreeProxyTimeoutBatchFitsRecoveryCycleBudget(t *testing.T) {
 	const candidates = 960
 	const concurrency = 48
@@ -720,5 +711,19 @@ func TestFreeProxyServingDecisionRequiresConfirmationAndUsesHysteresis(t *testin
 	serving, state, reason, observations = freeProxyServingDecision(previous, 7, 10)
 	if serving || state != "recovering" || reason != "below_hysteresis_floor" || observations != 0 {
 		t.Fatalf("below hysteresis decision = %v/%s/%s/%d", serving, state, reason, observations)
+	}
+}
+
+func TestParsePersistedFreeProxyServingSnapshotRestoresReadyHysteresis(t *testing.T) {
+	restored := parsePersistedFreeProxyServingSnapshot(`{"state":"ready","serving":true,"mature":12}`)
+	if restored.State != "ready" || restored.ReadyObservations != 2 {
+		t.Fatalf("restored snapshot = %#v, want durable ready state", restored)
+	}
+	serving, state, reason, observations := freeProxyServingDecision(restored, 8, 10)
+	if !serving || state != "ready" || reason != "" || observations != 2 {
+		t.Fatalf("restart decision = serving=%v state=%q reason=%q observations=%d", serving, state, reason, observations)
+	}
+	if got := parsePersistedFreeProxyServingSnapshot(`{"state":"recovering","serving":false}`); got.State != "" {
+		t.Fatalf("recovering state restored as ready: %#v", got)
 	}
 }

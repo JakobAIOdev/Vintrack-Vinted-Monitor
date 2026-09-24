@@ -125,12 +125,6 @@ export function RegionPoolStatus({
     const isHealthy = Boolean(
         freeProxy.enabled && regionHealth?.healthy && regionHealth?.serving,
     );
-    const isUKCanaryValidating = Boolean(
-        freeProxy.enabled &&
-        selectedRegion === "uk" &&
-        mature >= min &&
-        !regionHealth?.healthy,
-    );
     const poolRegions = REGIONS.map((region) => ({
         ...region,
         health: freeProxy.regions?.[region.code],
@@ -171,9 +165,7 @@ export function RegionPoolStatus({
                             >
                                 {isHealthy
                                     ? "Ready"
-                                    : isUKCanaryValidating
-                                      ? "Validating"
-                                      : freeProxy.enabled
+                                    : freeProxy.enabled
                                         ? "Recovering"
                                         : "Disabled"}
                             </Badge>
@@ -195,9 +187,7 @@ export function RegionPoolStatus({
                             {freeProxy.enabled
                                 ? isHealthy
                                     ? `${mature} mature proxies are serving this region. Runtime success: ${regionHealth?.runtimeSuccessRate === null || regionHealth?.runtimeSuccessRate === undefined ? "collecting" : `${Math.round(regionHealth.runtimeSuccessRate)}%`}.`
-                                    : isUKCanaryValidating
-                                      ? `Validating safe UK capacity (${regionHealth?.canarySampleCount ?? 0}/200 probes, ${regionHealth?.canarySuccessRate === null || regionHealth?.canarySuccessRate === undefined ? "collecting" : `${Math.round(regionHealth.canarySuccessRate)}% success`}). Active monitors wait safely.`
-                                      : `${mature} mature of ${min} required. The pool is rebuilding automatically; active monitors wait safely.`
+                                    : `${mature} mature of ${min} required. The pool is rebuilding automatically; active monitors wait safely.`
                                 : "Free Proxy Pool is currently disabled by admin."}
                         </p>
                     </div>
@@ -227,9 +217,8 @@ export function RegionPoolStatus({
             </div>
             {!isHealthy && (
                 <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
-                    {selectedRegion === "uk"
-                        ? "UK stays unavailable for new monitors until safe capacity is fully validated. Existing UK monitors keep waiting and resume automatically."
-                        : "The shared pool is recovering. You can still select it; the monitor will wait and resume automatically."}
+                    The shared pool is recovering. You can still select it; the
+                    monitor will wait and resume automatically.
                 </p>
             )}
             {freeProxy.usage?.limitReached ? (

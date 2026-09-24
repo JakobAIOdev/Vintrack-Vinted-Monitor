@@ -410,14 +410,7 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 	reserveTarget, _ := settingIntContext(refreshCtx, store, "free_proxy_reserve_target_active_region", 50)
 	idleTarget, _ := settingIntContext(refreshCtx, store, "free_proxy_idle_region_target", 10)
 	for _, region := range regions {
-		var ukProxies []string
-		activeCount := 0
-		if region == freeProxyUKCanaryRegion {
-			ukProxies, err = store.GetDiverseActiveFreeProxiesContext(refreshCtx, region, max(1, minActive))
-			activeCount = len(ukProxies)
-		} else {
-			activeCount, err = store.CountActiveFreeProxiesContext(refreshCtx, region)
-		}
+		activeCount, err := store.CountActiveFreeProxiesContext(refreshCtx, region)
 		if err != nil {
 			log.Printf("free proxy active count failed for %s: %v", region, err)
 			freeProxyPools.Publish(region, "", "recovering", 0, "active_count_unavailable", 0)
@@ -425,19 +418,14 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 		}
 
 		previous := freeProxyPools.Snapshot(region)
+		if previous.Version == 0 {
+			previous = persistedFreeProxyServingSnapshot(refreshCtx, store, region)
+		}
 		serving, state, reason, readyObservations := freeProxyServingDecision(
 			previous,
 			activeCount,
 			minActive,
 		)
-		if region == freeProxyUKCanaryRegion {
-			serving, state, reason, readyObservations = freeProxyUKServingDecision(
-				refreshCtx,
-				store,
-				activeCount,
-				minActive,
-			)
-		}
 		if !serving {
 			freeProxyPools.Publish(region, "", state, activeCount, reason, readyObservations)
 			_ = publishFreeProxyRegionServingState(refreshCtx, store, region, state, activeCount, reason)
@@ -448,13 +436,7 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 		if regionDemand[region] > 0 {
 			poolLimit = max(1, readyTarget+reserveTarget)
 		}
-		poolLimit = freeProxyServingPoolLimit(region, minActive, poolLimit)
-		var proxies []string
-		if region == freeProxyUKCanaryRegion {
-			proxies = ukProxies
-		} else {
-			proxies, err = store.GetActiveFreeProxiesContext(refreshCtx, region, poolLimit)
-		}
+		proxies, err := store.GetActiveFreeProxiesContext(refreshCtx, region, poolLimit)
 		if err != nil {
 			log.Printf("free proxy refresh failed for %s: %v", region, err)
 			freeProxyPools.Publish(region, "", "recovering", activeCount, "snapshot_query_failed", 0)
@@ -466,49 +448,29 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 	}
 }
 
-func freeProxyServingPoolLimit(region string, minimum int, defaultLimit int) int {
-	if region == freeProxyUKCanaryRegion {
-		return max(1, minimum)
+func persistedFreeProxyServingSnapshot(ctx context.Context, store *database.Store, region string) proxy.PoolSnapshot {
+	if store == nil {
+		return proxy.PoolSnapshot{}
 	}
-	return max(1, defaultLimit)
+	raw, ok, err := store.GetSettingValueContext(ctx, "free_proxy_serving_state:"+region)
+	if err != nil || !ok {
+		return proxy.PoolSnapshot{}
+	}
+	return parsePersistedFreeProxyServingSnapshot(raw)
 }
 
-func freeProxyUKServingDecision(
-	ctx context.Context,
-	store *database.Store,
-	activeCount int,
-	minActive int,
-) (bool, string, string, int) {
-	canary, err := readFreeProxyUKCanaryStateContext(ctx, store, time.Now())
-	if err != nil {
-		return false, "recovering", "uk_canary_state_unavailable", 0
+func parsePersistedFreeProxyServingSnapshot(raw string) proxy.PoolSnapshot {
+	var state struct {
+		State   string `json:"state"`
+		Serving bool   `json:"serving"`
 	}
-	exitThreshold := max(1, (max(1, minActive)*80+99)/100)
-	if activeCount < exitThreshold {
-		return false, "recovering", "below_hysteresis_floor", 0
+	if json.Unmarshal([]byte(raw), &state) != nil || !state.Serving || state.State != "ready" {
+		return proxy.PoolSnapshot{}
 	}
-	if !canary.CapacityReady {
-		state := "recovering"
-		if activeCount == 0 {
-			state = "building"
-		}
-		reason := canary.ReadinessReason
-		if reason == "" {
-			reason = "confirming_readiness"
-		}
-		return false, state, reason, canary.CapacityObservations
-	}
-	if !canary.CanaryPassed {
-		reason := canary.ReadinessReason
-		if reason == "" {
-			reason = "collecting_uk_canary"
-		}
-		return false, "recovering", reason, canary.CapacityObservations
-	}
-	return true, "ready", "", max(2, canary.CapacityObservations)
+	return proxy.PoolSnapshot{State: "ready", ReadyObservations: 2}
 }
 
-const freeProxyValidationRevision = "catalog-region-currency-v7"
+const freeProxyValidationRevision = "catalog-marketplace-headers-v8"
 
 func ensureFreeProxyValidationRevision(ctx context.Context, store *database.Store, regions []string) error {
 	const settingKey = "free_proxy_validation_revision"
@@ -519,7 +481,7 @@ func ensureFreeProxyValidationRevision(ctx context.Context, store *database.Stor
 	if ok && current == freeProxyValidationRevision {
 		return nil
 	}
-	requeued, err := store.ResetFreeProxyValidationEvidenceContext(ctx, regions)
+	requeued, err := store.RequeueFreeProxyRegionalAccessFailuresContext(ctx, regions)
 	if err != nil {
 		return err
 	}
