@@ -2120,25 +2120,20 @@ func freeProxyRegions(store *database.Store) ([]string, error) {
 }
 
 func freeProxyRegionsContext(ctx context.Context, store *database.Store) ([]string, error) {
-	activeRegions, err := store.GetActiveFreeProxyRegionsContext(ctx)
-	if err != nil {
-		return nil, err
-	}
 	starterRegionValue := "de,fr,it,es,nl,be,at"
 	if value, ok, settingErr := store.GetSettingValueContext(ctx, "free_proxy_starter_regions"); settingErr != nil {
 		return nil, settingErr
 	} else if ok {
 		starterRegionValue = value
 	}
-	return mergeFreeProxyRegions(starterRegionValue, activeRegions), nil
+	return configuredFreeProxyRegions(starterRegionValue), nil
 }
 
-func mergeFreeProxyRegions(starterRegionValue string, activeRegions []string) []string {
+func configuredFreeProxyRegions(starterRegionValue string) []string {
 	starterRegions := strings.Split(starterRegionValue, ",")
 	seen := make(map[string]bool)
-	regions := make([]string, 0, len(activeRegions)+len(starterRegions)+1)
-	validationRegions := append(append(starterRegions, activeRegions...), freeProxyUKCanaryRegion)
-	for _, region := range validationRegions {
+	regions := make([]string, 0, len(starterRegions))
+	for _, region := range starterRegions {
 		region = strings.TrimSpace(strings.ToLower(region))
 		if region == "" || seen[region] {
 			continue

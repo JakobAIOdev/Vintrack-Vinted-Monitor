@@ -70,11 +70,17 @@ func TestFreeProxyValidationTimeout(t *testing.T) {
 	}
 }
 
-func TestMergeFreeProxyRegionsAlwaysIncludesUKCanary(t *testing.T) {
-	got := mergeFreeProxyRegions("de", []string{"fr", "DE"})
-	want := []string{"de", "fr", "uk"}
+func TestConfiguredFreeProxyRegionsDoesNotForceDisabledUK(t *testing.T) {
+	got := configuredFreeProxyRegions("de,fr,DE")
+	want := []string{"de", "fr"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("regions = %#v, want %#v", got, want)
+	}
+
+	got = configuredFreeProxyRegions("de,uk")
+	want = []string{"de", "uk"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("configured UK regions = %#v, want %#v", got, want)
 	}
 }
 

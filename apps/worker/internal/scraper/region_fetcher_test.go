@@ -29,6 +29,24 @@ func TestSellerInfoCache_SetAndGet(t *testing.T) {
 	}
 }
 
+func TestConfigureFreeSellerClientPoolBoundsPerProxyLoad(t *testing.T) {
+	t.Setenv("FREE_SELLER_MAX_REQUESTS_PER_PROXY_SECOND", "0.4")
+	pool := &ClientPool{}
+	configureSellerClientPool(pool, "free")
+	if pool.maxRequestsPerSecond != 0.4 {
+		t.Fatalf("maxRequestsPerSecond = %v, want 0.4", pool.maxRequestsPerSecond)
+	}
+	if pool.quarantineAfter != 3 {
+		t.Fatalf("quarantineAfter = %d, want 3", pool.quarantineAfter)
+	}
+
+	privatePool := &ClientPool{}
+	configureSellerClientPool(privatePool, "group:private")
+	if privatePool.maxRequestsPerSecond != 0 || privatePool.quarantineAfter != 0 {
+		t.Fatalf("private seller pool was unexpectedly rate limited: %+v", privatePool)
+	}
+}
+
 func TestSellerInfoCache_IsolatedByDomainAndExpires(t *testing.T) {
 	cache := &sellerInfoCache{cache: make(map[string]sellerCacheEntry, 4)}
 	cache.Set("www.vinted.de", 7, SellerInfo{Region: "🇩🇪 DE"}, time.Now())

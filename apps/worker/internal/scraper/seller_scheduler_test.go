@@ -39,6 +39,35 @@ func TestSellerEnrichmentSchedulerFairAcrossSources(t *testing.T) {
 	}
 }
 
+func TestSellerEnrichmentSchedulerFairAcrossMonitorsOnSamePool(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scheduler := NewSellerEnrichmentScheduler(16, 1)
+	go scheduler.Run(ctx)
+	readyAt := time.Now().Add(100 * time.Millisecond)
+	jobs := []enrichmentJob{
+		{proxySource: "free", monitor: model.Monitor{ID: 1709}, item: itemWithID(1), readyAt: readyAt},
+		{proxySource: "free", monitor: model.Monitor{ID: 1709}, item: itemWithID(2), readyAt: readyAt},
+		{proxySource: "free", monitor: model.Monitor{ID: 1777}, item: itemWithID(3), readyAt: readyAt},
+	}
+	for _, job := range jobs {
+		if !scheduler.Submit(ctx, job) {
+			t.Fatal("submit failed")
+		}
+	}
+	want := []int64{1, 3, 2}
+	for index, expected := range want {
+		select {
+		case job := <-scheduler.Work():
+			if job.item.ID != expected {
+				t.Fatalf("job %d = %d, want %d", index, job.item.ID, expected)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for scheduled work")
+		}
+	}
+}
+
 func TestSellerEnrichmentSchedulerPrioritizesNewAlerts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

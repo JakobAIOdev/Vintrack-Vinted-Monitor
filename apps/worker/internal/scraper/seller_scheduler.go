@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -139,7 +140,10 @@ func (s *SellerEnrichmentScheduler) Run(ctx context.Context) {
 	}
 
 	add := func(job enrichmentJob) {
-		key := job.proxySource
+		// A lane is scoped to one monitor as well as its transport. Without the
+		// monitor ID, one broad high-frequency search can place thousands of
+		// lookups ahead of every other member using the same regional pool.
+		key := fmt.Sprintf("%s:%d", job.proxySource, job.monitor.ID)
 		if job.enricher != nil {
 			key = job.enricher.domain + ":" + key
 		}

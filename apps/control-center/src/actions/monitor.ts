@@ -88,10 +88,10 @@ const MONITOR_CREATION_MAINTENANCE_MESSAGE =
 
 async function isFreeProxyPoolAvailable(region: string) {
     const health = await getFreeProxyPoolHealth();
-    if (!health.enabled) return false;
-    const normalizedRegion = region.trim().toLowerCase();
-    if (normalizedRegion !== "uk") return true;
-    return health.regions.uk?.healthy === true;
+    return (
+        health.enabled &&
+        Boolean(health.regions[region.trim().toLowerCase()])
+    );
 }
 
 async function resolveMonitorProxySelection(
@@ -115,11 +115,7 @@ async function resolveMonitorProxySelection(
             !allowExistingFreeRegion &&
             !(await isFreeProxyPoolAvailable(region))
         ) {
-            throw new Error(
-                region.trim().toLowerCase() === "uk"
-                    ? "UK Free Proxy Pool is still validating safe capacity"
-                    : "Free proxy pool is currently disabled",
-            );
+            throw new Error("Free proxy pool is not enabled for this region");
         }
         return { proxyGroupId: null, proxySource: "free" };
     }
@@ -448,12 +444,12 @@ export async function createPresetMonitor(input: {
     }
 
     const freeProxy = await getFreeProxyPoolHealth();
-    if (!freeProxy.enabled) {
+    if (!freeProxy.enabled || !freeProxy.regions[region]) {
         return {
             ok: false,
             code: "POOL_UNAVAILABLE",
             message:
-                "The Free Proxy Pool is currently disabled. Set up the monitor manually.",
+                "The Free Proxy Pool is not enabled for this region. Set up the monitor manually.",
         };
     }
 

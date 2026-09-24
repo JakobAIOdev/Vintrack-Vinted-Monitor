@@ -96,7 +96,7 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 		discoveryMode = "off"
 	}
 	jobsCtx, jobsCancel := context.WithCancel(context.Background())
-	enrichmentWorkers := getEnvInt("ENRICHMENT_WORKERS", 24)
+	enrichmentWorkers := getEnvInt("ENRICHMENT_WORKERS", 48)
 	if enrichmentWorkers < 1 {
 		enrichmentWorkers = 1
 	}
@@ -222,6 +222,7 @@ func (e *Engine) GetOrCreateEnricher(pm *proxy.Manager, domain string, proxyKey 
 		if strings.HasPrefix(proxyLabel, "free") {
 			s.pool.Reconcile(configuredSellerPoolSize(proxyLabel))
 		}
+		configureSellerClientPool(s.pool, proxyLabel)
 		s.configureCacheTTLs(e.workerPolicySnapshot())
 		return s
 	}
@@ -233,6 +234,7 @@ func (e *Engine) GetOrCreateEnricher(pm *proxy.Manager, domain string, proxyKey 
 		if strings.HasPrefix(proxyLabel, "free") {
 			s.pool.Reconcile(configuredSellerPoolSize(proxyLabel))
 		}
+		configureSellerClientPool(s.pool, proxyLabel)
 		s.configureCacheTTLs(e.workerPolicySnapshot())
 		return s
 	}
@@ -240,6 +242,7 @@ func (e *Engine) GetOrCreateEnricher(pm *proxy.Manager, domain string, proxyKey 
 	log.Printf("Creating new seller enricher for %s (source: %s)", domain, proxyLabel)
 	sellerPoolSize := configuredSellerPoolSize(proxyLabel)
 	s = NewSellerEnricher(pm, e.db, domain, sellerPoolSize, trafficRecorder)
+	configureSellerClientPool(s.pool, proxyLabel)
 	s.configureCacheTTLs(e.workerPolicySnapshot())
 	e.enrichers[key] = s
 	return s
@@ -248,7 +251,7 @@ func (e *Engine) GetOrCreateEnricher(pm *proxy.Manager, domain string, proxyKey 
 func configuredSellerPoolSize(proxyLabel string) int {
 	size := getEnvInt("SELLER_CLIENT_POOL_SIZE", 16)
 	if strings.HasPrefix(proxyLabel, "free") {
-		size = getEnvInt("FREE_SELLER_CLIENT_POOL_SIZE", 24)
+		size = getEnvInt("FREE_SELLER_CLIENT_POOL_SIZE", 50)
 	}
 	if size < 1 {
 		return 1
@@ -257,6 +260,18 @@ func configuredSellerPoolSize(proxyLabel string) int {
 		return 100
 	}
 	return size
+}
+
+func configureSellerClientPool(pool *ClientPool, proxyLabel string) {
+	if pool == nil || !strings.HasPrefix(proxyLabel, "free") {
+		return
+	}
+	// Use the full mature regional cohort, but keep each public exit below the
+	// same conservative request rate used by the catalog pacer. Isolated 429s
+	// and transport blips get a short cooldown before a session is discarded,
+	// avoiding a replacement/warmup storm.
+	pool.SetMaxRequestsPerSecond(getEnvFloat("FREE_SELLER_MAX_REQUESTS_PER_PROXY_SECOND", 0.5))
+	pool.SetQuarantineFailureThreshold(3)
 }
 
 func (e *Engine) GetOrCreatePool(pm *proxy.Manager, domain string, proxyKey string, trafficRecorder func(txBytes int64, rxBytes int64), proxyLabel string) *ClientPool {
@@ -1011,6 +1026,7 @@ func (e *Engine) handleDetectedItem(ctx context.Context, monitor model.Monitor, 
 		ctx: ctx, item: item, vintedItem: vintedItem, monitor: monitor, proxySource: proxySource,
 		enricher: enricher, publishUpdate: !strictSellerGate,
 		requireSellerMatch: strictSellerGate, alertAfterEnrich: alertAfterEnrich,
+		backgroundOnly: sellerEnrichmentIsBestEffort(strictSellerGate, alertAfterEnrich),
 	}, publishNow)
 	return true
 }
@@ -1347,6 +1363,13 @@ func mockSellerMetadata(userID int64, itemID int64) SellerInfo {
 
 func getEnvInt(key string, fallback int) int {
 	if val, err := strconv.Atoi(os.Getenv(key)); err == nil {
+		return val
+	}
+	return fallback
+}
+
+func getEnvFloat(key string, fallback float64) float64 {
+	if val, err := strconv.ParseFloat(os.Getenv(key), 64); err == nil && val > 0 {
 		return val
 	}
 	return fallback

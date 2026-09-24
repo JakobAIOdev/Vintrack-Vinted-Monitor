@@ -116,7 +116,9 @@ func TestSellerHedgeAllowedOnlyForForegroundJobs(t *testing.T) {
 		want bool
 	}{
 		{name: "ordinary foreground", job: enrichmentJob{}, want: true},
+		{name: "free foreground", job: enrichmentJob{proxySource: "free"}, want: false},
 		{name: "strict foreground retry", job: enrichmentJob{strictAttempt: 1}, want: true},
+		{name: "free strict retry", job: enrichmentJob{proxySource: "free", strictAttempt: 1}, want: false},
 		{name: "background retry", job: enrichmentJob{backgroundOnly: true}, want: false},
 		{name: "stale refresh", job: enrichmentJob{backgroundOnly: true, refreshOnly: true}, want: false},
 	}
@@ -124,6 +126,25 @@ func TestSellerHedgeAllowedOnlyForForegroundJobs(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if got := sellerHedgeAllowed(test.job); got != test.want {
 				t.Fatalf("sellerHedgeAllowed(%+v) = %v, want %v", test.job, got, test.want)
+			}
+		})
+	}
+}
+
+func TestSellerEnrichmentBestEffortOnlyWithoutStrictGateOrExternalAlert(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		requireSellerMatch bool
+		alertAfterEnrich   bool
+		want               bool
+	}{
+		{name: "dashboard update only", want: true},
+		{name: "external alert", alertAfterEnrich: true, want: false},
+		{name: "strict seller filter", requireSellerMatch: true, alertAfterEnrich: true, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := sellerEnrichmentIsBestEffort(test.requireSellerMatch, test.alertAfterEnrich); got != test.want {
+				t.Fatalf("sellerEnrichmentIsBestEffort(%v, %v) = %v, want %v", test.requireSellerMatch, test.alertAfterEnrich, got, test.want)
 			}
 		})
 	}
