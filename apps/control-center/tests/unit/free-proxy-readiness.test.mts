@@ -3,12 +3,7 @@ import assert from "node:assert/strict";
 import {
     parseFreeProxyCanarySnapshot,
     resolveFreeProxyRegionReadiness,
-    withRequiredFreeProxyCanaryRegions,
 } from "../../src/lib/free-proxy-readiness.ts";
-
-test("UK remains a validation region when admins hide it from starter regions", () => {
-    assert.deepEqual(withRequiredFreeProxyCanaryRegions(["de"]), ["de", "uk"]);
-});
 
 test("UK canary telemetry remains parseable for diagnostics", () => {
     const canary = parseFreeProxyCanarySnapshot(

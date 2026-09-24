@@ -7536,13 +7536,16 @@ export function AdminClient({
                                             <div className="space-y-2">
                                                 <div className="flex items-center justify-between gap-3">
                                                     <Label>
-                                                        Starter regions
+                                                        Enabled regions
                                                     </Label>
                                                     <span className="text-muted-foreground text-[11px]">
                                                         {starterRegionSet.size}{" "}
                                                         selected
                                                     </span>
                                                 </div>
+                                                <p className="text-muted-foreground text-[11px]">
+                                                    Monitors in disabled regions stay active and wait safely until the region is enabled again.
+                                                </p>
                                                 <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
                                                     {REGIONS.map((region) => {
                                                         const selected =

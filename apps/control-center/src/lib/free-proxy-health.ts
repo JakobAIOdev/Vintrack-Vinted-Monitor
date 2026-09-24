@@ -2,7 +2,6 @@ import { db } from "@/lib/db";
 import {
     parseFreeProxyCanarySnapshot,
     resolveFreeProxyRegionReadiness,
-    withRequiredFreeProxyCanaryRegions,
 } from "@/lib/free-proxy-readiness";
 import { readFreeProxyPolicy } from "@/lib/runtime-policies.server";
 
@@ -335,15 +334,17 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
     const readyTarget = Number(
         policy?.readyTarget ?? readyTargetSetting?.value ?? 50,
     );
-    const configuredRegions = withRequiredFreeProxyCanaryRegions(
-        (
-            policy?.starterRegions ??
-            starterRegionsSetting?.value ??
-            DEFAULT_STARTER_REGIONS
-        )
-            .split(",")
-            .map((region) => region.trim().toLowerCase())
-            .filter(Boolean),
+    const configuredRegions = Array.from(
+        new Set(
+            (
+                policy?.starterRegions ??
+                starterRegionsSetting?.value ??
+                DEFAULT_STARTER_REGIONS
+            )
+                .split(",")
+                .map((region) => region.trim().toLowerCase())
+                .filter(Boolean),
+        ),
     );
     const servingByRegion = new Map<
         string,

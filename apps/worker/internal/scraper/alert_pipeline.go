@@ -41,7 +41,15 @@ type enrichmentJob struct {
 }
 
 func sellerHedgeAllowed(job enrichmentJob) bool {
-	return !job.backgroundOnly
+	// Public proxies are already shared by catalog traffic. Hedging seller
+	// lookups through them doubles request pressure precisely when the pool is
+	// slow or rate-limited, which turns a short slowdown into a 429/timeout
+	// storm. Private/server proxy groups retain the latency hedge.
+	return !job.backgroundOnly && job.proxySource != "free"
+}
+
+func sellerEnrichmentIsBestEffort(requireSellerMatch bool, alertAfterEnrich bool) bool {
+	return !requireSellerMatch && !alertAfterEnrich
 }
 
 // alertDeliveryWorkerCount is the single source of truth for delivery

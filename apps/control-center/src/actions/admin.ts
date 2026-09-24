@@ -3118,17 +3118,10 @@ export async function updateFreeProxySettings(formData: FormData) {
         maxAdmissionDelayMs,
     });
 
-    const activeMonitorRegions = await db.monitors.findMany({
-        where: { status: "active", proxy_source: "free" },
-        distinct: ["region"],
-        select: { region: true },
-    });
-    const retainedRegions = Array.from(
-        new Set([
-            ...starterRegions.split(",").filter(Boolean),
-            ...activeMonitorRegions.map((monitor) => monitor.region),
-        ]),
-    );
+    // The admin region selection is authoritative. Active monitors in a
+    // disabled region remain active but wait for pool capacity; they must not
+    // silently re-enable validation for that region.
+    const retainedRegions = starterRegions.split(",").filter(Boolean);
     if (retainedRegions.length > 0) {
         await db.free_proxy_health.deleteMany({
             where: { region: { notIn: retainedRegions } },

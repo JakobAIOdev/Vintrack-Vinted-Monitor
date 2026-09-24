@@ -9,10 +9,6 @@ export type FreeProxyCanarySnapshot = {
     lastProbeAt: Date | null;
 };
 
-export function withRequiredFreeProxyCanaryRegions(regions: string[]) {
-    return Array.from(new Set([...regions, "uk"]));
-}
-
 export function parseFreeProxyCanarySnapshot(
     value: string | null | undefined,
 ): FreeProxyCanarySnapshot | null {
