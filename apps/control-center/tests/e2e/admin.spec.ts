@@ -241,9 +241,7 @@ test.describe("admin running monitors", () => {
             .getByRole("button", { name: "Save worker settings" })
             .click();
         await expect(
-            getAdminMain(page).getByText(
-                "Price Watch worker configuration saved",
-            ),
+            page.getByText("Price Watch worker configuration saved"),
         ).toBeVisible();
         await expect(
             getAdminMain(page).getByLabel("Shared minimum"),
