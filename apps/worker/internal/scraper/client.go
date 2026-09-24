@@ -150,14 +150,20 @@ func newAPIHeaders(domain string) http.Header {
 	}
 }
 
-func newCatalogAPIHeaders(domain string) http.Header {
+// newCatalogAPIHeaders binds the request to the regional marketplace. Without
+// Locale and X-Anon-Id svc-catalogue falls back to the exit IP's country, so
+// free proxies return foreign feeds priced in foreign currencies.
+func newCatalogAPIHeaders(domain string, anonID string) http.Header {
 	fingerprint := configuredClientFingerprint()
-	return http.Header{
+	headers := http.Header{
 		"User-Agent":         {configuredChromeUA()},
 		"Accept":             {"application/json, text/plain, */*"},
 		"Accept-Language":    {acceptLanguageForDomain(domain)},
 		"Origin":             {fmt.Sprintf("https://%s", domain)},
 		"Referer":            {fmt.Sprintf("https://%s/", domain)},
+		"Locale":             {strings.SplitN(acceptLanguageForDomain(domain), ",", 2)[0]},
+		"Platform":           {"web"},
+		"X-Next-App":         {"marketplace-web"},
 		"Sec-Ch-Ua":          {fmt.Sprintf(`"Google Chrome";v="%s", "Chromium";v="%s", "Not_A Brand";v="24"`, fingerprint.version, fingerprint.version)},
 		"Sec-Ch-Ua-Mobile":   {"?0"},
 		"Sec-Ch-Ua-Platform": {`"macOS"`},
@@ -166,6 +172,27 @@ func newCatalogAPIHeaders(domain string) http.Header {
 		"Sec-Fetch-Site":     {"same-site"},
 		"Priority":           {"u=1, i"},
 	}
+	if anonID != "" {
+		headers.Set("X-Anon-Id", anonID)
+	}
+	return headers
+}
+
+// catalogAnonID returns the anonymous session id Vinted issued during warmup.
+func (c *Client) catalogAnonID(domain string) string {
+	if c == nil || c.HttpClient == nil {
+		return ""
+	}
+	target, err := url.Parse(fmt.Sprintf("https://%s/", catalogAPIHost(domain)))
+	if err != nil {
+		return ""
+	}
+	for _, cookie := range c.HttpClient.GetCookies(target) {
+		if cookie.Name == "anon_id" {
+			return strings.TrimSpace(cookie.Value)
+		}
+	}
+	return ""
 }
 
 type Client struct {

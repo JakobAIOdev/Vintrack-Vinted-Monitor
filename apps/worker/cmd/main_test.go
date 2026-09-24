@@ -722,3 +722,17 @@ func TestFreeProxyServingDecisionRequiresConfirmationAndUsesHysteresis(t *testin
 		t.Fatalf("below hysteresis decision = %v/%s/%s/%d", serving, state, reason, observations)
 	}
 }
+
+func TestParsePersistedFreeProxyServingSnapshotRestoresReadyHysteresis(t *testing.T) {
+	restored := parsePersistedFreeProxyServingSnapshot(`{"state":"ready","serving":true,"mature":12}`)
+	if restored.State != "ready" || restored.ReadyObservations != 2 {
+		t.Fatalf("restored snapshot = %#v, want durable ready state", restored)
+	}
+	serving, state, reason, observations := freeProxyServingDecision(restored, 8, 10)
+	if !serving || state != "ready" || reason != "" || observations != 2 {
+		t.Fatalf("restart decision = serving=%v state=%q reason=%q observations=%d", serving, state, reason, observations)
+	}
+	if got := parsePersistedFreeProxyServingSnapshot(`{"state":"recovering","serving":false}`); got.State != "" {
+		t.Fatalf("recovering state restored as ready: %#v", got)
+	}
+}

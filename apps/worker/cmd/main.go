@@ -425,6 +425,9 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 		}
 
 		previous := freeProxyPools.Snapshot(region)
+		if previous.Version == 0 {
+			previous = persistedFreeProxyServingSnapshot(refreshCtx, store, region)
+		}
 		serving, state, reason, readyObservations := freeProxyServingDecision(
 			previous,
 			activeCount,
@@ -464,6 +467,28 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 		freeProxyPools.Publish(region, strings.Join(proxies, "\n"), "ready", activeCount, "", readyObservations)
 		_ = publishFreeProxyRegionServingState(refreshCtx, store, region, "ready", activeCount, "")
 	}
+}
+
+func persistedFreeProxyServingSnapshot(ctx context.Context, store *database.Store, region string) proxy.PoolSnapshot {
+	if store == nil {
+		return proxy.PoolSnapshot{}
+	}
+	raw, ok, err := store.GetSettingValueContext(ctx, "free_proxy_serving_state:"+region)
+	if err != nil || !ok {
+		return proxy.PoolSnapshot{}
+	}
+	return parsePersistedFreeProxyServingSnapshot(raw)
+}
+
+func parsePersistedFreeProxyServingSnapshot(raw string) proxy.PoolSnapshot {
+	var state struct {
+		State   string `json:"state"`
+		Serving bool   `json:"serving"`
+	}
+	if json.Unmarshal([]byte(raw), &state) != nil || !state.Serving || state.State != "ready" {
+		return proxy.PoolSnapshot{}
+	}
+	return proxy.PoolSnapshot{State: "ready", ReadyObservations: 2}
 }
 
 func freeProxyServingPoolLimit(region string, minimum int, defaultLimit int) int {
@@ -508,7 +533,7 @@ func freeProxyUKServingDecision(
 	return true, "ready", "", max(2, canary.CapacityObservations)
 }
 
-const freeProxyValidationRevision = "catalog-region-currency-v7"
+const freeProxyValidationRevision = "catalog-marketplace-headers-v8"
 
 func ensureFreeProxyValidationRevision(ctx context.Context, store *database.Store, regions []string) error {
 	const settingKey = "free_proxy_validation_revision"
@@ -519,7 +544,7 @@ func ensureFreeProxyValidationRevision(ctx context.Context, store *database.Stor
 	if ok && current == freeProxyValidationRevision {
 		return nil
 	}
-	requeued, err := store.ResetFreeProxyValidationEvidenceContext(ctx, regions)
+	requeued, err := store.RequeueFreeProxyRegionalAccessFailuresContext(ctx, regions)
 	if err != nil {
 		return err
 	}

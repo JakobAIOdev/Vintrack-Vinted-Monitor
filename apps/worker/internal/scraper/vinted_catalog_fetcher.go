@@ -70,7 +70,7 @@ func fetchCatalogAttempt(ctx context.Context, client *Client, initialURL string,
 		if err != nil {
 			return nil, 0, err
 		}
-		req.Header = newCatalogAPIHeaders(domain)
+		req.Header = newCatalogAPIHeaders(domain, client.catalogAnonID(domain))
 
 		resp, err := client.HttpClient.Do(req)
 		if err != nil {

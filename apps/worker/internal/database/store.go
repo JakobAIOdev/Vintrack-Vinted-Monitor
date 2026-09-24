@@ -62,7 +62,10 @@ const (
 	monitorRunPruneMaximumBatchesPerCycle = 100
 	freeProxyMaintainerAdvisoryLockKey    = int64(8_670_505_012_026)
 	freeProxyUKCanaryAdvisoryLockKey      = int64(8_670_505_012_027)
-	freeProxyMinimumServingScore          = 80
+	// Two region-correct checks are the promotion contract. The second success
+	// produces score 70, so requiring 80 here silently added a third check and
+	// deadlocked the UK canary below otherwise mature capacity.
+	freeProxyMinimumServingScore = 70
 )
 
 type proxyGroupBandwidthDelta struct {
@@ -2572,30 +2575,6 @@ func (s *Store) RecordFreeProxyFailureStageContext(
 	return s.recordFreeProxySourceOutcomeContext(ctx, proxyURL, region, false)
 }
 
-func (s *Store) ResetFreeProxyValidationEvidenceContext(ctx context.Context, regions []string) (int64, error) {
-	if len(regions) == 0 {
-		return 0, nil
-	}
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE free_proxy_health
-		SET status = 'pending',
-			success_streak = 0,
-			failure_streak = 0,
-			last_status_code = NULL,
-			last_error = NULL,
-			last_error_code = NULL,
-			last_error_stage = NULL,
-			last_success_at = NULL,
-			next_check_at = NOW(),
-			candidate_window_token = FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint,
-			updated_at = NOW()
-		WHERE region = ANY($1)`, pq.Array(regions))
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 // RequeueFreeProxyRegionalAccessFailuresContext invalidates access-denial
 // evidence produced by an older catalogue request revision. The caller guards
 // this with a durable revision marker so normal regional backoff is preserved.
@@ -2618,7 +2597,7 @@ func (s *Store) RequeueFreeProxyRegionalAccessFailuresContext(ctx context.Contex
 				candidate_window_token = FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint,
 				updated_at = NOW()
 			WHERE region = ANY($1)
-			  AND last_error_code IN ('vinted_401', 'vinted_403', 'vinted_429')
+			  AND last_error_code IN ('region_mismatch', 'vinted_401', 'vinted_403', 'vinted_429')
 			RETURNING 1
 		)
 		SELECT COUNT(*) FROM requeued`, pq.Array(regions)).Scan(&count)

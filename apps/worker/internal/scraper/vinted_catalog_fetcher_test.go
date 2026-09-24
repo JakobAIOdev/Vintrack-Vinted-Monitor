@@ -131,25 +131,27 @@ func TestValidateCatalogCurrencyRejectsWrongMarketplaceSession(t *testing.T) {
 }
 
 func TestCatalogAPIHeadersMatchMarketplaceWeb(t *testing.T) {
-	headers := newCatalogAPIHeaders("www.vinted.co.uk")
+	headers := newCatalogAPIHeaders("www.vinted.co.uk", "anon-synthetic")
 	for key, want := range map[string]string{
 		"Origin":          "https://www.vinted.co.uk",
 		"Referer":         "https://www.vinted.co.uk/",
 		"Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
 		"Priority":        "u=1, i",
 		"Sec-Fetch-Site":  "same-site",
+		"Locale":          "en-GB",
+		"Platform":        "web",
+		"X-Next-App":      "marketplace-web",
+		"X-Anon-Id":       "anon-synthetic",
 	} {
 		if got := headers.Get(key); got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
 	}
-	for _, legacyHeader := range []string{
-		"Cache-Control", "Pragma", "Locale", "Platform",
-		"X-Anon-Id", "X-Csrf-Token", "X-Next-App",
-	} {
-		if got := headers.Get(legacyHeader); got != "" {
-			t.Errorf("%s = %q, want omitted for current catalogue requests", legacyHeader, got)
-		}
+	if got := headers.Get("X-Csrf-Token"); got != "" {
+		t.Errorf("X-Csrf-Token = %q, want omitted", got)
+	}
+	if got := newCatalogAPIHeaders("www.vinted.de", "").Get("X-Anon-Id"); got != "" {
+		t.Errorf("X-Anon-Id = %q, want omitted without a session id", got)
 	}
 }
 
