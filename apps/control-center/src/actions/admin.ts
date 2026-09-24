@@ -2839,10 +2839,7 @@ export async function getFreeProxyAdminState() {
                 neverChecked: Number(row.never_checked_count),
                 serving,
                 capacityReady:
-                    row.region === "uk"
-                        ? (canary?.capacityReady ?? false)
-                        : Number(row.active_count) >=
-                          settings.minActivePerRegion,
+                    Number(row.active_count) >= settings.minActivePerRegion,
                 canaryState: canary?.state ?? null,
                 canarySampleCount: canary?.sampleCount ?? 0,
                 canarySuccessRate: canary?.successRate ?? null,

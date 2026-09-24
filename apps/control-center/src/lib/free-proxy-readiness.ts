@@ -58,17 +58,13 @@ export function parseFreeProxyCanarySnapshot(
 }
 
 export function resolveFreeProxyRegionReadiness({
-    region,
     featureEnabled,
     serving,
     servingReason,
-    canary,
 }: {
-    region: string;
     featureEnabled: boolean;
     serving: boolean;
     servingReason: string | null;
-    canary: FreeProxyCanarySnapshot | null;
 }) {
     if (!featureEnabled) {
         return { ready: false, reason: "disabled" };
@@ -76,16 +72,7 @@ export function resolveFreeProxyRegionReadiness({
     if (!serving) {
         return {
             ready: false,
-            reason:
-                servingReason ??
-                (region === "uk" ? canary?.readinessReason : null) ??
-                "awaiting_serving_snapshot",
-        };
-    }
-    if (region === "uk" && canary?.canaryPassed !== true) {
-        return {
-            ready: false,
-            reason: canary?.readinessReason ?? "collecting_uk_canary",
+            reason: servingReason ?? "awaiting_serving_snapshot",
         };
     }
     return { ready: true, reason: null };

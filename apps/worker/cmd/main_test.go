@@ -78,15 +78,6 @@ func TestMergeFreeProxyRegionsAlwaysIncludesUKCanary(t *testing.T) {
 	}
 }
 
-func TestFreeProxyServingPoolLimitUsesValidatedUKCohort(t *testing.T) {
-	if got := freeProxyServingPoolLimit("uk", 10, 100); got != 10 {
-		t.Fatalf("UK serving limit = %d, want 10", got)
-	}
-	if got := freeProxyServingPoolLimit("de", 10, 100); got != 100 {
-		t.Fatalf("DE serving limit = %d, want 100", got)
-	}
-}
-
 func TestFreeProxyTimeoutBatchFitsRecoveryCycleBudget(t *testing.T) {
 	const candidates = 960
 	const concurrency = 48

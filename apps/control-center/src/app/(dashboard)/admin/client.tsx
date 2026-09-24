@@ -8062,10 +8062,7 @@ export function AdminClient({
                                         );
                                         const status = region.initializing
                                             ? "Waiting"
-                                            : region.region === "uk" &&
-                                                region.canaryState !== "passed"
-                                              ? "Validating"
-                                              : region.recoveryMode
+                                            : region.recoveryMode
                                                 ? "Recovery"
                                                 : region.stalled
                                                   ? "Stalled"

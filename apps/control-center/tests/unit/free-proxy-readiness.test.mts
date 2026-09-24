@@ -10,7 +10,7 @@ test("UK remains a validation region when admins hide it from starter regions", 
     assert.deepEqual(withRequiredFreeProxyCanaryRegions(["de"]), ["de", "uk"]);
 });
 
-test("UK readiness depends on the persisted shadow canary", () => {
+test("UK canary telemetry remains parseable for diagnostics", () => {
     const canary = parseFreeProxyCanarySnapshot(
         JSON.stringify({
             state: "passed",
@@ -23,52 +23,39 @@ test("UK readiness depends on the persisted shadow canary", () => {
         }),
     );
 
+    assert.equal(canary?.canaryPassed, true);
+    assert.equal(canary?.sampleCount, 200);
+});
+
+test("UK readiness uses the same serving snapshot as every region", () => {
     assert.deepEqual(
         resolveFreeProxyRegionReadiness({
-            region: "uk",
             featureEnabled: true,
             serving: true,
             servingReason: null,
-            canary,
         }),
         { ready: true, reason: null },
     );
 });
 
-test("UK remains closed without shadow evidence even when serving is stale-ready", () => {
+test("UK remains ready without shadow evidence when it is serving", () => {
     assert.deepEqual(
         resolveFreeProxyRegionReadiness({
-            region: "uk",
             featureEnabled: true,
             serving: true,
             servingReason: null,
-            canary: null,
         }),
-        { ready: false, reason: "collecting_uk_canary" },
+        { ready: true, reason: null },
     );
 });
 
-test("member runtime metrics are not an input to shadow-canary readiness", () => {
-    const canary = parseFreeProxyCanarySnapshot(
-        JSON.stringify({
-            state: "collecting",
-            capacityReady: true,
-            canaryPassed: false,
-            sampleCount: 199,
-            successRate: 100,
-            windowMinutes: 29.5,
-            readinessReason: "collecting_uk_canary",
-        }),
-    );
-
+test("a non-serving pool remains unavailable regardless of canary telemetry", () => {
     assert.deepEqual(
         resolveFreeProxyRegionReadiness({
-            region: "uk",
             featureEnabled: true,
             serving: false,
             servingReason: null,
-            canary,
         }),
-        { ready: false, reason: "collecting_uk_canary" },
+        { ready: false, reason: "awaiting_serving_snapshot" },
     );
 });
