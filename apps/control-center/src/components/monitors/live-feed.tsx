@@ -12,36 +12,95 @@ import { capFeedItems, DEFAULT_LIVE_FEED_ITEM_CAP } from "@/lib/live-feed";
 import { useMonitorItemStream } from "@/components/monitors/monitor-stream-context";
 
 const MONITOR_LIVE_FEED_ITEM_CAP = DEFAULT_LIVE_FEED_ITEM_CAP;
+const MONITOR_FEED_RECONCILE_INTERVAL_MS = 10_000;
 
 export function LiveFeed({ monitorId }: { monitorId: number }) {
     const [items, setItems] = useState<ItemData[]>([]);
     const [loading, setLoading] = useState(true);
-    const { decrementItemCount, incrementItemCount } = useMonitorLiveContext();
+    const {
+        decrementItemCount,
+        ensureItemCountAtLeast,
+        incrementItemCount,
+    } = useMonitorLiveContext();
     const seenItemIds = useRef<Set<string>>(new Set());
 
     useEffect(() => {
+        let active = true;
+        let requestInFlight = false;
+
         const fetchItems = async () => {
+            if (requestInFlight) return;
+            requestInFlight = true;
             try {
-                const res = await fetch(`/api/monitors/${monitorId}/items`);
+                const res = await fetch(`/api/monitors/${monitorId}/items`, {
+                    cache: "no-store",
+                });
                 if (res.ok) {
                     const data: ItemData[] = await res.json();
-                    const cappedItems = capFeedItems(
+                    if (!active) return;
+
+                    const fetchedItems = capFeedItems(
                         data.map((i) => ({ ...i, isLive: false })),
                         MONITOR_LIVE_FEED_ITEM_CAP,
                     );
-                    seenItemIds.current = new Set(
-                        cappedItems.map((item) => String(item.id)),
-                    );
-                    setItems(cappedItems);
+                    ensureItemCountAtLeast(fetchedItems.length);
+                    setItems((currentItems) => {
+                        const currentByID = new Map(
+                            currentItems.map((item) => [String(item.id), item]),
+                        );
+                        const fetchedIDs = new Set(
+                            fetchedItems.map((item) => String(item.id)),
+                        );
+                        const merged: ItemData[] = fetchedItems.map((item) => {
+                            const current = currentByID.get(String(item.id));
+                            return {
+                                ...current,
+                                ...item,
+                                isLive: current?.isLive ?? false,
+                            };
+                        });
+
+                        // A live event can arrive just before its Postgres row is
+                        // visible. Keep such items until a later reconcile sees
+                        // them instead of briefly removing them from the feed.
+                        for (const item of currentItems) {
+                            if (!fetchedIDs.has(String(item.id))) {
+                                merged.push(item);
+                            }
+                        }
+
+                        const nextItems = capFeedItems(
+                            merged.sort(
+                                (a, b) =>
+                                    Date.parse(b.found_at) -
+                                    Date.parse(a.found_at),
+                            ),
+                            MONITOR_LIVE_FEED_ITEM_CAP,
+                        );
+                        seenItemIds.current = new Set(
+                            nextItems.map((item) => String(item.id)),
+                        );
+                        return nextItems;
+                    });
                 }
             } catch (err) {
                 console.error("Fetch error", err);
             } finally {
-                setLoading(false);
+                requestInFlight = false;
+                if (active) setLoading(false);
             }
         };
-        fetchItems();
-    }, [incrementItemCount, monitorId]);
+        void fetchItems();
+        const reconcileTimer = window.setInterval(
+            () => void fetchItems(),
+            MONITOR_FEED_RECONCILE_INTERVAL_MS,
+        );
+
+        return () => {
+            active = false;
+            window.clearInterval(reconcileTimer);
+        };
+    }, [ensureItemCountAtLeast, monitorId]);
 
     useMonitorItemStream((newItem) => {
         if (newItem.monitor_id !== monitorId) return;
