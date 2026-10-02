@@ -1,6 +1,6 @@
 # Vintrack Browser Sync Privacy Policy
 
-Effective date: August 23, 2026
+Effective date: October 2, 2026
 
 Vintrack Browser Sync links a Vinted account that the user is already signed in
 to with the Vintrack service. The extension runs only on the public Vintrack
@@ -37,7 +37,16 @@ The extension stores the Vintrack light or dark theme locally and mirrors that
 preference between the approved Vintrack page and supported Vinted pages. It
 also stores a random, revocable Vintrack browser-link token and local sync state
 required to maintain the connection, plus the user's popup-only or inline
-companion preference.
+companion preference. Local maintenance state also includes the linked regional
+domain and cookie-store ID, retry times, and a SHA-256 fingerprint of the last
+successfully synced access token and browser-link token; token fingerprints are
+not sent to Vintrack.
+
+Session renewal uses an existing matching Vinted tab or background requests to
+the supported Vinted origin. Browser-managed cookies accompany those requests;
+the extension does not read the refresh token or transmit it to Vintrack. It
+never opens or reloads tabs for automatic renewal. A login or security challenge
+is left for the user to handle in Vinted.
 
 The extension does **not** transmit the complete browser cookie jar, the Vinted
 browser refresh token, the Vinted password, payment-card data, or browsing

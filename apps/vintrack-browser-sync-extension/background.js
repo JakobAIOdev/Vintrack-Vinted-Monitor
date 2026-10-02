@@ -5,18 +5,26 @@ const STORAGE_KEYS = {
   lastSyncAttemptAt: "vintrackLastSyncAttemptAt",
   lastSyncStatus: "vintrackLastSyncStatus",
   lastSyncError: "vintrackLastSyncError",
+  lastSyncNeedsUserAction: "vintrackLastSyncNeedsUserAction",
   syncedDomains: "vintrackSyncedDomains",
-  autoRecoveryNextAt: "vintrackAutoRecoveryNextAt",
+  autoRecoveryNextAt: "vintrackAutoRecoveryNextAt", // Removed when clearing legacy state.
+  browserRefreshState: "vintrackBrowserRefreshState",
+  syncedSessions: "vintrackSyncedSessions",
+  syncReceipts: "vintrackSyncReceipts",
   checkoutLinks: "vintrackCheckoutLinks",
   theme: "vintrackTheme",
   companionMode: "vintrackCompanionMode",
 };
 const PERIODIC_SYNC_ALARM = "vintrackPeriodicSync";
-const PERIODIC_SYNC_MINUTES = 10;
+const PERIODIC_SYNC_MINUTES = 1;
 const BUY_TAB_READY_TIMEOUT_MS = 20000;
 const SYNC_REQUEST_TIMEOUT_MS = 15000;
 const PROACTIVE_BROWSER_REFRESH_MS = 2 * 60 * 1000;
-const AUTO_RECOVERY_FAILURE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const SYNC_RECEIPT_TTL_MS = 10 * 60 * 1000;
+const BROWSER_REFRESH_TIMEOUT_MS = 12000;
+const BROWSER_REFRESH_RETRY_MS = 60 * 1000;
+const BROWSER_REFRESH_MAX_RETRY_MS = 60 * 60 * 1000;
+const BROWSER_REFRESH_ACTION_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const COMPLETED_SYNC_STATUSES = new Set(["completed", "refreshed"]);
 const VINTRACK_APP_ORIGINS = new Set([
   "https://vintrack.jakobaio.dev",
@@ -48,8 +56,12 @@ const SUPPORTED_VINTED_DOMAINS = [
   "vinted.sk",
 ];
 const extensionApi = globalThis.browser || globalThis.chrome;
-const isFirefoxExtension = typeof globalThis.browser !== "undefined";
+const isFirefoxExtension = Boolean(
+  extensionApi.runtime.getManifest().browser_specific_settings?.gecko,
+);
 const inFlightSyncs = new Map();
+const inFlightLifecycles = new Map();
+let syncLifecycleTail = Promise.resolve();
 
 function sanitizeDomain(domain) {
   return (domain || "").replace(/^\./, "").trim().toLowerCase();
@@ -408,6 +420,8 @@ async function getOpenVintedTabs(preferredDomain = "") {
     return (
       !normalizedPreferredDomain ||
       domain === normalizedPreferredDomain ||
+      (refreshDomain(domain) &&
+        refreshDomain(domain) === refreshDomain(normalizedPreferredDomain)) ||
       cookieDomainMatches(domain, normalizedPreferredDomain)
     );
   });
@@ -451,6 +465,7 @@ async function selectAccessCookieForTab(
   const cookies = (
     await extensionApi.cookies.getAll({
       name: "access_token_web",
+      ...(storeId ? { storeId } : {}),
     })
   ).filter((cookie) => {
     const cookieStoreId =
@@ -478,142 +493,239 @@ async function selectAccessCookieForTab(
   })[0];
 }
 
-async function refreshOpenVintedBrowserSessions(
-  preferredDomain = "",
-  options = {},
-) {
-  let tabs = await getOpenVintedTabs(preferredDomain);
-  let recoveryTabId = 0;
+function refreshDomain(domain) {
+  const normalized = sanitizeDomain(domain);
+  const supported = SUPPORTED_VINTED_DOMAINS.find(
+    (value) => normalized === value || normalized === `www.${value}`,
+  );
+  return supported ? `www.${supported}` : "";
+}
 
-  if (tabs.length === 0 && options.allowInactiveTab === true) {
-    const storage = await extensionApi.storage.local.get([
-      STORAGE_KEYS.token,
-      STORAGE_KEYS.syncedDomains,
-      STORAGE_KEYS.autoRecoveryNextAt,
-    ]);
-    const nextAttemptAt = Number(storage[STORAGE_KEYS.autoRecoveryNextAt] || 0);
-    if (
-      options.bypassCooldown !== true &&
-      Number.isFinite(nextAttemptAt) &&
-      nextAttemptAt > Date.now()
-    ) {
-      return [
-        {
-          ok: false,
-          reason: "auto-recovery-cooldown",
-          retryable: false,
-          error:
-            "Automatic Vinted session recovery is cooling down after a previous failure.",
-        },
-      ];
-    }
+function browserRefreshError(status, retryAfter = "") {
+  const requiresUserAction = status === 401 || status === 403;
+  const retrySeconds = Number(retryAfter);
+  const retryDate = Date.parse(retryAfter);
+  const retryAfterMs = retryAfter
+    ? Number.isFinite(retrySeconds)
+      ? Math.max(0, retrySeconds * 1000)
+      : Math.max(0, retryDate - Date.now()) || 0
+    : 0;
+  return {
+    ok: false,
+    statusCode: status,
+    requiresUserAction,
+    retryAfterMs,
+    reason: requiresUserAction
+      ? "browser-login-required"
+      : "browser-refresh-failed",
+    error: requiresUserAction
+      ? "Open Vinted and check your login or security prompt, then sync again."
+      : status === 429
+        ? "Vinted is rate limiting session refresh. Vintrack will retry later."
+        : "Vinted session refresh is temporarily unavailable. Vintrack will retry later.",
+  };
+}
 
-    const storedDomains = Array.isArray(storage[STORAGE_KEYS.syncedDomains])
-      ? storage[STORAGE_KEYS.syncedDomains]
-      : [];
-    const recoveryDomain = [
-      sanitizeDomain(preferredDomain),
-      ...storedDomains.map(sanitizeDomain),
-    ].find((domain) => domain && isVintedDomain(domain));
-
-    if (storage[STORAGE_KEYS.token] && recoveryDomain) {
-      try {
-        const createdTab = await extensionApi.tabs.create({
-          url: `https://${recoveryDomain}/`,
-          active: false,
-        });
-        if (typeof createdTab?.id === "number") {
-          recoveryTabId = createdTab.id;
-          await waitForTabLoad(createdTab.id);
-          tabs = [createdTab];
-        }
-      } catch (error) {
-        if (recoveryTabId) {
-          await extensionApi.tabs.remove(recoveryTabId).catch(() => {});
-          recoveryTabId = 0;
-        }
-        await extensionApi.storage.local.set({
-          [STORAGE_KEYS.autoRecoveryNextAt]:
-            Date.now() + AUTO_RECOVERY_FAILURE_COOLDOWN_MS,
-        });
-        return [
-          {
-            ok: false,
-            domain: recoveryDomain,
-            reason: "auto-recovery-tab-failed",
-            error:
-              error instanceof Error
-                ? error.message
-                : "Could not open a background Vinted tab.",
-          },
-        ];
-      }
-    }
+async function refreshBrowserSessionInBackground(domain, storeId) {
+  // fetch uses the extension's default cookie store. Container/private sessions
+  // must stay in their existing tab; never copy their cookies into another store.
+  const defaultStoreId = isFirefoxExtension ? "firefox-default" : "0";
+  if (storeId && storeId !== defaultStoreId) {
+    return {
+      ok: false,
+      reason: "browser-context-required",
+      requiresUserAction: true,
+      error:
+        "Open Vinted in the linked browser container or private window, then sync again.",
+    };
   }
-
-  if (tabs.length === 0) {
-    return [
-      {
-        ok: false,
-        reason: "no-open-vinted-tab",
-        error: "Open a logged-in Vinted tab, then sync again.",
-      },
-    ];
-  }
-
-  const results = [];
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    BROWSER_REFRESH_TIMEOUT_MS,
+  );
   try {
-    for (const tab of tabs) {
-      if (typeof tab.id !== "number") {
-        continue;
-      }
+    const origin = `https://${domain}`;
+    const requestOptions = {
+      credentials: "include",
+      cache: "no-store",
+      redirect: "error",
+      signal: controller.signal,
+    };
+    // Obtain CSRF context without opening a document or reading refresh cookies.
+    const page = await fetch(`${origin}/`, requestOptions);
+    if (!page.ok) {
+      return browserRefreshError(page.status, page.headers.get("Retry-After"));
+    }
+    const html = await page.text();
+    const csrfToken =
+      html.match(
+        /<meta\s+name=["']csrf-token["']\s+content=["']([^"']+)["']/i,
+      )?.[1] ||
+      html.match(
+        /<meta\s+content=["']([^"']+)["']\s+name=["']csrf-token["']/i,
+      )?.[1] ||
+      html.match(/"csrfToken"\s*:\s*"([^"<>]+)"/)?.[1] ||
+      html.match(/"csrf_token"\s*:\s*"([^"<>]+)"/)?.[1] ||
+      // Next.js Flight embeds Vinted's current uppercase CSRF_TOKEN as escaped JSON.
+      html.match(/CSRF_TOKEN\\?":\s*\\?"([^"\\]+)/)?.[1] ||
+      "";
+    if (!csrfToken) {
+      return browserRefreshError(403);
+    }
+    const response = await fetch(`${origin}/web/api/auth/refresh`, {
+      ...requestOptions,
+      method: "POST",
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        "X-Csrf-Token": csrfToken,
+      },
+    });
+    // Only status/cookie rotation is needed. Never expose auth response bodies.
+    if (!response.ok) {
+      return browserRefreshError(
+        response.status,
+        response.headers.get("Retry-After"),
+      );
+    }
+    return { ok: true };
+  } catch {
+    return browserRefreshError(0);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
+async function refreshVintedBrowserSessions(targets, options = {}) {
+  const config = await getConfig();
+  if (!config[STORAGE_KEYS.token] || !config[STORAGE_KEYS.appOrigin]) {
+    return [{ ok: false, reason: "not-configured" }];
+  }
+  const state = { ...(config[STORAGE_KEYS.browserRefreshState] || {}) };
+  const results = [];
+  const uniqueTargets = new Map();
+  for (const target of targets) {
+    const domain = refreshDomain(target.domain);
+    const storeId =
+      target.storeId || (isFirefoxExtension ? "firefox-default" : "0");
+    if (domain)
+      uniqueTargets.set(cookieSyncKey(domain, storeId), { domain, storeId });
+  }
+  for (const [key, target] of uniqueTargets) {
+    const previous = state[key] || {};
+    if (
+      Number(previous.nextAttemptAt || 0) > Date.now() &&
+      // A user click may retry authentication, but must respect a rate limit.
+      (options.bypassAutoRecoveryCooldown !== true ||
+        previous.statusCode === 429)
+    ) {
+      results.push({
+        ...target,
+        ok: false,
+        reason: "browser-refresh-cooldown",
+        requiresUserAction: previous.requiresUserAction === true,
+        error: previous.error || "Vinted session refresh will retry later.",
+      });
+      continue;
+    }
+    // Persist a lease before network I/O so a restarted MV3 worker doesn't retry
+    // an interrupted refresh immediately. The lifecycle queue prevents races.
+    state[key] = {
+      ...previous,
+      nextAttemptAt: Date.now() + BROWSER_REFRESH_RETRY_MS,
+    };
+    await extensionApi.storage.local.set({
+      [STORAGE_KEYS.browserRefreshState]: state,
+    });
+    const before = await extensionApi.cookies.get(
+      cookieLookupDetails(target.domain, "access_token_web", target.storeId),
+    );
+    const tabs = (await getOpenVintedTabs(target.domain)).filter((tab) => {
+      const tabStore =
+        typeof tab.cookieStoreId === "string" ? tab.cookieStoreId : "";
+      if (target.storeId && tabStore) return tabStore === target.storeId;
+      if (
+        target.storeId &&
+        target.storeId !== "0" &&
+        target.storeId !== "firefox-default"
+      ) {
+        return target.storeId === "1" && tab.incognito === true;
+      }
+      return !tab.incognito;
+    });
+    const selectedTab = mostRecentlyUsedTab(tabs);
+    let result;
+    if (
+      selectedTab &&
+      typeof selectedTab.id === "number" &&
+      !selectedTab.discarded
+    ) {
       try {
-        try {
-          await waitForTabBridge(tab.id, 5000);
-        } catch {
-          await extensionApi.tabs.reload(tab.id);
-          await waitForTabLoad(tab.id);
-          await waitForTabBridge(tab.id, 10000);
-        }
-        const result = await extensionApi.tabs.sendMessage(tab.id, {
+        await waitForTabBridge(selectedTab.id, 1500);
+        const response = await extensionApi.tabs.sendMessage(selectedTab.id, {
           type: "VINTRACK_REFRESH_BROWSER_SESSION",
           payload: { requestId: crypto.randomUUID() },
         });
-        results.push({
-          ok: Boolean(result?.ok),
-          domain: sanitizeDomain(
-            result?.domain || domainFromUrl(tab.url || ""),
-          ),
-          tabId: tab.id,
-          status: result?.status,
-          error: result?.error || "",
-        });
-      } catch (error) {
-        results.push({
-          ok: false,
-          domain: domainFromUrl(tab.url || ""),
-          tabId: tab.id,
-          error: error instanceof Error ? error.message : "unknown-error",
-        });
+        result = response?.ok
+          ? { ok: true }
+          : browserRefreshError(
+              Number(response?.status || 0),
+              response?.retryAfter || "",
+            );
+      } catch {
+        // A missing bridge is safe to handle in the default background context.
+        result = await refreshBrowserSessionInBackground(
+          target.domain,
+          target.storeId,
+        );
+      }
+    } else {
+      result = await refreshBrowserSessionInBackground(
+        target.domain,
+        target.storeId,
+      );
+    }
+    if (result.ok) {
+      const after = await extensionApi.cookies.get(
+        cookieLookupDetails(target.domain, "access_token_web", target.storeId),
+      );
+      if (
+        !after?.value ||
+        after.value === before?.value ||
+        accessTokenExpiresSoon(after.value)
+      ) {
+        result = {
+          ...browserRefreshError(0),
+          reason: "browser-token-not-rotated",
+          error:
+            "Vinted did not provide a fresh session token. Vintrack will retry later.",
+        };
       }
     }
-
-    if (results.some((result) => result.ok)) {
-      await extensionApi.storage.local.remove(STORAGE_KEYS.autoRecoveryNextAt);
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    } else if (recoveryTabId) {
-      await extensionApi.storage.local.set({
-        [STORAGE_KEYS.autoRecoveryNextAt]:
-          Date.now() + AUTO_RECOVERY_FAILURE_COOLDOWN_MS,
-      });
+    if (result.ok) {
+      delete state[key];
+    } else {
+      const failures = Math.min(Number(previous.failures || 0) + 1, 7);
+      const delay = result.requiresUserAction
+        ? BROWSER_REFRESH_ACTION_COOLDOWN_MS
+        : Math.min(
+            BROWSER_REFRESH_RETRY_MS * 2 ** (failures - 1),
+            BROWSER_REFRESH_MAX_RETRY_MS,
+          );
+      state[key] = {
+        failures,
+        nextAttemptAt: Date.now() + Math.max(delay, result.retryAfterMs || 0),
+        statusCode: result.statusCode || 0,
+        requiresUserAction: result.requiresUserAction === true,
+        error: result.error,
+      };
     }
-    return results;
-  } finally {
-    if (recoveryTabId) {
-      await extensionApi.tabs.remove(recoveryTabId).catch(() => {});
-    }
+    await extensionApi.storage.local.set({
+      [STORAGE_KEYS.browserRefreshState]: state,
+    });
+    results.push({ ...target, ...result });
   }
+  return results;
 }
 
 async function persistSyncState(results) {
@@ -637,6 +749,7 @@ async function persistSyncState(results) {
   const previous = await extensionApi.storage.local.get([
     STORAGE_KEYS.lastSyncAt,
     STORAGE_KEYS.syncedDomains,
+    STORAGE_KEYS.syncedSessions,
   ]);
   const previousDomains = Array.isArray(previous[STORAGE_KEYS.syncedDomains])
     ? previous[STORAGE_KEYS.syncedDomains]
@@ -644,7 +757,9 @@ async function persistSyncState(results) {
   const hasSuccessfulSync = successfulDomains.length > 0;
 
   await extensionApi.storage.local.set({
-    [STORAGE_KEYS.lastSyncAt]: hasSuccessfulSync
+    [STORAGE_KEYS.lastSyncAt]: results.some(
+      (result) => isCompletedSyncResult(result) && !result.cached,
+    )
       ? now
       : previous[STORAGE_KEYS.lastSyncAt] || "",
     [STORAGE_KEYS.lastSyncAttemptAt]: now,
@@ -653,10 +768,20 @@ async function persistSyncState(results) {
       : failedResult
         ? "error"
         : "idle",
-    [STORAGE_KEYS.lastSyncError]: syncResultError(failedResult),
+    [STORAGE_KEYS.lastSyncError]: hasSuccessfulSync
+      ? ""
+      : syncResultError(failedResult),
+    [STORAGE_KEYS.lastSyncNeedsUserAction]:
+      !hasSuccessfulSync && failedResult?.requiresUserAction === true,
     [STORAGE_KEYS.syncedDomains]: hasSuccessfulSync
       ? successfulDomains
       : previousDomains,
+    [STORAGE_KEYS.syncedSessions]: hasSuccessfulSync
+      ? results.filter(isCompletedSyncResult).map(({ domain, storeId }) => ({
+          domain,
+          storeId: storeId || (isFirefoxExtension ? "firefox-default" : "0"),
+        }))
+      : previous[STORAGE_KEYS.syncedSessions] || [],
   });
 }
 
@@ -688,6 +813,7 @@ function formatRuntimeState(storage) {
       typeof storage.vintrackLastSyncStatus === "string"
         ? storage.vintrackLastSyncStatus
         : "idle",
+    lastSyncNeedsUserAction: storage.vintrackLastSyncNeedsUserAction === true,
     lastSyncError:
       typeof storage.vintrackLastSyncError === "string"
         ? storage.vintrackLastSyncError
@@ -706,7 +832,8 @@ async function performDomainSync(domain, options = {}) {
     return { ok: false, reason: "unsupported-domain" };
   }
 
-  const { browserLinkToken, vintrackAppOrigin } = await getConfig();
+  const config = await getConfig();
+  const { browserLinkToken, vintrackAppOrigin } = config;
   if (!browserLinkToken || !vintrackAppOrigin) {
     return { ok: false, reason: "not-configured" };
   }
@@ -718,7 +845,12 @@ async function performDomainSync(domain, options = {}) {
       );
 
   if (!accessCookie?.value) {
-    return { ok: false, reason: "missing-browser-token" };
+    return {
+      ok: false,
+      domain: normalizedDomain,
+      storeId,
+      reason: "missing-browser-token",
+    };
   }
   if (accessTokenExpiresSoon(accessCookie.value)) {
     return {
@@ -729,6 +861,34 @@ async function performDomainSync(domain, options = {}) {
       retryable: true,
       error:
         "The Vinted browser session token is expiring and needs to be refreshed.",
+    };
+  }
+
+  const receiptKey = cookieSyncKey(
+    refreshDomain(normalizedDomain) || normalizedDomain,
+    storeId || (isFirefoxExtension ? "firefox-default" : "0"),
+  );
+  const fingerprint = Array.from(
+    new Uint8Array(
+      await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(`${browserLinkToken}|${accessCookie.value}`),
+      ),
+    ),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+  const receipt = config[STORAGE_KEYS.syncReceipts]?.[receiptKey];
+  if (
+    !allowAccountSwitch &&
+    receipt?.fingerprint === fingerprint &&
+    Date.now() - Number(receipt.syncedAt || 0) < SYNC_RECEIPT_TTL_MS
+  ) {
+    return {
+      ok: true,
+      domain: normalizedDomain,
+      storeId,
+      status: "completed",
+      cached: true,
     };
   }
 
@@ -799,10 +959,10 @@ async function performDomainSync(domain, options = {}) {
       storeId,
       reason: "server-sync-failed",
       statusCode: response?.status || 0,
+      // A Vintrack outage/link failure cannot be repaired by refreshing Vinted.
       retryable:
-        response?.status === 401 ||
-        response?.status === 403 ||
-        response?.status >= 500,
+        response?.status === 401 &&
+        String(data.error || "").startsWith("invalid browser token sync:"),
       error: syncStatusError(
         data,
         `Sync failed (${response?.status || "network error"})`,
@@ -812,6 +972,25 @@ async function performDomainSync(domain, options = {}) {
 
   const status = typeof data.status === "string" ? data.status : "completed";
   const completed = COMPLETED_SYNC_STATUSES.has(status);
+  if (completed) {
+    const latest = await extensionApi.storage.local.get([
+      STORAGE_KEYS.syncReceipts,
+      STORAGE_KEYS.browserRefreshState,
+    ]);
+    const refreshState = {
+      ...(latest[STORAGE_KEYS.browserRefreshState] || {}),
+    };
+    // A fresh accepted token proves that a prior authentication failure recovered.
+    if (refreshState[receiptKey]?.statusCode !== 429)
+      delete refreshState[receiptKey];
+    await extensionApi.storage.local.set({
+      [STORAGE_KEYS.browserRefreshState]: refreshState,
+      [STORAGE_KEYS.syncReceipts]: {
+        ...(allowAccountSwitch ? {} : latest[STORAGE_KEYS.syncReceipts] || {}),
+        [receiptKey]: { fingerprint, syncedAt: Date.now() },
+      },
+    });
+  }
   return {
     ok: completed,
     domain: sanitizeDomain(data.domain || normalizedDomain),
@@ -855,18 +1034,28 @@ async function syncDomain(domain, options = {}) {
 }
 
 async function syncAllVintedDomains() {
-  const accessCookies = await extensionApi.cookies.getAll({
-    name: "access_token_web",
-  });
+  const config = await getConfig();
+  const savedSessions = Array.isArray(config[STORAGE_KEYS.syncedSessions])
+    ? config[STORAGE_KEYS.syncedSessions]
+    : [];
   const candidates = new Map();
-
-  for (const cookie of accessCookies) {
-    const domain = sanitizeDomain(cookie.domain);
-    if (!isVintedDomain(domain)) {
-      continue;
+  if (savedSessions.length > 0) {
+    // Refresh only linked browser contexts, even after their access cookie expires.
+    for (const session of savedSessions) {
+      if (refreshDomain(session.domain)) {
+        candidates.set(cookieSyncKey(session.domain, session.storeId), session);
+      }
     }
-    const storeId = typeof cookie.storeId === "string" ? cookie.storeId : "";
-    candidates.set(cookieSyncKey(domain, storeId), { domain, storeId });
+  } else {
+    const accessCookies = await extensionApi.cookies.getAll({
+      name: "access_token_web",
+    });
+    for (const cookie of accessCookies) {
+      const domain = sanitizeDomain(cookie.domain);
+      if (!isVintedDomain(domain)) continue;
+      const storeId = typeof cookie.storeId === "string" ? cookie.storeId : "";
+      candidates.set(cookieSyncKey(domain, storeId), { domain, storeId });
+    }
   }
 
   const results = [];
@@ -980,7 +1169,10 @@ async function syncPreferredOrAllDomains(preferredDomain, options = {}) {
   }
   if (normalizedPreferredDomain && isVintedDomain(normalizedPreferredDomain)) {
     const cookies = (
-      await extensionApi.cookies.getAll({ name: "access_token_web" })
+      await extensionApi.cookies.getAll({
+        name: "access_token_web",
+        ...(options.storeId ? { storeId: options.storeId } : {}),
+      })
     ).filter((cookie) =>
       cookieDomainMatches(cookie.domain, normalizedPreferredDomain),
     );
@@ -991,7 +1183,12 @@ async function syncPreferredOrAllDomains(preferredDomain, options = {}) {
         ),
       ),
     ];
-    const targets = storeIds.length > 0 ? storeIds : [""];
+    const targets =
+      typeof options.storeId === "string" && options.storeId
+        ? [options.storeId]
+        : storeIds.length > 0
+          ? storeIds
+          : [""];
     const results = [];
 
     for (const storeId of targets) {
@@ -1007,101 +1204,110 @@ async function syncPreferredOrAllDomains(preferredDomain, options = {}) {
       }
     }
 
-    if (results.some(isCompletedSyncResult)) {
-      return results;
-    }
-    if (results.some((result) => result.reason !== "missing-browser-token")) {
-      return results;
-    }
-
-    try {
-      return [await syncDomain(normalizedPreferredDomain)];
-    } catch (error) {
-      return [
-        {
-          ok: false,
-          domain: normalizedPreferredDomain,
-          error: error instanceof Error ? error.message : "unknown-error",
-        },
-      ];
-    }
+    return results;
   }
 
   return syncAllVintedDomains();
+}
+
+function needsBrowserRefresh(result) {
+  return (
+    result.reason === "browser-token-needs-refresh" ||
+    result.reason === "missing-browser-token" ||
+    result.reason === "no-open-vinted-tab" ||
+    result.reason === "ignored_invalid_browser_session" ||
+    (result.reason === "server-sync-failed" && result.retryable)
+  );
+}
+
+async function performSyncLifecycle(preferredDomain, options) {
+  const config = await getConfig();
+  if (!config[STORAGE_KEYS.token] || !config[STORAGE_KEYS.appOrigin]) return [];
+  const savedSessions = Array.isArray(config[STORAGE_KEYS.syncedSessions])
+    ? config[STORAGE_KEYS.syncedSessions]
+    : [];
+  if (
+    !options.allowAccountSwitch &&
+    preferredDomain &&
+    savedSessions.length > 0 &&
+    !savedSessions.some(
+      (session) =>
+        refreshDomain(session.domain) === refreshDomain(preferredDomain) &&
+        (!options.storeId || session.storeId === options.storeId),
+    )
+  )
+    return [];
+  let results = await syncPreferredOrAllDomains(preferredDomain, options);
+  if (
+    !results.some(isCompletedSyncResult) &&
+    (results.length === 0 || results.some(needsBrowserRefresh))
+  ) {
+    let targets = results
+      .filter(needsBrowserRefresh)
+      .filter((result) => result.domain);
+    targets = targets.flatMap((target) => {
+      if (target.storeId) return [target];
+      const saved = savedSessions.filter(
+        (session) =>
+          refreshDomain(session.domain) === refreshDomain(target.domain),
+      );
+      return saved.length > 0 ? saved : [target];
+    });
+    if (targets.length === 0) {
+      const sessions = Array.isArray(config[STORAGE_KEYS.syncedSessions])
+        ? config[STORAGE_KEYS.syncedSessions]
+        : [];
+      targets =
+        sessions.length > 0
+          ? sessions
+          : (config[STORAGE_KEYS.syncedDomains] || []).map((domain) => ({
+              domain,
+              storeId: "",
+            }));
+      if (preferredDomain) {
+        const matching = targets.filter(
+          (target) =>
+            refreshDomain(target.domain) === refreshDomain(preferredDomain),
+        );
+        targets =
+          matching.length > 0
+            ? matching
+            : [{ domain: preferredDomain, storeId: "" }];
+      }
+    }
+    const refreshResults = await refreshVintedBrowserSessions(targets, options);
+    if (refreshResults.some((result) => result.ok)) {
+      results = await syncPreferredOrAllDomains(preferredDomain, options);
+    } else if (refreshResults.length > 0) {
+      results = refreshResults;
+    }
+  }
+  await persistSyncState(results);
+  return results;
 }
 
 async function syncAndPersistPreferredOrAllDomains(
   preferredDomain,
   options = {},
 ) {
-  let results = await syncPreferredOrAllDomains(preferredDomain, options);
-  if (
-    !results.some(isCompletedSyncResult) &&
-    results.some(
-      (result) =>
-        result.retryable ||
-        result.reason === "missing-browser-token" ||
-        result.reason === "no-open-vinted-tab",
-    )
-  ) {
-    const refreshResults = await refreshOpenVintedBrowserSessions(
-      preferredDomain,
-      {
-        allowInactiveTab: true,
-        bypassCooldown: options.bypassAutoRecoveryCooldown === true,
-      },
-    );
-    if (refreshResults.some((result) => result.ok)) {
-      results = await syncPreferredOrAllDomains(preferredDomain, options);
-      if (results.length === 0) {
-        results = [
-          {
-            ok: false,
-            reason: "missing-browser-token",
-            error:
-              "Vinted did not expose a fresh browser access token after refresh.",
-          },
-        ];
-      }
-    } else if (results.length === 0) {
-      results = refreshResults;
-    }
+  const domain = sanitizeDomain(preferredDomain);
+  const key = `${domain}|${options.storeId || ""}|${options.preferOpenTab === true}|${options.allowAccountSwitch === true}`;
+  if (inFlightLifecycles.has(key)) return inFlightLifecycles.get(key);
+  // Cookie rotation, tab events, alarms and manual actions share one queue.
+  const sync = syncLifecycleTail
+    .catch(() => {})
+    .then(() => performSyncLifecycle(domain, options));
+  syncLifecycleTail = sync;
+  inFlightLifecycles.set(key, sync);
+  try {
+    return await sync;
+  } finally {
+    if (inFlightLifecycles.get(key) === sync) inFlightLifecycles.delete(key);
   }
-  await persistSyncState(results);
-  return results;
 }
 
 async function syncAndPersistAllDomains() {
-  let results = await syncAllVintedDomains();
-  if (
-    !results.some(isCompletedSyncResult) &&
-    (results.length === 0 ||
-      results.some(
-        (result) =>
-          result.retryable || result.reason === "missing-browser-token",
-      ))
-  ) {
-    const refreshResults = await refreshOpenVintedBrowserSessions("", {
-      allowInactiveTab: true,
-    });
-    if (refreshResults.some((result) => result.ok)) {
-      results = await syncAllVintedDomains();
-      if (results.length === 0) {
-        results = [
-          {
-            ok: false,
-            reason: "missing-browser-token",
-            error:
-              "Vinted did not expose a fresh browser access token after refresh.",
-          },
-        ];
-      }
-    } else if (results.length === 0) {
-      results = refreshResults;
-    }
-  }
-  await persistSyncState(results);
-  return results;
+  return syncAndPersistPreferredOrAllDomains("");
 }
 
 function waitForTabLoad(tabId, timeoutMs = BUY_TAB_READY_TIMEOUT_MS) {
@@ -1375,7 +1581,7 @@ function scheduleSync(domain, options = {}) {
   const timer = setTimeout(async () => {
     syncTimers.delete(key);
     try {
-      await syncAndPersistPreferredOrAllDomains(normalizedDomain);
+      await syncAndPersistPreferredOrAllDomains(normalizedDomain, { storeId });
     } catch (error) {
       console.warn("[vintrack-extension] sync failed", normalizedDomain, error);
     }
