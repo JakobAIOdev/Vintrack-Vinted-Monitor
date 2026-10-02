@@ -1,6 +1,6 @@
 {
     "name": "control-center",
-    "version": "2.4.24",
+    "version": "2.4.25",
     "private": true,
     "scripts": {
         "dev": "next dev",
