@@ -415,15 +415,24 @@
       }
 
       const account = state.overview?.account;
+      const syncError =
+        state.lastSyncStatus === "error" ? state.lastSyncError : "";
+      const needsBrowserAction =
+        account?.requiresBrowserReauth || state.lastSyncNeedsUserAction;
       const accountStatus = account?.available
         ? account.linked
-          ? account.requiresBrowserReauth
+          ? needsBrowserAction
             ? "Browser refresh needed"
-            : "Linked"
+            : syncError
+              ? "Sync pending"
+              : "Linked"
           : "Not linked"
         : "Status unavailable";
       const statusClass =
-        account?.available && account?.linked
+        account?.available &&
+        account?.linked &&
+        !needsBrowserAction &&
+        !syncError
           ? "vtc-status vtc-status-ok"
           : "vtc-status";
 
@@ -478,6 +487,9 @@
         element("span", statusClass, accountStatus),
       );
       accountCard.appendChild(accountSummary);
+      if (syncError) {
+        accountCard.appendChild(element("p", "vtc-muted", syncError));
+      }
       addButton(accountCard, "Sync linked account now", "sync", {
         secondary: true,
       });

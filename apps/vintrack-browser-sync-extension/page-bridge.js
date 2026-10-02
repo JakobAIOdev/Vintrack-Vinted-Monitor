@@ -129,23 +129,29 @@
 
   async function refreshBrowserSession() {
     const csrfToken = extractCsrfToken();
-    const response = await fetch(`${window.location.origin}/web/api/auth/refresh`, {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Accept": "application/json, text/plain, */*",
-        ...(csrfToken ? { "X-Csrf-Token": csrfToken } : {}),
-      },
-    });
-
-    const body = await response.text().catch(() => "");
-    return {
-      ok: response.ok,
-      status: response.status,
-      domain: window.location.hostname,
-      hasAccessCookie: Boolean(readCookie("access_token_web")),
-      error: response.ok ? "" : truncate(body, 200),
-    };
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(`${window.location.origin}/web/api/auth/refresh`, {
+        method: "POST",
+        credentials: "include",
+        redirect: "error",
+        signal: controller.signal,
+        headers: {
+          Accept: "application/json, text/plain, */*",
+          ...(csrfToken ? { "X-Csrf-Token": csrfToken } : {}),
+        },
+      });
+      return {
+        ok: response.ok,
+        status: response.status,
+        retryAfter: response.headers.get("Retry-After") || "",
+        domain: window.location.hostname,
+        error: response.ok ? "" : "Vinted could not refresh the browser session.",
+      };
+    } finally {
+      window.clearTimeout(timeout);
+    }
   }
 
   function waitForDocumentReady(timeoutMs = 15000) {

@@ -307,28 +307,29 @@ assert.ok(
   "Content-script bridge must reject foreign app origins",
 );
 assert.ok(
-  background.includes('autoRecoveryNextAt: "vintrackAutoRecoveryNextAt"'),
-  "Auto-recovery cooldown state is missing",
+  background.includes('browserRefreshState: "vintrackBrowserRefreshState"'),
+  "Silent refresh must persist per-session retry state",
 );
-assert.ok(
-  background.includes("AUTO_RECOVERY_FAILURE_COOLDOWN_MS"),
-  "Auto-recovery must apply a bounded failure cooldown",
+const refreshSource = background.slice(
+  background.indexOf("function refreshDomain("),
+  background.indexOf("async function persistSyncState("),
 );
-assert.ok(
-  background.includes("active: false"),
-  "Session recovery must use an inactive Vinted tab",
-);
-assert.ok(
-  background.includes("tabs.remove(recoveryTabId)"),
-  "Temporary Vinted recovery tabs must be closed",
-);
-assert.ok(
-  background.includes('result.reason === "no-open-vinted-tab"'),
-  "Manual sync must recover when no Vinted tab is open",
-);
+for (const forbidden of [
+  "tabs.create",
+  "tabs.update",
+  "tabs.reload",
+  "tabs.remove",
+]) {
+  assert.ok(
+    !refreshSource.includes(forbidden),
+    `Session recovery must never call ${forbidden}`,
+  );
+}
 assert.ok(
   background.includes("bypassAutoRecoveryCooldown: true"),
-  "Explicit connect and sync actions must bypass the periodic cooldown",
+  "Explicit sync actions must allow retrying authentication failures",
 );
+// Execute lifecycle regressions during the same validation used by CI/releases.
+await import("./session-refresh.test.mjs");
 
 console.log(`Extension validation passed for v${chromeManifest.version}`);

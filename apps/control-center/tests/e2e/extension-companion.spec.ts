@@ -163,3 +163,61 @@ declare global {
         };
     }
 }
+
+test("shows the persisted browser login failure in the linked-account card", async ({
+    page,
+}) => {
+    await page.setContent('<main id="companion"></main>');
+    await page.addStyleTag({ path: companionStyle });
+    await page.evaluate(() => {
+        Object.assign(window, {
+            chrome: {
+                runtime: {
+                    sendMessage: async () => ({
+                        ok: true,
+                        configured: true,
+                        theme: "light",
+                        lastSyncStatus: "error",
+                        lastSyncNeedsUserAction: true,
+                        lastSyncError:
+                            "Open Vinted and check your login or security prompt, then sync again.",
+                        overview: {
+                            account: {
+                                available: true,
+                                linked: true,
+                                vintedName: "Synthetic account",
+                                domain: "www.vinted.de",
+                            },
+                            monitors: { active: 0 },
+                            priceWatches: { total: 0 },
+                        },
+                        context: { kind: "unsupported" },
+                    }),
+                },
+                storage: {
+                    onChanged: { addListener() {}, removeListener() {} },
+                },
+            },
+        });
+    });
+    await page.addScriptTag({ path: companionScript });
+    await page.evaluate(() => {
+        const container = document.querySelector("#companion");
+        if (!(container instanceof HTMLElement))
+            throw new Error("Missing mount");
+        globalThis.VintrackCompanion.mount(container, { surface: "popup" });
+    });
+    const account = page.locator(".vtc-account-card");
+    await expect(
+        account.getByText(
+            "Open Vinted and check your login or security prompt, then sync again.",
+        ),
+    ).toBeVisible();
+    await expect(account.locator(".vtc-status")).toHaveText(
+        "Browser refresh needed",
+    );
+    await expect(account.locator(".vtc-status-ok")).toHaveCount(0);
+    await expect(
+        account.getByRole("button", { name: "Sync linked account now" }),
+    ).toBeVisible();
+});

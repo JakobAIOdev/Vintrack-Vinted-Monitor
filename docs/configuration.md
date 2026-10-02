@@ -126,8 +126,8 @@ persistent data.
 ## Browser extension
 
 ```env
-BROWSER_EXTENSION_LATEST_VERSION=0.1.6
-BROWSER_EXTENSION_MIN_VERSION=0.1.5
+BROWSER_EXTENSION_LATEST_VERSION=0.2.1
+BROWSER_EXTENSION_MIN_VERSION=0.2
 BROWSER_EXTENSION_FIREFOX_URL=https://addons.mozilla.org/firefox/addon/vintrack-browser-sync/
 ```
 
