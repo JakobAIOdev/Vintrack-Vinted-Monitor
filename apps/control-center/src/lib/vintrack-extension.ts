@@ -18,6 +18,7 @@ export type BrowserBuyResult =
           paymentUrl?: string;
           autoCheckoutReason?: string;
           ready?: boolean;
+          timings?: Record<string, number>;
       }
     | {
           ok: false;

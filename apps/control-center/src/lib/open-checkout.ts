@@ -81,6 +81,9 @@ async function startCheckout(
     itemId: number,
     loadedTarget?: CheckoutTarget,
 ) {
+    const startedAt = performance.now();
+    let authorizationMs = 0;
+    let readinessMs = 0;
     const [target, extensionAvailable] = await Promise.all([
         loadedTarget ?? getCheckoutTarget(monitorId, itemId),
         hasCheckoutExtension(),
@@ -91,6 +94,7 @@ async function startCheckout(
                 "Update or reload the Vintrack extension to use auto-checkout (version 0.2.6 or later).",
             );
         if (target.preferences?.autoCheckout) {
+            const readinessAt = performance.now();
             // Check the local receiver before consuming the shared payment
             // claim. This never runs a Vinted account or checkout request.
             const ready = await runBrowserBuyViaExtension(
@@ -111,6 +115,8 @@ async function startCheckout(
                               "Reload Vinted before opening the buy link."
                         : "The Vinted tab did not become ready. Reload Vinted before opening the buy link.",
                 );
+            readinessMs = performance.now() - readinessAt;
+            const authorizationAt = performance.now();
             const authorization = await fetch(
                 checkoutApiPath(monitorId, itemId),
                 {
@@ -129,6 +135,7 @@ async function startCheckout(
                     data.error ||
                         "Auto-checkout could not be authorized. Check Vinted before trying again.",
                 );
+            authorizationMs = performance.now() - authorizationAt;
         }
         if (
             extensionAvailable < 3 &&
@@ -172,6 +179,37 @@ async function startCheckout(
             throw new Error(
                 "The payment destination could not be verified. Check Vinted before trying again.",
             );
+        // Numeric timings only: no item/account IDs, URLs, tokens or responses.
+        const timingKeys = [
+            "tabReadyMs",
+            "contextMs",
+            "accountMs",
+            "transactionMs",
+            "buildMs",
+            "updateMs",
+            "contactMs",
+            "paymentMs",
+            "extensionMs",
+        ];
+        const timings = Object.fromEntries(
+            timingKeys.flatMap((key) => {
+                const value = result.timings?.[key];
+                return typeof value === "number" &&
+                    Number.isFinite(value) &&
+                    value >= 0
+                    ? [[key, Math.round(value)]]
+                    : [];
+            }),
+        );
+        console.info(
+            "[vintrack:checkout-timing]",
+            JSON.stringify({
+                ...timings,
+                readinessMs: Math.round(readinessMs),
+                authorizationMs: Math.round(authorizationMs),
+                handoffMs: Math.round(performance.now() - startedAt),
+            }),
+        );
         // History is best-effort; a slow history endpoint must not keep the
         // handoff displaying "Preparing" after the browser has opened checkout.
         void fetch("/api/items/checkout-links", {

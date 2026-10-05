@@ -101,8 +101,48 @@ Browser-E2E-Tests arbeiten mit lokalen Stubs, ohne echten Vinted-Payment-Traffic
 
 - Control Center: 39 Unit-Tests, 22 bestandene Checkout-E2E auf Desktop/Mobil
   (2 Auth-Fälle im angemeldeten Testmodus übersprungen), ESLint und Build.
-- Extension: 52 bestandene synthetische Checkout-/Lifecycle-Tests und
-  Chrome-/Firefox-Pakete 0.2.6 gebaut.
+- Extension: 55 bestandene synthetische Checkout-/Lifecycle-Tests und
+  Chrome-/Firefox-Pakete 0.2.8 gebaut. Neue Tests prüfen den Start nach
+  HTML-Parsing, während die Seite noch nicht vollständig geladen ist, und
+  Bridge-Bereitschaft nach dem Entfernen von HTML-Root-Attributen.
 - Vinted-Service: `go test ./...`.
 - Lokale Account-UI: Warnung und Limit geprüft, bestehende Vorgaben nicht gespeichert
   oder verändert. [UI-Vorschau](screenshots/checkout-auto-paypal.png).
+
+## Kaltstart und Latenzmessung
+
+Ohne offenen Vinted-Tab muss die Extension weiterhin eine Browser-Seite für
+die native Request-Sitzung öffnen. Version 0.2.7 startet, sobald die Bridge
+verfügbar und das HTML geparst ist, statt Bilder, Analytics und das vollständige
+`load`-Event abzuwarten. Die feste Pause von 400 ms wurde entfernt.
+Die sichere Prüfung von Identität, Preisen und Opt-in bleibt erhalten.
+Seit 0.2.8 bleibt die Bridge-Bereitschaft zusätzlich im Content-Script
+gespeichert, wenn Vinted HTML-Root-Attribute entfernt. Bei Dokumentnavigation
+wird dieser Zustand verworfen; ein getrennter Receiver wird weiterhin erkannt.
+
+Die Vintrack-Konsole gibt unter `[vintrack:checkout-timing]` ausschließlich
+numerische Millisekunden für einzelne Phasen aus. IDs, URLs, Browser-Storage,
+CSRF-Werte und Response-Bodies werden nicht geloggt. `handoffMs` endet bei der
+Extension-Antwort nach Navigationsbeginn; das anschließende Rendern der nativen
+Checkout-Seite ist darin nicht enthalten. Wiederöffnete Cache-Checkouts sind
+gesondert von der Vorbereitung eines neuen Artikels zu vergleichen.
+
+Live-Prüfung am 05.10.2026, normaler Oneclick mit Auto-Checkout ausgeschaltet,
+zwei verschiedene, zuvor nicht vorbereitete Artikel unter Extension 0.2.7:
+
+| Phase | Offener Vinted-Tab | Kein Vinted-Tab |
+| --- | ---: | ---: |
+| Tab/Bridge bereit | 1 ms | 2.821 ms |
+| Account-Prüfung | 253 ms | 269 ms |
+| Buy-Konversation | 1.044 ms | 1.026 ms |
+| Checkout-Build | 1.632 ms | 1.641 ms |
+| Checkout-Update | 1.441 ms | 1.325 ms |
+| Handoff insgesamt | 4.544 ms | 7.307 ms |
+
+Beide Versuche erreichten den nativen letzten Checkout-Schritt mit Lieferung
+nach Hause und PayPal. [Preisübersicht vor „Zahlen“](screenshots/checkout-latency-verified.png).
+Es wurde kein Payment-Start und kein Kauf ausgeführt. Diese Einzelmessungen
+sind keine garantierten Antwortzeiten. Die sequenziell abhängigen Vinted-Requests
+machen bei beiden Versuchen mehr als vier Sekunden aus. Der zusätzliche
+Bereitschafts-Fix aus 0.2.8 ist synthetisch geprüft; die Live-Prüfung folgt nach
+dem erneuten Laden der Extension.

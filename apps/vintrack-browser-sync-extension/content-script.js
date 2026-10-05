@@ -93,12 +93,17 @@
     window.postMessage({ type, payload }, window.location.origin);
   }
 
+  // Vinted can replace root attributes during hydration. Keep readiness in
+  // this content-script instance, which is discarded on document navigation.
+  let pageBridgeReady = false;
+
   function ensurePageBridge() {
     if (!isVintedHost(window.location.hostname)) {
       return;
     }
 
-    if (document.documentElement.dataset.vintrackPageBridge === "ready") {
+    if (pageBridgeReady || document.documentElement.dataset.vintrackPageBridge === "ready") {
+      pageBridgeReady = true;
       return;
     }
 
@@ -116,6 +121,7 @@
     script.async = false;
     script.dataset.vintrackPageBridge = "true";
     script.onload = () => {
+      pageBridgeReady = true;
       document.documentElement.dataset.vintrackPageBridge = "ready";
       script.remove();
     };
@@ -177,7 +183,8 @@
 
   function waitForPageBridgeReady(timeoutMs = 15000) {
     return new Promise((resolve, reject) => {
-      if (document.documentElement.dataset.vintrackPageBridge === "ready") {
+      if (pageBridgeReady || document.documentElement.dataset.vintrackPageBridge === "ready") {
+        pageBridgeReady = true;
         resolve();
         return;
       }
@@ -197,6 +204,7 @@
 
         window.clearTimeout(timeout);
         window.removeEventListener("message", handleReady);
+        pageBridgeReady = true;
         document.documentElement.dataset.vintrackPageBridge = "ready";
         resolve();
       }
@@ -827,7 +835,7 @@
       sendResponseSafely(sendResponse, {
         ok: true,
         isVintedPage: isVintedHost(window.location.hostname),
-        pageBridgeReady: document.documentElement.dataset.vintrackPageBridge === "ready",
+        pageBridgeReady: pageBridgeReady || document.documentElement.dataset.vintrackPageBridge === "ready",
       });
       return false;
     }

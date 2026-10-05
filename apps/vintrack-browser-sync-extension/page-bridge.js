@@ -156,23 +156,25 @@
 
   function waitForDocumentReady(timeoutMs = 15000) {
     return new Promise((resolve, reject) => {
-      if (document.readyState === "complete") {
-        window.setTimeout(resolve, 400);
+      // CSRF context is in the parsed document. Images, analytics and the load
+      // event are not prerequisites for the request-only checkout flow.
+      if (document.readyState !== "loading") {
+        resolve();
         return;
       }
 
       const timeout = window.setTimeout(() => {
-        window.removeEventListener("load", handleLoad);
+        document.removeEventListener("DOMContentLoaded", handleLoad);
         reject(new Error("Vinted page did not finish loading in time"));
       }, timeoutMs);
 
       function handleLoad() {
         window.clearTimeout(timeout);
-        window.removeEventListener("load", handleLoad);
-        window.setTimeout(resolve, 400);
+        document.removeEventListener("DOMContentLoaded", handleLoad);
+        resolve();
       }
 
-      window.addEventListener("load", handleLoad, { once: true });
+      document.addEventListener("DOMContentLoaded", handleLoad, { once: true });
     });
   }
 
@@ -515,7 +517,14 @@
   }
 
   async function runBrowserBuy(payload) {
+    const startedAt = Date.now();
     await waitForDocumentReady();
+    const timings = { contextMs: Date.now() - startedAt };
+    async function checkoutRequest(key, step, input) {
+      const requestAt = Date.now();
+      try { return await vintedRequest(step, input); }
+      finally { timings[key] = (timings[key] || 0) + Date.now() - requestAt; }
+    }
 
     const itemId = Number(payload?.itemId || 0);
     const sellerId = Number(payload?.sellerId || 0);
@@ -543,13 +552,15 @@
       };
     }
 
+    const accountAt = Date.now();
     const account = await getBrowserAccount();
+    timings.accountMs = Date.now() - accountAt;
     if (!account.ok) return account;
     if (account.accountId !== expectedAccountId || sellerId === expectedAccountId) {
       return { ok: false, code: "checkout_account_mismatch", error: "Open Vinted with the account linked to Vintrack before starting checkout." };
     }
 
-    const conversationResult = await vintedRequest("buy conversation", {
+    const conversationResult = await checkoutRequest("transactionMs", "buy conversation", {
       method: "POST",
       url: `${window.location.origin}/api/v2/conversations`,
       referrer: itemUrl,
@@ -577,7 +588,7 @@
       };
     }
 
-    const buildResult = await vintedRequest("checkout build", {
+    const buildResult = await checkoutRequest("buildMs", "checkout build", {
       method: "POST",
       url: `${window.location.origin}/api/v2/purchases/checkout/build`,
       referrer: itemUrl,
@@ -644,7 +655,7 @@
       };
     }
     const paymentChoice = checkoutPaymentChoice(buildResult.data, preferences.payment);
-    let updateResult = await vintedRequest("checkout update", {
+    let updateResult = await checkoutRequest("updateMs", "checkout update", {
       method: "PUT",
       url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout`,
       referrer: checkoutReferrer,
@@ -657,7 +668,7 @@
     }
     const updatedChoice = checkoutPaymentChoice(updateResult.data, preferences.payment);
     if (!paymentChoice && updatedChoice && selectedCheckoutPayment(updateResult.data) !== preferences.payment) {
-      updateResult = await vintedRequest("checkout preferences", {
+      updateResult = await checkoutRequest("updateMs", "checkout preferences", {
         method: "PUT",
         url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout`,
         referrer: checkoutReferrer,
@@ -694,7 +705,7 @@
       shippingOrderId;
 
     if (phoneNumber && shippingOrderId) {
-      const shippingContactResult = await vintedRequest("shipping contact", {
+      const shippingContactResult = await checkoutRequest("contactMs", "shipping contact", {
         method: "POST",
         url: `${window.location.origin}/api/v2/shipping_orders/${shippingOrderId}/shipping_contact`,
         referrer: checkoutReferrer,
@@ -743,6 +754,7 @@
       purchaseId,
       checkoutUrl: checkoutUrl || checkoutReferrer,
       shippingOrderId,
+      timings,
     };
     if (!preferences.autoCheckout) return prepared;
     prepared.status = "checkout_review_required";
@@ -756,7 +768,7 @@
     prepared.autoCheckoutReason = "A payment request was sent but no verified PayPal redirect was returned. Check Vinted; do not start it again.";
     try {
       // Background persisted intent before the first mutation; no retries here.
-      const payment = await vintedRequest("PayPal payment start", {
+      const payment = await checkoutRequest("paymentMs", "PayPal payment start", {
         method: "POST",
         url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout/payment`,
         referrer: checkoutReferrer,

@@ -51,7 +51,7 @@ handles signing, review, installation, and updates for the public build.
 
 ## Checkout handoff
 
-Version 0.2.6 advertises checkout preparation protocol 5 to Vintrack. The
+Version 0.2.8 advertises checkout preparation protocol 5 to Vintrack. The
 dashboard's Open Checkout action verifies that the Vinted browser account
 matches the linked account, applies the delivery/payment preferences selected
 in Vintrack Account, and opens its checkout page. Home delivery and available
@@ -112,6 +112,19 @@ refresh. History saving does not hold the completed dashboard handoff open.
 Runtime failures retain their request ID so Vintrack can display them immediately
 instead of waiting for the 90-second response timeout. Reload existing Vintrack
 and Vinted pages after reloading the development extension.
+
+Cold starts no longer wait for the Vinted document's complete load event. Once
+the content bridge attaches, checkout waits only until HTML parsing is finished,
+so images and other subresources do not delay its API requests. The previous
+fixed 400 ms document-ready pause is removed. If no matching Vinted tab exists,
+a tab must still be created; this is not a tab-free background checkout.
+Bridge readiness survives Vinted replacing root HTML attributes during
+hydration. Navigating to another document creates a new content-script context;
+disconnected receivers still require a reload.
+The Vintrack console emits `[vintrack:checkout-timing]` with numeric durations
+for context readiness, account verification, transaction, build, update,
+optional payment, browser handoff and optional server authorization. It never
+includes identifiers, URLs, account data, credentials or response bodies.
 
 The latest checkout response must confirm the delivery choice, enabled PayPal,
 a fresh checksum, a positive EUR total within the limit, and no applied wallet

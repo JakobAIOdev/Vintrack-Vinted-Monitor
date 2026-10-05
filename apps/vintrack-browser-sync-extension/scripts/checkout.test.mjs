@@ -17,6 +17,23 @@ const domain = "www.vinted.de";
 const target = { itemId: 123, sellerId: 456, expectedAccountId: 42, domain };
 const checkoutUrl = `https://${domain}/checkout?purchase_id=synthetic&order_id=77&order_type=transaction`;
 
+test("content bridge remembers readiness when Vinted replaces root attributes", () => {
+  let receive;
+  let injected;
+  const root = { dataset: {} };
+  const window = { location: { origin: `https://${domain}`, hostname: domain }, addEventListener() {} };
+  const document = { documentElement: root, head: { appendChild(script) { injected = script; } }, createElement() { return { dataset: {}, remove() {} }; } };
+  const context = vm.createContext({ window, document, MutationObserver: class { observe() {} }, chrome: { runtime: { getURL: path => `chrome-extension://synthetic/${path}`, sendMessage: () => new Promise(() => {}), onMessage: { addListener(listener) { receive = listener; } } } } });
+  vm.runInContext(contentSource, context);
+  let response;
+  receive({ type: "VINTRACK_TAB_PING" }, {}, value => { response = value; });
+  assert.equal(response.pageBridgeReady, false);
+  injected.onload();
+  root.dataset = {};
+  receive({ type: "VINTRACK_TAB_PING" }, {}, value => { response = value; });
+  assert.equal(response.pageBridgeReady, true);
+});
+
 test("content bridge preserves checkout request IDs on synchronous, asynchronous and empty runtime failures", async () => {
   for (const failure of [() => { throw new Error("synthetic private context"); }, () => Promise.reject(new Error("synthetic private context")), () => undefined, () => ({ ok: false, error: "Unauthorized extension sender" })]) {
     const listeners = {};
@@ -33,8 +50,18 @@ test("content bridge preserves checkout request IDs on synchronous, asynchronous
   }
 });
 
-function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paymentResponse = {}) {
+function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paymentResponse = {}, pageState = "complete") {
   const requests = [];
+  const documentListeners = {};
+  const document = {
+    readyState: pageState,
+    cookie: "",
+    scripts: [],
+    querySelector: () => null,
+    documentElement: { innerHTML: "" },
+    addEventListener(type, handler) { documentListeners[type] = handler; },
+    removeEventListener(type) { delete documentListeners[type]; },
+  };
   const window = {
     location: {
       origin: `https://${domain}`,
@@ -46,16 +73,11 @@ function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paym
     addEventListener() {},
     postMessage() {},
     setTimeout: (fn) => setTimeout(fn, 0),
+    clearTimeout,
   };
   const context = vm.createContext({
     window,
-    document: {
-      readyState: "complete",
-      cookie: "",
-      scripts: [],
-      querySelector: () => null,
-      documentElement: { innerHTML: "" },
-    },
+    document,
     navigator: { language: "de-DE" },
     Headers,
     URL,
@@ -88,8 +110,19 @@ function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paym
     ),
     context,
   );
-  return { requests, run: (payload) => window.testCheckout(payload) };
+  return { requests, run: (payload) => window.testCheckout(payload), parsed() { document.readyState = "interactive"; documentListeners.DOMContentLoaded?.(); } };
 }
+
+test("checkout starts after HTML parsing without waiting for the page load event", async () => {
+  const h = bridge(42, [], {}, {}, "loading");
+  const checkout = h.run(target);
+  assert.equal(h.requests.length, 0);
+  h.parsed();
+  const result = await checkout;
+  assert.equal(result.ok, true);
+  assert.deepEqual(h.requests.map(({ init })=>init.method), ["GET", "POST", "POST", "PUT"]);
+  assert.ok(Object.values(result.timings).every(value=>Number.isFinite(value) && value >= 0));
+});
 
 test("page checkout uses the linked account and stops before payment", async () => {
   const h = bridge();
@@ -319,6 +352,8 @@ function background(options = {}) {
       onActivated: event,
       onUpdated: event,
       async query() { return options.tabs || []; },
+      async create(changes) { mutations.push({ created: true, changes }); return { id: 10, status: "loading" }; },
+      async get() { throw new Error("waiting for full page load is unnecessary"); },
       async update(id, changes) {
         if (options.updateError) throw new Error("synthetic private navigation error");
         mutations.push({ id, changes });
@@ -395,6 +430,14 @@ test("readiness checks are local and do not consume a checkout attempt", async (
   assert.equal(h.messages.length, 0);
   assert.equal(h.mutations.length, 0);
   assert.ok(!h.storage.vintrackCheckoutAttempts);
+});
+
+test("a cold checkout starts as soon as the bridge attaches, before page load completes", async () => {
+  const h = background({ tabs: [] });
+  assert.equal((await h.run()).ok, true);
+  assert.equal(h.mutations[0].created, true);
+  assert.equal(h.mutations.at(-1).changes.url, checkoutUrl);
+  assert.equal(h.messages.filter(m=>m.type==="VINTRACK_RUN_BROWSER_BUY").length, 1);
 });
 
 test("a stale tab does not block a ready same-region receiver", async () => {

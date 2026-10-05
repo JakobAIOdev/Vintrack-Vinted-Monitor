@@ -1349,7 +1349,6 @@ async function ensureVintedBuyTab(targetUrl) {
   }
   const loadingTab = existingTabs.find((tab) => tab.status === "loading" && !tab.discarded);
   if (loadingTab) {
-    await waitForTabLoad(loadingTab.id);
     await waitForTabBridge(loadingTab.id);
     return { tabId: loadingTab.id, created: false };
   }
@@ -1365,7 +1364,6 @@ async function ensureVintedBuyTab(targetUrl) {
     throw new Error("Failed to open Vinted tab for browser checkout");
   }
 
-  await waitForTabLoad(createdTab.id);
   await waitForTabBridge(createdTab.id);
   return { tabId: createdTab.id, created: true };
 }
@@ -1508,9 +1506,11 @@ async function handleBrowserBuy(payload) {
 }
 
 async function prepareBrowserCheckout(target) {
+  const startedAt = Date.now();
   const { itemId, sellerId, expectedAccountId, domain } = target;
   const targetUrl = `https://${domain}/items/${itemId}`;
   const { tabId } = await checkoutStep("checkout_tab_unavailable", "Vinted could not become ready. Open or reload Vinted before opening a new buy link. No checkout request was sent by this attempt.", () => ensureVintedBuyTab(targetUrl));
+  const tabReadyMs = Date.now() - startedAt;
   const attempt = {
     ...target,
     accountId: expectedAccountId,
@@ -1654,6 +1654,7 @@ async function prepareBrowserCheckout(target) {
     transactionId: result.transactionId,
     purchaseId: result.purchaseId,
     autoCheckoutReason: result.autoCheckoutReason,
+    timings: { ...result.timings, tabReadyMs, extensionMs: Date.now() - startedAt },
     ...(paymentRedirectAllowed ? { paymentUrl: result.paymentUrl } : {}),
   };
 }
