@@ -1,9 +1,11 @@
 # Checkout handoff: Machbarkeit und nächster Test
 
-Stand: 5. Oktober 2026. Untersuchung des lokalen Codes und zwei öffentliche,
-anonyme GET-Aufrufe. Kein echter Account wurde verwendet, kein Checkout wurde
-angelegt und keine Zahlung ausgelöst. Die Akzeptanz der bestehenden privaten
-Vinted-Endpunkte ist damit nicht live bestätigt.
+Stand: 5. Oktober 2026. Die ursprüngliche Untersuchung umfasste lokalen Code
+und öffentliche, anonyme GET-Aufrufe. Anschließend gab der Nutzer einen
+Testaccount und einen konkreten Artikel für einen Test bis vor Kaufbestätigung
+frei. Der Login wartet auf einen E-Mail-Verifizierungscode. Es wurde weiterhin
+kein echter Checkout angelegt und keine Zahlung ausgelöst. Die Akzeptanz der
+bestehenden privaten Vinted-Endpunkte ist damit nicht live bestätigt.
 
 ## Implementiert auf `codex/checkout-handoff`
 
@@ -61,9 +63,12 @@ gewählt hat. Die vorhandenen Request-Beispiele zeigen ein Build sowie leere
 Komponenten und eine optionale Pickup-Auswahl, aber keine Vollständigkeit der
 finalen Checkout-Ansicht. Der anonyme GET auf `/checkout` lieferte am
 5. Oktober HTTP 307; die Authentifizierungsgrenze wurde nicht überschritten.
-Vor weiterer Implementierung zur vollständigen Auswahl sind ein freigegebener
-Testaccount, ein konkreter Artikel und sanitierte echte Checkout-Antworten nötig.
-Es wurde weiterhin kein echter Checkout angelegt.
+Ein Testaccount und ein konkreter Artikel wurden inzwischen freigegeben. Der
+Login wartet auf einen E-Mail-Verifizierungscode, den der Nutzer bislang nicht
+erhalten hat. Der angegebene Artikel trägt sowohl in der vorhandenen
+Chrome-Sitzung als auch in der getrennten Sitzung das Label „Entfernt!“. Vor weiterer
+Implementierung zur vollständigen Auswahl sind sanitierte echte
+Checkout-Antworten nötig. Es wurde weiterhin kein echter Checkout angelegt.
 
 ## Ergebnis
 
