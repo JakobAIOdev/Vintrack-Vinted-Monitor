@@ -2,6 +2,9 @@
 
 Stand: 5. Oktober 2026. Branch: `codex/checkout-handoff`.
 
+Die anschließend ergänzte regionale Zahlungsauswahl mit Extension 0.2.4 ist
+in [checkout-payment-regions.md](checkout-payment-regions.md) dokumentiert.
+
 ## Live getestet
 
 Der Nutzer gab den verknüpften Account `@jakob_aio` in seinem Hauptbrowser,

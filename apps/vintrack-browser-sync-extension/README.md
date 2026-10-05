@@ -51,7 +51,7 @@ handles signing, review, installation, and updates for the public build.
 
 ## Checkout handoff
 
-Version 0.2.3 advertises checkout preparation protocol 2 to Vintrack. The
+Version 0.2.4 advertises checkout preparation protocol 3 to Vintrack. The
 dashboard's Open Checkout action verifies that the Vinted browser account
 matches the linked account, applies the delivery/payment preferences selected
 in Vintrack Account, and opens its checkout page. Home delivery and available
@@ -60,6 +60,20 @@ submits checkout/payment or confirms the purchase. Missing or unavailable
 delivery/payment choices remain for the user on Vinted. Home delivery with
 confirmed selections has been tested on the DE site; wallet-only readiness and
 mobile/in-app browser handoff have not been live verified.
+
+Vintrack Account shows payment presets for the linked regional domain: PayPal
+in DE/AT/BE, Tink and Klarna in DE, Bancontact in BE, iDEAL/Wero in NL, and
+BLIK/Przelewy24 in PL, plus Wallet, a saved card, Google Pay and the saved
+Vinted payment choice. Apple Pay is not offered for this web flow.
+New provider choices require this extension version; protocol 2 still works
+for the original Wallet/PayPal/saved-choice preferences.
+
+The page bridge takes provider values from the actual checkout's offered
+methods. Disabled or unrecognized options remain for review; there is no
+automatic substitution. A card requires either Vinted's selected saved card
+or exactly one saved card. Ambiguous cards/provider variants are left for
+the user. Preparation still ends before checkout/payment. Other than PayPal,
+new provider preselection has synthetic coverage, not a live regional test.
 
 Preparation uses HTTP requests in an existing same-region Vinted tab without
 loading the product page first. A new attempt verifies identity once in the

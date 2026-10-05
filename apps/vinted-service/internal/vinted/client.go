@@ -1001,14 +1001,14 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 	if err := save(link); err != nil {
 		return &link, err
 	}
-	selectPayPal := preferences.Payment == "paypal" && build.Selection.PayPalAvailable
-	updated, updateErr := c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, selectPayPal))
-	if updateErr == nil && !selectPayPal && preferences.Payment == "paypal" && updated.Selection.PayPalAvailable && !updated.Selection.PayPalSelected {
+	paymentChoice := build.Selection.Methods[preferences.Payment]
+	updated, updateErr := c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, paymentChoice))
+	if updateErr == nil && paymentChoice == nil && updated.Selection.SelectedPreference != preferences.Payment && updated.Selection.Methods[preferences.Payment] != nil {
 		link.Status = "checkout_selecting_preferences"
 		if err := save(link); err != nil {
 			return &link, err
 		}
-		updated, updateErr = c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, true))
+		updated, updateErr = c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, updated.Selection.Methods[preferences.Payment]))
 	}
 	if updateErr != nil {
 		// The built checkout can be completed by its owner in Vinted. Do not
@@ -1022,7 +1022,7 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 			}
 		}
 		link.Status = "checkout_review_required"
-		if updated.Selection.Ready() && preferences.Payment != "wallet" && (preferences.Payment != "paypal" || updated.Selection.PayPalSelected) {
+		if updated.Selection.Ready() && preferences.Payment != "wallet" && (preferences.Payment == "" || preferences.Payment == "vinted" || updated.Selection.SelectedPreference == preferences.Payment) {
 			link.Status = "checkout_prepared"
 		}
 	}

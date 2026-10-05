@@ -10,12 +10,12 @@ import { runBrowserBuyViaExtension } from "@/lib/vintrack-extension";
 const pending = new Map<string, Promise<void>>();
 
 function hasCheckoutExtension() {
-    return new Promise<boolean>((resolve) => {
-        const timeout = window.setTimeout(() => finish(false), 750);
-        function finish(available: boolean) {
+    return new Promise<number>((resolve) => {
+        const timeout = window.setTimeout(() => finish(0), 750);
+        function finish(version: number) {
             window.clearTimeout(timeout);
             window.removeEventListener("message", onMessage);
-            resolve(available);
+            resolve(version);
         }
         function onMessage(event: MessageEvent) {
             if (
@@ -25,7 +25,12 @@ function hasCheckoutExtension() {
             )
                 finish(
                     event.data.payload?.configured === true &&
-                        event.data.payload?.checkoutPrepareVersion === 2,
+                        Number.isSafeInteger(
+                            event.data.payload?.checkoutPrepareVersion,
+                        ) &&
+                        event.data.payload.checkoutPrepareVersion >= 2
+                        ? event.data.payload.checkoutPrepareVersion
+                        : 0,
                 );
         }
         window.addEventListener("message", onMessage);
@@ -79,6 +84,14 @@ async function startCheckout(
         hasCheckoutExtension(),
     ]);
     if (extensionAvailable) {
+        if (
+            extensionAvailable < 3 &&
+            target.preferences &&
+            !["wallet", "paypal", "vinted"].includes(target.preferences.payment)
+        )
+            throw new Error(
+                "Update or reload the Vintrack extension to use this payment method (version 0.2.4 or later).",
+            );
         const result = await runBrowserBuyViaExtension(
             {
                 itemId: target.itemId,

@@ -13,8 +13,70 @@ export type CheckoutTarget = {
 
 export type CheckoutPreferences = {
     shipping: "home" | "vinted";
-    payment: "wallet" | "paypal" | "vinted";
+    payment:
+        | "wallet"
+        | "paypal"
+        | "vinted"
+        | "card"
+        | "google_pay"
+        | "klarna"
+        | "tink"
+        | "bancontact"
+        | "ideal"
+        | "blik"
+        | "przelewy24";
 };
+
+export const CHECKOUT_PAYMENT_LABELS: Record<
+    CheckoutPreferences["payment"],
+    string
+> = {
+    wallet: "Vinted Wallet",
+    vinted: "Keep Vinted's saved payment choice",
+    card: "Card saved in Vinted",
+    google_pay: "Google Pay",
+    paypal: "PayPal",
+    klarna: "Klarna",
+    tink: "Bank account (Tink)",
+    bancontact: "Bancontact Pay",
+    ideal: "iDEAL | Wero",
+    blik: "BLIK",
+    przelewy24: "Przelewy24",
+};
+
+// Regional presets are filtered again against the actual checkout response.
+// Apple Pay is omitted: Vinted documents it as iOS-app-only, not web checkout.
+const REGIONAL_CHECKOUT_PAYMENTS: Record<
+    string,
+    CheckoutPreferences["payment"][]
+> = {
+    "www.vinted.de": ["paypal", "tink", "klarna"],
+    "www.vinted.at": ["paypal"],
+    "www.vinted.be": ["paypal", "bancontact"],
+    "www.vinted.nl": ["ideal"],
+    "www.vinted.pl": ["blik", "przelewy24"],
+};
+
+export function checkoutPaymentOptions(
+    domain: string,
+): CheckoutPreferences["payment"][] {
+    const normalized = checkoutDomain(domain);
+    if (!normalized) return [];
+    return [
+        "wallet",
+        "vinted",
+        "card",
+        "google_pay",
+        ...(REGIONAL_CHECKOUT_PAYMENTS[normalized] || []),
+    ];
+}
+
+export function checkoutPaymentAllowed(
+    domain: string,
+    payment: CheckoutPreferences["payment"],
+) {
+    return checkoutPaymentOptions(domain).includes(payment);
+}
 
 export const DEFAULT_CHECKOUT_PREFERENCES: CheckoutPreferences = {
     shipping: "home",
@@ -33,7 +95,10 @@ export function isCheckoutPreferences(
         typeof preferences.shipping === "string" &&
         typeof preferences.payment === "string" &&
         ["home", "vinted"].includes(preferences.shipping) &&
-        ["wallet", "paypal", "vinted"].includes(preferences.payment)
+        Object.prototype.hasOwnProperty.call(
+            CHECKOUT_PAYMENT_LABELS,
+            preferences.payment,
+        )
     );
 }
 

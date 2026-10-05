@@ -743,7 +743,7 @@ function formatRuntimeState(storage) {
 
   return {
     installed: true,
-    checkoutPrepareVersion: 2,
+    checkoutPrepareVersion: 3,
     version: extensionApi.runtime.getManifest().version || "",
     configured: Boolean(storage.browserLinkToken && storage.vintrackAppOrigin),
     companionMode:
@@ -1405,7 +1405,7 @@ async function handleBrowserBuy(payload) {
     !preferences || typeof preferences !== "object" ||
     Object.keys(preferences).some((key) => !["shipping", "payment"].includes(key)) ||
     !["home", "vinted"].includes(preferences.shipping) ||
-    !["wallet", "paypal", "vinted"].includes(preferences.payment)
+    !["wallet", "paypal", "vinted", "card", "google_pay", "klarna", "tink", "bancontact", "ideal", "blik", "przelewy24"].includes(preferences.payment)
   ) {
     return {
       ok: false,

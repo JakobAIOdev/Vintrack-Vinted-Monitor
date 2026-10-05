@@ -1,5 +1,10 @@
 package vinted
 
+import (
+	"regexp"
+	"strings"
+)
+
 // These are account-level choices, not payment credentials. Wallet funds are
 // applied by Vinted itself; we never initiate a payment or save a payment method.
 type CheckoutPreferences struct {
@@ -8,13 +13,17 @@ type CheckoutPreferences struct {
 }
 
 func (p CheckoutPreferences) Valid() bool {
-	return (p.Shipping == "" || p.Shipping == "home" || p.Shipping == "vinted") &&
-		(p.Payment == "" || p.Payment == "wallet" || p.Payment == "paypal" || p.Payment == "vinted")
+	switch p.Payment {
+	case "", "wallet", "vinted", "paypal", "card", "google_pay", "klarna", "tink", "bancontact", "ideal", "blik", "przelewy24":
+		return p.Shipping == "" || p.Shipping == "home" || p.Shipping == "vinted"
+	default:
+		return false
+	}
 }
 
 func (p CheckoutPreferences) Key() string { return p.Shipping + ":" + p.Payment }
 
-func checkoutComponents(p CheckoutPreferences, paypal bool) map[string]interface{} {
+func checkoutComponents(p CheckoutPreferences, payment map[string]interface{}) map[string]interface{} {
 	components := map[string]interface{}{
 		"additional_service":      map[string]interface{}{},
 		"payment_method":          map[string]interface{}{},
@@ -27,20 +36,47 @@ func checkoutComponents(p CheckoutPreferences, paypal bool) map[string]interface
 	if p.Shipping == "home" {
 		components["shipping_pickup_options"] = map[string]interface{}{"pickup_type": 1}
 	}
-	if paypal {
-		components["payment_method"] = map[string]interface{}{"card_id": nil, "payment_method": "paypal"}
+	if payment != nil {
+		components["payment_method"] = payment
 	}
 	return components
 }
 
 type checkoutSelection struct {
-	PayPalAvailable   bool
-	PayPalSelected    bool
-	PaymentSelected   bool
-	HomeSelected      bool
-	AddressSelected   bool
-	RateSelected      bool
-	PaymentsAvailable bool
+	PaymentSelected    bool
+	HomeSelected       bool
+	AddressSelected    bool
+	RateSelected       bool
+	PaymentsAvailable  bool
+	Methods            map[string]map[string]interface{}
+	SelectedPreference string
+}
+
+var checkoutMethodCode = regexp.MustCompile(`^[a-zA-Z0-9_]{1,64}$`)
+
+// Read the provider value from Vinted's own offer rather than guessing method
+// IDs shared across regions. Only PayPal has a verified legacy-code fallback.
+func checkoutProvider(method map[string]interface{}) string {
+	value, _ := method["payment_method"].(string)
+	value = strings.ToLower(value)
+	switch value {
+	case "paypal", "card", "google_pay", "klarna", "tink", "bancontact", "ideal", "blik", "przelewy24":
+		return value
+	}
+	code, _ := method["code"].(string)
+	tokens := "_" + strings.ToUpper(code) + "_"
+	for _, provider := range []string{"paypal", "google_pay", "klarna", "tink", "bancontact", "ideal", "blik", "przelewy24"} {
+		if strings.Contains(tokens, "_"+strings.ToUpper(provider)+"_") {
+			return provider
+		}
+	}
+	if strings.Contains(tokens, "_WERO_") {
+		return "ideal"
+	}
+	if strings.Contains(tokens, "_CARD_") {
+		return "card"
+	}
+	return ""
 }
 
 func checkoutMap(raw map[string]interface{}, keys ...string) map[string]interface{} {
@@ -58,19 +94,58 @@ func readCheckoutSelection(raw map[string]interface{}) checkoutSelection {
 	components := checkoutMap(raw, "checkout", "components")
 	payment := checkoutMap(components, "payment_method")
 	selection := checkoutSelection{
-		PayPalSelected:  firstStringPath(components, []string{"payment_method", "selected_payment_method", "pay_in_method", "payment_method"}) == "paypal",
-		PaymentSelected: checkoutMap(payment, "selected_payment_method") != nil,
-		HomeSelected:    firstInt64Path(components, []string{"shipping_pickup_options", "selected_pickup_option"}) == 1,
-		AddressSelected: checkoutMap(components, "shipping_address", "address") != nil,
-		RateSelected:    firstStringPath(components, []string{"shipping_pickup_details", "pickup_details", "selected_rate_uuid"}) != "",
+		Methods:            make(map[string]map[string]interface{}),
+		SelectedPreference: checkoutProvider(checkoutMap(payment, "selected_payment_method", "pay_in_method")),
+		PaymentSelected:    checkoutMap(payment, "selected_payment_method") != nil,
+		HomeSelected:       firstInt64Path(components, []string{"shipping_pickup_options", "selected_pickup_option"}) == 1,
+		AddressSelected:    checkoutMap(components, "shipping_address", "address") != nil,
+		RateSelected:       firstStringPath(components, []string{"shipping_pickup_details", "pickup_details", "selected_rate_uuid"}) != "",
 	}
 	selection.PaymentsAvailable, _ = checkoutMap(components, "pay_button_v2")["payments_available"].(bool)
 	methods, _ := payment["pay_in_methods"].([]interface{})
+	choices := make(map[string][]map[string]interface{})
 	for _, method := range methods {
 		m, _ := method.(map[string]interface{})
-		if m["code"] == "MANGOPAY_PAYPAL" {
-			selection.PayPalAvailable = true
+		provider := checkoutProvider(m)
+		native, _ := m["payment_method"].(string)
+		if native == "" && m["code"] == "MANGOPAY_PAYPAL" {
+			native = "paypal"
 		}
+		readOnly, _ := m["read_only"].(bool)
+		if provider == "" || !checkoutMethodCode.MatchString(native) || readOnly {
+			continue
+		}
+		choice := map[string]interface{}{"card_id": nil, "payment_method": native}
+		if provider == "card" {
+			selected := checkoutMap(payment, "selected_payment_method")
+			cardID := firstInt64Path(selected, []string{"card_id"}, []string{"card", "id"})
+			cards, _ := payment["cards"].([]interface{})
+			if cardID <= 0 && len(cards) == 1 {
+				card, _ := cards[0].(map[string]interface{})
+				cardID = firstInt64Path(card, []string{"id"})
+			}
+			if cardID <= 0 {
+				continue
+			}
+			choice["card_id"] = cardID
+		}
+		choices[provider] = append(choices[provider], choice)
+	}
+	selectedNative := firstStringPath(payment, []string{"selected_payment_method", "pay_in_method", "payment_method"})
+	for provider, options := range choices {
+		if len(options) == 1 {
+			selection.Methods[provider] = options[0]
+			continue
+		}
+		for _, option := range options {
+			if option["payment_method"] == selectedNative {
+				selection.Methods[provider] = option
+				break
+			}
+		}
+	}
+	if selection.SelectedPreference == "card" && firstInt64Path(checkoutMap(payment, "selected_payment_method"), []string{"card_id"}, []string{"card", "id"}) <= 0 {
+		selection.SelectedPreference = ""
 	}
 	return selection
 }

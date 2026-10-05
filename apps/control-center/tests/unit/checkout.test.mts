@@ -5,7 +5,44 @@ import {
     parseCheckoutIds,
     checkoutDomain,
     isCheckoutUrl,
+    checkoutPaymentOptions,
+    checkoutPaymentAllowed,
+    isCheckoutPreferences,
 } from "../../src/lib/checkout.ts";
+
+test("payment preferences follow the linked region and web support", () => {
+    for (const domain of ["vinted.de", "www.vinted.at", "www.vinted.be"]) {
+        assert.equal(checkoutPaymentAllowed(domain, "paypal"), true);
+    }
+    for (const domain of [
+        "www.vinted.fr",
+        "www.vinted.co.uk",
+        "www.vinted.pl",
+        "www.vinted.nl",
+    ]) {
+        assert.equal(checkoutPaymentAllowed(domain, "paypal"), false);
+        assert.equal(checkoutPaymentAllowed(domain, "google_pay"), true);
+    }
+    assert.equal(checkoutPaymentAllowed("vinted.de", "klarna"), true);
+    assert.equal(checkoutPaymentAllowed("vinted.fr", "klarna"), false);
+    assert.equal(checkoutPaymentAllowed("vinted.be", "bancontact"), true);
+    assert.equal(checkoutPaymentAllowed("vinted.nl", "ideal"), true);
+    assert.equal(checkoutPaymentAllowed("vinted.pl", "blik"), true);
+    assert.equal(checkoutPaymentAllowed("vinted.pl", "przelewy24"), true);
+    assert.deepEqual(checkoutPaymentOptions("vinted.de.evil.test"), []);
+    assert.equal(
+        isCheckoutPreferences({ shipping: "home", payment: "google_pay" }),
+        true,
+    );
+    assert.equal(
+        isCheckoutPreferences({ shipping: "home", payment: "apple_pay" }),
+        false,
+    );
+    assert.equal(
+        isCheckoutPreferences({ shipping: "home", payment: "constructor" }),
+        false,
+    );
+});
 
 test("checkout IDs reject ambiguous, non-positive and unsafe numbers", () => {
     assert.deepEqual(parseCheckoutIds("17", "1234567890"), {

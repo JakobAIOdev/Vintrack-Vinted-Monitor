@@ -434,6 +434,49 @@
     };
   }
 
+  const checkoutPayments = ["wallet", "paypal", "vinted", "card", "google_pay", "klarna", "tink", "bancontact", "ideal", "blik", "przelewy24"];
+
+  function checkoutProvider(method) {
+    const value = String(method?.payment_method || "").toLowerCase();
+    if (checkoutPayments.includes(value) && !["wallet", "vinted"].includes(value)) return value;
+    const tokens = `_${String(method?.code || "").toUpperCase()}_`;
+    for (const provider of checkoutPayments) {
+      if (!["wallet", "vinted", "card"].includes(provider) && tokens.includes(`_${provider.toUpperCase()}_`)) return provider;
+    }
+    if (tokens.includes("_WERO_")) return "ideal";
+    if (tokens.includes("_CARD_")) return "card";
+    return "";
+  }
+
+  function selectedCheckoutPayment(data) {
+    const selected = data?.checkout?.components?.payment_method?.selected_payment_method;
+    const provider = checkoutProvider(selected?.pay_in_method);
+    if (provider === "card" && !(Number(selected?.card_id || selected?.card?.id) > 0)) return "";
+    return provider;
+  }
+
+  function checkoutPaymentChoice(data, preference) {
+    const payment = data?.checkout?.components?.payment_method;
+    const choices = (Array.isArray(payment?.pay_in_methods) ? payment.pay_in_methods : [])
+      .filter((method) => checkoutProvider(method) === preference && method.read_only !== true)
+      .map((method) => {
+        const native = method.payment_method || (method.code === "MANGOPAY_PAYPAL" ? "paypal" : "");
+        if (typeof native !== "string" || !/^[a-zA-Z0-9_]{1,64}$/.test(native)) return null;
+        let cardId = null;
+        if (preference === "card") {
+          const selected = payment.selected_payment_method;
+          cardId = Number(selected?.card_id || selected?.card?.id ||
+            (Array.isArray(payment.cards) && payment.cards.length === 1 ? payment.cards[0]?.id : 0));
+          if (!Number.isSafeInteger(cardId) || cardId <= 0) return null;
+        }
+        return { card_id: cardId, payment_method: native };
+      }).filter(Boolean);
+    if (choices.length === 1) return choices[0];
+    // Multiple variants must not silently choose a different saved method.
+    const selectedNative = payment?.selected_payment_method?.pay_in_method?.payment_method;
+    return choices.find((choice) => choice.payment_method === selectedNative) || null;
+  }
+
   async function runBrowserBuy(payload) {
     await waitForDocumentReady();
 
@@ -444,7 +487,7 @@
     if (!preferences || typeof preferences !== "object" ||
         Object.keys(preferences).some((key) => !["shipping", "payment"].includes(key)) ||
         !["home", "vinted"].includes(preferences.shipping) ||
-        !["wallet", "paypal", "vinted"].includes(preferences.payment)) {
+        !checkoutPayments.includes(preferences.payment)) {
       return { ok: false, code: "invalid_checkout_preferences", error: "Invalid checkout preferences" };
     }
     const phoneNumber = typeof payload?.phoneNumber === "string" ? payload.phoneNumber.trim() : "";
@@ -554,38 +597,34 @@
       ]) || findNumberByKeys(buildResult.data, ["shipping_order_id", "shippingOrderId"]);
 
     const checkoutReferrer = buildCheckoutUrl(purchaseId, transactionId);
-    function components(paypal = false) {
+    function components(payment = null) {
       return {
         additional_service: {},
-        payment_method: paypal ? { card_id: null, payment_method: "paypal" } : {},
+        payment_method: payment || {},
         shipping_address: {},
         shipping_pickup_options: preferences.shipping === "home" ? { pickup_type: 1 } : {},
         shipping_pickup_details: {},
       };
     }
-    function offersPayPal(data) {
-      const methods = data?.checkout?.components?.payment_method?.pay_in_methods;
-      return Array.isArray(methods) && methods.some((method) => method.code === "MANGOPAY_PAYPAL");
-    }
-    const selectPayPal = preferences.payment === "paypal" && offersPayPal(buildResult.data);
+    const paymentChoice = checkoutPaymentChoice(buildResult.data, preferences.payment);
     let updateResult = await vintedRequest("checkout update", {
       method: "PUT",
       url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout`,
       referrer: checkoutReferrer,
       body: {
-        components: components(selectPayPal),
+        components: components(paymentChoice),
       },
     });
     if (!updateResult.ok) {
       return updateResult;
     }
-    const paypalSelected = updateResult.data?.checkout?.components?.payment_method?.selected_payment_method?.pay_in_method?.payment_method === "paypal";
-    if (!selectPayPal && preferences.payment === "paypal" && offersPayPal(updateResult.data) && !paypalSelected) {
+    const updatedChoice = checkoutPaymentChoice(updateResult.data, preferences.payment);
+    if (!paymentChoice && updatedChoice && selectedCheckoutPayment(updateResult.data) !== preferences.payment) {
       updateResult = await vintedRequest("checkout preferences", {
         method: "PUT",
         url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout`,
         referrer: checkoutReferrer,
-        body: { components: components(true) },
+        body: { components: components(updatedChoice) },
       });
       if (!updateResult.ok) return updateResult;
     }
@@ -656,7 +695,7 @@
       selected?.shipping_pickup_details?.pickup_details?.selected_rate_uuid &&
       selected?.pay_button_v2?.payments_available === true &&
       preferences.payment !== "wallet" &&
-      (preferences.payment !== "paypal" || selected?.payment_method?.selected_payment_method?.pay_in_method?.payment_method === "paypal")
+      (preferences.payment === "vinted" || selectedCheckoutPayment(updateResult.data) === preferences.payment)
     );
     return {
       ok: true,

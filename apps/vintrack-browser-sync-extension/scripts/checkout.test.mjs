@@ -151,6 +151,44 @@ test("invalid checkout preferences fail before any account request", async () =>
   assert.equal(h.requests.length, 0);
 });
 
+test("regional provider preferences use the offered native method without paying", async () => {
+  for (const provider of ["google_pay", "klarna", "tink", "bancontact", "ideal", "blik", "przelewy24", "card"]) {
+    const offered = selectedCheckout(false);
+    const native = provider === "card" ? "credit_card" : provider === "bancontact" ? "provider_bancontact" : provider;
+    const method = { code: provider.toUpperCase(), payment_method: native };
+    offered.checkout.components.payment_method.pay_in_methods = [method];
+    if (provider === "card") offered.checkout.components.payment_method.cards = [{ id: 55 }];
+    const selected = structuredClone(offered);
+    selected.checkout.components.payment_method.selected_payment_method = { pay_in_method: method, ...(provider === "card" ? { card_id: 55 } : {}) };
+    const h = bridge(42, [selected], offered);
+    const result = await h.run({ ...target, preferences: { shipping: "home", payment: provider } });
+    assert.equal(result.status, "checkout_prepared", provider);
+    assert.equal(h.requests.length, 4);
+    assert.deepEqual(JSON.parse(h.requests[3].init.body).components.payment_method, { card_id: provider === "card" ? 55 : null, payment_method: native });
+    assert.ok(h.requests.every(({ url }) => !url.includes("/payment")));
+  }
+});
+
+test("unavailable providers, disabled methods and ambiguous cards stay for review", async () => {
+  for (const [provider, methods, cards] of [
+    ["google_pay", [{ code: "MANGOPAY_PAYPAL" }], []],
+    ["google_pay", [{ payment_method: "google_pay", read_only: true }], []],
+    ["card", [{ payment_method: "card" }], []],
+    ["card", [{ payment_method: "card" }], [{ id: 55 }, { id: 56 }]],
+    ["klarna", [{ code: "KLARNA", payment_method: "klarna_now" }, { code: "KLARNA", payment_method: "klarna_later" }], []],
+    ["ideal", [{ code: "IDEAL", payment_method: "https://evil.test" }], []],
+  ]) {
+    const response = selectedCheckout(false);
+    response.checkout.components.payment_method.pay_in_methods = methods;
+    response.checkout.components.payment_method.cards = cards;
+    const h = bridge(42, [response], response);
+    const result = await h.run({ ...target, preferences: { shipping: "home", payment: provider } });
+    assert.equal(result.status, "checkout_review_required");
+    assert.equal(h.requests.length, 4);
+    assert.deepEqual(JSON.parse(h.requests[3].init.body).components.payment_method, {});
+  }
+});
+
 test("page checkout rejects a different logged-in account before mutation", async () => {
   const h = bridge(99);
   const result = await h.run(target);

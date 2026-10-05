@@ -159,3 +159,105 @@ test("checkout APIs reject an anonymous caller", async ({ request }) => {
         expect(response.status()).toBe(401);
     }
 });
+
+test("an old extension cannot start a new payment preference or silently fall back", async ({
+    page,
+}) => {
+    let mutations = 0;
+    await page.addInitScript(() => {
+        window.addEventListener("message", (event) => {
+            if (
+                event.source !== window ||
+                event.data?.type !== "VINTRACK_EXTENSION_PING"
+            )
+                return;
+            window.postMessage(
+                {
+                    type: "VINTRACK_EXTENSION_READY",
+                    payload: { configured: true, checkoutPrepareVersion: 2 },
+                },
+                window.location.origin,
+            );
+        });
+    });
+    await page.route("**/api/checkout/17/123", async (route) => {
+        if (route.request().method() !== "GET") mutations++;
+        await route.fulfill({
+            json: {
+                ...target,
+                preferences: { shipping: "home", payment: "google_pay" },
+            },
+        });
+    });
+    await page.goto("/checkout/17/123");
+    await expect(
+        page.getByRole("alert").filter({ hasText: "Update or reload" }),
+    ).toBeVisible();
+    expect(mutations).toBe(0);
+});
+
+test("protocol 3 forwards the regional payment preference without preparing twice", async ({
+    page,
+}) => {
+    let preparations = 0;
+    let provider = "";
+    await page.exposeFunction("checkoutTestProvider", (value: string) => {
+        provider = value;
+    });
+    await page.addInitScript(() => {
+        window.addEventListener("message", (event) => {
+            if (event.source !== window) return;
+            if (event.data?.type === "VINTRACK_EXTENSION_PING")
+                window.postMessage(
+                    {
+                        type: "VINTRACK_EXTENSION_READY",
+                        payload: {
+                            configured: true,
+                            checkoutPrepareVersion: 3,
+                        },
+                    },
+                    window.location.origin,
+                );
+            if (event.data?.type === "VINTRACK_EXTENSION_BUY") {
+                void (
+                    window as unknown as {
+                        checkoutTestProvider(value: string): Promise<void>;
+                    }
+                ).checkoutTestProvider(event.data.payload.preferences.payment);
+                window.postMessage(
+                    {
+                        type: "VINTRACK_EXTENSION_BUY_RESULT",
+                        payload: {
+                            requestId: event.data.payload.requestId,
+                            ok: true,
+                            status: "checkout_prepared",
+                            checkoutUrl:
+                                "https://www.vinted.de/checkout?purchase_id=synthetic",
+                        },
+                    },
+                    window.location.origin,
+                );
+            }
+        });
+    });
+    await page.route("**/api/checkout/17/123", async (route) => {
+        if (route.request().method() === "POST") preparations++;
+        await route.fulfill({
+            json: {
+                ...target,
+                preferences: { shipping: "home", payment: "google_pay" },
+            },
+        });
+    });
+    await page.route("**/api/items/checkout-links", (route) =>
+        route.fulfill({ json: { ok: true } }),
+    );
+    await page.goto("/checkout/17/123");
+    await expect(
+        page
+            .getByRole("status")
+            .filter({ hasText: "Checkout is open in your Vinted tab" }),
+    ).toBeVisible();
+    expect(provider).toBe("google_pay");
+    expect(preparations).toBe(0);
+});

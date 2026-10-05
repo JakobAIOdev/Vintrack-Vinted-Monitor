@@ -2,11 +2,13 @@
 
 import { useEffect, useState, useTransition } from "react";
 import {
-    getCheckoutPreferences,
+    getCheckoutPreferenceSettings,
     saveCheckoutPreferences,
 } from "@/actions/checkout-preferences";
 import {
     DEFAULT_CHECKOUT_PREFERENCES,
+    CHECKOUT_PAYMENT_LABELS,
+    checkoutPaymentOptions,
     type CheckoutPreferences,
 } from "@/lib/checkout";
 import {
@@ -29,13 +31,15 @@ export function CheckoutPreferencesCard({
         DEFAULT_CHECKOUT_PREFERENCES,
     );
     const [loaded, setLoaded] = useState(false);
+    const [domain, setDomain] = useState("");
     const [pending, startTransition] = useTransition();
     useEffect(() => {
         let cancelled = false;
-        getCheckoutPreferences()
+        getCheckoutPreferenceSettings()
             .then((value) => {
                 if (!cancelled) {
-                    setPreferences(value);
+                    setPreferences(value.preferences);
+                    setDomain(value.domain);
                     setLoaded(true);
                 }
             })
@@ -53,7 +57,11 @@ export function CheckoutPreferencesCard({
                 <CardTitle>Oneclick checkout</CardTitle>
                 <CardDescription>
                     Choose what your notification checkout links should
-                    preselect.
+                    preselect. Payment options follow your linked Vinted region
+                    {domain
+                        ? ` (${domain.replace("www.vinted.", "").toUpperCase()})`
+                        : ""}
+                    .
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4 p-5">
@@ -96,25 +104,24 @@ export function CheckoutPreferencesCard({
                                 })
                             }
                         >
-                            <option value="wallet">
-                                Use Vinted Wallet automatically
-                            </option>
-                            <option value="paypal">
-                                Vinted Wallet + PayPal for the remainder
-                            </option>
-                            <option value="vinted">
-                                Keep Vinted&apos;s saved payment choice
-                            </option>
+                            {checkoutPaymentOptions(domain).map((payment) => (
+                                <option key={payment} value={payment}>
+                                    {CHECKOUT_PAYMENT_LABELS[payment]}
+                                </option>
+                            ))}
                         </select>
                     </div>
                 </div>
                 <p className="text-muted-foreground text-xs leading-5">
                     Vinted applies available wallet funds automatically. With
                     Wallet, review or choose the payment method for any
-                    remaining amount in Vinted. Home delivery uses the carrier
-                    Vinted preselects. Missing address, contact details or
-                    unavailable options still need your attention. You always
-                    confirm payment in Vinted.
+                    remaining amount in Vinted. Other choices apply to the
+                    remainder. Vinted checks availability for each item and
+                    device. Card preselection needs a saved card; if there is
+                    more than one, choose it in Vinted first. Home delivery uses
+                    the carrier Vinted preselects. Missing address, contact
+                    details or unavailable options still need your attention.
+                    You always confirm payment in Vinted.
                 </p>
                 <Button
                     disabled={!loaded || pending}

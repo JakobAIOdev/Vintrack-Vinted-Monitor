@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import {
     checkoutDomain,
+    checkoutPaymentAllowed,
     isCheckoutPreferences,
     type CheckoutPreferences,
 } from "@/lib/checkout";
@@ -34,12 +35,28 @@ export async function getCheckoutPreferences() {
     );
 }
 
+export async function getCheckoutPreferenceSettings() {
+    const account = await linkedAccount();
+    return {
+        domain: account.domain,
+        preferences: await loadCheckoutPreferences(
+            account.userId,
+            account.accountId,
+            account.domain,
+        ),
+    };
+}
+
 export async function saveCheckoutPreferences(
     preferences: CheckoutPreferences,
 ) {
     if (!isCheckoutPreferences(preferences))
         return { error: "Invalid checkout preferences." };
     const account = await linkedAccount();
+    if (!checkoutPaymentAllowed(account.domain, preferences.payment))
+        return {
+            error: "This payment method is not offered for your linked Vinted region.",
+        };
     if (
         !(await getFeatureAccessForUser("checkout_links", account.userId))
             .allowed

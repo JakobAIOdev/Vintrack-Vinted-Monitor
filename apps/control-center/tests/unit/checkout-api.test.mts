@@ -13,6 +13,7 @@ function harness(
         unlinked?: boolean;
         upstreamUrl?: string;
         preferences?: unknown;
+        accountDomain?: string;
     } = {},
 ) {
     const databaseCalls: unknown[] = [];
@@ -62,7 +63,7 @@ function harness(
                     : {
                           vinted_user_id: 42n,
                           vinted_name: "synthetic-buyer",
-                          domain: "www.vinted.de",
+                          domain: options.accountDomain || "www.vinted.de",
                       };
             },
         },
@@ -236,6 +237,23 @@ test("malformed stored preferences cannot supply arbitrary checkout components",
             payment: "wallet",
         });
     }
+});
+
+test("a retired regional payment preference resets without changing delivery", async () => {
+    const h = harness({
+        accountDomain: "www.vinted.fr",
+        preferences: {
+            accountId: 42,
+            domain: "www.vinted.fr",
+            preferences: { shipping: "vinted", payment: "paypal" },
+        },
+    });
+    const data = await (await h.call()).json();
+    assert.deepEqual(data.preferences, {
+        shipping: "vinted",
+        payment: "wallet",
+    });
+    assert.equal(h.serviceCalls.length, 0);
 });
 
 test("cross-site requests and invalid IDs fail before any checkout lookup or mutation", async () => {
