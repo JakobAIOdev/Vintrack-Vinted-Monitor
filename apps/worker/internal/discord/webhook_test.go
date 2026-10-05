@@ -13,17 +13,23 @@ import (
 	"vintrack-worker/internal/model"
 )
 
-func TestCheckoutLinkAppearsInBothItemStylesOnlyWithHandoffURL(t *testing.T) {
+func TestCheckoutLinkLeadsBothItemStylesOnlyWithHandoffURL(t *testing.T) {
 	for _, style := range []model.NotificationMessageStyle{model.NotificationMessageStyleCompact, model.NotificationMessageStyleRich} {
 		item := model.Item{URL: "https://www.vinted.de/items/123", CheckoutStartURL: "https://dashboard.example.test/checkout/17/123"}
-		encoded, _ := json.Marshal(buildItemWebhookPayload(item, "Test monitor", "server", style))
-		if !strings.Contains(string(encoded), "[Open checkout]("+item.CheckoutStartURL+")") {
-			t.Fatalf("missing checkout link: %s", encoded)
+		payload := buildItemWebhookPayload(item, "Test monitor", "server", style)
+		description := payload["embeds"].([]map[string]interface{})[0]["description"].(string)
+		if !strings.HasPrefix(description, "**⚡ [Oneclick checkout]("+item.CheckoutStartURL+")**\n\n") {
+			t.Fatalf("%s checkout link must have its own first line: %q", style, description)
 		}
-		item.CheckoutStartURL = "javascript:alert(1)"
-		encoded, _ = json.Marshal(buildItemWebhookPayload(item, "Test monitor", "server", style))
-		if strings.Contains(string(encoded), "Open checkout") {
-			t.Fatalf("unsafe checkout link accepted: %s", encoded)
+		if strings.Count(description, item.CheckoutStartURL) != 1 {
+			t.Fatalf("%s checkout link must appear once: %q", style, description)
+		}
+		for _, checkoutURL := range []string{"", "javascript:alert(1)"} {
+			item.CheckoutStartURL = checkoutURL
+			encoded, _ := json.Marshal(buildItemWebhookPayload(item, "Test monitor", "server", style))
+			if strings.Contains(string(encoded), "Oneclick checkout") {
+				t.Fatalf("%s checkout link shown without valid handoff URL: %s", style, encoded)
+			}
 		}
 	}
 }

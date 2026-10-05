@@ -254,7 +254,7 @@ func buildCompactItemWebhookPayload(item model.Item, monitorName string) map[str
 		embed["url"] = item.URL
 	}
 	if isHTTPURL(item.CheckoutStartURL) {
-		embed["description"] = fmt.Sprintf("%s\n[Open checkout](%s)", itemPriceValue(item), item.CheckoutStartURL)
+		embed["description"] = fmt.Sprintf("**⚡ [Oneclick checkout](%s)**\n\n%s", item.CheckoutStartURL, itemPriceValue(item))
 	}
 
 	return map[string]interface{}{
@@ -292,14 +292,14 @@ func buildRichItemWebhookPayload(item model.Item, monitorName string, proxySourc
 	dashLink := publicurl.Link(fmt.Sprintf("/monitors/%d", item.MonitorID))
 
 	links := fmt.Sprintf("**[View item](%s)**", item.URL)
-	if isHTTPURL(item.CheckoutStartURL) {
-		links += fmt.Sprintf("  •  **[Open checkout](%s)**", item.CheckoutStartURL)
-	}
 	if dashLink != "" {
 		links += fmt.Sprintf("  •  [Dashboard](%s)", dashLink)
 	}
 	if item.SellerURL != "" {
 		links = fmt.Sprintf("%s  •  [Seller](%s)", links, item.SellerURL)
+	}
+	if isHTTPURL(item.CheckoutStartURL) {
+		links = fmt.Sprintf("**⚡ [Oneclick checkout](%s)**\n\n%s", item.CheckoutStartURL, links)
 	}
 
 	detectedAt := item.FoundAt
