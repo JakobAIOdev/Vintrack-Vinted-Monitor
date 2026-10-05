@@ -275,6 +275,13 @@ Temporary extensions are removed by Firefox on restart by design.
 4. Bump both manifests to the same new version and run the normal
    **Prepare Release** workflow.
 
+For the current release, both manifests and `BROWSER_EXTENSION_LATEST_VERSION`
+are `0.2.8`; the minimum compatible version remains `0.2.1`.
+If the GitHub Actions variable `BROWSER_EXTENSION_LATEST_VERSION` is set,
+update it with every manifest version bump: the deploy workflow rejects a
+different value before submitting the Firefox build. Keep `.env.example`,
+Compose defaults and the dashboard fallback in sync with the release version.
+
 When the prepared release PR is merged, **Release and Deploy** compares the
 manifest version with marker tags such as `extension-v0.2`. A missing tag
 causes the workflow to validate and lint the extension, submit the listed build
