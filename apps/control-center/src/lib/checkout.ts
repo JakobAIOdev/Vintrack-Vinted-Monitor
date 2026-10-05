@@ -8,7 +8,34 @@ export type CheckoutTarget = {
     itemUrl: string;
     title: string;
     price: string | null;
+    preferences?: CheckoutPreferences;
 };
+
+export type CheckoutPreferences = {
+    shipping: "home" | "vinted";
+    payment: "wallet" | "paypal" | "vinted";
+};
+
+export const DEFAULT_CHECKOUT_PREFERENCES: CheckoutPreferences = {
+    shipping: "home",
+    payment: "wallet",
+};
+
+export function isCheckoutPreferences(
+    value: unknown,
+): value is CheckoutPreferences {
+    if (!value || typeof value !== "object") return false;
+    const preferences = value as Record<string, unknown>;
+    return (
+        Object.keys(preferences).every(
+            (key) => key === "shipping" || key === "payment",
+        ) &&
+        typeof preferences.shipping === "string" &&
+        typeof preferences.payment === "string" &&
+        ["home", "vinted"].includes(preferences.shipping) &&
+        ["wallet", "paypal", "vinted"].includes(preferences.payment)
+    );
+}
 
 export function parseCheckoutIds(monitor: string, item: string) {
     if (!/^[1-9]\d*$/.test(monitor) || !/^[1-9]\d*$/.test(item)) return null;

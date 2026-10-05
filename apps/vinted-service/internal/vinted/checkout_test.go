@@ -18,6 +18,71 @@ func checkoutResults() []fakeHTTPResult {
 	}
 }
 
+const nativeHomeCheckout = `{"checkout":{"components":{"payment_method":{"pay_in_methods":[{"code":"MANGOPAY_PAYPAL"}],"selected_payment_method":null},"shipping_address":{"address":{"id":55}},"shipping_pickup_options":{"selected_pickup_option":1},"shipping_pickup_details":{"pickup_details":{"selected_rate_uuid":"synthetic-rate"}},"pay_button_v2":{"payments_available":true}}}}`
+
+func TestPrepareCheckoutSelectsHomeAndAvailablePayPalWithoutPayment(t *testing.T) {
+	results := checkoutResults()
+	results[2].body = nativeHomeCheckout
+	selected := strings.Replace(nativeHomeCheckout, `"selected_payment_method":null`, `"selected_payment_method":{"pay_in_method":{"payment_method":"paypal"}}`, 1)
+	results = append(results, fakeHTTPResult{status: 200, body: selected})
+	client, transport := testClient(results...)
+	var checkpointStatuses []string
+	link, err := client.PrepareCheckout(123, 456, func(link session.CheckoutLink) error {
+		checkpointStatuses = append(checkpointStatuses, link.Status)
+		return nil
+	}, CheckoutPreferences{Shipping: "home", Payment: "paypal"})
+	if err != nil || link.Status != "checkout_prepared" || len(transport.requests) != 4 {
+		t.Fatalf("preferences not applied: link=%#v err=%v requests=%d", link, err, len(transport.requests))
+	}
+	for i, req := range transport.requests {
+		if strings.Contains(req.URL.Path, "/payment") {
+			t.Fatal("payment must never be called")
+		}
+		if i < 2 {
+			continue
+		}
+		body, _ := io.ReadAll(req.Body)
+		var raw map[string]interface{}
+		_ = json.Unmarshal(body, &raw)
+		if firstInt64Path(raw, []string{"components", "shipping_pickup_options", "pickup_type"}) != 1 {
+			t.Fatalf("home not selected: %s", body)
+		}
+		if i == 3 && firstStringPath(raw, []string{"components", "payment_method", "payment_method"}) != "paypal" {
+			t.Fatalf("PayPal not selected: %s", body)
+		}
+	}
+	if checkpointStatuses[3] != "checkout_selecting_preferences" {
+		t.Fatal("missing preference mutation checkpoint")
+	}
+}
+
+func TestPrepareCheckoutWalletOrUnavailablePayPalRequiresReviewWithoutSubstitution(t *testing.T) {
+	for _, payment := range []string{"wallet", "paypal"} {
+		results := checkoutResults()
+		results[2].body = strings.Replace(nativeHomeCheckout, `[{"code":"MANGOPAY_PAYPAL"}]`, `[]`, 1)
+		client, transport := testClient(results...)
+		link, err := client.PrepareCheckout(123, 456, func(session.CheckoutLink) error { return nil }, CheckoutPreferences{Shipping: "home", Payment: payment})
+		if err != nil || link.Status != "checkout_review_required" || len(transport.requests) != 3 {
+			t.Fatalf("unexpected fallback: %#v %v", link, err)
+		}
+	}
+}
+
+func TestPrepareCheckoutPreferenceCheckpointFailurePreventsNextMutation(t *testing.T) {
+	results := checkoutResults()
+	results[2].body = nativeHomeCheckout
+	client, transport := testClient(results...)
+	_, err := client.PrepareCheckout(123, 456, func(link session.CheckoutLink) error {
+		if link.Status == "checkout_selecting_preferences" {
+			return errors.New("storage unavailable")
+		}
+		return nil
+	}, CheckoutPreferences{Shipping: "home", Payment: "paypal"})
+	if err == nil || len(transport.requests) != 3 {
+		t.Fatal("preference update ran without a saved checkpoint")
+	}
+}
+
 func TestPrepareCheckoutStopsBeforePaymentAndUsesSavedPreferences(t *testing.T) {
 	client, transport := testClient(checkoutResults()...)
 	client.session.VintedUserID = 42
@@ -29,7 +94,7 @@ func TestPrepareCheckoutStopsBeforePaymentAndUsesSavedPreferences(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if link.Status != "checkout_prepared" || link.TransactionID != 77 || link.PurchaseID != "synthetic-purchase" || link.PaymentURL != "" {
+	if link.Status != "checkout_review_required" || link.TransactionID != 77 || link.PurchaseID != "synthetic-purchase" || link.PaymentURL != "" {
 		t.Fatalf("unexpected link: %#v", link)
 	}
 	if len(transport.requests) != 3 {

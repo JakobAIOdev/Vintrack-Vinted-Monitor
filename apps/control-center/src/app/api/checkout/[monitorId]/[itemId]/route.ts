@@ -65,6 +65,7 @@ async function handle(
                 seller_id: target.sellerId,
                 account_id: target.accountId,
                 domain: target.domain,
+                preferences: target.preferences,
             }),
             cache: "no-store",
             signal: AbortSignal.timeout(90_000),

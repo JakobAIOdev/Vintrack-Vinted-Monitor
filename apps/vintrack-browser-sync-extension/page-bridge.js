@@ -440,6 +440,13 @@
     const itemId = Number(payload?.itemId || 0);
     const sellerId = Number(payload?.sellerId || 0);
     const expectedAccountId = Number(payload?.expectedAccountId || 0);
+    const preferences = payload?.preferences || { shipping: "vinted", payment: "vinted" };
+    if (!preferences || typeof preferences !== "object" ||
+        Object.keys(preferences).some((key) => !["shipping", "payment"].includes(key)) ||
+        !["home", "vinted"].includes(preferences.shipping) ||
+        !["wallet", "paypal", "vinted"].includes(preferences.payment)) {
+      return { ok: false, code: "invalid_checkout_preferences", error: "Invalid checkout preferences" };
+    }
     const phoneNumber = typeof payload?.phoneNumber === "string" ? payload.phoneNumber.trim() : "";
     const itemUrl = typeof payload?.itemUrl === "string" && payload.itemUrl.trim()
       ? payload.itemUrl.trim()
@@ -547,22 +554,36 @@
       ]) || findNumberByKeys(buildResult.data, ["shipping_order_id", "shippingOrderId"]);
 
     const checkoutReferrer = buildCheckoutUrl(purchaseId, transactionId);
-    const updateResult = await vintedRequest("checkout update", {
+    function components(paypal = false) {
+      return {
+        additional_service: {},
+        payment_method: paypal ? { card_id: null, payment_method: "paypal" } : {},
+        shipping_address: {},
+        shipping_pickup_options: preferences.shipping === "home" ? { pickup_type: 1 } : {},
+        shipping_pickup_details: {},
+      };
+    }
+    let updateResult = await vintedRequest("checkout update", {
       method: "PUT",
       url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout`,
       referrer: checkoutReferrer,
       body: {
-        components: {
-          additional_service: {},
-          payment_method: {},
-          shipping_address: {},
-          shipping_pickup_options: {},
-          shipping_pickup_details: {},
-        },
+        components: components(),
       },
     });
     if (!updateResult.ok) {
       return updateResult;
+    }
+    const methods = updateResult.data?.checkout?.components?.payment_method?.pay_in_methods;
+    const paypalAvailable = Array.isArray(methods) && methods.some((method) => method.code === "MANGOPAY_PAYPAL");
+    if (preferences.payment === "paypal" && paypalAvailable) {
+      updateResult = await vintedRequest("checkout preferences", {
+        method: "PUT",
+        url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout`,
+        referrer: checkoutReferrer,
+        body: { components: components(true) },
+      });
+      if (!updateResult.ok) return updateResult;
     }
 
     checksum =
@@ -623,9 +644,19 @@
         checkoutUrl;
     }
 
+    const selected = updateResult.data?.checkout?.components;
+    const ready = Boolean(
+      selected?.payment_method?.selected_payment_method &&
+      selected?.shipping_address?.address &&
+      selected?.shipping_pickup_options?.selected_pickup_option === 1 &&
+      selected?.shipping_pickup_details?.pickup_details?.selected_rate_uuid &&
+      selected?.pay_button_v2?.payments_available === true &&
+      preferences.payment !== "wallet" &&
+      (preferences.payment !== "paypal" || selected?.payment_method?.selected_payment_method?.pay_in_method?.payment_method === "paypal")
+    );
     return {
       ok: true,
-      status: "checkout_prepared",
+      status: ready ? "checkout_prepared" : "checkout_review_required",
       itemId,
       sellerId,
       transactionId,

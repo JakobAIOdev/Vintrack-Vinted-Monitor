@@ -16,7 +16,7 @@ const domain = "www.vinted.de";
 const target = { itemId: 123, sellerId: 456, expectedAccountId: 42, domain };
 const checkoutUrl = `https://${domain}/checkout?purchase_id=synthetic&order_id=77&order_type=transaction`;
 
-function bridge(accountId = 42) {
+function bridge(accountId = 42, checkoutResponses = []) {
   const requests = [];
   const window = {
     location: {
@@ -57,7 +57,7 @@ function bridge(accountId = 42) {
                   purchase: { id: "synthetic" },
                   checksum: "synthetic-checksum",
                 }
-              : {};
+              : checkoutResponses.shift() || {};
       return new Response(JSON.stringify(data), { status: 200 });
     },
   });
@@ -91,6 +91,46 @@ test("page checkout uses the linked account and stops before payment", async () 
     "shipping_pickup_details",
   ])
     assert.deepEqual(components[field], {});
+});
+
+function selectedCheckout(paypalAvailable = true, paymentSelected = false) {
+  return { checkout: { components: {
+    payment_method: {
+      pay_in_methods: paypalAvailable ? [{ code: "MANGOPAY_PAYPAL" }] : [],
+      selected_payment_method: paymentSelected ? { pay_in_method: { payment_method: "paypal" } } : null,
+    },
+    shipping_address: { address: { id: 55 } },
+    shipping_pickup_options: { selected_pickup_option: 1 },
+    shipping_pickup_details: { pickup_details: { selected_rate_uuid: "synthetic-rate" } },
+    pay_button_v2: { payments_available: true },
+  } } };
+}
+
+test("home delivery and available PayPal are selected without paying", async () => {
+  const h = bridge(42, [selectedCheckout(), selectedCheckout(true, true)]);
+  const result = await h.run({ ...target, preferences: { shipping: "home", payment: "paypal" } });
+  assert.equal(result.status, "checkout_prepared");
+  assert.equal(h.requests.length, 5);
+  assert.deepEqual(JSON.parse(h.requests[3].init.body).components.shipping_pickup_options, { pickup_type: 1 });
+  assert.deepEqual(JSON.parse(h.requests[4].init.body).components.payment_method, { card_id: null, payment_method: "paypal" });
+  assert.ok(h.requests.every(({ url }) => !url.includes("/payment")));
+});
+
+test("wallet and unavailable PayPal never select a substitute payment method", async () => {
+  for (const payment of ["wallet", "paypal"]) {
+    const h = bridge(42, [selectedCheckout(false)]);
+    const result = await h.run({ ...target, preferences: { shipping: "home", payment } });
+    assert.equal(result.status, "checkout_review_required");
+    assert.equal(h.requests.length, 4);
+    assert.deepEqual(JSON.parse(h.requests[3].init.body).components.payment_method, {});
+  }
+});
+
+test("invalid checkout preferences fail before any account request", async () => {
+  const h = bridge();
+  const result = await h.run({ ...target, preferences: { shipping: "home", payment: "arbitrary", token: "synthetic" } });
+  assert.equal(result.code, "invalid_checkout_preferences");
+  assert.equal(h.requests.length, 0);
 });
 
 test("page checkout rejects a different logged-in account before mutation", async () => {

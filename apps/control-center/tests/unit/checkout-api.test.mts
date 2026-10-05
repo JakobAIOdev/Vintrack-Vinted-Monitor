@@ -12,11 +12,17 @@ function harness(
         missingItem?: boolean;
         unlinked?: boolean;
         upstreamUrl?: string;
+        preferences?: unknown;
     } = {},
 ) {
     const databaseCalls: unknown[] = [];
     const serviceCalls: { url: string; init: RequestInit }[] = [];
     const db = {
+        user: {
+            async findUnique() {
+                return { checkout_preferences: options.preferences };
+            },
+        },
         items: {
             async findFirst(query: {
                 where: {
@@ -115,6 +121,9 @@ function harness(
         });
         return exports;
     }
+    modules["@/lib/checkout-preferences.server"] = load(
+        "../../src/lib/checkout-preferences.server.ts",
+    );
     modules["@/lib/checkout.server"] = load("../../src/lib/checkout.server.ts");
     const route = load(
         "../../src/app/api/checkout/[monitorId]/[itemId]/route.ts",
@@ -186,7 +195,47 @@ test("POST uses the authenticated identity and stored seller, including behind a
         seller_id: 456,
         account_id: 42,
         domain: "www.vinted.de",
+        preferences: { shipping: "home", payment: "wallet" },
     });
+});
+
+test("preferences are loaded only for the linked account and region", async () => {
+    for (const [accountId, domain, payment] of [
+        [42, "www.vinted.de", "paypal"],
+        [99, "www.vinted.de", "wallet"],
+        [42, "www.vinted.fr", "wallet"],
+    ] as const) {
+        const h = harness({
+            preferences: {
+                accountId,
+                domain,
+                preferences: { shipping: "home", payment: "paypal" },
+            },
+        });
+        const data = await (await h.call()).json();
+        assert.equal(data.preferences.payment, payment);
+    }
+});
+
+test("malformed stored preferences cannot supply arbitrary checkout components", async () => {
+    for (const preferences of [
+        { shipping: ["home"], payment: "paypal" },
+        { shipping: "home", payment: "paypal", paymentToken: "synthetic" },
+        { shipping: "pickup", payment: "paypal" },
+    ]) {
+        const h = harness({
+            preferences: {
+                accountId: 42,
+                domain: "www.vinted.de",
+                preferences,
+            },
+        });
+        const data = await (await h.call()).json();
+        assert.deepEqual(data.preferences, {
+            shipping: "home",
+            payment: "wallet",
+        });
+    }
 });
 
 test("cross-site requests and invalid IDs fail before any checkout lookup or mutation", async () => {

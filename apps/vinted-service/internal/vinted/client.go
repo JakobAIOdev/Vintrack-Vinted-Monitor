@@ -955,18 +955,23 @@ type BuyResponse struct {
 	CheckoutURL   string `json:"checkout_url"`
 }
 
-// PrepareCheckout deliberately ends before checkout/payment. Empty components
-// let Vinted apply saved preferences where supported; missing details remain
-// editable in the Vinted checkout. A successful build is not a payment-ready
-// guarantee. Persist checkpoints before each mutation so an uncertain response
-// cannot cause the caller to replay the whole flow automatically.
-func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.CheckoutLink) error) (*session.CheckoutLink, error) {
+// PrepareCheckout ends before checkout/payment and applies explicit delivery
+// and payment preferences. Checkpoints prevent replay after uncertain mutations.
+func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.CheckoutLink) error, choices ...CheckoutPreferences) (*session.CheckoutLink, error) {
+	preferences := CheckoutPreferences{}
+	if len(choices) > 0 {
+		preferences = choices[0]
+	}
+	if !preferences.Valid() {
+		return nil, fmt.Errorf("invalid checkout preferences")
+	}
 	if itemID <= 0 || sellerID <= 0 || sellerID == c.session.VintedUserID || save == nil {
 		return nil, fmt.Errorf("invalid checkout target")
 	}
 	link := session.CheckoutLink{
 		ItemID: itemID, SellerID: sellerID, Domain: c.session.Domain,
 		Status: "transaction_creating", CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		PreferencesKey: preferences.Key(),
 	}
 	if err := save(link); err != nil {
 		return nil, err
@@ -996,13 +1001,14 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 	if err := save(link); err != nil {
 		return &link, err
 	}
-	updated, updateErr := c.updatePurchaseCheckout(build.PurchaseID, transactionID, map[string]interface{}{
-		"additional_service":      map[string]interface{}{},
-		"payment_method":          map[string]interface{}{},
-		"shipping_address":        map[string]interface{}{},
-		"shipping_pickup_options": map[string]interface{}{},
-		"shipping_pickup_details": map[string]interface{}{},
-	})
+	updated, updateErr := c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, false))
+	if updateErr == nil && preferences.Payment == "paypal" && updated.Selection.PayPalAvailable {
+		link.Status = "checkout_selecting_preferences"
+		if err := save(link); err != nil {
+			return &link, err
+		}
+		updated, updateErr = c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, true))
+	}
 	if updateErr != nil {
 		// The built checkout can be completed by its owner in Vinted. Do not
 		// recreate the transaction or retry the update on auth/challenge errors.
@@ -1014,7 +1020,10 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 				return &link, err
 			}
 		}
-		link.Status = "checkout_prepared"
+		link.Status = "checkout_review_required"
+		if updated.Selection.Ready() && preferences.Payment != "wallet" && (preferences.Payment != "paypal" || updated.Selection.PayPalSelected) {
+			link.Status = "checkout_prepared"
+		}
 	}
 	if err := save(link); err != nil {
 		return &link, err
@@ -1318,6 +1327,7 @@ type checkoutBuildResult struct {
 	Checksum        string
 	CheckoutURL     string
 	ShippingOrderID int64
+	Selection       checkoutSelection
 }
 
 func (c *Client) buildPurchaseCheckout(itemID, transactionID int64, incogniaRequestToken string) (*checkoutBuildResult, error) {
@@ -1419,6 +1429,7 @@ func (c *Client) updatePurchaseCheckout(purchaseID string, transactionID int64, 
 	if err := json.Unmarshal(respBody, &raw); err != nil {
 		return nil, fmt.Errorf("invalid Vinted checkout update response")
 	}
+	result.Selection = readCheckoutSelection(raw)
 	result.PurchaseID = firstStringPath(raw, []string{"purchase", "id"}, []string{"purchase_id"})
 	result.Checksum = firstStringPath(raw, []string{"checksum"}, []string{"checkout", "checksum"}, []string{"payment", "checksum"})
 	result.CheckoutURL = firstStringPath(raw, []string{"checkout_url"}, []string{"checkout", "url"})

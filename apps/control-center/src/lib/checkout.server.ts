@@ -2,6 +2,7 @@ import "server-only";
 
 import { db } from "@/lib/db";
 import { checkoutDomain, type CheckoutTarget } from "@/lib/checkout";
+import { loadCheckoutPreferences } from "@/lib/checkout-preferences.server";
 
 export class CheckoutTargetError extends Error {
     constructor(
@@ -61,5 +62,6 @@ export async function loadCheckoutTarget(
         itemUrl: `https://${domain}/items/${itemId}`,
         title: item.title || "Vinted item",
         price: item.price,
+        preferences: await loadCheckoutPreferences(userId, accountId, domain),
     };
 }

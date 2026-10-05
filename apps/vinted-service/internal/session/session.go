@@ -37,15 +37,16 @@ type VintedSession struct {
 }
 
 type CheckoutLink struct {
-	ItemID        int64  `json:"item_id"`
-	SellerID      int64  `json:"seller_id"`
-	TransactionID int64  `json:"transaction_id"`
-	PurchaseID    string `json:"purchase_id,omitempty"`
-	CheckoutURL   string `json:"checkout_url,omitempty"`
-	PaymentURL    string `json:"payment_url,omitempty"`
-	Domain        string `json:"domain,omitempty"`
-	Status        string `json:"status"`
-	CreatedAt     string `json:"created_at"`
+	ItemID         int64  `json:"item_id"`
+	SellerID       int64  `json:"seller_id"`
+	TransactionID  int64  `json:"transaction_id"`
+	PurchaseID     string `json:"purchase_id,omitempty"`
+	CheckoutURL    string `json:"checkout_url,omitempty"`
+	PaymentURL     string `json:"payment_url,omitempty"`
+	Domain         string `json:"domain,omitempty"`
+	Status         string `json:"status"`
+	CreatedAt      string `json:"created_at"`
+	PreferencesKey string `json:"preferences_key,omitempty"`
 }
 
 type BrowserSyncRequest struct {

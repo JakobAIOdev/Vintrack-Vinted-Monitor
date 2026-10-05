@@ -25,7 +25,7 @@ function hasCheckoutExtension() {
             )
                 finish(
                     event.data.payload?.configured === true &&
-                        event.data.payload?.checkoutPrepareVersion === 1,
+                        event.data.payload?.checkoutPrepareVersion === 2,
                 );
         }
         window.addEventListener("message", onMessage);
@@ -75,6 +75,7 @@ async function startCheckout(monitorId: number, itemId: number) {
                 expectedAccountId: target.accountId,
                 domain: target.domain,
                 itemUrl: target.itemUrl,
+                preferences: target.preferences,
             },
             90_000,
         );
@@ -101,7 +102,7 @@ async function startCheckout(monitorId: number, itemId: number) {
                 transaction_id: result.transactionId || 0,
                 purchase_id: result.purchaseId || "",
                 checkout_url: result.checkoutUrl,
-                status: "checkout_prepared",
+                status: result.status || "checkout_review_required",
             }),
         }).catch(() => {});
         return;

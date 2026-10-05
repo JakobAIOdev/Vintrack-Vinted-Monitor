@@ -16,14 +16,15 @@ func (s *Server) handlePrepareCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ItemID    int64  `json:"item_id"`
-		SellerID  int64  `json:"seller_id"`
-		AccountID int64  `json:"account_id"`
-		Domain    string `json:"domain"`
+		ItemID      int64                      `json:"item_id"`
+		SellerID    int64                      `json:"seller_id"`
+		AccountID   int64                      `json:"account_id"`
+		Domain      string                     `json:"domain"`
+		Preferences vinted.CheckoutPreferences `json:"preferences"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil || req.ItemID <= 0 || req.SellerID <= 0 || req.AccountID <= 0 || req.Domain == "" {
+	if err := decoder.Decode(&req); err != nil || req.ItemID <= 0 || req.SellerID <= 0 || req.AccountID <= 0 || req.Domain == "" || !req.Preferences.Valid() {
 		writeError(w, "valid item_id and seller_id are required", http.StatusBadRequest)
 		return
 	}
@@ -64,6 +65,9 @@ func (s *Server) handlePrepareCheckout(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if cached.CheckoutURL != "" {
+			if cached.PreferencesKey != req.Preferences.Key() || cached.Status != "checkout_prepared" {
+				cached.Status = "checkout_review_required"
+			}
 			writeJSON(w, http.StatusOK, cached)
 		} else {
 			writeJSON(w, http.StatusConflict, map[string]string{"code": "checkout_uncertain", "error": "A checkout was already attempted. Open the item in Vinted to continue; it will not be retried automatically."})
@@ -72,7 +76,7 @@ func (s *Server) handlePrepareCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 	link, err := client.PrepareCheckout(req.ItemID, req.SellerID, func(link session.CheckoutLink) error {
 		return s.sessions.SaveCheckoutPreparation(sess, token, link)
-	})
+	}, req.Preferences)
 	s.persistIfRefreshed(sess, client)
 	if err != nil {
 		// Never return raw authenticated responses, request headers or tokens.

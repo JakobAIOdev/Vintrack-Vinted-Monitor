@@ -51,11 +51,15 @@ handles signing, review, installation, and updates for the public build.
 
 ## Checkout handoff
 
-Version 0.2.2 advertises checkout preparation protocol 1 to Vintrack. The
+Version 0.2.2 advertises checkout preparation protocol 2 to Vintrack. The
 dashboard's Open Checkout action verifies that the Vinted browser account
-matches the linked account, prepares checkout using Vinted's saved preferences,
-and opens its checkout page. It never submits checkout/payment or confirms the
-purchase. Missing delivery/payment choices remain for the user on Vinted.
+matches the linked account, applies the delivery/payment preferences selected
+in Vintrack Account, and opens its checkout page. Home delivery and available
+PayPal are preselected; Vinted applies wallet funds automatically. It never
+submits checkout/payment or confirms the purchase. Missing or unavailable
+delivery/payment choices remain for the user on Vinted. Home delivery with
+confirmed selections has been tested on the DE site; wallet-only readiness and
+mobile/in-app browser handoff have not been live verified.
 
 Concurrent clicks share one attempt. A local checkpoint survives worker restarts
 and prevents replay for ten minutes after an uncertain result. Checkouts are

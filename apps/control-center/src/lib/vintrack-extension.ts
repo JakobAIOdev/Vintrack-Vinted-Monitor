@@ -4,6 +4,7 @@ export type BrowserBuyPayload = {
     expectedAccountId: number;
     itemUrl?: string;
     domain?: string;
+    preferences?: import("@/lib/checkout").CheckoutPreferences;
 };
 
 export type BrowserBuyResult =
@@ -12,6 +13,7 @@ export type BrowserBuyResult =
           checkoutUrl?: string;
           purchaseId?: string;
           transactionId?: number;
+          status?: string;
       }
     | {
           ok: false;

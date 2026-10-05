@@ -743,7 +743,7 @@ function formatRuntimeState(storage) {
 
   return {
     installed: true,
-    checkoutPrepareVersion: 1,
+    checkoutPrepareVersion: 2,
     version: extensionApi.runtime.getManifest().version || "",
     configured: Boolean(storage.browserLinkToken && storage.vintrackAppOrigin),
     companionMode:
@@ -1398,12 +1398,17 @@ async function handleBrowserBuy(payload) {
   const expectedAccountId = Number(payload?.expectedAccountId || 0);
   const requestId = String(payload?.requestId || crypto.randomUUID());
   const domain = sanitizeDomain(String(payload?.domain || ""));
+  const preferences = payload?.preferences || { shipping: "vinted", payment: "vinted" };
   if (
     ![itemId, sellerId, expectedAccountId].every(
       (id) => Number.isSafeInteger(id) && id > 0,
     ) ||
     !isVintedDomain(domain) ||
-    sellerId === expectedAccountId
+    sellerId === expectedAccountId ||
+    !preferences || typeof preferences !== "object" ||
+    Object.keys(preferences).some((key) => !["shipping", "payment"].includes(key)) ||
+    !["home", "vinted"].includes(preferences.shipping) ||
+    !["wallet", "paypal", "vinted"].includes(preferences.payment)
   ) {
     return {
       ok: false,
@@ -1420,6 +1425,7 @@ async function handleBrowserBuy(payload) {
       sellerId,
       expectedAccountId,
       domain,
+      preferences,
     });
     checkoutInFlight.set(key, task);
   }
@@ -1490,7 +1496,9 @@ async function prepareBrowserCheckout(target) {
     });
     return {
       ok: true,
-      status: "checkout_prepared",
+      status: previous.preferences?.shipping === target.preferences.shipping && previous.preferences?.payment === target.preferences.payment
+        ? previous.status || "checkout_review_required"
+        : "checkout_review_required",
       checkoutUrl: previous.checkoutUrl,
       transactionId: previous.transactionId,
       purchaseId: previous.purchaseId,
@@ -1523,6 +1531,7 @@ async function prepareBrowserCheckout(target) {
       checkoutUrl: result.checkoutUrl,
       transactionId: result.transactionId,
       purchaseId: result.purchaseId,
+      status: result.status,
     };
     await extensionApi.storage.local.set({
       [STORAGE_KEYS.checkoutAttempts]: [
@@ -1543,6 +1552,7 @@ async function prepareBrowserCheckout(target) {
     checkoutUrl: result.checkoutUrl,
     transactionId: result.transactionId,
     purchaseId: result.purchaseId,
+    status: result.status,
   });
   await extensionApi.tabs.update(tabId, {
     url: result.checkoutUrl,
@@ -1550,7 +1560,7 @@ async function prepareBrowserCheckout(target) {
   });
   return {
     ok: true,
-    status: "checkout_prepared",
+    status: result.status || "checkout_review_required",
     checkoutUrl: result.checkoutUrl,
     transactionId: result.transactionId,
     purchaseId: result.purchaseId,
