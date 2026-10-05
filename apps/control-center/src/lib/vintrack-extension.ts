@@ -5,6 +5,7 @@ export type BrowserBuyPayload = {
     itemUrl?: string;
     domain?: string;
     preferences?: import("@/lib/checkout").CheckoutPreferences;
+    readinessOnly?: boolean;
 };
 
 export type BrowserBuyResult =
@@ -16,6 +17,7 @@ export type BrowserBuyResult =
           status?: string;
           paymentUrl?: string;
           autoCheckoutReason?: string;
+          ready?: boolean;
       }
     | {
           ok: false;

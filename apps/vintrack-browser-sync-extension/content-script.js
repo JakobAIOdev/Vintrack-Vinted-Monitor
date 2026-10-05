@@ -801,9 +801,11 @@
             runtimeError
               ? {
                   ok: false,
-                  error: runtimeError.message || "Extension checkout failed",
+                  code: "extension_connection_lost",
+                  requestId: event.data.payload?.requestId,
+                  error: "The extension connection was interrupted. Reload Vintrack and Vinted; check Vinted before starting checkout again.",
                 }
-              : response || { ok: false },
+              : { ...(response || { ok: false }), requestId: event.data.payload?.requestId },
           );
         },
       );
@@ -825,6 +827,7 @@
       sendResponseSafely(sendResponse, {
         ok: true,
         isVintedPage: isVintedHost(window.location.hostname),
+        pageBridgeReady: document.documentElement.dataset.vintrackPageBridge === "ready",
       });
       return false;
     }

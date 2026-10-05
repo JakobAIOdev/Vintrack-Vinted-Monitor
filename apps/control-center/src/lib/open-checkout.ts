@@ -86,11 +86,31 @@ async function startCheckout(
         hasCheckoutExtension(),
     ]);
     if (extensionAvailable) {
-        if (target.preferences?.autoCheckout && extensionAvailable < 4)
+        if (target.preferences?.autoCheckout && extensionAvailable < 5)
             throw new Error(
-                "Update or reload the Vintrack extension to use auto-checkout (version 0.2.5 or later).",
+                "Update or reload the Vintrack extension to use auto-checkout (version 0.2.6 or later).",
             );
         if (target.preferences?.autoCheckout) {
+            // Check the local receiver before consuming the shared payment
+            // claim. This never runs a Vinted account or checkout request.
+            const ready = await runBrowserBuyViaExtension(
+                {
+                    itemId: target.itemId,
+                    sellerId: target.sellerId,
+                    expectedAccountId: target.accountId,
+                    domain: target.domain,
+                    preferences: target.preferences,
+                    readinessOnly: true,
+                },
+                25_000,
+            );
+            if (!ready?.ok || ready.ready !== true)
+                throw new Error(
+                    ready && !ready.ok
+                        ? ready.error ||
+                              "Reload Vinted before opening the buy link."
+                        : "The Vinted tab did not become ready. Reload Vinted before opening the buy link.",
+                );
             const authorization = await fetch(
                 checkoutApiPath(monitorId, itemId),
                 {
@@ -152,8 +172,11 @@ async function startCheckout(
             throw new Error(
                 "The payment destination could not be verified. Check Vinted before trying again.",
             );
-        await fetch("/api/items/checkout-links", {
+        // History is best-effort; a slow history endpoint must not keep the
+        // handoff displaying "Preparing" after the browser has opened checkout.
+        void fetch("/api/items/checkout-links", {
             method: "POST",
+            keepalive: true,
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 item_id: itemId,

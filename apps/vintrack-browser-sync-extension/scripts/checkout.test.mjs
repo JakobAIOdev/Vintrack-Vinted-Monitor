@@ -12,9 +12,26 @@ const backgroundSource = await readFile(
   new URL("../background.js", import.meta.url),
   "utf8",
 );
+const contentSource = await readFile(new URL("../content-script.js", import.meta.url), "utf8");
 const domain = "www.vinted.de";
 const target = { itemId: 123, sellerId: 456, expectedAccountId: 42, domain };
 const checkoutUrl = `https://${domain}/checkout?purchase_id=synthetic&order_id=77&order_type=transaction`;
+
+test("content bridge preserves checkout request IDs on synchronous, asynchronous and empty runtime failures", async () => {
+  for (const failure of [() => { throw new Error("synthetic private context"); }, () => Promise.reject(new Error("synthetic private context")), () => undefined, () => ({ ok: false, error: "Unauthorized extension sender" })]) {
+    const listeners = {};
+    const posts = [];
+    const window = { location: { origin: "http://localhost:3000", hostname: "localhost" }, addEventListener(type, listener) { listeners[type] = listener; }, postMessage(message) { posts.push(message); } };
+    const context = vm.createContext({ window, document: { documentElement: { dataset: { vintrackThemeBridge: "ready" } } }, chrome: { runtime: { sendMessage(message) { return message.type === "VINTRACK_EXTENSION_BUY" ? failure() : { installed: true }; }, onMessage: { addListener() {} } } }, crypto: webcrypto });
+    vm.runInContext(contentSource, context);
+    listeners.message({ source: window, data: { type: "VINTRACK_EXTENSION_BUY", payload: { requestId: "synthetic-request" } } });
+    await new Promise(resolve => setImmediate(resolve));
+    const result = posts.find(message => message.type === "VINTRACK_EXTENSION_BUY_RESULT").payload;
+    assert.equal(result.requestId, "synthetic-request");
+    assert.equal(result.ok, false);
+    assert.ok(!result.error?.includes("synthetic private"));
+  }
+});
 
 function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paymentResponse = {}) {
   const requests = [];
@@ -303,10 +320,12 @@ function background(options = {}) {
       onUpdated: event,
       async query() { return options.tabs || []; },
       async update(id, changes) {
+        if (options.updateError) throw new Error("synthetic private navigation error");
         mutations.push({ id, changes });
       },
       async sendMessage(_id, message) {
         messages.push(message);
+        if (options.ping && message.type === "VINTRACK_TAB_PING") return options.ping(_id, message);
         if (message.type === "VINTRACK_TAB_PING") return { ok: true };
         if (message.type === "VINTRACK_GET_BROWSER_ACCOUNT")
           return { ok: true, accountId: options.accountId || 42 };
@@ -357,6 +376,51 @@ test("concurrent clicks and repeated clicks reuse a single browser checkout", as
     h.messages.filter((msg) => msg.type === "VINTRACK_RUN_BROWSER_BUY").length,
     1,
   );
+});
+
+test("disconnected complete tabs fail immediately without a checkout checkpoint or replay", async () => {
+  const h = background({ tabs: [{ id: 1, status: "complete" }], ping: () => { throw new Error("synthetic connection unavailable"); } });
+  const result = await h.run(autoTarget);
+  assert.equal(result.code, "checkout_tab_reload_required");
+  assert.ok(!h.storage.vintrackCheckoutAttempts);
+  assert.ok(h.messages.every(m => m.type === "VINTRACK_TAB_PING"));
+  assert.equal(h.mutations.length, 0);
+  assert.ok(!result.error.includes("synthetic"));
+});
+
+test("readiness checks are local and do not consume a checkout attempt", async () => {
+  const h = background();
+  const result = await h.run({ ...autoTarget, readinessOnly: true });
+  assert.equal(result.ready, true);
+  assert.equal(h.messages.length, 0);
+  assert.equal(h.mutations.length, 0);
+  assert.ok(!h.storage.vintrackCheckoutAttempts);
+});
+
+test("a stale tab does not block a ready same-region receiver", async () => {
+  const h = background({ tabs: [{ id: 2, status: "complete", active: true }, { id: 1, status: "complete" }], ping: id => {
+    if (id === 2) throw new Error("receiver disconnected");
+    return { ok: true };
+  } });
+  assert.equal((await h.run()).ok, true);
+  assert.equal(h.mutations.at(-1).id, 1);
+  assert.equal(h.messages.filter(m=>m.type==="VINTRACK_RUN_BROWSER_BUY").length, 1);
+});
+
+test("a content receiver without a page bridge cannot consume auto-checkout readiness", async () => {
+  const h = background({ tabs: [{ id: 1, status: "complete" }], ping: () => ({ ok: true, pageBridgeReady: false }) });
+  const result = await h.run({ ...autoTarget, readinessOnly: true });
+  assert.equal(result.code, "checkout_tab_reload_required");
+  assert.equal(h.messages.length, 1);
+  assert.ok(!h.storage.vintrackCheckoutAttempts);
+});
+
+test("navigation failures identify the failed stage and retain the completed checkpoint", async () => {
+  const h = background({ updateError: true });
+  const result = await h.run();
+  assert.equal(result.code, "checkout_navigation_failed");
+  assert.equal(h.storage.vintrackCheckoutAttempts[0].checkoutUrl, checkoutUrl);
+  assert.ok(!result.error.includes("synthetic private"));
 });
 
 test("lost responses survive extension restart without replay or cross-region fallback", async () => {

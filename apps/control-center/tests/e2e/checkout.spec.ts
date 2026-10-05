@@ -48,7 +48,7 @@ test("auto-checkout refuses protocol 3 before requesting a payment authorization
     });
     await page.goto("/checkout/17/123");
     await expect(
-        page.getByRole("alert").filter({ hasText: "version 0.2.5" }),
+        page.getByRole("alert").filter({ hasText: "version 0.2.6" }),
     ).toBeVisible();
     expect(posts).toBe(0);
 });
@@ -71,12 +71,26 @@ test("PayPal auto-checkout requires shared authorization and cannot replay after
                         type: "VINTRACK_EXTENSION_READY",
                         payload: {
                             configured: true,
-                            checkoutPrepareVersion: 4,
+                            checkoutPrepareVersion: 5,
                         },
                     },
                     window.location.origin,
                 );
             if (event.data?.type === "VINTRACK_EXTENSION_BUY") {
+                if (event.data.payload.readinessOnly) {
+                    window.postMessage(
+                        {
+                            type: "VINTRACK_EXTENSION_BUY_RESULT",
+                            payload: {
+                                requestId: event.data.payload.requestId,
+                                ok: true,
+                                ready: true,
+                            },
+                        },
+                        window.location.origin,
+                    );
+                    return;
+                }
                 void (
                     window as unknown as {
                         autoCheckoutTestStarted(limit: number): Promise<void>;
@@ -178,6 +192,109 @@ test("server auto-checkout opens only the verified PayPal redirect", async ({
         "https://www.paypal.com/checkoutnow?token=synthetic",
     );
     expect(starts).toBe(1);
+});
+
+test("disconnected auto-checkout receivers do not consume server payment authorization", async ({
+    page,
+}) => {
+    let authorizations = 0;
+    await page.addInitScript(() => {
+        window.addEventListener("message", (event) => {
+            if (event.source !== window) return;
+            if (event.data?.type === "VINTRACK_EXTENSION_PING")
+                window.postMessage(
+                    {
+                        type: "VINTRACK_EXTENSION_READY",
+                        payload: {
+                            configured: true,
+                            checkoutPrepareVersion: 5,
+                        },
+                    },
+                    window.location.origin,
+                );
+            if (event.data?.type === "VINTRACK_EXTENSION_BUY") {
+                if (!event.data.payload.readinessOnly)
+                    throw new Error("checkout must not run");
+                window.postMessage(
+                    {
+                        type: "VINTRACK_EXTENSION_BUY_RESULT",
+                        payload: {
+                            requestId: event.data.payload.requestId,
+                            ok: false,
+                            code: "checkout_tab_reload_required",
+                            error: "The Vinted tab is disconnected. Reload Vinted once.",
+                        },
+                    },
+                    window.location.origin,
+                );
+            }
+        });
+    });
+    await page.route("**/api/checkout/17/123", async (route) => {
+        if (route.request().method() === "POST") authorizations++;
+        await route.fulfill({
+            json: { ...target, preferences: autoPreferences },
+        });
+    });
+    await page.goto("/checkout/17/123");
+    await expect(
+        page.getByRole("alert").filter({ hasText: "Reload Vinted once" }),
+    ).toBeVisible();
+    expect(authorizations).toBe(0);
+});
+
+test("slow checkout history does not keep a completed handoff waiting", async ({
+    page,
+}) => {
+    await page.addInitScript(() => {
+        window.addEventListener("message", (event) => {
+            if (event.source !== window) return;
+            if (event.data?.type === "VINTRACK_EXTENSION_PING")
+                window.postMessage(
+                    {
+                        type: "VINTRACK_EXTENSION_READY",
+                        payload: {
+                            configured: true,
+                            checkoutPrepareVersion: 5,
+                        },
+                    },
+                    window.location.origin,
+                );
+            if (event.data?.type === "VINTRACK_EXTENSION_BUY")
+                window.postMessage(
+                    {
+                        type: "VINTRACK_EXTENSION_BUY_RESULT",
+                        payload: {
+                            requestId: event.data.payload.requestId,
+                            ok: true,
+                            checkoutUrl:
+                                "https://www.vinted.de/checkout?purchase_id=synthetic",
+                        },
+                    },
+                    window.location.origin,
+                );
+        });
+    });
+    await page.route("**/api/checkout/17/123", (route) =>
+        route.fulfill({ json: target }),
+    );
+    let releaseHistory!: () => void;
+    const historyWait = new Promise<void>((resolve) => {
+        releaseHistory = resolve;
+    });
+    await page.route("**/api/items/checkout-links", async (route) => {
+        await historyWait;
+        await route.fulfill({ json: { status: "stored" } });
+    });
+    try {
+        await page.goto("/checkout/17/123");
+        await expect(page.getByRole("status")).toContainText(
+            "Checkout is open",
+            { timeout: 5000 },
+        );
+    } finally {
+        releaseHistory();
+    }
 });
 
 test("opening a notification link prepares and opens checkout without another click", async ({
@@ -387,6 +504,20 @@ test("protocol 3 forwards the regional payment preference without preparing twic
                     window.location.origin,
                 );
             if (event.data?.type === "VINTRACK_EXTENSION_BUY") {
+                if (event.data.payload.readinessOnly) {
+                    window.postMessage(
+                        {
+                            type: "VINTRACK_EXTENSION_BUY_RESULT",
+                            payload: {
+                                requestId: event.data.payload.requestId,
+                                ok: true,
+                                ready: true,
+                            },
+                        },
+                        window.location.origin,
+                    );
+                    return;
+                }
                 void (
                     window as unknown as {
                         checkoutTestProvider(value: string): Promise<void>;

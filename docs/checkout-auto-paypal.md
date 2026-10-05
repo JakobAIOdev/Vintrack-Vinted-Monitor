@@ -1,6 +1,6 @@
 # Optionaler PayPal-Auto-Checkout
 
-Stand: 5. Oktober 2026, Branch `codex/checkout-handoff`.
+Stand: 5. Oktober 2026, Branch `feature/checkout-handoff`.
 
 Unter Account kann ein Nutzer PayPal-Auto-Checkout einschalten, die Warnung
 bestätigen und ein maximales EUR-Gesamtlimit einschließlich Versand und Gebühren
@@ -18,8 +18,18 @@ Es gibt keinen automatischen Wechsel auf Karte oder Wallet.
 
 Die Vorbereitung erfolgt weiterhin per Requests. Auto-Checkout ergänzt eine
 gemeinsame serverseitige Versuchssperre und genau einen Payment-POST, wenn alle
-Prüfungen erfolgreich sind. Extension 0.2.5 mit Prepare-Protokoll 4 ist erforderlich;
+Prüfungen erfolgreich sind. Extension 0.2.6 mit Prepare-Protokoll 5 ist erforderlich;
 ältere erkannte Erweiterungen werden vor einer Mutation zum Update aufgefordert.
+Vor der Versuchssperre prüft die Extension ihre lokale Verbindung zum Vinted-Tab,
+ohne Vinted-Account- oder Checkout-Requests. Die serverseitige Browser-Freigabe
+liest nur die verknüpfte Sitzung und Redis; sie führt keinen Vinted-Warmup oder
+Token-Refresh aus. Ein bereits geladener, unerreichbarer Tab wird höchstens
+750 ms geprüft statt 20 Sekunden lang abgefragt. Fehlerantworten behalten ihre
+Request-ID, damit ein Verbindungsabbruch sofort angezeigt werden kann. Das
+Speichern der Historie verzögert die Fertigmeldung nicht mehr. Neu geladene Tabs
+und die eigentlichen Vinted-Requests können weiterhin zusätzliche Zeit benötigen;
+die Änderung ist keine garantierte Live-Latenz.
+
 Der Service-Fallback verwendet dieselben Preisprüfungen und Versuchssperren.
 Der rein serverseitige Zugriff war zuvor bei dieser DE-Sitzung durch einen
 Vinted-Sicherheitscheck blockiert; er ist noch kein live bestätigter Ersatz.
@@ -89,10 +99,10 @@ Checksummen, nicht verfügbare Zahlarten, abgelehnte Opt-ins, gemeinsame
 Versuchssperren, Neustarts und das Vermeiden persistierter Zahlungstokens.
 Browser-E2E-Tests arbeiten mit lokalen Stubs, ohne echten Vinted-Payment-Traffic.
 
-- Control Center: 39 Unit-Tests, 18 bestandene Checkout-E2E auf Desktop/Mobil
+- Control Center: 39 Unit-Tests, 22 bestandene Checkout-E2E auf Desktop/Mobil
   (2 Auth-Fälle im angemeldeten Testmodus übersprungen), ESLint und Build.
-- Extension: 46 bestandene synthetische Checkout-/Lifecycle-Tests und
-  Chrome-/Firefox-Pakete 0.2.5 gebaut.
+- Extension: 52 bestandene synthetische Checkout-/Lifecycle-Tests und
+  Chrome-/Firefox-Pakete 0.2.6 gebaut.
 - Vinted-Service: `go test ./...`.
 - Lokale Account-UI: Warnung und Limit geprüft, bestehende Vorgaben nicht gespeichert
   oder verändert. [UI-Vorschau](screenshots/checkout-auto-paypal.png).

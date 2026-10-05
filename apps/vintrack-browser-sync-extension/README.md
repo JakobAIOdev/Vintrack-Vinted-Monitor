@@ -51,7 +51,7 @@ handles signing, review, installation, and updates for the public build.
 
 ## Checkout handoff
 
-Version 0.2.5 advertises checkout preparation protocol 4 to Vintrack. The
+Version 0.2.6 advertises checkout preparation protocol 5 to Vintrack. The
 dashboard's Open Checkout action verifies that the Vinted browser account
 matches the linked account, applies the delivery/payment preferences selected
 in Vintrack Account, and opens its checkout page. Home delivery and available
@@ -100,7 +100,18 @@ Account settings can explicitly enable auto-checkout for PayPal in DE/AT/BE
 after accepting the payment warning and setting a maximum EUR order total,
 including shipping and fees. It remains off by default. Dashboard and
 notification buy-link clicks use the same flow; monitor matches do not buy
-anything without a click. Protocol 4 is required for extension auto-checkout.
+anything without a click. Protocol 5 is required for extension auto-checkout.
+
+Before consuming the server payment-intent claim, protocol 5 checks the local
+Vinted receiver without account or checkout requests. Existing complete tabs
+are probed concurrently with a 750 ms bound; disconnected receivers fail with
+a reload instruction instead of a 20-second polling loop. A ready same-region
+tab is preferred over a disconnected one. Browser authorization reads the
+linked session and Redis claim only, without a server-side Vinted warmup or
+refresh. History saving does not hold the completed dashboard handoff open.
+Runtime failures retain their request ID so Vintrack can display them immediately
+instead of waiting for the 90-second response timeout. Reload existing Vintrack
+and Vinted pages after reloading the development extension.
 
 The latest checkout response must confirm the delivery choice, enabled PayPal,
 a fresh checksum, a positive EUR total within the limit, and no applied wallet

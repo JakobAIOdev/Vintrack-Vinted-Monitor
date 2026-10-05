@@ -38,9 +38,33 @@ func (s *Server) handlePrepareCheckout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "invalid checkout request", http.StatusBadRequest)
 		return
 	}
-	sess, client, ok := s.getSessionAndClient(r, w)
-	if !ok {
+	if req.BrowserPrepareOnly && req.Preferences.AutoCheckout == nil {
+		writeError(w, "browser authorization requires auto-checkout preferences", http.StatusBadRequest)
 		return
+	}
+	var sess *session.VintedSession
+	var client *vinted.Client
+	if req.BrowserPrepareOnly {
+		// This is a local payment-intent claim. Browser checkout verifies its own
+		// current account; no server TLS warmup, refresh or Vinted request belongs
+		// on this path.
+		var err error
+		sess, err = s.sessions.Get(getUserID(r))
+		if err != nil {
+			writeError(w, "session fetch error", http.StatusInternalServerError)
+			return
+		}
+		if sess == nil {
+			writeError(w, "no linked Vinted account", http.StatusNotFound)
+			return
+		}
+		s.canonicalizeSessionDomain(sess)
+	} else {
+		var ok bool
+		sess, client, ok = s.getSessionAndClient(r, w)
+		if !ok {
+			return
+		}
 	}
 	if req.AccountID != sess.VintedUserID || req.Domain != sess.Domain {
 		writeError(w, "linked Vinted account changed; reload checkout", http.StatusConflict)
@@ -48,10 +72,6 @@ func (s *Server) handlePrepareCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.SellerID == sess.VintedUserID {
 		writeError(w, "you cannot buy your own item", http.StatusBadRequest)
-		return
-	}
-	if req.BrowserPrepareOnly && req.Preferences.AutoCheckout == nil {
-		writeError(w, "browser authorization requires auto-checkout preferences", http.StatusBadRequest)
 		return
 	}
 	token, acquired, err := s.sessions.AcquireCheckoutPreparation(sess, req.ItemID)
