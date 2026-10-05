@@ -955,6 +955,84 @@ type BuyResponse struct {
 	CheckoutURL   string `json:"checkout_url"`
 }
 
+// PrepareCheckout deliberately ends before checkout/payment. Empty components
+// let Vinted apply saved preferences where supported; missing details remain
+// editable in the Vinted checkout. A successful build is not a payment-ready
+// guarantee. Persist checkpoints before each mutation so an uncertain response
+// cannot cause the caller to replay the whole flow automatically.
+func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.CheckoutLink) error) (*session.CheckoutLink, error) {
+	if itemID <= 0 || sellerID <= 0 || sellerID == c.session.VintedUserID || save == nil {
+		return nil, fmt.Errorf("invalid checkout target")
+	}
+	link := session.CheckoutLink{
+		ItemID: itemID, SellerID: sellerID, Domain: c.session.Domain,
+		Status: "transaction_creating", CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := save(link); err != nil {
+		return nil, err
+	}
+	transactionID, err := c.createBuyTransaction(itemID, sellerID)
+	if err != nil {
+		return &link, err
+	}
+	link.TransactionID = transactionID
+	link.Status = "checkout_building"
+	if err := save(link); err != nil {
+		return &link, err
+	}
+	build, err := c.buildPurchaseCheckout(itemID, transactionID, "")
+	if err != nil {
+		return &link, err
+	}
+	if build.PurchaseID == "" {
+		return &link, fmt.Errorf("checkout build did not return a purchase id")
+	}
+	link.PurchaseID = build.PurchaseID
+	link.CheckoutURL, err = c.validatedCheckoutURL(build.CheckoutURL, build.PurchaseID, transactionID)
+	if err != nil {
+		return &link, err
+	}
+	link.Status = "checkout_updating"
+	if err := save(link); err != nil {
+		return &link, err
+	}
+	updated, updateErr := c.updatePurchaseCheckout(build.PurchaseID, transactionID, map[string]interface{}{
+		"additional_service":      map[string]interface{}{},
+		"payment_method":          map[string]interface{}{},
+		"shipping_address":        map[string]interface{}{},
+		"shipping_pickup_options": map[string]interface{}{},
+		"shipping_pickup_details": map[string]interface{}{},
+	})
+	if updateErr != nil {
+		// The built checkout can be completed by its owner in Vinted. Do not
+		// recreate the transaction or retry the update on auth/challenge errors.
+		link.Status = "checkout_review_required"
+	} else {
+		if updated.CheckoutURL != "" {
+			link.CheckoutURL, err = c.validatedCheckoutURL(updated.CheckoutURL, build.PurchaseID, transactionID)
+			if err != nil {
+				return &link, err
+			}
+		}
+		link.Status = "checkout_prepared"
+	}
+	if err := save(link); err != nil {
+		return &link, err
+	}
+	return &link, nil
+}
+
+func (c *Client) validatedCheckoutURL(raw, purchaseID string, transactionID int64) (string, error) {
+	if raw == "" {
+		raw = fmt.Sprintf("https://%s/checkout?purchase_id=%s&order_id=%d&order_type=transaction", c.session.Domain, url.QueryEscape(purchaseID), transactionID)
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || parsed.Host != c.session.Domain || parsed.User != nil || parsed.Path != "/checkout" || parsed.Fragment != "" {
+		return "", fmt.Errorf("Vinted returned an invalid checkout URL")
+	}
+	return parsed.String(), nil
+}
+
 type BrowserInfo struct {
 	Language       string `json:"language"`
 	ColorDepth     int    `json:"color_depth"`
@@ -1165,6 +1243,18 @@ func defaultPaymentMethod(paymentMethod map[string]interface{}) map[string]inter
 	}
 }
 
+func readCheckoutResponse(reader io.Reader) ([]byte, error) {
+	const limit = 2 * 1024 * 1024
+	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("could not read Vinted checkout response")
+	}
+	if len(body) > limit {
+		return nil, fmt.Errorf("Vinted checkout response exceeded size limit")
+	}
+	return body, nil
+}
+
 func (c *Client) createBuyTransaction(itemID, sellerID int64) (int64, error) {
 	convoURL := fmt.Sprintf("https://%s/api/v2/conversations", c.session.Domain)
 	payload := map[string]interface{}{
@@ -1187,9 +1277,12 @@ func (c *Client) createBuyTransaction(itemID, sellerID int64) (int64, error) {
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := readCheckoutResponse(resp.Body)
+	if err != nil {
+		return 0, err
+	}
 	bodyStr := strings.TrimSpace(string(respBody))
-	log.Printf("[vinted] POST /api/v2/conversations (buy) -> %d (%.300s)", resp.StatusCode, bodyStr)
+	log.Printf("[vinted] POST /api/v2/conversations (buy) -> %d", resp.StatusCode)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return 0, vintedHTTPError("buy conversation", resp.StatusCode, bodyStr)
@@ -1217,7 +1310,7 @@ func (c *Client) createBuyTransaction(itemID, sellerID int64) (int64, error) {
 		return txID, nil
 	}
 
-	return 0, fmt.Errorf("could not extract transaction ID from buy conversation response: %.200s", bodyStr)
+	return 0, fmt.Errorf("could not extract transaction ID from buy conversation response")
 }
 
 type checkoutBuildResult struct {
@@ -1252,9 +1345,12 @@ func (c *Client) buildPurchaseCheckout(itemID, transactionID int64, incogniaRequ
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := readCheckoutResponse(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	bodyStr := strings.TrimSpace(string(respBody))
-	log.Printf("[vinted] POST /api/v2/purchases/checkout/build -> %d (%.300s)", resp.StatusCode, bodyStr)
+	log.Printf("[vinted] POST /api/v2/purchases/checkout/build -> %d", resp.StatusCode)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, vintedHTTPError("checkout build", resp.StatusCode, bodyStr)
@@ -1307,9 +1403,12 @@ func (c *Client) updatePurchaseCheckout(purchaseID string, transactionID int64, 
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := readCheckoutResponse(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	bodyStr := strings.TrimSpace(string(respBody))
-	log.Printf("[vinted] PUT /api/v2/purchases/%s/checkout -> %d (%.300s)", purchaseID, resp.StatusCode, bodyStr)
+	log.Printf("[vinted] PUT checkout -> %d", resp.StatusCode)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, vintedHTTPError("checkout update", resp.StatusCode, bodyStr)
@@ -1317,20 +1416,21 @@ func (c *Client) updatePurchaseCheckout(purchaseID string, transactionID int64, 
 
 	result := &checkoutBuildResult{}
 	var raw map[string]interface{}
-	if err := json.Unmarshal(respBody, &raw); err == nil {
-		result.PurchaseID = firstStringPath(raw, []string{"purchase", "id"}, []string{"purchase_id"})
-		result.Checksum = firstStringPath(raw, []string{"checksum"}, []string{"checkout", "checksum"}, []string{"payment", "checksum"})
-		result.CheckoutURL = firstStringPath(raw, []string{"checkout_url"}, []string{"checkout", "url"})
-		result.ShippingOrderID = firstInt64Path(raw, []string{"shipping_order_id"}, []string{"shippingOrderId"}, []string{"shipping_order", "id"}, []string{"shippingOrder", "id"}, []string{"checkout", "shipping_order_id"}, []string{"checkout", "shipping_order", "id"})
-		if result.Checksum == "" {
-			result.Checksum, _ = findStringByKey(raw, "checksum")
-		}
-		if result.CheckoutURL == "" {
-			result.CheckoutURL, _ = findURLContaining(raw, "/checkout")
-		}
-		if result.ShippingOrderID == 0 {
-			result.ShippingOrderID, _ = findInt64ByAnyKey(raw, "shipping_order_id", "shippingOrderId")
-		}
+	if err := json.Unmarshal(respBody, &raw); err != nil {
+		return nil, fmt.Errorf("invalid Vinted checkout update response")
+	}
+	result.PurchaseID = firstStringPath(raw, []string{"purchase", "id"}, []string{"purchase_id"})
+	result.Checksum = firstStringPath(raw, []string{"checksum"}, []string{"checkout", "checksum"}, []string{"payment", "checksum"})
+	result.CheckoutURL = firstStringPath(raw, []string{"checkout_url"}, []string{"checkout", "url"})
+	result.ShippingOrderID = firstInt64Path(raw, []string{"shipping_order_id"}, []string{"shippingOrderId"}, []string{"shipping_order", "id"}, []string{"shippingOrder", "id"}, []string{"checkout", "shipping_order_id"}, []string{"checkout", "shipping_order", "id"})
+	if result.Checksum == "" {
+		result.Checksum, _ = findStringByKey(raw, "checksum")
+	}
+	if result.CheckoutURL == "" {
+		result.CheckoutURL, _ = findURLContaining(raw, "/checkout")
+	}
+	if result.ShippingOrderID == 0 {
+		result.ShippingOrderID, _ = findInt64ByAnyKey(raw, "shipping_order_id", "shippingOrderId")
 	}
 	return result, nil
 }

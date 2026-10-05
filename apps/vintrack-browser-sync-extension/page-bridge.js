@@ -439,7 +439,7 @@
 
     const itemId = Number(payload?.itemId || 0);
     const sellerId = Number(payload?.sellerId || 0);
-    const pickupType = Number(payload?.pickupType || 1) || 1;
+    const expectedAccountId = Number(payload?.expectedAccountId || 0);
     const phoneNumber = typeof payload?.phoneNumber === "string" ? payload.phoneNumber.trim() : "";
     const itemUrl = typeof payload?.itemUrl === "string" && payload.itemUrl.trim()
       ? payload.itemUrl.trim()
@@ -448,12 +448,18 @@
       (typeof payload?.incogniaRequestToken === "string" && payload.incogniaRequestToken.trim()) ||
       extractIncogniaRequestToken();
 
-    if (!itemId || !sellerId) {
+    if (!Number.isSafeInteger(itemId) || itemId <= 0 || !Number.isSafeInteger(sellerId) || sellerId <= 0 || !Number.isSafeInteger(expectedAccountId) || expectedAccountId <= 0) {
       return {
         ok: false,
         code: "invalid_buy_payload",
         error: "Missing item or seller information",
       };
+    }
+
+    const account = await getBrowserAccount();
+    if (!account.ok) return account;
+    if (account.accountId !== expectedAccountId || sellerId === expectedAccountId) {
+      return { ok: false, code: "checkout_account_mismatch", error: "Open Vinted with the account linked to Vintrack before starting checkout." };
     }
 
     const conversationResult = await vintedRequest("buy conversation", {
@@ -550,7 +556,7 @@
           additional_service: {},
           payment_method: {},
           shipping_address: {},
-          shipping_pickup_options: { pickup_type: pickupType },
+          shipping_pickup_options: {},
           shipping_pickup_details: {},
         },
       },
@@ -619,14 +625,12 @@
 
     return {
       ok: true,
-      status: "checkout_ready",
+      status: "checkout_prepared",
       itemId,
       sellerId,
       transactionId,
       purchaseId,
       checkoutUrl: checkoutUrl || checkoutReferrer,
-      checksum,
-      incogniaRequestToken,
       shippingOrderId,
     };
   }

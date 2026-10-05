@@ -1,6 +1,6 @@
 # Vintrack Browser Sync Privacy Policy
 
-Effective date: October 2, 2026
+Effective date: October 5, 2026
 
 Vintrack Browser Sync links a Vinted account that the user is already signed in
 to with the Vintrack service. The extension runs only on the public Vintrack
@@ -54,6 +54,19 @@ history outside the supported Vintrack and Vinted pages.
 
 The companion does not automate checkout, purchase confirmation, likes, offers,
 or messages.
+
+When the user clicks Open Checkout in Vintrack, the dashboard can ask the
+extension to prepare a checkout in the matching signed-in Vinted account.
+The extension verifies the current Vinted account before creating a buy
+transaction, building checkout, and requesting saved delivery/payment defaults.
+It opens Vinted for the user to review and confirm the purchase. The extension
+does not initiate payment or press the final purchase button. The local
+preparation checkpoint stores item, seller and account IDs, regional domain,
+start time and a generated checkout link for up to ten minutes of reuse; it
+prevents repeated starts after lost responses. Completed links are also kept
+in a local history of up to twenty links. Clearing extension state removes
+both histories. Account tokens and payment-card data are not part of these
+checkout histories.
 
 ## Purpose, storage, and deletion
 

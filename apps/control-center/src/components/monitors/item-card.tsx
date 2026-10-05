@@ -24,7 +24,7 @@ import Link from "next/link";
 import { useVintedAccount } from "@/components/account-provider";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { runBrowserBuyViaExtension } from "@/lib/vintrack-extension";
+import { openItemCheckout } from "@/lib/open-checkout";
 import {
     Dialog,
     DialogContent,
@@ -90,13 +90,7 @@ function ItemCardComponent({
     showMonitor = false,
     onSellerBanned,
 }: ItemCardProps) {
-    const {
-        linked,
-        domain: accountDomain,
-        likedIds,
-        addLike,
-        removeLike,
-    } = useVintedAccount();
+    const { linked, likedIds, addLike, removeLike } = useVintedAccount();
     const liked = likedIds.has(Number(item.id));
     const [liking, setLiking] = useState(false);
     const [msgOpen, setMsgOpen] = useState(false);
@@ -108,7 +102,6 @@ function ItemCardComponent({
     const [buying, setBuying] = useState(false);
     const [banningSeller, setBanningSeller] = useState(false);
     const [banDialogOpen, setBanDialogOpen] = useState(false);
-    const [buyDialogOpen, setBuyDialogOpen] = useState(false);
     const [selectedImgIndex, setSelectedImgIndex] = useState<number | null>(
         null,
     );
@@ -280,90 +273,25 @@ function ItemCardComponent({
         setSendingOffer(false);
     };
 
-    const runBuy = async () => {
-        if (!linked) {
-            toast.error("Link your Vinted account first (Account tab)");
-            return;
-        }
-        if (!item.seller_id) {
-            toast.error("Seller information is missing");
-            return;
-        }
-
+    const handleBuy = async (e: React.MouseEvent) => {
+        e.stopPropagation();
+        e.preventDefault();
+        if (buying) return;
         setBuying(true);
         try {
-            const browserBuyResult = await runBrowserBuyViaExtension({
-                itemId: Number(item.id),
-                sellerId: Number(item.seller_id),
-                itemUrl: item.url || undefined,
-                domain:
-                    accountDomain ||
-                    (item.url ? new URL(item.url).hostname : undefined),
-                pickupType: 1,
-            });
-
-            if (browserBuyResult) {
-                if (browserBuyResult.ok) {
-                    if (!browserBuyResult.checkoutUrl) {
-                        toast.error(
-                            "Browser checkout returned no Vinted checkout URL",
-                        );
-                        return;
-                    }
-
-                    await fetch("/api/items/checkout-links", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            item_id: Number(item.id),
-                            seller_id: Number(item.seller_id),
-                            transaction_id: browserBuyResult.transactionId || 0,
-                            purchase_id: browserBuyResult.purchaseId || "",
-                            checkout_url: browserBuyResult.checkoutUrl,
-                            status: "checkout_ready",
-                        }),
-                    }).catch(() => {});
-
-                    toast.success(
-                        "Vinted checkout opened. Choose the payment method there.",
-                    );
-                    setBuyDialogOpen(false);
-                    return;
-                }
-
-                if (browserBuyResult.code === "datadome_challenge") {
-                    toast.error(
-                        "Vinted requested a captcha in the browser tab. Solve it there, then retry checkout.",
-                    );
-                    return;
-                }
-
-                toast.error(
-                    browserBuyResult.error || "Browser checkout failed",
-                );
-                return;
-            }
-
-            toast.error("Browser extension not detected or not responding");
-        } catch {
-            toast.error("Browser checkout could not be started");
+            await openItemCheckout(item.monitor_id, Number(item.id));
+            toast.success(
+                "Vinted checkout opened. Review the details and confirm your purchase on Vinted.",
+            );
+        } catch (error) {
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Checkout could not be opened",
+            );
         } finally {
             setBuying(false);
         }
-    };
-
-    const handleBuy = (e: React.MouseEvent) => {
-        e.stopPropagation();
-        e.preventDefault();
-        if (!linked) {
-            toast.error("Link your Vinted account first (Account tab)");
-            return;
-        }
-        if (!item.seller_id) {
-            toast.error("Seller information is missing");
-            return;
-        }
-        setBuyDialogOpen(true);
     };
 
     const handleBanSeller = async () => {
@@ -805,39 +733,6 @@ function ItemCardComponent({
                                 <Send className="h-4 w-4" />
                             )}
                             {sending ? "Sending..." : "Send"}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
-
-            <Dialog open={buyDialogOpen} onOpenChange={setBuyDialogOpen}>
-                <DialogContent className="sm:max-w-md">
-                    <DialogHeader>
-                        <DialogTitle>Open Vinted Checkout</DialogTitle>
-                        <DialogDescription>
-                            This opens the normal Vinted checkout in your
-                            logged-in browser. Choose the payment method there
-                            and finish the order on Vinted.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <DialogFooter>
-                        <Button
-                            variant="outline"
-                            onClick={() => setBuyDialogOpen(false)}
-                        >
-                            Cancel
-                        </Button>
-                        <Button
-                            onClick={runBuy}
-                            disabled={buying}
-                            className="gap-2"
-                        >
-                            {buying ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                                <ShoppingCart className="h-4 w-4" />
-                            )}
-                            {buying ? "Starting..." : "Open Checkout"}
                         </Button>
                     </DialogFooter>
                 </DialogContent>

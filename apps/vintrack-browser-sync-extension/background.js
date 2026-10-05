@@ -12,6 +12,7 @@ const STORAGE_KEYS = {
   syncedSessions: "vintrackSyncedSessions",
   syncReceipts: "vintrackSyncReceipts",
   checkoutLinks: "vintrackCheckoutLinks",
+  checkoutAttempts: "vintrackCheckoutAttempts",
   theme: "vintrackTheme",
   companionMode: "vintrackCompanionMode",
 };
@@ -208,22 +209,6 @@ function cookieDomainMatches(cookieDomain, targetDomain) {
   );
 }
 
-function itemUrlForDomain(itemUrl, domain, itemId) {
-  const normalizedDomain = sanitizeDomain(domain);
-  if (!itemUrl) {
-    return `https://${normalizedDomain}/items/${itemId}`;
-  }
-
-  try {
-    const parsed = new URL(itemUrl);
-    parsed.protocol = "https:";
-    parsed.hostname = normalizedDomain;
-    return parsed.toString();
-  } catch {
-    return `https://${normalizedDomain}/items/${itemId}`;
-  }
-}
-
 async function getConfig() {
   const storage = await extensionApi.storage.local.get(
     Object.values(STORAGE_KEYS),
@@ -318,41 +303,6 @@ async function storeCheckoutLink(entry) {
   await extensionApi.storage.local.set({
     [STORAGE_KEYS.checkoutLinks]: nextLinks,
   });
-}
-
-async function findStoredCheckoutLink(match) {
-  const links = await getStoredCheckoutLinks();
-  const normalizedDomain = sanitizeDomain(match?.domain || "");
-  const transactionId = Number(match?.transactionId || 0);
-  const itemId = Number(match?.itemId || 0);
-  const sellerId = Number(match?.sellerId || 0);
-
-  return (
-    links.find(
-      (link) =>
-        transactionId && Number(link?.transactionId || 0) === transactionId,
-    ) ||
-    links.find(
-      (link) =>
-        itemId &&
-        sellerId &&
-        Number(link?.itemId || 0) === itemId &&
-        Number(link?.sellerId || 0) === sellerId &&
-        sanitizeDomain(link?.domain || "") === normalizedDomain,
-    ) ||
-    null
-  );
-}
-
-async function findExistingCheckoutTab(domain) {
-  const normalizedDomain = sanitizeDomain(domain);
-  const matchingTabs = await extensionApi.tabs.query({
-    url: [`https://${normalizedDomain}/checkout*`],
-  });
-  const existingTab = matchingTabs
-    .filter((tab) => typeof tab.id === "number" && typeof tab.url === "string")
-    .sort((a, b) => (b.id || 0) - (a.id || 0))[0];
-  return existingTab || null;
 }
 
 function ensurePeriodicSyncAlarm() {
@@ -793,6 +743,7 @@ function formatRuntimeState(storage) {
 
   return {
     installed: true,
+    checkoutPrepareVersion: 1,
     version: extensionApi.runtime.getManifest().version || "",
     configured: Boolean(storage.browserLinkToken && storage.vintrackAppOrigin),
     companionMode:
@@ -1401,166 +1352,209 @@ async function ensureVintedBuyTab(targetUrl) {
   return { tabId: createdTab.id, created: true };
 }
 
+const checkoutInFlight = new Map();
+const CHECKOUT_ATTEMPT_TTL_MS = 10 * 60 * 1000;
+let checkoutStorageQueue = Promise.resolve();
+
+function withCheckoutAttempts(action) {
+  const task = checkoutStorageQueue.then(async () => {
+    const storage = await extensionApi.storage.local.get(
+      STORAGE_KEYS.checkoutAttempts,
+    );
+    const attempts = (
+      Array.isArray(storage[STORAGE_KEYS.checkoutAttempts])
+        ? storage[STORAGE_KEYS.checkoutAttempts]
+        : []
+    ).filter(
+      (entry) =>
+        Number.isFinite(entry.startedAt) &&
+        Date.now() - entry.startedAt < CHECKOUT_ATTEMPT_TTL_MS,
+    );
+    return action(attempts);
+  });
+  checkoutStorageQueue = task.catch(() => {});
+  return task;
+}
+
+function validCheckoutUrl(raw, domain) {
+  try {
+    const url = new URL(raw);
+    return (
+      url.protocol === "https:" &&
+      url.host === domain &&
+      !url.username &&
+      !url.password &&
+      url.pathname === "/checkout" &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function handleBrowserBuy(payload) {
   const itemId = Number(payload?.itemId || 0);
   const sellerId = Number(payload?.sellerId || 0);
+  const expectedAccountId = Number(payload?.expectedAccountId || 0);
   const requestId = String(payload?.requestId || crypto.randomUUID());
-  const itemUrl = String(payload?.itemUrl || "").trim();
-  const preferredDomain = sanitizeDomain(String(payload?.domain || "").trim());
-  const itemDomain = domainFromUrl(itemUrl);
-  const normalizedDomain = sanitizeDomain(preferredDomain || itemDomain);
-
-  if (!itemId || !sellerId) {
+  const domain = sanitizeDomain(String(payload?.domain || ""));
+  if (
+    ![itemId, sellerId, expectedAccountId].every(
+      (id) => Number.isSafeInteger(id) && id > 0,
+    ) ||
+    !isVintedDomain(domain) ||
+    sellerId === expectedAccountId
+  ) {
     return {
       ok: false,
       code: "invalid_buy_payload",
-      error: "Missing item or seller information",
+      error: "Invalid checkout target or linked account",
       requestId,
     };
   }
-
-  if (!normalizedDomain || !isVintedDomain(normalizedDomain)) {
-    return {
-      ok: false,
-      code: "invalid_domain",
-      error: "A valid Vinted domain is required for browser checkout",
-      requestId,
-    };
-  }
-
-  async function runCheckoutOnDomain(domain) {
-    const checkoutDomain = sanitizeDomain(domain);
-    const targetUrl = itemUrlForDomain(itemUrl, checkoutDomain, itemId);
-    const { tabId, created } = await ensureVintedBuyTab(targetUrl);
-    const result = await extensionApi.tabs.sendMessage(tabId, {
-      type: "VINTRACK_RUN_BROWSER_BUY",
-      payload: {
-        requestId,
-        itemId,
-        sellerId,
-        domain: checkoutDomain,
-        itemUrl: targetUrl,
-        phoneNumber: String(payload?.phoneNumber || "").trim(),
-        incogniaRequestToken: String(
-          payload?.incogniaRequestToken || "",
-        ).trim(),
-        browserInfo: payload?.browserInfo || {},
-        paymentMethod: payload?.paymentMethod || {},
-        pickupType: Number(payload?.pickupType || 1),
-      },
-    });
-
-    return { result, tabId, created, domain: checkoutDomain };
-  }
-
-  let attempt = await runCheckoutOnDomain(normalizedDomain);
-  let result = attempt.result;
-  let tabId = attempt.tabId;
-  let created = attempt.created;
-  let checkoutDomain = attempt.domain;
-
-  const fallbackDomain =
-    itemDomain && itemDomain !== checkoutDomain && isVintedDomain(itemDomain)
-      ? itemDomain
-      : "";
-  if (
-    fallbackDomain &&
-    result &&
-    !result.ok &&
-    !["datadome_challenge", "payment_already_processing"].includes(result.code)
-  ) {
-    if (created) {
-      await extensionApi.tabs.remove(tabId).catch(() => {});
-    }
-    attempt = await runCheckoutOnDomain(fallbackDomain);
-    result = attempt.result;
-    tabId = attempt.tabId;
-    created = attempt.created;
-    checkoutDomain = attempt.domain;
-  }
-
-  if (result?.ok) {
-    if (result.checkoutUrl) {
-      await storeCheckoutLink({
-        itemId,
-        sellerId,
-        transactionId: result.transactionId,
-        purchaseId: result.purchaseId,
-        checkoutUrl: result.checkoutUrl,
-        domain: checkoutDomain,
-      });
-    }
-
-    const nextUrl = result.paymentUrl || result.checkoutUrl;
-    if (nextUrl) {
-      await extensionApi.tabs.create({ url: nextUrl, active: true });
-      if (created) {
-        await extensionApi.tabs.remove(tabId).catch(() => {});
-      }
-      return { ...result, openedPayment: true };
-    }
-  }
-
-  if (result?.code === "payment_already_processing") {
-    const existingCheckoutTab = await findExistingCheckoutTab(checkoutDomain);
-    if (existingCheckoutTab?.id) {
-      await extensionApi.tabs.update(existingCheckoutTab.id, { active: true });
-      if (created) {
-        await extensionApi.tabs.remove(tabId).catch(() => {});
-      }
-      return {
-        ok: true,
-        checkoutUrl: existingCheckoutTab.url,
-        openedPayment: true,
-        transactionId: result.transactionId,
-      };
-    }
-
-    const storedCheckout = await findStoredCheckoutLink({
+  const key = `${domain}:${expectedAccountId}:${itemId}`;
+  let task = checkoutInFlight.get(key);
+  if (!task) {
+    task = prepareBrowserCheckout({
       itemId,
       sellerId,
-      transactionId: result.transactionId,
-      domain: checkoutDomain,
+      expectedAccountId,
+      domain,
     });
-    if (storedCheckout?.checkoutUrl) {
-      await extensionApi.tabs.create({
-        url: storedCheckout.checkoutUrl,
-        active: true,
-      });
-      if (created) {
-        await extensionApi.tabs.remove(tabId).catch(() => {});
-      }
+    checkoutInFlight.set(key, task);
+  }
+  try {
+    return { ...(await task), requestId };
+  } catch {
+    return {
+      ok: false,
+      code: "checkout_failed",
+      error:
+        "Checkout could not be completed. Check the Vinted tab before starting it again.",
+      requestId,
+    };
+  } finally {
+    if (checkoutInFlight.get(key) === task) checkoutInFlight.delete(key);
+  }
+}
+
+async function prepareBrowserCheckout(target) {
+  const { itemId, sellerId, expectedAccountId, domain } = target;
+  const targetUrl = `https://${domain}/items/${itemId}`;
+  const { tabId } = await ensureVintedBuyTab(targetUrl);
+  const account = await extensionApi.tabs.sendMessage(tabId, {
+    type: "VINTRACK_GET_BROWSER_ACCOUNT",
+  });
+  if (!account?.ok || account.accountId !== expectedAccountId) {
+    await extensionApi.tabs.update(tabId, { active: true });
+    return {
+      ok: false,
+      code: "checkout_account_mismatch",
+      error: "Sign in to Vinted with the account linked to Vintrack.",
+    };
+  }
+  const attempt = {
+    ...target,
+    accountId: expectedAccountId,
+    startedAt: Date.now(),
+  };
+  const previous = await withCheckoutAttempts(async (attempts) => {
+    const found = attempts.find(
+      (entry) =>
+        entry.itemId === itemId &&
+        entry.accountId === expectedAccountId &&
+        entry.domain === domain,
+    );
+    if (found) return found;
+    // Save intent before any POST. Serialize storage updates across items.
+    await extensionApi.storage.local.set({
+      [STORAGE_KEYS.checkoutAttempts]: [attempt, ...attempts].slice(0, 100),
+    });
+    return null;
+  });
+  if (previous) {
+    if (
+      previous.sellerId !== sellerId ||
+      !validCheckoutUrl(previous.checkoutUrl, domain)
+    ) {
       return {
-        ok: true,
-        checkoutUrl: storedCheckout.checkoutUrl,
-        openedPayment: true,
-        transactionId: storedCheckout.transactionId,
-        purchaseId: storedCheckout.purchaseId,
+        ok: false,
+        code: "checkout_uncertain",
+        error:
+          "Checkout was already attempted. Continue in Vinted before starting it again.",
       };
     }
+    await extensionApi.tabs.update(tabId, {
+      url: previous.checkoutUrl,
+      active: true,
+    });
+    return {
+      ok: true,
+      status: "checkout_prepared",
+      checkoutUrl: previous.checkoutUrl,
+      transactionId: previous.transactionId,
+      purchaseId: previous.purchaseId,
+    };
   }
-
-  if (result?.code === "datadome_challenge") {
-    if (result.captchaUrl) {
-      await extensionApi.tabs.update(tabId, {
-        active: true,
-        url: result.captchaUrl,
-      });
-    } else {
-      await extensionApi.tabs.update(tabId, {
-        active: true,
-      });
-    }
-  }
-
-  return (
-    result || {
+  const result = await extensionApi.tabs.sendMessage(tabId, {
+    type: "VINTRACK_RUN_BROWSER_BUY",
+    payload: target,
+  });
+  if (!result?.ok) {
+    await extensionApi.tabs.update(tabId, { active: true });
+    return {
       ok: false,
-      code: "empty_buy_result",
-      error: "Browser checkout did not return a result",
-      requestId,
-    }
-  );
+      code: result?.code || "checkout_failed",
+      error:
+        result?.code === "datadome_challenge"
+          ? "Complete Vinted's security check in the browser tab."
+          : "Vinted could not prepare checkout. Continue in the Vinted tab.",
+    };
+  }
+  if (!validCheckoutUrl(result.checkoutUrl, domain))
+    return {
+      ok: false,
+      code: "invalid_checkout_url",
+      error: "Vinted did not return a valid checkout link.",
+    };
+  await withCheckoutAttempts(async (attempts) => {
+    const completed = {
+      ...attempt,
+      checkoutUrl: result.checkoutUrl,
+      transactionId: result.transactionId,
+      purchaseId: result.purchaseId,
+    };
+    await extensionApi.storage.local.set({
+      [STORAGE_KEYS.checkoutAttempts]: [
+        completed,
+        ...attempts.filter(
+          (entry) =>
+            !(
+              entry.itemId === itemId &&
+              entry.accountId === expectedAccountId &&
+              entry.domain === domain
+            ),
+        ),
+      ].slice(0, 100),
+    });
+  });
+  await storeCheckoutLink({
+    ...target,
+    checkoutUrl: result.checkoutUrl,
+    transactionId: result.transactionId,
+    purchaseId: result.purchaseId,
+  });
+  await extensionApi.tabs.update(tabId, {
+    url: result.checkoutUrl,
+    active: true,
+  });
+  return {
+    ok: true,
+    status: "checkout_prepared",
+    checkoutUrl: result.checkoutUrl,
+    transactionId: result.transactionId,
+    purchaseId: result.purchaseId,
+  };
 }
 
 const syncTimers = new Map();

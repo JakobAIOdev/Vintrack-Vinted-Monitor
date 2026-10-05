@@ -48,6 +48,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/items/like", s.handleLike)
 	mux.HandleFunc("POST /api/items/unlike", s.handleUnlike)
 	mux.HandleFunc("POST /api/items/buy", s.handleOneClickBuy)
+	mux.HandleFunc("POST /api/items/checkout/prepare", s.handlePrepareCheckout)
 	mux.HandleFunc("POST /api/items/buy/warm", s.handleBuyWarm)
 	mux.HandleFunc("GET /api/items/checkout-links", s.handleCheckoutLinks)
 	mux.HandleFunc("POST /api/items/checkout-links", s.handleStoreCheckoutLink)
@@ -89,7 +90,7 @@ func featureForPath(path string) string {
 		return "chats"
 	case strings.HasPrefix(path, "/api/offers/"):
 		return "offers"
-	case path == "/api/items/buy" || path == "/api/items/buy/warm" || path == "/api/items/checkout-links":
+	case path == "/api/items/buy" || path == "/api/items/buy/warm" || path == "/api/items/checkout-links" || path == "/api/items/checkout/prepare":
 		return "checkout_links"
 	default:
 		return ""

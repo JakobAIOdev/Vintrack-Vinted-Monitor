@@ -2,6 +2,7 @@ package discord
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,21 @@ import (
 
 	"vintrack-worker/internal/model"
 )
+
+func TestCheckoutLinkAppearsInBothItemStylesOnlyWithHandoffURL(t *testing.T) {
+	for _, style := range []model.NotificationMessageStyle{model.NotificationMessageStyleCompact, model.NotificationMessageStyleRich} {
+		item := model.Item{URL: "https://www.vinted.de/items/123", CheckoutStartURL: "https://dashboard.example.test/checkout/17/123"}
+		encoded, _ := json.Marshal(buildItemWebhookPayload(item, "Test monitor", "server", style))
+		if !strings.Contains(string(encoded), "[Open checkout]("+item.CheckoutStartURL+")") {
+			t.Fatalf("missing checkout link: %s", encoded)
+		}
+		item.CheckoutStartURL = "javascript:alert(1)"
+		encoded, _ = json.Marshal(buildItemWebhookPayload(item, "Test monitor", "server", style))
+		if strings.Contains(string(encoded), "Open checkout") {
+			t.Fatalf("unsafe checkout link accepted: %s", encoded)
+		}
+	}
+}
 
 func withDiscordServer(t *testing.T, handler http.HandlerFunc) string {
 	t.Helper()

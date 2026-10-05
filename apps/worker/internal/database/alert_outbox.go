@@ -244,12 +244,23 @@ func (s *Store) ClaimAlertDeliveries(ctx context.Context, claimToken string, lim
 					ELSE COALESCE(m.telegram_active, FALSE)
 				END
 				ELSE FALSE
-			END AS channel_enabled
+			END AS channel_enabled,
+			COALESCE(vs.vinted_user_id > 0 AND cp.enabled AND ap.enabled AND
+				CASE member.role
+					WHEN 'free' THEN cp.free_enabled AND ap.free_enabled
+					WHEN 'premium' THEN cp.premium_enabled AND ap.premium_enabled
+					WHEN 'admin' THEN cp.admin_enabled AND ap.admin_enabled
+					ELSE FALSE
+				END, FALSE) AS checkout_enabled
 		FROM claimed
 		JOIN alert_notifications n ON n.id = claimed.notification_id
 		LEFT JOIN monitors m ON m.id = n.monitor_id
 		LEFT JOIN price_watches pw ON pw.id = n.price_watch_id
-		LEFT JOIN telegram_connections tc ON tc."userId" = n.user_id`,
+		LEFT JOIN telegram_connections tc ON tc."userId" = n.user_id
+		LEFT JOIN "User" member ON member.id = n.user_id
+		LEFT JOIN vinted_sessions vs ON vs.user_id = n.user_id
+		LEFT JOIN feature_policies cp ON cp.feature = 'checkout_links'
+		LEFT JOIN feature_policies ap ON ap.feature = 'vinted_account'`,
 		claimToken, fmt.Sprintf("%d seconds", int(alertDeliveryLeaseDuration.Seconds())), limit,
 	)
 	if err != nil {
@@ -266,7 +277,7 @@ func (s *Store) ClaimAlertDeliveries(ctx context.Context, claimToken string, lim
 			&delivery.MonitorID, &delivery.PriceWatchID, &delivery.ItemID, &delivery.Kind,
 			&payload, &delivery.ExpiresAt, &delivery.Channel, &delivery.Destination,
 			&delivery.DestinationFingerprint, &delivery.AttemptCount, &delivery.ClaimToken,
-			&delivery.NotificationsEnabled, &delivery.ChannelEnabled,
+			&delivery.NotificationsEnabled, &delivery.ChannelEnabled, &delivery.CheckoutEnabled,
 		); err != nil {
 			return nil, err
 		}

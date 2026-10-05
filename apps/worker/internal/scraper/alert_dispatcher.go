@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"time"
 
 	"vintrack-worker/internal/discord"
 	"vintrack-worker/internal/model"
+	"vintrack-worker/internal/publicurl"
 	"vintrack-worker/internal/telegram"
 )
 
@@ -219,15 +221,28 @@ func sendAlertDeliveryAttempt(ctx context.Context, delivery model.AlertDelivery)
 		return telegram.SendPriceDropAttempt(ctx, delivery.Destination, *payload.PriceDrop, payload.TelegramStyle)
 	}
 	if payload.Item != nil {
+		item := checkoutAlertItem(delivery)
 		if delivery.Channel == "discord" {
-			return discord.SendWebhookAttempt(ctx, delivery.Destination, *payload.Item, payload.MonitorName, payload.ProxySource, payload.DiscordStyle)
+			return discord.SendWebhookAttempt(ctx, delivery.Destination, item, payload.MonitorName, payload.ProxySource, payload.DiscordStyle)
 		}
-		return telegram.SendItemAttempt(ctx, delivery.Destination, *payload.Item, payload.MonitorName, payload.ProxySource, payload.TelegramStyle)
+		return telegram.SendItemAttempt(ctx, delivery.Destination, item, payload.MonitorName, payload.ProxySource, payload.TelegramStyle)
 	}
 	if delivery.Channel == "discord" {
 		return discord.SendStatusAttempt(ctx, delivery.Destination, payload.Title, payload.Message)
 	}
 	return telegram.SendStatusAttempt(ctx, delivery.Destination, payload.Title, payload.Message)
+}
+
+func checkoutAlertItem(delivery model.AlertDelivery) model.Item {
+	item := *delivery.Payload.Item
+	// Resolve eligibility at delivery time, not from an old outbox snapshot.
+	// The URL carries only item/monitor IDs; the receiving page reauthorizes
+	// its signed-in member and never starts checkout from a GET/link preview.
+	item.CheckoutStartURL = ""
+	if delivery.CheckoutEnabled && delivery.MonitorID > 0 && item.ID > 0 {
+		item.CheckoutStartURL = publicurl.Link(fmt.Sprintf("/checkout/%d/%d", delivery.MonitorID, item.ID))
+	}
+	return item
 }
 
 func alertExponentialBackoff(attempt int) time.Duration {

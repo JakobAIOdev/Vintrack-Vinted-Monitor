@@ -345,6 +345,63 @@ paths:
           $ref: "#/components/responses/Conflict"
         "502":
           $ref: "#/components/responses/UpstreamError"
+  /api/items/checkout/prepare:
+    post:
+      tags: [Items]
+      summary: Prepare a checkout without initiating payment
+      description: >
+        Requires checkout_links and vinted_account access. Creates a buy
+        transaction and builds checkout using saved Vinted preferences. Never
+        calls checkout/payment. account_id and domain must match the current
+        linked account. Checkpoints and a lock prevent repeated starts for the
+        same linked identity/item for ten minutes. Uncertain attempts without
+        a checkout URL require continuing manually on Vinted. A prepared URL
+        does not guarantee that all delivery/payment preferences are complete.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [item_id, seller_id, account_id, domain]
+              properties:
+                item_id:
+                  type: integer
+                  format: int64
+                  minimum: 1
+                seller_id:
+                  type: integer
+                  format: int64
+                  minimum: 1
+                account_id:
+                  type: integer
+                  format: int64
+                  minimum: 1
+                domain:
+                  type: string
+                  example: www.vinted.de
+      responses:
+        "200":
+          description: Checkout prepared or built checkout requires manual review. No payment was initiated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckoutLink"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Feature disabled or linked session requires reauthentication.
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "503":
+          description: Checkout checkpoint storage unavailable.
   /api/items/buy/warm:
     post:
       tags: [Items]

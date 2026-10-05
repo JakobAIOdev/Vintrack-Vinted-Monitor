@@ -331,5 +331,6 @@ assert.ok(
 );
 // Execute lifecycle regressions during the same validation used by CI/releases.
 await import("./session-refresh.test.mjs");
+await import("./checkout.test.mjs");
 
 console.log(`Extension validation passed for v${chromeManifest.version}`);

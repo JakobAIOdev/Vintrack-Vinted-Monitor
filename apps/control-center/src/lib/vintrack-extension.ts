@@ -1,19 +1,15 @@
 export type BrowserBuyPayload = {
     itemId: number;
     sellerId: number;
+    expectedAccountId: number;
     itemUrl?: string;
     domain?: string;
-    pickupType?: number;
-    phoneNumber?: string;
-    incogniaRequestToken?: string;
 };
 
 export type BrowserBuyResult =
     | {
           ok: true;
-          paymentUrl?: string;
           checkoutUrl?: string;
-          openedPayment?: boolean;
           purchaseId?: string;
           transactionId?: number;
       }
@@ -46,6 +42,7 @@ export async function runBrowserBuyViaExtension(
         function handleResponse(event: MessageEvent) {
             if (
                 event.source !== window ||
+                event.origin !== window.location.origin ||
                 event.data?.type !== "VINTRACK_EXTENSION_BUY_RESULT" ||
                 event.data.payload?.requestId !== requestId
             ) {

@@ -14,6 +14,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { oidcConfigured, oidcName } from "@/lib/auth-provider";
+import { checkoutReturnPath } from "@/lib/checkout";
 
 export const metadata: Metadata = {
     title: "Login | Vintrack",
@@ -24,16 +25,16 @@ export const metadata: Metadata = {
     },
 };
 
-async function signInWithDiscord() {
+async function signInWithDiscord(returnTo: string) {
     "use server";
 
-    await signIn("discord", { redirectTo: "/dashboard" });
+    await signIn("discord", { redirectTo: checkoutReturnPath(returnTo) });
 }
 
-async function signInWithOidc() {
+async function signInWithOidc(returnTo: string) {
     "use server";
 
-    await signIn("oidc", { redirectTo: "/dashboard" });
+    await signIn("oidc", { redirectTo: checkoutReturnPath(returnTo) });
 }
 
 const highlights = [
@@ -57,10 +58,12 @@ const highlights = [
 export default async function LoginPage({
     searchParams,
 }: {
-    searchParams?: Promise<{ error?: string }>;
+    searchParams?: Promise<{ error?: string; returnTo?: string }>;
 }) {
     const session = await auth();
-    const error = (await searchParams)?.error;
+    const query = await searchParams;
+    const error = query?.error;
+    const returnTo = checkoutReturnPath(query?.returnTo);
 
     if (session?.user && error) {
         redirect(
@@ -68,7 +71,7 @@ export default async function LoginPage({
         );
     }
     if (session?.user) {
-        redirect("/dashboard");
+        redirect(returnTo);
     }
 
     return (
@@ -182,7 +185,9 @@ export default async function LoginPage({
                             </p>
 
                             {oidcConfigured ? (
-                                <form action={signInWithOidc}>
+                                <form
+                                    action={signInWithOidc.bind(null, returnTo)}
+                                >
                                     <Button
                                         type="submit"
                                         size="lg"
@@ -198,7 +203,12 @@ export default async function LoginPage({
                                     </Button>
                                 </form>
                             ) : (
-                                <form action={signInWithDiscord}>
+                                <form
+                                    action={signInWithDiscord.bind(
+                                        null,
+                                        returnTo,
+                                    )}
+                                >
                                     <Button
                                         type="submit"
                                         size="lg"

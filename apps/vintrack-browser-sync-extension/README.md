@@ -49,6 +49,20 @@ The Firefox listing URL can be overridden for deployments with
 an unsigned `.xpi`: Firefox Stable and Beta reject unsigned add-ons, while AMO
 handles signing, review, installation, and updates for the public build.
 
+## Checkout handoff
+
+Version 0.2.2 advertises checkout preparation protocol 1 to Vintrack. The
+dashboard's Open Checkout action verifies that the Vinted browser account
+matches the linked account, prepares checkout using Vinted's saved preferences,
+and opens its checkout page. It never submits checkout/payment or confirms the
+purchase. Missing delivery/payment choices remain for the user on Vinted.
+
+Concurrent clicks share one attempt. A local checkpoint survives worker restarts
+and prevents replay for ten minutes after an uncertain result. Checkouts are
+never automatically retried on another regional domain. Older extensions use
+the service handoff instead of the new browser protocol. The Companion does
+not expose a purchase action.
+
 ## Build and validate
 
 ```sh
