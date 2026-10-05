@@ -55,7 +55,8 @@ history outside the supported Vintrack and Vinted pages.
 The companion does not automate checkout, purchase confirmation, likes, offers,
 or messages.
 
-When the user clicks Open Checkout in Vintrack, the dashboard can ask the
+When the user clicks Open Checkout in Vintrack or opens a checkout notification
+link in a visible browser tab, Vintrack automatically asks the
 extension to prepare a checkout in the matching signed-in Vinted account.
 The extension verifies the current Vinted account before creating a buy
 transaction, building checkout, and requesting saved delivery/payment defaults.

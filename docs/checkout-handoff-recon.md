@@ -10,9 +10,12 @@ Vinted-Endpunkte ist damit nicht live bestätigt.
 - Item-Karten starten den Handoff direkt, ohne den bisherigen Zwischendialog.
 - Monitor-Notifications in Telegram und Discord erhalten einen Checkout-Link
   für verknüpfte Accounts mit aktuellem Feature-/Rollenzugriff.
-- `/checkout/{monitorId}/{itemId}` zeigt den eigenen Artikel und einen expliziten
-  Start-Button. Seitenaufrufe und Vorschauen lesen ausschließlich Metadaten.
-  Nach einem Login bleibt das Checkout-Ziel erhalten.
+- `/checkout/{monitorId}/{itemId}` startet den Checkout automatisch im sichtbaren
+  Browser und öffnet Vinted ohne weiteren Start-Button. GET/HTML-Vorschauen und
+  Next-Prefetches legen keinen Checkout an; versteckte oder vorgerenderte Tabs
+  warten auf Aktivierung. Nach einem Login wird dasselbe Ziel automatisch
+  fortgesetzt. Nur Fehler und bereits geöffnete Checkouts zeigen eine manuelle
+  Wiederholungsaktion. Fehlgeschlagene Versuche werden nicht automatisch wiederholt.
 - Die authentifizierte Dashboard-API lädt Seller und Account aus eigenen
   Datensätzen, prüft Monitor-Besitz und erlaubt nur die Checkout-URL der
   verknüpften Vinted-Region.
@@ -37,8 +40,9 @@ ausschließlich synthetische Antworten und keine echten Vinted-Accounts.
 
 - `apps/control-center`: `npm run lint`, `npm run build` und
   `npm run test:unit` (29 Tests) erfolgreich.
-- Playwright: `auth.spec.ts` und `checkout.spec.ts`, Desktop Chromium und
-  Mobile Chrome (14 Tests) erfolgreich. Externe Checkout-Antworten sind
+- Playwright: zuletzt `checkout.spec.ts`, Desktop Chromium und Mobile Chrome
+  (10 Tests) erfolgreich; Auth-Grenzen zusätzlich im vorherigen Lauf geprüft.
+  Externe Checkout-Antworten sind
   vollständig abgefangen. Der lokale PostgreSQL-Server war nicht erreichbar;
   die neuen Ownership-/Feature-API-Tests verwenden isolierte Test-Doubles.
   Eine echte Datenbank-/Vinted-Integration ist dadurch nicht bestätigt.
@@ -48,6 +52,18 @@ ausschließlich synthetische Antworten und keine echten Vinted-Accounts.
 - Extension: `node scripts/validate-extension.mjs`, 32 Tests erfolgreich.
 - [Checkout-Vorschau mit synthetischem Account](screenshots/checkout-handoff.png).
   Erneut exportierbar mit `E2E_CHECKOUT_SCREENSHOT=true` beim Checkout-E2E-Test.
+
+### Noch nicht bestätigt: ausschließlich finale Kaufbestätigung
+
+Der automatische Link-Aufruf beseitigt den zusätzlichen Vintrack-Klick. Er
+beweist nicht, dass Vinted bereits Versand und Zahlungsmethode vollständig
+gewählt hat. Die vorhandenen Request-Beispiele zeigen ein Build sowie leere
+Komponenten und eine optionale Pickup-Auswahl, aber keine Vollständigkeit der
+finalen Checkout-Ansicht. Der anonyme GET auf `/checkout` lieferte am
+5. Oktober HTTP 307; die Authentifizierungsgrenze wurde nicht überschritten.
+Vor weiterer Implementierung zur vollständigen Auswahl sind ein freigegebener
+Testaccount, ein konkreter Artikel und sanitierte echte Checkout-Antworten nötig.
+Es wurde weiterhin kein echter Checkout angelegt.
 
 ## Ergebnis
 

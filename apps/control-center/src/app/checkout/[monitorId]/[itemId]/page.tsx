@@ -16,5 +16,5 @@ export default async function CheckoutPage({
     const path = await params;
     const ids = parseCheckoutIds(path.monitorId, path.itemId);
     if (!ids) notFound();
-    return <CheckoutHandoff {...ids} />;
+    return <CheckoutHandoff key={`${ids.monitorId}:${ids.itemId}`} {...ids} />;
 }

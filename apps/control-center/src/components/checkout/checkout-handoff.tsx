@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Loader2, ShoppingCart, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,8 @@ export function CheckoutHandoff({
     const [loading, setLoading] = useState(true);
     const [running, setRunning] = useState(false);
     const [opened, setOpened] = useState(false);
+    const started = useRef(false);
+    const inFlight = useRef(false);
     useEffect(() => {
         let cancelled = false;
         getCheckoutTarget(monitorId, itemId)
@@ -36,8 +38,9 @@ export function CheckoutHandoff({
         };
     }, [monitorId, itemId]);
 
-    async function start() {
-        if (running) return;
+    const start = useCallback(async () => {
+        if (inFlight.current) return;
+        inFlight.current = true;
         setRunning(true);
         setError("");
         try {
@@ -50,9 +53,36 @@ export function CheckoutHandoff({
                     : "Checkout could not be opened.",
             );
         } finally {
+            inFlight.current = false;
             setRunning(false);
         }
-    }
+    }, [monitorId, itemId]);
+
+    useEffect(() => {
+        if (!target) return;
+        function continueCheckout() {
+            // Plain GET previews never prepare checkout. A hidden or
+            // prerendered browser document waits until the user opens it.
+            if (
+                started.current ||
+                document.visibilityState !== "visible" ||
+                (document as Document & { prerendering?: boolean }).prerendering
+            )
+                return;
+            started.current = true;
+            void start();
+        }
+        document.addEventListener("visibilitychange", continueCheckout);
+        document.addEventListener("prerenderingchange", continueCheckout);
+        continueCheckout();
+        return () => {
+            document.removeEventListener("visibilitychange", continueCheckout);
+            document.removeEventListener(
+                "prerenderingchange",
+                continueCheckout,
+            );
+        };
+    }, [target, start]);
 
     return (
         <main className="mx-auto flex min-h-screen max-w-lg items-center px-5 py-10">
@@ -65,7 +95,11 @@ export function CheckoutHandoff({
                 </Link>
                 <div className="flex items-center gap-3">
                     <ShoppingCart className="text-primary size-6" />
-                    <h1 className="text-2xl font-bold">Open Vinted checkout</h1>
+                    <h1 className="text-2xl font-bold">
+                        {error
+                            ? "Checkout could not open"
+                            : "Opening Vinted checkout"}
+                    </h1>
                 </div>
                 {loading ? (
                     <p className="text-muted-foreground flex items-center gap-2">
@@ -90,12 +124,17 @@ export function CheckoutHandoff({
                         </p>
                     </div>
                 ) : null}
-                <p className="text-muted-foreground text-sm leading-6">
-                    We prepare checkout using your saved Vinted settings. Review
-                    the total, delivery and payment method on Vinted, then
-                    confirm the purchase there. Vinted may ask for missing
-                    details or a login.
-                </p>
+                {!error && !opened && !loading ? (
+                    <p
+                        role="status"
+                        className="text-muted-foreground flex items-center gap-2 text-sm"
+                    >
+                        <Loader2 className="size-4 animate-spin" />
+                        {running
+                            ? "Preparing your checkout…"
+                            : "Waiting for this tab to open…"}
+                    </p>
+                ) : null}
                 {error ? (
                     <p role="alert" className="text-destructive text-sm">
                         {error}
@@ -107,45 +146,49 @@ export function CheckoutHandoff({
                         purchase there.
                     </p>
                 ) : null}
-                <Button
-                    onClick={start}
-                    disabled={!target || running}
-                    className="w-full gap-2"
-                >
-                    {running ? (
-                        <Loader2 className="size-4 animate-spin" />
-                    ) : (
-                        <ShoppingCart className="size-4" />
-                    )}
-                    {running
-                        ? "Preparing checkout…"
-                        : opened
-                          ? "Reopen checkout"
-                          : "Open checkout"}
-                </Button>
-                <div className="flex flex-wrap gap-4 text-sm">
-                    {target ? (
-                        <a
-                            href={target.itemUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1 underline"
-                        >
-                            <ExternalLink className="size-3" />
-                            View on Vinted
-                        </a>
-                    ) : (
-                        <Link
-                            href={`/login?returnTo=${encodeURIComponent(`/checkout/${monitorId}/${itemId}`)}`}
-                            className="underline"
-                        >
-                            Sign in to Vintrack
+                {target && (error || opened) ? (
+                    <Button
+                        onClick={start}
+                        disabled={running}
+                        className="w-full gap-2"
+                    >
+                        {running ? (
+                            <Loader2 className="size-4 animate-spin" />
+                        ) : (
+                            <ShoppingCart className="size-4" />
+                        )}
+                        {running
+                            ? "Preparing checkout…"
+                            : opened
+                              ? "Reopen checkout"
+                              : "Try again"}
+                    </Button>
+                ) : null}
+                {error || opened ? (
+                    <div className="flex flex-wrap gap-4 text-sm">
+                        {target ? (
+                            <a
+                                href={target.itemUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1 underline"
+                            >
+                                <ExternalLink className="size-3" />
+                                View on Vinted
+                            </a>
+                        ) : (
+                            <Link
+                                href={`/login?returnTo=${encodeURIComponent(`/checkout/${monitorId}/${itemId}`)}`}
+                                className="underline"
+                            >
+                                Sign in to Vintrack
+                            </Link>
+                        )}
+                        <Link href="/account" className="underline">
+                            Manage linked account
                         </Link>
-                    )}
-                    <Link href="/account" className="underline">
-                        Manage linked account
-                    </Link>
-                </div>
+                    </div>
+                ) : null}
             </section>
         </main>
     );
