@@ -51,6 +51,14 @@ handles signing, review, installation, and updates for the public build.
 
 ## Checkout handoff
 
+Every Vintrack user must first accept the checkout risk overlay, covering account
+restrictions/bans, technical errors, payment risks and use at their own risk.
+Acceptance is stored per user with a warning version and timestamp. Dashboard
+buttons and notification links stop before any checkout request until acceptance;
+the server also blocks older clients and legacy endpoints. The separate
+auto-payment opt-in and price limit remain required. See
+[checkout risk warning](../../docs/checkout-risk-warning.md).
+
 Version 0.3.0 advertises checkout preparation protocol 5 to Vintrack. The
 dashboard's Open Checkout action verifies that the Vinted browser account
 matches the linked account, applies the delivery/payment preferences selected

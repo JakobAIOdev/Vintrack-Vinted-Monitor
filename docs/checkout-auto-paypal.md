@@ -2,6 +2,11 @@
 
 Stand: 5. Oktober 2026, Branch `feature/checkout-handoff`.
 
+Vor der Nutzung von Checkout oder Auto-Checkout muss jeder Nutzer zusätzlich
+das [allgemeine Risiko-Overlay](checkout-risk-warning.md) ausdrücklich
+akzeptieren. Die Zustimmung wird mit Textversion und Zeitpunkt am Nutzer
+gespeichert; bestehende Zahlungs-Opt-ins ersetzen sie nicht.
+
 Unter Account kann ein Nutzer PayPal-Auto-Checkout einschalten, die Warnung
 bestätigen und ein maximales EUR-Gesamtlimit einschließlich Versand und Gebühren
 festlegen. Standardmäßig ist die Option aus. Dashboard-Warenkorb und

@@ -1,5 +1,6 @@
 import { guardApiFeature } from "@/lib/features.server";
 import { auth } from "@/auth";
+import { guardCheckoutConsent } from "@/lib/checkout-consent.server";
 import { NextRequest, NextResponse } from "next/server";
 import { logAuditEvent } from "@/lib/audit";
 
@@ -16,6 +17,8 @@ export async function GET() {
         "checkout_links",
     );
     if (featureDenied) return featureDenied;
+    const consentDenied = await guardCheckoutConsent(session.user.id);
+    if (consentDenied) return consentDenied;
 
     try {
         const res = await fetch(`${API_URL}/api/items/checkout-links`, {
@@ -40,6 +43,8 @@ export async function POST(req: NextRequest) {
         "checkout_links",
     );
     if (featureDenied) return featureDenied;
+    const consentDenied = await guardCheckoutConsent(session.user.id);
+    if (consentDenied) return consentDenied;
 
     try {
         const body = await req.text();

@@ -8,6 +8,10 @@ import {
     parseCheckoutIds,
 } from "@/lib/checkout";
 import { NextRequest, NextResponse } from "next/server";
+import {
+    CHECKOUT_RISK_WARNING_VERSION,
+    CHECKOUT_CONSENT_REQUIRED,
+} from "@/lib/checkout-consent";
 
 const API_URL = process.env.VINTED_SERVICE_URL || "http://localhost:4000";
 type Context = { params: Promise<{ monitorId: string; itemId: string }> };
@@ -54,6 +58,17 @@ async function handle(
             ids.monitorId,
             ids.itemId,
         );
+        if (
+            prepare &&
+            target.riskConsentVersion !== CHECKOUT_RISK_WARNING_VERSION
+        )
+            return NextResponse.json(
+                {
+                    code: CHECKOUT_CONSENT_REQUIRED,
+                    error: "Accept the checkout risk warning before using checkout.",
+                },
+                { status: 403 },
+            );
         const browserPrepareOnly =
             prepare &&
             request.headers.get("x-vintrack-checkout-mode") === "browser";
@@ -77,9 +92,23 @@ async function handle(
             );
         // GET is read-only, including link previews and Next.js prefetches.
         if (!prepare)
-            return NextResponse.json(target, {
-                headers: { "Cache-Control": "private, no-store" },
-            });
+            return NextResponse.json(
+                target.riskConsentVersion === CHECKOUT_RISK_WARNING_VERSION
+                    ? target
+                    : {
+                          code: CHECKOUT_CONSENT_REQUIRED,
+                          error: "Accept the checkout risk warning before using checkout.",
+                          target,
+                      },
+                {
+                    status:
+                        target.riskConsentVersion ===
+                        CHECKOUT_RISK_WARNING_VERSION
+                            ? 200
+                            : 403,
+                    headers: { "Cache-Control": "private, no-store" },
+                },
+            );
         const response = await fetch(`${API_URL}/api/items/checkout/prepare`, {
             method: "POST",
             headers: {

@@ -23,6 +23,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { CHECKOUT_RISK_WARNING_VERSION } from "@/lib/checkout-consent";
+import { requestCheckoutConsent } from "@/lib/checkout-consent.client";
 
 export function CheckoutPreferencesCard({
     accountKey,
@@ -38,12 +40,16 @@ export function CheckoutPreferencesCard({
     const [warningAccepted, setWarningAccepted] = useState(false);
     const [maxTotal, setMaxTotal] = useState("");
     const [pending, startTransition] = useTransition();
+    const [riskConsentVersion, setRiskConsentVersion] = useState<number | null>(
+        null,
+    );
     useEffect(() => {
         let cancelled = false;
         getCheckoutPreferenceSettings()
             .then((value) => {
                 if (!cancelled) {
                     setPreferences(value.preferences);
+                    setRiskConsentVersion(value.riskConsentVersion);
                     setDomain(value.domain);
                     setAutoEnabled(Boolean(value.preferences.autoCheckout));
                     setWarningAccepted(Boolean(value.preferences.autoCheckout));
@@ -228,6 +234,16 @@ export function CheckoutPreferencesCard({
                     onClick={() =>
                         startTransition(async () => {
                             try {
+                                if (
+                                    autoEnabled &&
+                                    riskConsentVersion !==
+                                        CHECKOUT_RISK_WARNING_VERSION
+                                ) {
+                                    await requestCheckoutConsent();
+                                    setRiskConsentVersion(
+                                        CHECKOUT_RISK_WARNING_VERSION,
+                                    );
+                                }
                                 const result = await saveCheckoutPreferences({
                                     shipping: preferences.shipping,
                                     payment: preferences.payment,

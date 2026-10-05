@@ -7,16 +7,30 @@ import {
     checkoutPaymentAllowed,
     autoCheckoutAllowed,
 } from "@/lib/checkout";
+import {
+    checkoutRiskAccepted,
+    CHECKOUT_RISK_WARNING_VERSION,
+} from "@/lib/checkout-consent";
 
-export async function loadCheckoutPreferences(
+export async function loadCheckoutSettings(
     userId: string,
     accountId: number,
     domain: string,
 ) {
     const user = await db.user.findUnique({
         where: { id: userId },
-        select: { checkout_preferences: true },
+        select: {
+            checkout_preferences: true,
+            checkout_risk_version: true,
+            checkout_risk_accepted_at: true,
+        },
     });
+    const riskConsentVersion = checkoutRiskAccepted(
+        user?.checkout_risk_version,
+        user?.checkout_risk_accepted_at,
+    )
+        ? CHECKOUT_RISK_WARNING_VERSION
+        : null;
     const stored = user?.checkout_preferences;
     if (
         stored &&
@@ -28,18 +42,32 @@ export async function loadCheckoutPreferences(
     ) {
         if (!checkoutPaymentAllowed(domain, stored.preferences.payment))
             return {
-                shipping: stored.preferences.shipping,
-                payment: "wallet" as const,
+                riskConsentVersion,
+                preferences: {
+                    shipping: stored.preferences.shipping,
+                    payment: "wallet" as const,
+                },
             };
         if (
             stored.preferences.autoCheckout &&
             !autoCheckoutAllowed(domain, stored.preferences.payment)
         )
             return {
-                shipping: stored.preferences.shipping,
-                payment: stored.preferences.payment,
+                riskConsentVersion,
+                preferences: {
+                    shipping: stored.preferences.shipping,
+                    payment: stored.preferences.payment,
+                },
             };
-        return stored.preferences;
+        return { riskConsentVersion, preferences: stored.preferences };
     }
-    return DEFAULT_CHECKOUT_PREFERENCES;
+    return { riskConsentVersion, preferences: DEFAULT_CHECKOUT_PREFERENCES };
+}
+
+export async function loadCheckoutPreferences(
+    userId: string,
+    accountId: number,
+    domain: string,
+) {
+    return (await loadCheckoutSettings(userId, accountId, domain)).preferences;
 }

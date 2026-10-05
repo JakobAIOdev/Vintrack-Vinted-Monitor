@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
+import { CheckoutRiskDialog } from "@/components/checkout/checkout-risk-dialog";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -26,6 +27,7 @@ export default function RootLayout({
             <body className={`${inter.className} min-h-screen antialiased`}>
                 <ThemeProvider>
                     {children}
+                    <CheckoutRiskDialog />
                     <Toaster position="top-right" richColors />
                 </ThemeProvider>
             </body>

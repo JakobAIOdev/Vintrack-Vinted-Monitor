@@ -128,14 +128,32 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		if feature := featureForPath(r.URL.Path); feature != "" {
-			if userID := getUserID(r); userID != "" && !s.requireFeature(w, userID, feature) {
-				return
+			if userID := getUserID(r); userID != "" {
+				if !s.requireFeature(w, userID, feature) {
+					return
+				}
+				if feature == "checkout_links" && !s.requireCheckoutConsent(w, userID) {
+					return
+				}
 			}
 		}
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start).Round(time.Millisecond))
 	})
+}
+
+func (s *Server) requireCheckoutConsent(w http.ResponseWriter, userID string) bool {
+	accepted, err := s.sessions.CheckoutConsentAccepted(userID)
+	if err != nil {
+		writeError(w, "checkout consent unavailable", http.StatusServiceUnavailable)
+		return false
+	}
+	if !accepted {
+		writeJSON(w, http.StatusForbidden, map[string]string{"code": "CHECKOUT_CONSENT_REQUIRED", "error": "Accept the checkout risk warning in Vintrack before using checkout."})
+		return false
+	}
+	return true
 }
 
 func getUserID(r *http.Request) string {

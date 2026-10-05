@@ -7,6 +7,7 @@ const autoPreferences = {
 };
 
 const target = {
+    riskConsentVersion: 1,
     itemId: 123,
     monitorId: 17,
     sellerId: 456,
@@ -17,6 +18,208 @@ const target = {
     title: "Vintage Nike jacket",
     price: "25.00 EUR",
 };
+
+for (const auto of [false, true]) {
+    test(`risk warning blocks ${auto ? "auto-checkout" : "normal checkout"} until explicitly accepted`, async ({
+        page,
+    }) => {
+        let accepted = false;
+        let preparations = 0;
+        let saves = 0;
+        const currentTarget = () => ({
+            ...target,
+            preferences: auto ? autoPreferences : undefined,
+            riskConsentVersion: accepted ? 1 : null,
+        });
+        await page.route("**/api/checkout/17/123", (route) => {
+            if (route.request().method() === "POST") {
+                preparations++;
+                expect(accepted).toBe(true);
+                return route.fulfill({
+                    json: {
+                        checkoutUrl:
+                            "https://www.vinted.de/checkout?purchase_id=synthetic",
+                    },
+                });
+            }
+            return route.fulfill(
+                accepted
+                    ? { json: currentTarget() }
+                    : {
+                          status: 403,
+                          json: {
+                              code: "CHECKOUT_CONSENT_REQUIRED",
+                              target: currentTarget(),
+                          },
+                      },
+            );
+        });
+        await page.route("**/api/checkout/consent", async (route) => {
+            expect(route.request().postDataJSON()).toEqual({
+                version: 1,
+                accepted: true,
+            });
+            saves++;
+            accepted = true;
+            await route.fulfill({ json: { accepted: true, version: 1 } });
+        });
+        await page.route("https://www.vinted.de/**", (route) =>
+            route.fulfill({
+                contentType: "text/html",
+                body: "<h1>Synthetic Vinted checkout</h1>",
+            }),
+        );
+        if (
+            process.env.E2E_CHECKOUT_RISK_SCREENSHOT === "true" &&
+            test.info().project.name === "chromium"
+        )
+            await page.setViewportSize({ width: 1280, height: 900 });
+        await page.goto("/checkout/17/123");
+        const dialog = page.getByRole("dialog", {
+            name: "Before you use checkout",
+        });
+        await expect(dialog).toBeVisible();
+        await expect(dialog.getByText(/permanently banned/)).toBeVisible();
+        await expect(dialog.getByText(/Use at your own risk/)).toBeVisible();
+        if (auto)
+            await expect(
+                dialog.getByText(/Your saved auto-checkout mode is enabled/),
+            ).toBeVisible();
+        const accept = dialog.getByRole("button", {
+            name: "Accept risks and continue",
+        });
+        await expect(accept).toBeDisabled();
+        expect(preparations).toBe(0);
+        expect(saves).toBe(0);
+        if (!auto && process.env.E2E_CHECKOUT_RISK_SCREENSHOT === "true")
+            await page.screenshot({
+                animations: "disabled",
+                path: `../../docs/screenshots/checkout-risk-${test.info().project.name}.png`,
+            });
+        await dialog.getByRole("checkbox").check();
+        await accept.click();
+        await expect(page).toHaveURL(
+            "https://www.vinted.de/checkout?purchase_id=synthetic",
+        );
+        expect(saves).toBe(1);
+        expect(preparations).toBe(1);
+        // Persisted server consent skips the warning on the next link; there is
+        // no additional consent-status request on the normal fast path.
+        await page.goto("/checkout/17/123");
+        await expect(page).toHaveURL(
+            "https://www.vinted.de/checkout?purchase_id=synthetic",
+        );
+        expect(saves).toBe(1);
+        expect(preparations).toBe(2);
+    });
+}
+
+test("cancelling or failing to save consent never prepares a checkout", async ({
+    page,
+}) => {
+    let preparations = 0;
+    await page.route("**/api/checkout/17/123", (route) => {
+        if (route.request().method() === "POST") preparations++;
+        return route.fulfill({
+            status: 403,
+            json: {
+                code: "CHECKOUT_CONSENT_REQUIRED",
+                target: { ...target, riskConsentVersion: null },
+            },
+        });
+    });
+    await page.route("**/api/checkout/consent", (route) =>
+        route.fulfill({
+            status: 503,
+            json: { error: "Acceptance could not be saved." },
+        }),
+    );
+    await page.goto("/checkout/17/123");
+    const dialog = page.getByRole("dialog", {
+        name: "Before you use checkout",
+    });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("checkbox").check();
+    await dialog
+        .getByRole("button", { name: "Accept risks and continue" })
+        .click();
+    await expect(dialog.getByRole("alert")).toHaveText(
+        "Acceptance could not be saved.",
+    );
+    expect(preparations).toBe(0);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(
+        page.getByRole("alert").filter({ hasText: "Checkout cancelled" }),
+    ).toBeVisible();
+    expect(preparations).toBe(0);
+});
+
+test("unaccepted users cannot run an extension preflight or consume a payment claim", async ({
+    page,
+}) => {
+    let extensionRequests = 0;
+    let claims = 0;
+    await page.exposeFunction("checkoutRequestProbe", () => {
+        extensionRequests++;
+    });
+    await page.addInitScript(() => {
+        window.addEventListener("message", (event) => {
+            if (event.source !== window) return;
+            if (event.data?.type === "VINTRACK_EXTENSION_PING")
+                window.postMessage(
+                    {
+                        type: "VINTRACK_EXTENSION_READY",
+                        payload: {
+                            configured: true,
+                            checkoutPrepareVersion: 5,
+                        },
+                    },
+                    window.location.origin,
+                );
+            if (event.data?.type === "VINTRACK_EXTENSION_BUY")
+                void (
+                    window as unknown as {
+                        checkoutRequestProbe: () => Promise<void>;
+                    }
+                ).checkoutRequestProbe();
+        });
+    });
+    await page.route("**/api/checkout/17/123", (route) => {
+        if (route.request().method() === "POST") claims++;
+        return route.fulfill({
+            status: 403,
+            json: {
+                code: "CHECKOUT_CONSENT_REQUIRED",
+                target: {
+                    ...target,
+                    riskConsentVersion: null,
+                    preferences: autoPreferences,
+                },
+            },
+        });
+    });
+    await page.route("**/api/checkout/consent", (route) =>
+        route.fulfill({
+            status: 503,
+            json: { error: "Acceptance could not be saved." },
+        }),
+    );
+    await page.goto("/checkout/17/123");
+    const dialog = page.getByRole("dialog", {
+        name: "Before you use checkout",
+    });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("checkbox").check();
+    await dialog
+        .getByRole("button", { name: "Accept risks and continue" })
+        .click();
+    await expect(dialog.getByRole("alert")).toHaveText(
+        "Acceptance could not be saved.",
+    );
+    expect(extensionRequests).toBe(0);
+    expect(claims).toBe(0);
+});
 
 test("auto-checkout refuses protocol 3 before requesting a payment authorization", async ({
     page,

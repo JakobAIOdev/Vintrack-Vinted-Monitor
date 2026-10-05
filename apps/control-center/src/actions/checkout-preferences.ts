@@ -9,7 +9,11 @@ import {
     isCheckoutPreferences,
     type CheckoutPreferences,
 } from "@/lib/checkout";
-import { loadCheckoutPreferences } from "@/lib/checkout-preferences.server";
+import {
+    loadCheckoutPreferences,
+    loadCheckoutSettings,
+} from "@/lib/checkout-preferences.server";
+import { guardCheckoutConsent } from "@/lib/checkout-consent.server";
 import { getFeatureAccessForUser } from "@/lib/features.server";
 import { revalidatePath } from "next/cache";
 
@@ -40,11 +44,11 @@ export async function getCheckoutPreferenceSettings() {
     const account = await linkedAccount();
     return {
         domain: account.domain,
-        preferences: await loadCheckoutPreferences(
+        ...(await loadCheckoutSettings(
             account.userId,
             account.accountId,
             account.domain,
-        ),
+        )),
     };
 }
 
@@ -70,6 +74,13 @@ export async function saveCheckoutPreferences(
             .allowed
     )
         return { error: "Checkout is unavailable for your account." };
+    if (
+        preferences.autoCheckout &&
+        (await guardCheckoutConsent(account.userId))
+    )
+        return {
+            error: "Accept the checkout risk warning before enabling auto-checkout.",
+        };
     await db.user.update({
         where: { id: account.userId },
         data: {

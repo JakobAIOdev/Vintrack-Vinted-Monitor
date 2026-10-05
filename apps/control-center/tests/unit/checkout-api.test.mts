@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
 import * as checkout from "../../src/lib/checkout.ts";
+import * as checkoutConsent from "../../src/lib/checkout-consent.ts";
 
 function harness(
     options: {
@@ -17,6 +18,8 @@ function harness(
         upstreamPaymentUrl?: string;
         upstreamStatus?: string;
         browserAuthorized?: boolean;
+        riskConsentVersion?: number;
+        missingConsentDate?: boolean;
     } = {},
 ) {
     const databaseCalls: unknown[] = [];
@@ -24,7 +27,13 @@ function harness(
     const db = {
         user: {
             async findUnique() {
-                return { checkout_preferences: options.preferences };
+                return {
+                    checkout_preferences: options.preferences,
+                    checkout_risk_version: options.riskConsentVersion ?? 1,
+                    checkout_risk_accepted_at: options.missingConsentDate
+                        ? null
+                        : new Date("2026-10-05T12:00:00Z"),
+                };
             },
         },
         items: {
@@ -75,6 +84,7 @@ function harness(
         "server-only": {},
         "@/lib/db": { db },
         "@/lib/checkout": checkout,
+        "@/lib/checkout-consent": checkoutConsent,
         "@/auth": {
             auth: async () =>
                 options.anonymous ? null : { user: { id: "synthetic-member" } },
@@ -180,6 +190,30 @@ test("GET reads only authorized metadata and never calls the Vinted service", as
     assert.equal(data.accountId, 42);
     assert.equal(data.itemUrl, "https://www.vinted.de/items/123");
     assert.equal(h.serviceCalls.length, 0);
+});
+
+test("missing, outdated or undated consent blocks checkout and browser payment claims", async () => {
+    for (const options of [
+        { riskConsentVersion: 0 },
+        { riskConsentVersion: 2 },
+        { missingConsentDate: true },
+    ]) {
+        const h = harness(options);
+        const preview = await h.call();
+        assert.equal(preview.status, 403);
+        const data = await preview.json();
+        assert.equal(data.code, "CHECKOUT_CONSENT_REQUIRED");
+        assert.equal(data.target.riskConsentVersion, null);
+        for (const headers of [{}, { "X-Vintrack-Checkout-Mode": "browser" }]) {
+            const response = await h.call("POST", headers);
+            assert.equal(response.status, 403);
+            assert.equal(
+                (await response.json()).code,
+                "CHECKOUT_CONSENT_REQUIRED",
+            );
+        }
+        assert.equal(h.serviceCalls.length, 0);
+    }
 });
 
 test("POST uses the authenticated identity and stored seller, including behind an HTTPS proxy", async () => {

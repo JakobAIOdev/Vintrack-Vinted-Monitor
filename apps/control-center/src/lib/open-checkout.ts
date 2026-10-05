@@ -8,6 +8,11 @@ import {
     type CheckoutTarget,
 } from "@/lib/checkout";
 import { runBrowserBuyViaExtension } from "@/lib/vintrack-extension";
+import {
+    CHECKOUT_RISK_WARNING_VERSION,
+    CHECKOUT_CONSENT_REQUIRED,
+} from "@/lib/checkout-consent";
+import { requestCheckoutConsent } from "@/lib/checkout-consent.client";
 
 const pending = new Map<string, Promise<string | undefined>>();
 
@@ -51,6 +56,14 @@ export async function getCheckoutTarget(
         cache: "no-store",
     });
     const data = await response.json();
+    // The server blocks old clients here too. Current clients may display the
+    // read-only preview, but cannot prepare until the user accepts the warning.
+    if (
+        response.status === 403 &&
+        data.code === CHECKOUT_CONSENT_REQUIRED &&
+        data.target?.riskConsentVersion === null
+    )
+        return data.target;
     if (!response.ok)
         throw new Error(
             data.error ||
@@ -81,13 +94,25 @@ async function startCheckout(
     itemId: number,
     loadedTarget?: CheckoutTarget,
 ) {
-    const startedAt = performance.now();
+    let startedAt = performance.now();
     let authorizationMs = 0;
     let readinessMs = 0;
-    const [target, extensionAvailable] = await Promise.all([
+    const [initialTarget, extensionAvailable] = await Promise.all([
         loadedTarget ?? getCheckoutTarget(monitorId, itemId),
         hasCheckoutExtension(),
     ]);
+    let target = initialTarget;
+    if (target.riskConsentVersion !== CHECKOUT_RISK_WARNING_VERSION) {
+        await requestCheckoutConsent(Boolean(target.preferences?.autoCheckout));
+        // Fetch current saved choices after reading the warning. No Vinted
+        // requests or payment claims may run while consent is pending.
+        target = await getCheckoutTarget(monitorId, itemId);
+        if (target.riskConsentVersion !== CHECKOUT_RISK_WARNING_VERSION)
+            throw new Error(
+                "Your checkout acceptance could not be verified. Checkout has not started.",
+            );
+        startedAt = performance.now();
+    }
     if (extensionAvailable) {
         if (target.preferences?.autoCheckout && extensionAvailable < 5)
             throw new Error(

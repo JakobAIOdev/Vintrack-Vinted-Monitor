@@ -5,7 +5,12 @@ import vm from "node:vm";
 import ts from "typescript";
 import * as checkout from "../../src/lib/checkout.ts";
 
-function harness(domain: string, anonymous = false, denied = false) {
+function harness(
+    domain: string,
+    anonymous = false,
+    denied = false,
+    consentDenied = false,
+) {
     const writes: unknown[] = [];
     const modules: Record<string, unknown> = {
         "@/auth": {
@@ -16,6 +21,14 @@ function harness(domain: string, anonymous = false, denied = false) {
         "@/lib/checkout-preferences.server": {
             loadCheckoutPreferences: async () =>
                 checkout.DEFAULT_CHECKOUT_PREFERENCES,
+            loadCheckoutSettings: async () => ({
+                preferences: checkout.DEFAULT_CHECKOUT_PREFERENCES,
+                riskConsentVersion: 1,
+            }),
+        },
+        "@/lib/checkout-consent.server": {
+            guardCheckoutConsent: async () =>
+                consentDenied ? Response.json({}, { status: 403 }) : null,
         },
         "@/lib/features.server": {
             getFeatureAccessForUser: async () => ({ allowed: !denied }),
@@ -74,6 +87,24 @@ function harness(domain: string, anonymous = false, denied = false) {
         load: exports.getCheckoutPreferenceSettings,
     };
 }
+
+test("the separate auto-payment opt-in cannot replace general checkout risk consent", async () => {
+    const h = harness("www.vinted.de", false, false, true);
+    assert.ok(
+        (
+            (await h.save({
+                shipping: "home",
+                payment: "paypal",
+                autoCheckout: {
+                    warningVersion: 1,
+                    currency: "EUR",
+                    maxTotalMinor: 3000,
+                },
+            })) as { error?: string }
+        ).error,
+    );
+    assert.equal(h.writes.length, 0);
+});
 
 test("regional payment saves use the caller's linked account, not supplied region data", async () => {
     for (const [domain, payment] of [

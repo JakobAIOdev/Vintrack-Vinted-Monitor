@@ -9,6 +9,7 @@ export type CheckoutTarget = {
     title: string;
     price: string | null;
     preferences?: CheckoutPreferences;
+    riskConsentVersion?: number | null;
 };
 
 export type CheckoutPreferences = {

@@ -126,6 +126,13 @@ func (m *Manager) FeatureAccess(userID string, feature string) (FeatureAccess, e
 	return m.store.FeatureAccess(m.ctx, userID, feature)
 }
 
+func (m *Manager) CheckoutConsentAccepted(userID string) (bool, error) {
+	if m.store == nil {
+		return false, fmt.Errorf("checkout consent storage unavailable")
+	}
+	return m.store.CheckoutConsentAccepted(m.ctx, userID)
+}
+
 func (m *Manager) Close() error {
 	if m.store != nil {
 		_ = m.store.Close()

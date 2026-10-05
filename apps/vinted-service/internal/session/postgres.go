@@ -46,6 +46,18 @@ type FeatureAccess struct {
 	Dependency string
 }
 
+// Keep this version in sync with control-center's CHECKOUT_RISK_WARNING_VERSION.
+const checkoutRiskWarningVersion = 1
+
+func (s *persistentStore) CheckoutConsentAccepted(ctx context.Context, userID string) (bool, error) {
+	var accepted bool
+	err := s.db.QueryRowContext(ctx, `SELECT checkout_risk_version = $2 AND checkout_risk_accepted_at IS NOT NULL FROM "User" WHERE id = $1`, userID, checkoutRiskWarningVersion).Scan(&accepted)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return accepted && err == nil, err
+}
+
 func (s *persistentStore) FeatureAccess(ctx context.Context, userID string, feature string) (FeatureAccess, error) {
 	var role string
 	var enabled, freeEnabled, premiumEnabled, adminEnabled bool
