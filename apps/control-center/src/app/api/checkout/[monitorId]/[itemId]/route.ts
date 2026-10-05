@@ -1,7 +1,12 @@
 import { auth } from "@/auth";
 import { guardApiFeature } from "@/lib/features.server";
 import { CheckoutTargetError, loadCheckoutTarget } from "@/lib/checkout.server";
-import { isCheckoutUrl, parseCheckoutIds } from "@/lib/checkout";
+import {
+    isCheckoutUrl,
+    isPayPalPaymentUrl,
+    checkoutPreferencesKey,
+    parseCheckoutIds,
+} from "@/lib/checkout";
 import { NextRequest, NextResponse } from "next/server";
 
 const API_URL = process.env.VINTED_SERVICE_URL || "http://localhost:4000";
@@ -49,6 +54,27 @@ async function handle(
             ids.monitorId,
             ids.itemId,
         );
+        const browserPrepareOnly =
+            prepare &&
+            request.headers.get("x-vintrack-checkout-mode") === "browser";
+        if (browserPrepareOnly && !target.preferences?.autoCheckout)
+            return NextResponse.json(
+                { error: "Auto-checkout is not enabled." },
+                { status: 400 },
+            );
+        if (
+            browserPrepareOnly &&
+            (request.headers.get("x-vintrack-checkout-account") !==
+                `${target.accountId}@${target.domain}` ||
+                request.headers.get("x-vintrack-checkout-preferences") !==
+                    checkoutPreferencesKey(target.preferences!))
+        )
+            return NextResponse.json(
+                {
+                    error: "Checkout preferences or linked account changed. Reload the buy link.",
+                },
+                { status: 409 },
+            );
         // GET is read-only, including link previews and Next.js prefetches.
         if (!prepare)
             return NextResponse.json(target, {
@@ -66,6 +92,7 @@ async function handle(
                 account_id: target.accountId,
                 domain: target.domain,
                 preferences: target.preferences,
+                ...(browserPrepareOnly ? { browser_prepare_only: true } : {}),
             }),
             cache: "no-store",
             signal: AbortSignal.timeout(90_000),
@@ -79,13 +106,30 @@ async function handle(
                 },
                 { status: response.status },
             );
+        if (browserPrepareOnly)
+            return NextResponse.json(
+                {
+                    browserPaymentAuthorized:
+                        data?.browser_payment_authorized === true,
+                },
+                { headers: { "Cache-Control": "private, no-store" } },
+            );
         if (!isCheckoutUrl(data?.checkout_url, target.domain))
             return NextResponse.json(
                 { error: "Vinted did not return a valid checkout link." },
                 { status: 502 },
             );
         return NextResponse.json(
-            { checkoutUrl: data.checkout_url, status: data.status },
+            {
+                checkoutUrl: data.checkout_url,
+                status: data.status,
+                autoCheckoutReason: data.auto_checkout_reason,
+                ...(target.preferences?.autoCheckout &&
+                data.status === "paypal_redirect_ready" &&
+                isPayPalPaymentUrl(data.payment_url)
+                    ? { paymentUrl: data.payment_url }
+                    : {}),
+            },
             { headers: { "Cache-Control": "private, no-store" } },
         );
     } catch (error) {

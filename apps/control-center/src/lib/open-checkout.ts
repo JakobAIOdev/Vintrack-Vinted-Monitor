@@ -3,11 +3,13 @@
 import {
     checkoutApiPath,
     isCheckoutUrl,
+    isPayPalPaymentUrl,
+    checkoutPreferencesKey,
     type CheckoutTarget,
 } from "@/lib/checkout";
 import { runBrowserBuyViaExtension } from "@/lib/vintrack-extension";
 
-const pending = new Map<string, Promise<void>>();
+const pending = new Map<string, Promise<string | undefined>>();
 
 function hasCheckoutExtension() {
     return new Promise<number>((resolve) => {
@@ -84,6 +86,30 @@ async function startCheckout(
         hasCheckoutExtension(),
     ]);
     if (extensionAvailable) {
+        if (target.preferences?.autoCheckout && extensionAvailable < 4)
+            throw new Error(
+                "Update or reload the Vintrack extension to use auto-checkout (version 0.2.5 or later).",
+            );
+        if (target.preferences?.autoCheckout) {
+            const authorization = await fetch(
+                checkoutApiPath(monitorId, itemId),
+                {
+                    method: "POST",
+                    headers: {
+                        "X-Vintrack-Checkout-Mode": "browser",
+                        "X-Vintrack-Checkout-Account": `${target.accountId}@${target.domain}`,
+                        "X-Vintrack-Checkout-Preferences":
+                            checkoutPreferencesKey(target.preferences),
+                    },
+                },
+            );
+            const data = await authorization.json();
+            if (!authorization.ok || data.browserPaymentAuthorized !== true)
+                throw new Error(
+                    data.error ||
+                        "Auto-checkout could not be authorized. Check Vinted before trying again.",
+                );
+        }
         if (
             extensionAvailable < 3 &&
             target.preferences &&
@@ -117,6 +143,15 @@ async function startCheckout(
             );
         if (!isCheckoutUrl(result.checkoutUrl, target.domain))
             throw new Error("Vinted did not return a valid checkout link.");
+        if (
+            result.paymentUrl &&
+            (!target.preferences?.autoCheckout ||
+                result.status !== "paypal_redirect_ready" ||
+                !isPayPalPaymentUrl(result.paymentUrl))
+        )
+            throw new Error(
+                "The payment destination could not be verified. Check Vinted before trying again.",
+            );
         await fetch("/api/items/checkout-links", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -129,7 +164,7 @@ async function startCheckout(
                 status: result.status || "checkout_review_required",
             }),
         }).catch(() => {});
-        return;
+        return result.autoCheckoutReason;
     }
     const response = await fetch(checkoutApiPath(monitorId, itemId), {
         method: "POST",
@@ -140,5 +175,13 @@ async function startCheckout(
     if (!isCheckoutUrl(data.checkoutUrl, target.domain))
         throw new Error("Vinted did not return a valid checkout link.");
     // Navigation in this tab also works in mobile browsers with popup blocking.
-    window.location.assign(data.checkoutUrl);
+    if (
+        data.paymentUrl &&
+        target.preferences?.autoCheckout &&
+        data.status === "paypal_redirect_ready" &&
+        isPayPalPaymentUrl(data.paymentUrl)
+    )
+        window.location.assign(data.paymentUrl);
+    else window.location.assign(data.checkoutUrl);
+    return data.autoCheckoutReason as string | undefined;
 }

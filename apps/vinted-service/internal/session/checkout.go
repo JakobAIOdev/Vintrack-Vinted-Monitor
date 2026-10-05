@@ -17,6 +17,13 @@ func checkoutPreparationKey(sess *VintedSession, itemID int64) string {
 const CheckoutPreparationTTL = 10 * time.Minute
 const checkoutPreparationLockTTL = 2 * time.Minute
 
+// Shared by browser and service. Relinking, cache expiry and a different browser
+// must not automatically replay an uncertain payment for the same identity/item.
+func (m *Manager) ReserveAutoCheckout(sess *VintedSession, itemID int64) (bool, error) {
+	key := fmt.Sprintf("vinted:auto-checkout-attempt:%s:%d:%s:%d", sess.UserID, sess.VintedUserID, sess.Domain, itemID)
+	return m.redis.SetNX(m.ctx, key, time.Now().UTC().Format(time.RFC3339), 0).Result()
+}
+
 func (m *Manager) AcquireCheckoutPreparation(sess *VintedSession, itemID int64) (string, bool, error) {
 	token, err := m.newBrowserSyncCode()
 	if err != nil {

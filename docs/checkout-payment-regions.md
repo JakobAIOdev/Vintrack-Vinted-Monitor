@@ -54,7 +54,9 @@ Checkout-Mutation oder Zahlung war für diese Recherche nötig.
   bleibt der Checkout zur Prüfung offen. Keine erfundenen Karten- oder Method-IDs.
 - `checkout_prepared` setzt die bestätigte gewünschte Zahlart voraus; fehlende
   oder unbekannte Optionen ergeben `checkout_review_required`. Wallet bleibt
-  konservativ zur Prüfung offen. Kein Payment-Request und kein Auto-Kauf.
+  konservativ zur Prüfung offen. Normaler Oneclick sendet keinen Payment-Request.
+  Der separate, ausdrücklich aktivierte [PayPal-Auto-Checkout](checkout-auto-paypal.md)
+  kann nach dem Kaufklick einen Payment-Request senden.
 - Extension 0.2.4 / Prepare-Protokoll 3 verarbeitet die neuen Zahlarten. Bei
   alten Erweiterungen erscheint für neue Vorgaben eine Update-Aufforderung vor
   jeder Mutation. Die ursprünglichen Vorgaben bleiben mit Protokoll 2 kompatibel.

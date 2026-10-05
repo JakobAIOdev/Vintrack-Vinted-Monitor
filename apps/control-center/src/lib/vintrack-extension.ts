@@ -14,6 +14,8 @@ export type BrowserBuyResult =
           purchaseId?: string;
           transactionId?: number;
           status?: string;
+          paymentUrl?: string;
+          autoCheckoutReason?: string;
       }
     | {
           ok: false;

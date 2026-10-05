@@ -51,12 +51,12 @@ handles signing, review, installation, and updates for the public build.
 
 ## Checkout handoff
 
-Version 0.2.4 advertises checkout preparation protocol 3 to Vintrack. The
+Version 0.2.5 advertises checkout preparation protocol 4 to Vintrack. The
 dashboard's Open Checkout action verifies that the Vinted browser account
 matches the linked account, applies the delivery/payment preferences selected
 in Vintrack Account, and opens its checkout page. Home delivery and available
-PayPal are preselected; Vinted applies wallet funds automatically. It never
-submits checkout/payment or confirms the purchase. Missing or unavailable
+PayPal are preselected; Vinted applies wallet funds automatically. Normal
+Oneclick never submits checkout/payment or confirms the purchase. Missing or unavailable
 delivery/payment choices remain for the user on Vinted. Home delivery with
 confirmed selections has been tested on the DE site; wallet-only readiness and
 mobile/in-app browser handoff have not been live verified.
@@ -72,7 +72,7 @@ The page bridge takes provider values from the actual checkout's offered
 methods. Disabled or unrecognized options remain for review; there is no
 automatic substitution. A card requires either Vinted's selected saved card
 or exactly one saved card. Ambiguous cards/provider variants are left for
-the user. Preparation still ends before checkout/payment. Other than PayPal,
+the user. Normal preparation still ends before checkout/payment. Other than PayPal,
 new provider preselection has synthetic coverage, not a live regional test.
 
 Preparation uses HTTP requests in an existing same-region Vinted tab without
@@ -93,6 +93,34 @@ and prevents replay for ten minutes after an uncertain result. Checkouts are
 never automatically retried on another regional domain. Older extensions use
 the service handoff instead of the new browser protocol. The Companion does
 not expose a purchase action.
+
+### Optional PayPal auto-checkout
+
+Account settings can explicitly enable auto-checkout for PayPal in DE/AT/BE
+after accepting the payment warning and setting a maximum EUR order total,
+including shipping and fees. It remains off by default. Dashboard and
+notification buy-link clicks use the same flow; monitor matches do not buy
+anything without a click. Protocol 4 is required for extension auto-checkout.
+
+The latest checkout response must confirm the delivery choice, enabled PayPal,
+a fresh checksum, a positive EUR total within the limit, and no applied wallet
+funds or currency conversion. Missing or ambiguous fields leave native checkout
+for review. One additional payment request is sent, without following redirects
+inside that request, refresh, retry or payment polling. Only Vinted's verified
+PayPal redirect action is opened; other results ask the user to check Vinted.
+An external confirmation window and item reservation are not guaranteed.
+
+A shared server claim prevents another automatic attempt for the same member,
+Vinted identity, domain and item, including after extension restarts, relinking
+or preparation-cache expiry. It has no expiry while Redis retains its data.
+Local auto-checkout attempts are retained too. PayPal URLs may contain payment
+tokens: they are used only for immediate navigation, never stored in checkout
+history, Redis preparation records or extension attempt records.
+
+The live DE test on 2026-10-05 confirmed PayPal selection and the displayed EUR
+total but stopped before payment. Payment requests and redirects have synthetic
+coverage; live upstream acceptance of the new payment request remains unverified.
+See [PayPal auto-checkout evidence and limits](../../docs/checkout-auto-paypal.md).
 
 ## Build and validate
 

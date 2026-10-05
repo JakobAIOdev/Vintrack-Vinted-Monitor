@@ -1,6 +1,7 @@
 package vinted
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -8,11 +9,21 @@ import (
 // These are account-level choices, not payment credentials. Wallet funds are
 // applied by Vinted itself; we never initiate a payment or save a payment method.
 type CheckoutPreferences struct {
-	Shipping string `json:"shipping"`
-	Payment  string `json:"payment"`
+	Shipping     string                  `json:"shipping"`
+	Payment      string                  `json:"payment"`
+	AutoCheckout *AutoCheckoutPreference `json:"autoCheckout,omitempty"`
+}
+
+type AutoCheckoutPreference struct {
+	WarningVersion int    `json:"warningVersion"`
+	MaxTotalMinor  int64  `json:"maxTotalMinor"`
+	Currency       string `json:"currency"`
 }
 
 func (p CheckoutPreferences) Valid() bool {
+	if p.AutoCheckout != nil && (p.Payment != "paypal" || p.AutoCheckout.WarningVersion != 1 || p.AutoCheckout.Currency != "EUR" || p.AutoCheckout.MaxTotalMinor <= 0 || p.AutoCheckout.MaxTotalMinor > 1_000_000) {
+		return false
+	}
 	switch p.Payment {
 	case "", "wallet", "vinted", "paypal", "card", "google_pay", "klarna", "tink", "bancontact", "ideal", "blik", "przelewy24":
 		return p.Shipping == "" || p.Shipping == "home" || p.Shipping == "vinted"
@@ -21,7 +32,17 @@ func (p CheckoutPreferences) Valid() bool {
 	}
 }
 
-func (p CheckoutPreferences) Key() string { return p.Shipping + ":" + p.Payment }
+func (p CheckoutPreferences) Key() string {
+	key := p.Shipping + ":" + p.Payment
+	if p.AutoCheckout != nil {
+		key += fmt.Sprintf(":auto:%d:%s:%d", p.AutoCheckout.WarningVersion, p.AutoCheckout.Currency, p.AutoCheckout.MaxTotalMinor)
+	}
+	return key
+}
+
+func autoCheckoutRegion(domain string) bool {
+	return domain == "www.vinted.de" || domain == "www.vinted.at" || domain == "www.vinted.be"
+}
 
 func checkoutComponents(p CheckoutPreferences, payment map[string]interface{}) map[string]interface{} {
 	components := map[string]interface{}{
@@ -43,13 +64,15 @@ func checkoutComponents(p CheckoutPreferences, payment map[string]interface{}) m
 }
 
 type checkoutSelection struct {
-	PaymentSelected    bool
-	HomeSelected       bool
-	AddressSelected    bool
-	RateSelected       bool
-	PaymentsAvailable  bool
-	Methods            map[string]map[string]interface{}
-	SelectedPreference string
+	PaymentSelected     bool
+	HomeSelected        bool
+	AddressSelected     bool
+	RateSelected        bool
+	PaymentsAvailable   bool
+	Methods             map[string]map[string]interface{}
+	SelectedPreference  string
+	AutoTotalMinor      int64
+	AutoAmountsVerified bool
 }
 
 var checkoutMethodCode = regexp.MustCompile(`^[a-zA-Z0-9_]{1,64}$`)
@@ -112,7 +135,8 @@ func readCheckoutSelection(raw map[string]interface{}) checkoutSelection {
 			native = "paypal"
 		}
 		readOnly, _ := m["read_only"].(bool)
-		if provider == "" || !checkoutMethodCode.MatchString(native) || readOnly {
+		disabled := m["enabled"] == false
+		if provider == "" || !checkoutMethodCode.MatchString(native) || readOnly || disabled {
 			continue
 		}
 		choice := map[string]interface{}{"card_id": nil, "payment_method": native}
@@ -147,6 +171,7 @@ func readCheckoutSelection(raw map[string]interface{}) checkoutSelection {
 	if selection.SelectedPreference == "card" && firstInt64Path(checkoutMap(payment, "selected_payment_method"), []string{"card_id"}, []string{"card", "id"}) <= 0 {
 		selection.SelectedPreference = ""
 	}
+	selection.AutoTotalMinor, selection.AutoAmountsVerified = autoCheckoutTotal(components)
 	return selection
 }
 

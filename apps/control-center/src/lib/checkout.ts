@@ -25,7 +25,46 @@ export type CheckoutPreferences = {
         | "ideal"
         | "blik"
         | "przelewy24";
+    autoCheckout?: {
+        warningVersion: 1;
+        maxTotalMinor: number;
+        currency: "EUR";
+    };
 };
+
+export const AUTO_CHECKOUT_WARNING_VERSION = 1;
+
+export function checkoutPreferencesKey(preferences: CheckoutPreferences) {
+    const setting = preferences.autoCheckout;
+    return `${preferences.shipping}:${preferences.payment}${
+        setting
+            ? `:auto:${setting.warningVersion}:${setting.currency}:${setting.maxTotalMinor}`
+            : ""
+    }`;
+}
+
+export function autoCheckoutAllowed(domain: string, payment: string) {
+    return (
+        payment === "paypal" &&
+        ["www.vinted.de", "www.vinted.at", "www.vinted.be"].includes(
+            checkoutDomain(domain) || "",
+        )
+    );
+}
+
+export function isAutoCheckoutPreference(value: unknown): boolean {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+        return false;
+    const setting = value as Record<string, unknown>;
+    return (
+        Object.keys(setting).length === 3 &&
+        setting.warningVersion === AUTO_CHECKOUT_WARNING_VERSION &&
+        setting.currency === "EUR" &&
+        Number.isSafeInteger(setting.maxTotalMinor) &&
+        (setting.maxTotalMinor as number) > 0 &&
+        (setting.maxTotalMinor as number) <= 1_000_000
+    );
+}
 
 export const CHECKOUT_PAYMENT_LABELS: Record<
     CheckoutPreferences["payment"],
@@ -90,7 +129,10 @@ export function isCheckoutPreferences(
     const preferences = value as Record<string, unknown>;
     return (
         Object.keys(preferences).every(
-            (key) => key === "shipping" || key === "payment",
+            (key) =>
+                key === "shipping" ||
+                key === "payment" ||
+                key === "autoCheckout",
         ) &&
         typeof preferences.shipping === "string" &&
         typeof preferences.payment === "string" &&
@@ -98,8 +140,30 @@ export function isCheckoutPreferences(
         Object.prototype.hasOwnProperty.call(
             CHECKOUT_PAYMENT_LABELS,
             preferences.payment,
-        )
+        ) &&
+        (preferences.autoCheckout === undefined ||
+            (preferences.payment === "paypal" &&
+                isAutoCheckoutPreference(preferences.autoCheckout)))
     );
+}
+
+export function isPayPalPaymentUrl(raw: unknown): raw is string {
+    if (typeof raw !== "string") return false;
+    try {
+        const url = new URL(raw);
+        return (
+            url.protocol === "https:" &&
+            ["www.paypal.com", "paypal.com"].includes(url.host) &&
+            !url.username &&
+            !url.password &&
+            !url.hash &&
+            ["/checkoutnow", "/webscr", "/cgi-bin/webscr"].includes(
+                url.pathname,
+            )
+        );
+    } catch {
+        return false;
+    }
 }
 
 export function parseCheckoutIds(monitor: string, item: string) {

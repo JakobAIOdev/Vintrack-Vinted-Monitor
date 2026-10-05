@@ -743,7 +743,7 @@ function formatRuntimeState(storage) {
 
   return {
     installed: true,
-    checkoutPrepareVersion: 3,
+    checkoutPrepareVersion: 4,
     version: extensionApi.runtime.getManifest().version || "",
     configured: Boolean(storage.browserLinkToken && storage.vintrackAppOrigin),
     companionMode:
@@ -1353,6 +1353,13 @@ const checkoutInFlight = new Map();
 const CHECKOUT_ATTEMPT_TTL_MS = 10 * 60 * 1000;
 let checkoutStorageQueue = Promise.resolve();
 
+function limitCheckoutAttempts(attempts) {
+  return [
+    ...attempts.filter((entry) => entry.preferences?.autoCheckout),
+    ...attempts.filter((entry) => !entry.preferences?.autoCheckout).slice(0, 100),
+  ];
+}
+
 function withCheckoutAttempts(action) {
   const task = checkoutStorageQueue.then(async () => {
     const storage = await extensionApi.storage.local.get(
@@ -1365,7 +1372,7 @@ function withCheckoutAttempts(action) {
     ).filter(
       (entry) =>
         Number.isFinite(entry.startedAt) &&
-        Date.now() - entry.startedAt < CHECKOUT_ATTEMPT_TTL_MS,
+        (entry.preferences?.autoCheckout || Date.now() - entry.startedAt < CHECKOUT_ATTEMPT_TTL_MS),
     );
     return action(attempts);
   });
@@ -1389,6 +1396,23 @@ function validCheckoutUrl(raw, domain) {
   }
 }
 
+function validAutoCheckoutPreference(preferences, domain) {
+  const setting = preferences.autoCheckout;
+  if (setting === undefined) return true;
+  return setting && typeof setting === "object" && !Array.isArray(setting) && Object.keys(setting).length === 3 &&
+    setting.warningVersion === 1 && setting.currency === "EUR" &&
+    Number.isSafeInteger(setting.maxTotalMinor) && setting.maxTotalMinor > 0 && setting.maxTotalMinor <= 1_000_000 &&
+    preferences.payment === "paypal" && ["www.vinted.de", "www.vinted.at", "www.vinted.be"].includes(domain);
+}
+
+function validPayPalPaymentUrl(raw) {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" && ["www.paypal.com", "paypal.com"].includes(url.host) &&
+      !url.username && !url.password && !url.hash && ["/checkoutnow", "/webscr", "/cgi-bin/webscr"].includes(url.pathname);
+  } catch { return false; }
+}
+
 async function handleBrowserBuy(payload) {
   const itemId = Number(payload?.itemId || 0);
   const sellerId = Number(payload?.sellerId || 0);
@@ -1403,9 +1427,10 @@ async function handleBrowserBuy(payload) {
     !isVintedDomain(domain) ||
     sellerId === expectedAccountId ||
     !preferences || typeof preferences !== "object" ||
-    Object.keys(preferences).some((key) => !["shipping", "payment"].includes(key)) ||
+    Object.keys(preferences).some((key) => !["shipping", "payment", "autoCheckout"].includes(key)) ||
     !["home", "vinted"].includes(preferences.shipping) ||
-    !["wallet", "paypal", "vinted", "card", "google_pay", "klarna", "tink", "bancontact", "ideal", "blik", "przelewy24"].includes(preferences.payment)
+    !["wallet", "paypal", "vinted", "card", "google_pay", "klarna", "tink", "bancontact", "ideal", "blik", "przelewy24"].includes(preferences.payment) ||
+    !validAutoCheckoutPreference(preferences, domain)
   ) {
     return {
       ok: false,
@@ -1460,7 +1485,7 @@ async function prepareBrowserCheckout(target) {
     if (found) return found;
     // Save intent before any POST. Serialize storage updates across items.
     await extensionApi.storage.local.set({
-      [STORAGE_KEYS.checkoutAttempts]: [attempt, ...attempts].slice(0, 100),
+      [STORAGE_KEYS.checkoutAttempts]: limitCheckoutAttempts([attempt, ...attempts]),
     });
     return null;
   });
@@ -1495,9 +1520,12 @@ async function prepareBrowserCheckout(target) {
     });
     return {
       ok: true,
-      status: previous.preferences?.shipping === target.preferences.shipping && previous.preferences?.payment === target.preferences.payment
+      status: !target.preferences.autoCheckout && !previous.preferences?.autoCheckout && previous.preferences?.shipping === target.preferences.shipping && previous.preferences?.payment === target.preferences.payment
         ? previous.status || "checkout_review_required"
         : "checkout_review_required",
+      autoCheckoutReason: previous.preferences?.autoCheckout
+        ? "This checkout was already attempted. Continue in Vinted; an automatic payment will not be repeated."
+        : undefined,
       checkoutUrl: previous.checkoutUrl,
       transactionId: previous.transactionId,
       purchaseId: previous.purchaseId,
@@ -1537,6 +1565,7 @@ async function prepareBrowserCheckout(target) {
       code: "invalid_checkout_url",
       error: "Vinted did not return a valid checkout link.",
     };
+  const paymentRedirectAllowed = target.preferences.autoCheckout && result.status === "paypal_redirect_ready" && validPayPalPaymentUrl(result.paymentUrl);
   await withCheckoutAttempts(async (attempts) => {
     const completed = {
       ...attempt,
@@ -1546,7 +1575,7 @@ async function prepareBrowserCheckout(target) {
       status: result.status,
     };
     await extensionApi.storage.local.set({
-      [STORAGE_KEYS.checkoutAttempts]: [
+      [STORAGE_KEYS.checkoutAttempts]: limitCheckoutAttempts([
         completed,
         ...attempts.filter(
           (entry) =>
@@ -1556,7 +1585,7 @@ async function prepareBrowserCheckout(target) {
               entry.domain === domain
             ),
         ),
-      ].slice(0, 100),
+      ]),
     });
   });
   await storeCheckoutLink({
@@ -1567,7 +1596,7 @@ async function prepareBrowserCheckout(target) {
     status: result.status,
   });
   await extensionApi.tabs.update(tabId, {
-    url: result.checkoutUrl,
+    url: paymentRedirectAllowed ? result.paymentUrl : result.checkoutUrl,
     active: true,
   });
   return {
@@ -1576,6 +1605,8 @@ async function prepareBrowserCheckout(target) {
     checkoutUrl: result.checkoutUrl,
     transactionId: result.transactionId,
     purchaseId: result.purchaseId,
+    autoCheckoutReason: result.autoCheckoutReason,
+    ...(paymentRedirectAllowed ? { paymentUrl: result.paymentUrl } : {}),
   };
 }
 

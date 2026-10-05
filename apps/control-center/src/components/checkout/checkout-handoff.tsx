@@ -19,6 +19,7 @@ export function CheckoutHandoff({
     const [loading, setLoading] = useState(true);
     const [running, setRunning] = useState(false);
     const [opened, setOpened] = useState(false);
+    const [checkoutMessage, setCheckoutMessage] = useState("");
     const started = useRef(false);
     const inFlight = useRef(false);
     useEffect(() => {
@@ -44,7 +45,12 @@ export function CheckoutHandoff({
         setRunning(true);
         setError("");
         try {
-            await openItemCheckout(monitorId, itemId, target ?? undefined);
+            const message = await openItemCheckout(
+                monitorId,
+                itemId,
+                target ?? undefined,
+            );
+            setCheckoutMessage(message || "");
             setOpened(true);
         } catch (err) {
             setError(
@@ -142,8 +148,8 @@ export function CheckoutHandoff({
                 ) : null}
                 {opened ? (
                     <p role="status" className="text-sm">
-                        Checkout is open in your Vinted tab. Confirm your
-                        purchase there.
+                        {checkoutMessage ||
+                            "Checkout is open in your Vinted tab. Confirm your purchase there."}
                     </p>
                 ) : null}
                 {target && (error || opened) ? (

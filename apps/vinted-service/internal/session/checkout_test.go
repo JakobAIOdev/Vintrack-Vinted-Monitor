@@ -14,6 +14,27 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+func TestAutoCheckoutClaimPersistsAcrossPreparationExpiryAndRelinking(t *testing.T) {
+	m := checkoutTestManager(t)
+	sess := &VintedSession{UserID: "synthetic-user", VintedUserID: 42, Domain: "www.vinted.de", LinkedAt: "first"}
+	acquired, err := m.ReserveAutoCheckout(sess, 123)
+	if err != nil || !acquired {
+		t.Fatal("first claim failed")
+	}
+	sess.LinkedAt = "second"
+	if acquired, err = m.ReserveAutoCheckout(sess, 123); err != nil || acquired {
+		t.Fatal("relink allowed duplicate")
+	}
+	if acquired, err = m.ReserveAutoCheckout(sess, 124); err != nil || !acquired {
+		t.Fatal("different item rejected")
+	}
+	other := *sess
+	other.VintedUserID = 43
+	if acquired, err = m.ReserveAutoCheckout(&other, 123); err != nil || !acquired {
+		t.Fatal("different account rejected")
+	}
+}
+
 // Use a disposable local Redis process, never a configured application DB.
 // No extra test dependency is required; Redis-less environments skip this test.
 func checkoutTestManager(t *testing.T) *Manager {

@@ -16,7 +16,7 @@ const domain = "www.vinted.de";
 const target = { itemId: 123, sellerId: 456, expectedAccountId: 42, domain };
 const checkoutUrl = `https://${domain}/checkout?purchase_id=synthetic&order_id=77&order_type=transaction`;
 
-function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}) {
+function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paymentResponse = {}) {
   const requests = [];
   const window = {
     location: {
@@ -50,6 +50,8 @@ function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}) {
       const data =
         init.method === "GET"
           ? { user: { id: accountId } }
+          : url.endsWith("/payment")
+            ? (typeof paymentResponse === "function" ? paymentResponse() : paymentResponse)
           : url.endsWith("/conversations")
             ? { conversation: { transaction: { id: 77 } } }
             : url.endsWith("/build")
@@ -197,6 +199,79 @@ test("page checkout rejects a different logged-in account before mutation", asyn
     h.requests.map(({ init }) => init.method),
     ["GET"],
   );
+});
+
+const autoSetting = { warningVersion: 1, currency: "EUR", maxTotalMinor: 3000 };
+const autoTarget = { ...target, preferences: { shipping: "home", payment: "paypal", autoCheckout: autoSetting } };
+const syntheticPayPalUrl = "https://www.paypal.com/checkoutnow?token=synthetic";
+
+function autoQuote() {
+  const data = selectedCheckout(true, true);
+  data.checksum = "synthetic-current-checksum";
+  data.checkout.components.pay_button_v2.total = { price: { amount: "18.29", currency_code: "EUR" } };
+  data.checkout.components.order_summary_v2 = { deductions: [] };
+  return data;
+}
+
+test("opted-in PayPal starts once using the final quote and returns only a verified redirect", async () => {
+  const h = bridge(42, [autoQuote()], selectedCheckout(), { action: { type: "redirect", parameters: { url: syntheticPayPalUrl } } });
+  const result = await h.run(autoTarget);
+  assert.equal(result.status, "paypal_redirect_ready");
+  assert.equal(result.paymentUrl, syntheticPayPalUrl);
+  assert.equal(h.requests.length, 5);
+  const request = h.requests[4];
+  assert.ok(request.url.endsWith("/checkout/payment"));
+  assert.equal(request.init.redirect,"error");
+  assert.equal(JSON.parse(request.init.body).checksum,"synthetic-current-checksum");
+  assert.equal(result.checksum,undefined);
+});
+
+test("auto-checkout stops for wallet deductions, unknown quotes and exceeded limits", async () => {
+  const changes = [
+    data => { data.checkout.components.order_summary_v2.deductions = [{ type: "order-summary-wallet-deduction", price: { amount: "1.00", currency_code: "EUR" } }]; },
+    data => { delete data.checkout.components.order_summary_v2.deductions; },
+    data => { delete data.checkout.components.pay_button_v2.total; },
+    data => { data.checkout.components.pay_button_v2.total.price.amount = "0"; },
+    data => { data.checkout.components.pay_button_v2.total.price.amount = "30.01"; },
+    data => { data.checkout.components.pay_button_v2.total.price.amount = "18.291"; },
+    data => { data.checkout.components.pay_button_v2.total.price.currency_code = "USD"; },
+    data => { data.checkout.components.order_summary_v2.currency_conversion = {}; },
+    data => { delete data.checksum; },
+    data => { data.checkout.components.payment_method.selected_payment_method.pay_in_method.payment_method = "card"; },
+    data => { data.checkout.components.payment_method.pay_in_methods = [{payment_method:"paypal",enabled:false}]; },
+  ];
+  for (const change of changes) {
+    const data = autoQuote(); change(data);
+    const h = bridge(42,[data],selectedCheckout());
+    const result = await h.run(autoTarget);
+    assert.equal(result.status,"checkout_review_required");
+    assert.ok(h.requests.every(r=>!r.url.includes("/payment")));
+    assert.equal(result.paymentUrl,undefined);
+  }
+});
+
+test("unknown payment outcomes and hostile redirects never trigger retries or expose raw responses", async () => {
+  for (const response of [
+    () => { throw new Error("response lost"); },
+    { payment: { status: "success" } },
+    { action: { type: "redirect", parameters: { url: "https://www.paypal.com.evil.test/checkoutnow" } } },
+    { action: { type: "sca_required", parameters: { url: syntheticPayPalUrl } } },
+  ]) {
+    const h = bridge(42,[autoQuote()],selectedCheckout(),response);
+    const result = await h.run(autoTarget);
+    assert.equal(result.status,"payment_outcome_unknown");
+    assert.equal(result.paymentUrl,undefined);
+    assert.equal(result.raw,undefined);
+    assert.equal(h.requests.filter(r=>r.url.endsWith("/payment")).length,1);
+  }
+});
+
+test("invalid auto-checkout consent and limits fail before account lookup", async () => {
+  for(const setting of [null, {...autoSetting,warningVersion:0}, {...autoSetting,maxTotalMinor:0}, {...autoSetting,currency:"USD"}, {...autoSetting,force:true}]) {
+    const h=bridge();
+    assert.equal((await h.run({...autoTarget,preferences:{...autoTarget.preferences,autoCheckout:setting}})).code,"invalid_checkout_preferences");
+    assert.equal(h.requests.length,0);
+  }
 });
 
 function background(options = {}) {
@@ -351,4 +426,21 @@ test("parallel preparations for different items preserve all intent checkpoints"
     attempts.map((attempt) => attempt.itemId).sort(),
     [123, 124],
   );
+});
+
+test("auto-checkout navigates to PayPal without persisting redirect tokens or replaying after cache expiry", async () => {
+  let starts=0;
+  const h=background({run:()=>{starts++;return {ok:true,checkoutUrl,transactionId:77,purchaseId:"synthetic",status:"paypal_redirect_ready",paymentUrl:syntheticPayPalUrl};}});
+  const result=await h.run(autoTarget);
+  assert.equal(result.paymentUrl,syntheticPayPalUrl);
+  assert.equal(h.mutations.at(-1).changes.url,syntheticPayPalUrl);
+  assert.ok(!JSON.stringify(h.storage).includes("token=synthetic"));
+  h.storage.vintrackCheckoutAttempts[0].startedAt=Date.now()-86400000;
+  const restarted=background({storage:h.storage});
+  const repeated=await restarted.run(autoTarget);
+  assert.equal(repeated.status,"checkout_review_required");
+  assert.equal(repeated.paymentUrl,undefined);
+  assert.equal(restarted.mutations.at(-1).changes.url,checkoutUrl);
+  assert.equal(restarted.messages.filter(m=>m.type==="VINTRACK_RUN_BROWSER_BUY").length,0);
+  assert.equal(starts,1);
 });

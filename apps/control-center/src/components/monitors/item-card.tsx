@@ -279,9 +279,13 @@ function ItemCardComponent({
         if (buying) return;
         setBuying(true);
         try {
-            await openItemCheckout(item.monitor_id, Number(item.id));
+            const message = await openItemCheckout(
+                item.monitor_id,
+                Number(item.id),
+            );
             toast.success(
-                "Vinted checkout opened. Review the details and confirm your purchase on Vinted.",
+                message ||
+                    "Vinted checkout opened. Review the details and confirm your purchase on Vinted.",
             );
         } catch (error) {
             toast.error(

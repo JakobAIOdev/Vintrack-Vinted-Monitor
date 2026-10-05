@@ -129,3 +129,55 @@ test("anonymous and feature-denied callers cannot save payment preferences", asy
     );
     assert.equal(anonymous.writes.length + denied.writes.length, 0);
 });
+
+test("auto-checkout requires a supported linked region, warning version and positive price limit", async () => {
+    const setting = { warningVersion: 1, currency: "EUR", maxTotalMinor: 3000 };
+    const h = harness("www.vinted.de");
+    assert.equal(
+        (
+            (await h.save({
+                shipping: "home",
+                payment: "paypal",
+                autoCheckout: setting,
+            })) as { success: boolean }
+        ).success,
+        true,
+    );
+    for (const autoCheckout of [
+        { ...setting, warningVersion: 0 },
+        { ...setting, maxTotalMinor: 0 },
+        { ...setting, maxTotalMinor: 100.5 },
+        { ...setting, currency: "PLN" },
+        { ...setting, bypassWallet: true },
+    ])
+        assert.ok(
+            (
+                (await h.save({
+                    shipping: "home",
+                    payment: "paypal",
+                    autoCheckout,
+                })) as { error?: string }
+            ).error,
+        );
+    assert.ok(
+        (
+            (await h.save({
+                shipping: "home",
+                payment: "card",
+                autoCheckout: setting,
+            })) as { error?: string }
+        ).error,
+    );
+    const foreign = harness("www.vinted.fr");
+    assert.ok(
+        (
+            (await foreign.save({
+                shipping: "home",
+                payment: "paypal",
+                autoCheckout: setting,
+            })) as { error?: string }
+        ).error,
+    );
+    assert.equal(h.writes.length, 1);
+    assert.equal(foreign.writes.length, 0);
+});

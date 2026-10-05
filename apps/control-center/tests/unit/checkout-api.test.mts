@@ -14,6 +14,9 @@ function harness(
         upstreamUrl?: string;
         preferences?: unknown;
         accountDomain?: string;
+        upstreamPaymentUrl?: string;
+        upstreamStatus?: string;
+        browserAuthorized?: boolean;
     } = {},
 ) {
     const databaseCalls: unknown[] = [];
@@ -116,7 +119,9 @@ function harness(
                     checkout_url:
                         options.upstreamUrl ||
                         "https://www.vinted.de/checkout?purchase_id=synthetic",
-                    status: "checkout_prepared",
+                    status: options.upstreamStatus || "checkout_prepared",
+                    payment_url: options.upstreamPaymentUrl,
+                    browser_payment_authorized: options.browserAuthorized,
                 });
             },
         });
@@ -284,5 +289,79 @@ test("a payment URL or a checkout for a different domain is never returned to th
             JSON.stringify(await response.json()).includes(upstreamUrl),
             false,
         );
+    }
+});
+
+const autoPreferences = {
+    shipping: "home",
+    payment: "paypal",
+    autoCheckout: { warningVersion: 1, maxTotalMinor: 3000, currency: "EUR" },
+};
+const storedAutoPreferences = {
+    accountId: 42,
+    domain: "www.vinted.de",
+    preferences: autoPreferences,
+};
+
+test("browser payment authorization is bound to current saved preferences and linked identity", async () => {
+    const h = harness({
+        preferences: storedAutoPreferences,
+        browserAuthorized: true,
+    });
+    const headers = {
+        "X-Vintrack-Checkout-Mode": "browser",
+        "X-Vintrack-Checkout-Account": "42@www.vinted.de",
+        "X-Vintrack-Checkout-Preferences": "home:paypal:auto:1:EUR:3000",
+    };
+    for (const changed of [
+        { ...headers, "X-Vintrack-Checkout-Account": "99@www.vinted.de" },
+        {
+            ...headers,
+            "X-Vintrack-Checkout-Preferences": "home:paypal:auto:1:EUR:4000",
+        },
+    ])
+        assert.equal((await h.call("POST", changed)).status, 409);
+    assert.equal(h.serviceCalls.length, 0);
+    const response = await h.call("POST", headers);
+    assert.deepEqual(await response.json(), { browserPaymentAuthorized: true });
+    assert.equal(
+        JSON.parse(h.serviceCalls[0].init.body as string).browser_prepare_only,
+        true,
+    );
+    const normal = harness();
+    assert.equal((await normal.call("POST", headers)).status, 400);
+    assert.equal(normal.serviceCalls.length, 0);
+});
+
+test("a PayPal redirect is returned only for an enabled auto-checkout and verified destination", async () => {
+    const paymentUrl = "https://www.paypal.com/checkoutnow?token=synthetic";
+    for (const [preferences, url, status, expected] of [
+        [
+            storedAutoPreferences,
+            paymentUrl,
+            "paypal_redirect_ready",
+            paymentUrl,
+        ],
+        [undefined, paymentUrl, "paypal_redirect_ready", undefined],
+        [
+            storedAutoPreferences,
+            paymentUrl,
+            "payment_outcome_unknown",
+            undefined,
+        ],
+        [
+            storedAutoPreferences,
+            "https://www.paypal.com.evil.test/checkoutnow",
+            "paypal_redirect_ready",
+            undefined,
+        ],
+    ] as const) {
+        const h = harness({
+            preferences,
+            upstreamPaymentUrl: url,
+            upstreamStatus: status,
+        });
+        const data = await (await h.call("POST")).json();
+        assert.equal(data.paymentUrl, expected);
     }
 });

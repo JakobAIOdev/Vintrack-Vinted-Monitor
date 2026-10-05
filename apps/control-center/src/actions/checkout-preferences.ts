@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import {
     checkoutDomain,
     checkoutPaymentAllowed,
+    autoCheckoutAllowed,
     isCheckoutPreferences,
     type CheckoutPreferences,
 } from "@/lib/checkout";
@@ -56,6 +57,13 @@ export async function saveCheckoutPreferences(
     if (!checkoutPaymentAllowed(account.domain, preferences.payment))
         return {
             error: "This payment method is not offered for your linked Vinted region.",
+        };
+    if (
+        preferences.autoCheckout &&
+        !autoCheckoutAllowed(account.domain, preferences.payment)
+    )
+        return {
+            error: "Auto-checkout is currently available only with PayPal in supported regions.",
         };
     if (
         !(await getFeatureAccessForUser("checkout_links", account.userId))

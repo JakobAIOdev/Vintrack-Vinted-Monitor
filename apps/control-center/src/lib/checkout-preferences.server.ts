@@ -5,6 +5,7 @@ import {
     DEFAULT_CHECKOUT_PREFERENCES,
     isCheckoutPreferences,
     checkoutPaymentAllowed,
+    autoCheckoutAllowed,
 } from "@/lib/checkout";
 
 export async function loadCheckoutPreferences(
@@ -25,9 +26,20 @@ export async function loadCheckoutPreferences(
         stored.domain === domain &&
         isCheckoutPreferences(stored.preferences)
     ) {
-        return checkoutPaymentAllowed(domain, stored.preferences.payment)
-            ? stored.preferences
-            : { ...stored.preferences, payment: "wallet" as const };
+        if (!checkoutPaymentAllowed(domain, stored.preferences.payment))
+            return {
+                shipping: stored.preferences.shipping,
+                payment: "wallet" as const,
+            };
+        if (
+            stored.preferences.autoCheckout &&
+            !autoCheckoutAllowed(domain, stored.preferences.payment)
+        )
+            return {
+                shipping: stored.preferences.shipping,
+                payment: stored.preferences.payment,
+            };
+        return stored.preferences;
     }
     return DEFAULT_CHECKOUT_PREFERENCES;
 }

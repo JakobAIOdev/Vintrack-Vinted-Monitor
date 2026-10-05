@@ -1,5 +1,11 @@
 import { expect, test } from "@playwright/test";
 
+const autoPreferences = {
+    shipping: "home",
+    payment: "paypal",
+    autoCheckout: { warningVersion: 1, currency: "EUR", maxTotalMinor: 3000 },
+};
+
 const target = {
     itemId: 123,
     monitorId: 17,
@@ -11,6 +17,168 @@ const target = {
     title: "Vintage Nike jacket",
     price: "25.00 EUR",
 };
+
+test("auto-checkout refuses protocol 3 before requesting a payment authorization", async ({
+    page,
+}) => {
+    let posts = 0;
+    await page.addInitScript(() => {
+        window.addEventListener("message", (event) => {
+            if (
+                event.source === window &&
+                event.data?.type === "VINTRACK_EXTENSION_PING"
+            )
+                window.postMessage(
+                    {
+                        type: "VINTRACK_EXTENSION_READY",
+                        payload: {
+                            configured: true,
+                            checkoutPrepareVersion: 3,
+                        },
+                    },
+                    window.location.origin,
+                );
+        });
+    });
+    await page.route("**/api/checkout/17/123", async (route) => {
+        if (route.request().method() === "POST") posts++;
+        await route.fulfill({
+            json: { ...target, preferences: autoPreferences },
+        });
+    });
+    await page.goto("/checkout/17/123");
+    await expect(
+        page.getByRole("alert").filter({ hasText: "version 0.2.5" }),
+    ).toBeVisible();
+    expect(posts).toBe(0);
+});
+
+test("PayPal auto-checkout requires shared authorization and cannot replay after a second click", async ({
+    page,
+}) => {
+    let authorizations = 0;
+    let starts = 0;
+    await page.exposeFunction("autoCheckoutTestStarted", (limit: number) => {
+        expect(limit).toBe(3000);
+        starts++;
+    });
+    await page.addInitScript(() => {
+        window.addEventListener("message", (event) => {
+            if (event.source !== window) return;
+            if (event.data?.type === "VINTRACK_EXTENSION_PING")
+                window.postMessage(
+                    {
+                        type: "VINTRACK_EXTENSION_READY",
+                        payload: {
+                            configured: true,
+                            checkoutPrepareVersion: 4,
+                        },
+                    },
+                    window.location.origin,
+                );
+            if (event.data?.type === "VINTRACK_EXTENSION_BUY") {
+                void (
+                    window as unknown as {
+                        autoCheckoutTestStarted(limit: number): Promise<void>;
+                    }
+                ).autoCheckoutTestStarted(
+                    event.data.payload.preferences.autoCheckout.maxTotalMinor,
+                );
+                window.postMessage(
+                    {
+                        type: "VINTRACK_EXTENSION_BUY_RESULT",
+                        payload: {
+                            requestId: event.data.payload.requestId,
+                            ok: true,
+                            status: "paypal_redirect_ready",
+                            checkoutUrl:
+                                "https://www.vinted.de/checkout?purchase_id=synthetic",
+                            paymentUrl:
+                                "https://www.paypal.com/checkoutnow?token=synthetic",
+                            autoCheckoutReason:
+                                "Continue in PayPal to complete the payment.",
+                        },
+                    },
+                    window.location.origin,
+                );
+            }
+        });
+    });
+    await page.route("**/api/checkout/17/123", async (route) => {
+        if (route.request().method() === "GET") {
+            await route.fulfill({
+                json: { ...target, preferences: autoPreferences },
+            });
+            return;
+        }
+        expect(route.request().headers()["x-vintrack-checkout-mode"]).toBe(
+            "browser",
+        );
+        expect(
+            route.request().headers()["x-vintrack-checkout-preferences"],
+        ).toBe("home:paypal:auto:1:EUR:3000");
+        authorizations++;
+        await route.fulfill(
+            authorizations === 1
+                ? { json: { browserPaymentAuthorized: true } }
+                : {
+                      status: 409,
+                      json: {
+                          error: "Auto-checkout was already attempted. Check Vinted.",
+                      },
+                  },
+        );
+    });
+    await page.route("**/api/items/checkout-links", (route) =>
+        route.fulfill({ json: { ok: true } }),
+    );
+    await page.goto("/checkout/17/123");
+    await expect(
+        page.getByRole("status").filter({ hasText: "Continue in PayPal" }),
+    ).toBeVisible();
+    expect(starts).toBe(1);
+    await page.getByRole("button", { name: "Reopen checkout" }).click();
+    await expect(
+        page.getByRole("alert").filter({ hasText: "already attempted" }),
+    ).toBeVisible();
+    expect(authorizations).toBe(2);
+    expect(starts).toBe(1);
+});
+
+test("server auto-checkout opens only the verified PayPal redirect", async ({
+    page,
+}) => {
+    let starts = 0;
+    await page.route("**/api/checkout/17/123", async (route) => {
+        if (route.request().method() === "GET") {
+            await route.fulfill({
+                json: { ...target, preferences: autoPreferences },
+            });
+            return;
+        }
+        starts++;
+        await route.fulfill({
+            json: {
+                status: "paypal_redirect_ready",
+                checkoutUrl:
+                    "https://www.vinted.de/checkout?purchase_id=synthetic",
+                paymentUrl:
+                    "https://www.paypal.com/checkoutnow?token=synthetic",
+            },
+        });
+    });
+    await page.route("https://www.paypal.com/**", (route) =>
+        route.fulfill({
+            contentType: "text/html",
+            body: "<h1>Synthetic PayPal confirmation</h1>",
+        }),
+    );
+    await page.goto("/checkout/17/123");
+    await expect(page).toHaveURL(
+        "https://www.paypal.com/checkoutnow?token=synthetic",
+    );
+    expect(starts).toBe(1);
+});
 
 test("opening a notification link prepares and opens checkout without another click", async ({
     page,

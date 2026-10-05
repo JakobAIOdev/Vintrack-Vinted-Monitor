@@ -345,6 +345,7 @@
       headers,
       body: input.body === undefined ? undefined : JSON.stringify(input.body),
       credentials: "include",
+      redirect: input.redirect || "follow",
       referrer: input.referrer,
       referrerPolicy: "strict-origin-when-cross-origin",
     });
@@ -458,7 +459,7 @@
   function checkoutPaymentChoice(data, preference) {
     const payment = data?.checkout?.components?.payment_method;
     const choices = (Array.isArray(payment?.pay_in_methods) ? payment.pay_in_methods : [])
-      .filter((method) => checkoutProvider(method) === preference && method.read_only !== true)
+      .filter((method) => checkoutProvider(method) === preference && method.read_only !== true && method.enabled !== false)
       .map((method) => {
         const native = method.payment_method || (method.code === "MANGOPAY_PAYPAL" ? "paypal" : "");
         if (typeof native !== "string" || !/^[a-zA-Z0-9_]{1,64}$/.test(native)) return null;
@@ -477,6 +478,42 @@
     return choices.find((choice) => choice.payment_method === selectedNative) || null;
   }
 
+  function validAutoCheckout(preferences) {
+    const setting = preferences.autoCheckout;
+    if (setting === undefined) return true;
+    return isObject(setting) && Object.keys(setting).length === 3 &&
+      setting.warningVersion === 1 && setting.currency === "EUR" &&
+      Number.isSafeInteger(setting.maxTotalMinor) && setting.maxTotalMinor > 0 && setting.maxTotalMinor <= 1_000_000 &&
+      preferences.payment === "paypal" && ["www.vinted.de", "www.vinted.at", "www.vinted.be"].includes(window.location.hostname);
+  }
+
+  function checkoutMoneyMinor(price) {
+    if (price?.currency_code !== "EUR" || !["string", "number"].includes(typeof price.amount)) return null;
+    const amount = String(price.amount);
+    if (!/^\d{1,7}(?:\.\d{1,2})?$/.test(amount)) return null;
+    const [whole, fraction = ""] = amount.split(".");
+    return Number(whole) * 100 + Number((fraction + "00").slice(0, 2));
+  }
+
+  function autoCheckoutTotal(data) {
+    const components = data?.checkout?.components;
+    const summary = components?.order_summary_v2;
+    if (!summary || summary.currency_conversion != null || !Array.isArray(summary.deductions)) return null;
+    for (const deduction of summary.deductions) {
+      if (deduction?.type !== "order-summary-wallet-deduction" || checkoutMoneyMinor(deduction.price) !== 0) return null;
+    }
+    const total = checkoutMoneyMinor(components?.pay_button_v2?.total?.price);
+    return total > 0 ? total : null;
+  }
+
+  function validPayPalPaymentUrl(raw) {
+    try {
+      const url = new URL(raw);
+      return url.protocol === "https:" && ["www.paypal.com", "paypal.com"].includes(url.host) &&
+        !url.username && !url.password && !url.hash && ["/checkoutnow", "/webscr", "/cgi-bin/webscr"].includes(url.pathname);
+    } catch { return false; }
+  }
+
   async function runBrowserBuy(payload) {
     await waitForDocumentReady();
 
@@ -485,9 +522,9 @@
     const expectedAccountId = Number(payload?.expectedAccountId || 0);
     const preferences = payload?.preferences || { shipping: "vinted", payment: "vinted" };
     if (!preferences || typeof preferences !== "object" ||
-        Object.keys(preferences).some((key) => !["shipping", "payment"].includes(key)) ||
+        Object.keys(preferences).some((key) => !["shipping", "payment", "autoCheckout"].includes(key)) ||
         !["home", "vinted"].includes(preferences.shipping) ||
-        !checkoutPayments.includes(preferences.payment)) {
+        !checkoutPayments.includes(preferences.payment) || !validAutoCheckout(preferences)) {
       return { ok: false, code: "invalid_checkout_preferences", error: "Invalid checkout preferences" };
     }
     const phoneNumber = typeof payload?.phoneNumber === "string" ? payload.phoneNumber.trim() : "";
@@ -697,7 +734,7 @@
       preferences.payment !== "wallet" &&
       (preferences.payment === "vinted" || selectedCheckoutPayment(updateResult.data) === preferences.payment)
     );
-    return {
+    const prepared = {
       ok: true,
       status: ready ? "checkout_prepared" : "checkout_review_required",
       itemId,
@@ -707,6 +744,38 @@
       checkoutUrl: checkoutUrl || checkoutReferrer,
       shippingOrderId,
     };
+    if (!preferences.autoCheckout) return prepared;
+    prepared.status = "checkout_review_required";
+    prepared.autoCheckoutReason = "Review the checkout: PayPal, delivery or price could not be verified. No automatic payment was started.";
+    const total = autoCheckoutTotal(updateResult.data);
+    const currentChecksum = findStringByPaths(updateResult.data, [["checksum"], ["checkout", "checksum"]]);
+    // Contact updates may change the quote. Do not pay against an earlier state.
+    if (!ready || phoneNumber || total === null || total > preferences.autoCheckout.maxTotalMinor ||
+        !currentChecksum || !checkoutPaymentChoice(updateResult.data, "paypal")) return prepared;
+    prepared.status = "payment_outcome_unknown";
+    prepared.autoCheckoutReason = "A payment request was sent but no verified PayPal redirect was returned. Check Vinted; do not start it again.";
+    try {
+      // Background persisted intent before the first mutation; no retries here.
+      const payment = await vintedRequest("PayPal payment start", {
+        method: "POST",
+        url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout/payment`,
+        referrer: checkoutReferrer,
+        redirect: "error",
+        incogniaRequestToken,
+        body: { checksum: currentChecksum, payment_options: { browser_info: {
+          language: navigator.language || "en-US", color_depth: window.screen?.colorDepth || 24,
+          java_enabled: false, screen_height: window.screen?.height || 1080, screen_width: window.screen?.width || 1920,
+          timezone_offset: new Date().getTimezoneOffset(),
+        } } },
+      });
+      const redirect = payment.data?.action?.parameters?.url;
+      if (payment.ok && payment.data?.action?.type === "redirect" && validPayPalPaymentUrl(redirect)) {
+        prepared.status = "paypal_redirect_ready";
+        prepared.autoCheckoutReason = "Continue in PayPal to complete the payment.";
+        prepared.paymentUrl = redirect;
+      }
+    } catch { /* An uncertain payment must never be replayed automatically. */ }
+    return prepared;
   }
 
   window.addEventListener("message", (event) => {
