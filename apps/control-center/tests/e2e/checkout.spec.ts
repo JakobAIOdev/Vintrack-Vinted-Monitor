@@ -16,6 +16,7 @@ test("opening a notification link prepares and opens checkout without another cl
     page,
 }) => {
     let preparations = 0;
+    let targetLoads = 0;
     await page.route("**/api/checkout/17/123", async (route) => {
         if (route.request().method() === "POST") {
             preparations++;
@@ -36,6 +37,7 @@ test("opening a notification link prepares and opens checkout without another cl
                 },
             });
         } else {
+            targetLoads++;
             await route.fulfill({ json: target });
         }
     });
@@ -51,6 +53,7 @@ test("opening a notification link prepares and opens checkout without another cl
         "https://www.vinted.de/checkout?purchase_id=synthetic",
     );
     expect(preparations).toBe(1);
+    expect(targetLoads).toBe(1);
 });
 
 test("a hidden notification tab waits for activation before preparing checkout", async ({

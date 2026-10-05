@@ -563,20 +563,24 @@
         shipping_pickup_details: {},
       };
     }
+    function offersPayPal(data) {
+      const methods = data?.checkout?.components?.payment_method?.pay_in_methods;
+      return Array.isArray(methods) && methods.some((method) => method.code === "MANGOPAY_PAYPAL");
+    }
+    const selectPayPal = preferences.payment === "paypal" && offersPayPal(buildResult.data);
     let updateResult = await vintedRequest("checkout update", {
       method: "PUT",
       url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout`,
       referrer: checkoutReferrer,
       body: {
-        components: components(),
+        components: components(selectPayPal),
       },
     });
     if (!updateResult.ok) {
       return updateResult;
     }
-    const methods = updateResult.data?.checkout?.components?.payment_method?.pay_in_methods;
-    const paypalAvailable = Array.isArray(methods) && methods.some((method) => method.code === "MANGOPAY_PAYPAL");
-    if (preferences.payment === "paypal" && paypalAvailable) {
+    const paypalSelected = updateResult.data?.checkout?.components?.payment_method?.selected_payment_method?.pay_in_method?.payment_method === "paypal";
+    if (!selectPayPal && preferences.payment === "paypal" && offersPayPal(updateResult.data) && !paypalSelected) {
       updateResult = await vintedRequest("checkout preferences", {
         method: "PUT",
         url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout`,

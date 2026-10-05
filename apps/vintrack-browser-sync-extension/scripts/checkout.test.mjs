@@ -16,7 +16,7 @@ const domain = "www.vinted.de";
 const target = { itemId: 123, sellerId: 456, expectedAccountId: 42, domain };
 const checkoutUrl = `https://${domain}/checkout?purchase_id=synthetic&order_id=77&order_type=transaction`;
 
-function bridge(accountId = 42, checkoutResponses = []) {
+function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}) {
   const requests = [];
   const window = {
     location: {
@@ -56,6 +56,7 @@ function bridge(accountId = 42, checkoutResponses = []) {
               ? {
                   purchase: { id: "synthetic" },
                   checksum: "synthetic-checksum",
+                  ...buildResponse,
                 }
               : checkoutResponses.shift() || {};
       return new Response(JSON.stringify(data), { status: 200 });
@@ -116,6 +117,23 @@ test("home delivery and available PayPal are selected without paying", async () 
   assert.ok(h.requests.every(({ url }) => !url.includes("/payment")));
 });
 
+test("PayPal offered by build is selected with delivery in one update", async () => {
+  const h = bridge(42, [selectedCheckout(true, true)], selectedCheckout());
+  const result = await h.run({ ...target, preferences: { shipping: "home", payment: "paypal" } });
+  assert.equal(result.status, "checkout_prepared");
+  assert.deepEqual(h.requests.map(({ init }) => init.method), ["GET", "POST", "POST", "PUT"]);
+  const components = JSON.parse(h.requests[3].init.body).components;
+  assert.deepEqual(components.payment_method, { card_id: null, payment_method: "paypal" });
+  assert.deepEqual(components.shipping_pickup_options, { pickup_type: 1 });
+});
+
+test("already selected PayPal does not cause another checkout update", async () => {
+  const h = bridge(42, [selectedCheckout(true, true)]);
+  const result = await h.run({ ...target, preferences: { shipping: "home", payment: "paypal" } });
+  assert.equal(result.status, "checkout_prepared");
+  assert.equal(h.requests.length, 4);
+});
+
 test("wallet and unavailable PayPal never select a substitute payment method", async () => {
   for (const payment of ["wallet", "paypal"]) {
     const h = bridge(42, [selectedCheckout(false)]);
@@ -170,14 +188,18 @@ function background(options = {}) {
     tabs: {
       onActivated: event,
       onUpdated: event,
+      async query() { return options.tabs || []; },
       async update(id, changes) {
         mutations.push({ id, changes });
       },
       async sendMessage(_id, message) {
         messages.push(message);
+        if (message.type === "VINTRACK_TAB_PING") return { ok: true };
         if (message.type === "VINTRACK_GET_BROWSER_ACCOUNT")
           return { ok: true, accountId: options.accountId || 42 };
         if (options.run) return options.run(message.payload);
+        if (options.accountId && options.accountId !== 42)
+          return { ok: false, code: "checkout_account_mismatch" };
         return {
           ok: true,
           checkoutUrl,
@@ -196,7 +218,7 @@ function background(options = {}) {
     clearTimeout,
   });
   vm.runInContext(backgroundSource, context);
-  context.ensureVintedBuyTab = async () => ({ tabId: 1, created: false });
+  if (!options.tabs) context.ensureVintedBuyTab = async () => ({ tabId: 1, created: false });
   return {
     storage,
     mutations,
@@ -214,8 +236,10 @@ test("concurrent clicks and repeated clicks reuse a single browser checkout", as
   assert.equal(a.requestId, "a");
   assert.equal(b.requestId, "b");
   assert.equal(a.checkoutUrl, checkoutUrl);
+  assert.equal(h.messages.filter((msg) => msg.type === "VINTRACK_GET_BROWSER_ACCOUNT").length, 0);
   const c = await h.run();
   assert.equal(c.checkoutUrl, checkoutUrl);
+  assert.equal(h.messages.filter((msg) => msg.type === "VINTRACK_GET_BROWSER_ACCOUNT").length, 1);
   assert.equal(
     h.messages.filter((msg) => msg.type === "VINTRACK_RUN_BROWSER_BUY").length,
     1,
@@ -250,13 +274,34 @@ test("browser account mismatch and hostile URLs never open a checkout", async ()
   assert.equal(
     mismatch.messages.filter((msg) => msg.type === "VINTRACK_RUN_BROWSER_BUY")
       .length,
-    0,
+    1,
   );
+  assert.equal(mismatch.storage.vintrackCheckoutAttempts.length, 0);
+  assert.ok(mismatch.mutations.every(({ changes }) => !changes.url));
   const hostile = background({
     run: () => ({ ok: true, checkoutUrl: "https://evil.test/checkout" }),
   });
   assert.equal((await hostile.run()).code, "invalid_checkout_url");
   assert.ok(hostile.mutations.every(({ changes }) => !changes.url));
+});
+
+test("an existing same-region page runs requests without loading the item", async () => {
+  const h = background({ tabs: [
+    { id: 2, status: "loading", url: `https://${domain}/catalog` },
+    { id: 1, status: "complete", url: `https://${domain}/member/42` },
+  ] });
+  assert.equal((await h.run()).ok, true);
+  assert.equal(h.mutations.length, 1);
+  assert.equal(h.mutations[0].changes.url, checkoutUrl);
+  assert.equal(h.mutations[0].id, 1);
+});
+
+test("cached checkout checks the browser account before navigating", async () => {
+  const first = background();
+  await first.run();
+  const changed = background({ storage: first.storage, accountId: 99 });
+  assert.equal((await changed.run()).code, "checkout_account_mismatch");
+  assert.ok(changed.mutations.every(({ changes }) => !changes.url));
 });
 
 test("parallel preparations for different items preserve all intent checkpoints", async () => {

@@ -54,20 +54,31 @@ export async function getCheckoutTarget(
     return data;
 }
 
-export function openItemCheckout(monitorId: number, itemId: number) {
+export function openItemCheckout(
+    monitorId: number,
+    itemId: number,
+    loadedTarget?: CheckoutTarget,
+) {
     const key = `${monitorId}:${itemId}`;
     const current = pending.get(key);
     if (current) return current;
-    const promise = startCheckout(monitorId, itemId).finally(() =>
+    const promise = startCheckout(monitorId, itemId, loadedTarget).finally(() =>
         pending.delete(key),
     );
     pending.set(key, promise);
     return promise;
 }
 
-async function startCheckout(monitorId: number, itemId: number) {
-    const target = await getCheckoutTarget(monitorId, itemId);
-    if (await hasCheckoutExtension()) {
+async function startCheckout(
+    monitorId: number,
+    itemId: number,
+    loadedTarget?: CheckoutTarget,
+) {
+    const [target, extensionAvailable] = await Promise.all([
+        loadedTarget ?? getCheckoutTarget(monitorId, itemId),
+        hasCheckoutExtension(),
+    ]);
+    if (extensionAvailable) {
         const result = await runBrowserBuyViaExtension(
             {
                 itemId: target.itemId,

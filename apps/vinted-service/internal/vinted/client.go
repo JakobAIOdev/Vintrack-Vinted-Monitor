@@ -1001,8 +1001,9 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 	if err := save(link); err != nil {
 		return &link, err
 	}
-	updated, updateErr := c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, false))
-	if updateErr == nil && preferences.Payment == "paypal" && updated.Selection.PayPalAvailable {
+	selectPayPal := preferences.Payment == "paypal" && build.Selection.PayPalAvailable
+	updated, updateErr := c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, selectPayPal))
+	if updateErr == nil && !selectPayPal && preferences.Payment == "paypal" && updated.Selection.PayPalAvailable && !updated.Selection.PayPalSelected {
 		link.Status = "checkout_selecting_preferences"
 		if err := save(link); err != nil {
 			return &link, err
@@ -1372,6 +1373,7 @@ func (c *Client) buildPurchaseCheckout(itemID, transactionID int64, incogniaRequ
 	}
 
 	result := &checkoutBuildResult{
+		Selection:       readCheckoutSelection(raw),
 		PurchaseID:      firstStringPath(raw, []string{"purchase", "id"}, []string{"purchase", "uid"}, []string{"checkout", "purchase_id"}, []string{"checkout", "id"}, []string{"purchase_id"}),
 		Checksum:        firstStringPath(raw, []string{"checksum"}, []string{"checkout", "checksum"}, []string{"payment", "checksum"}),
 		CheckoutURL:     firstStringPath(raw, []string{"checkout_url"}, []string{"checkout", "url"}),

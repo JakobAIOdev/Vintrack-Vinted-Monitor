@@ -44,7 +44,7 @@ export function CheckoutHandoff({
         setRunning(true);
         setError("");
         try {
-            await openItemCheckout(monitorId, itemId);
+            await openItemCheckout(monitorId, itemId, target ?? undefined);
             setOpened(true);
         } catch (err) {
             setError(
@@ -56,7 +56,7 @@ export function CheckoutHandoff({
             inFlight.current = false;
             setRunning(false);
         }
-    }, [monitorId, itemId]);
+    }, [monitorId, itemId, target]);
 
     useEffect(() => {
         if (!target) return;

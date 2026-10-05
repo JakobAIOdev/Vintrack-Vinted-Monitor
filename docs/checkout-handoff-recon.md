@@ -83,7 +83,9 @@ weiterhin sichtbar sein.
 - Extension 0.2.2 meldet Prepare-Protokoll 2. Alte Protokolle verwenden den
   separaten Service-Prepare-Endpoint; keine Payment-Fallbacks.
 - Beide Wege setzen Hauszustellung und prüfen danach die verfügbaren Zahlarten.
-  PayPal wird mit einem weiteren Komponenten-Update gesetzt. Fehlende Optionen
+   PayPal wird gesetzt, sobald eine Antwort es anbietet. Bietet bereits die
+   Build-Antwort PayPal an, werden Versand und Zahlung gemeinsam aktualisiert.
+   Bereits ausgewähltes PayPal erfordert kein weiteres Update. Fehlende Optionen
   erzeugen einen Review-Status; keine erfundenen Zahlarten/Abholstellen.
 - Mutations-Checkpoints und kurze Sperren verhindern blinde Wiederholung.
   Bei geänderten Vorgaben öffnet ein schon vorhandener Checkout zur Prüfung;
@@ -110,10 +112,55 @@ verbunden und der Live-Test lief erfolgreich.
 - Vinted-Service und Worker: `go test ./...` erfolgreich.
 - Extension: 35 Tests und Manifest-Validierung erfolgreich.
 - Live: regulärer Checkout und neuer Extension-Prepare-Flow erfolgreich;
-  die serverseitige TLS-Integration wurde nicht live ausgeführt.
+  die serverseitige TLS-Integration wurde anschließend getestet, siehe unten.
 - [Account-Vorgaben](screenshots/checkout-preferences.png).
 - [Synthetische Handoff-Vorschau](screenshots/checkout-handoff.png).
 
 Die lokalen Docker-Images für Control Center, Vinted-Service und Worker wurden
 gebaut und gestartet. Die temporären Next-Dev-Server sind beendet. Kein Push
 oder Produktionsdeployment wurde ausgeführt.
+
+## Optimierung nach dem Discord-Test
+
+Der Nutzer bestätigte den funktionierenden Discord-Link und bat um einen
+schnelleren, möglichst vollständig requestbasierten Ablauf.
+
+Ein direkter Aufruf des Service-Prepare-Endpoints mit der normal gespeicherten
+verknüpften Sitzung, dem freigegebenen Artikel und Hauszustellung/PayPal endete
+nach **893 ms** mit `vinted_security_check` (Vintrack HTTP 409). Es wurde kein
+Checkout-Link zurückgegeben und kein Payment ausgeführt. Dieser Versuch wurde
+nicht wiederholt und die Sicherheitsprüfung nicht umgangen. Server-only ist
+für diese Sitzung damit aktuell kein live bestätigter Ersatz.
+
+Extension **0.2.3** führt die Vorbereitung weiter mit HTTP-Requests in der
+aktiven Vinted-Sitzung aus. Sie verwendet jede passende bereits offene
+Vinted-Seite, bevorzugt eine geladene Seite und überspringt die Navigation zur
+Artikelseite. Neue Versuche prüfen den Account einmal direkt vor dem ersten
+POST. Vorhandene Links prüfen ihn vor der Navigation. Bei Account-Abweichung
+vor jeder Mutation wird nur der eigene lokale Intent entfernt; unklare
+Mutationsfehler bleiben weiterhin gegen Wiederholung gesperrt.
+
+Die Handoff-Seite verwendet ihre bereits geladenen Ziel-Metadaten. Dadurch
+entfällt der zweite GET. Bei Item-Karten laufen Metadaten-Abfrage und
+Extension-Erkennung parallel. GET/Vorschauen bleiben weiterhin ohne Mutation.
+Beide Prepare-Implementierungen sparen ein PayPal-Update, wenn die Build-Antwort
+die Option bereits anbietet oder PayPal schon ausgewählt ist. Fehlt diese
+Information, bleibt der beobachtete Ablauf mit zweitem Update erhalten.
+
+Validierung: 39 Extension-Tests, 31 Frontend-Unit-Tests, ESLint,
+Produktionsbuild, 10 Handoff-E2E-Tests (Desktop/Mobile) sowie beide Go-Suites
+erfolgreich. Ein prozentualer Geschwindigkeitsgewinn wird ohne gemessene
+Vorher/Nachher-Stichprobe nicht behauptet.
+
+Nach dem manuellen Neuladen von 0.2.3 wurde derselbe freigegebene Artikel mit
+Hauszustellung/PayPal ausgehend von einer offenen Vinted-Startseite getestet.
+Die Vorbereitung bis zur initiierten Checkout-Navigation dauerte **4139 ms**
+(gemessen im lokalen UI mit `performance.now()`, ohne finales Seitenrendern).
+Ergebnis: `checkout_prepared`. Die tatsächlich geöffnete Checkout-Seite zeigte
+den richtigen Artikel, Hauszustellung mit DPD CLASSIC, ausgewähltes PayPal und
+den letzten Button „Zahlen“. Er wurde nicht gedrückt. Die temporäre, nur lokal
+und für den freigegebenen Account zugängliche Testseite wurde entfernt.
+Der Test misst die Extension-Vorbereitung; Discord-/Vintrack-Seitenladen ist
+nicht Teil dieser 4139 ms. Der komplette Discord-Link wurde vom Nutzer als
+funktionierend bestätigt, für den optimierten Link liegt keine separate
+Live-Messung ab Discord-Klick vor.

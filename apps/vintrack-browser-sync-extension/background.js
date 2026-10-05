@@ -1325,16 +1325,13 @@ async function ensureVintedBuyTab(targetUrl) {
   const matchingTabs = await extensionApi.tabs.query({
     url: [`https://${target.host}/*`],
   });
-  const existingTab = matchingTabs.find((tab) => typeof tab.id === "number");
+  const existingTab = matchingTabs
+    .filter((tab) => typeof tab.id === "number")
+    .sort((a, b) => Number(b.status === "complete") - Number(a.status === "complete"))[0];
 
   if (existingTab?.id) {
-    if (existingTab.url !== targetUrl) {
-      await extensionApi.tabs.update(existingTab.id, {
-        url: targetUrl,
-        active: false,
-      });
-      await waitForTabLoad(existingTab.id);
-    }
+    // Requests run on any same-region Vinted page. Loading the item first
+    // adds a full navigation without contributing to checkout preparation.
     await waitForTabBridge(existingTab.id);
     return { tabId: existingTab.id, created: false };
   }
@@ -1448,17 +1445,6 @@ async function prepareBrowserCheckout(target) {
   const { itemId, sellerId, expectedAccountId, domain } = target;
   const targetUrl = `https://${domain}/items/${itemId}`;
   const { tabId } = await ensureVintedBuyTab(targetUrl);
-  const account = await extensionApi.tabs.sendMessage(tabId, {
-    type: "VINTRACK_GET_BROWSER_ACCOUNT",
-  });
-  if (!account?.ok || account.accountId !== expectedAccountId) {
-    await extensionApi.tabs.update(tabId, { active: true });
-    return {
-      ok: false,
-      code: "checkout_account_mismatch",
-      error: "Sign in to Vinted with the account linked to Vintrack.",
-    };
-  }
   const attempt = {
     ...target,
     accountId: expectedAccountId,
@@ -1479,6 +1465,19 @@ async function prepareBrowserCheckout(target) {
     return null;
   });
   if (previous) {
+    // New checkouts verify identity in the page bridge before their first POST.
+    // Cached links do not run that bridge, so verify them here instead.
+    const account = await extensionApi.tabs.sendMessage(tabId, {
+      type: "VINTRACK_GET_BROWSER_ACCOUNT",
+    });
+    if (!account?.ok || account.accountId !== expectedAccountId) {
+      await extensionApi.tabs.update(tabId, { active: true });
+      return {
+        ok: false,
+        code: "checkout_account_mismatch",
+        error: "Sign in to Vinted with the account linked to Vintrack.",
+      };
+    }
     if (
       previous.sellerId !== sellerId ||
       !validCheckoutUrl(previous.checkoutUrl, domain)
@@ -1509,12 +1508,25 @@ async function prepareBrowserCheckout(target) {
     payload: target,
   });
   if (!result?.ok) {
+    if (result?.code === "checkout_account_mismatch") {
+      // This response is emitted before any remote mutation. Permit a retry
+      // after the user signs in with the correct account.
+      await withCheckoutAttempts(async (attempts) => {
+        await extensionApi.storage.local.set({
+          [STORAGE_KEYS.checkoutAttempts]: attempts.filter((entry) =>
+            !(entry.itemId === itemId && entry.accountId === expectedAccountId &&
+              entry.domain === domain && entry.startedAt === attempt.startedAt)),
+        });
+      });
+    }
     await extensionApi.tabs.update(tabId, { active: true });
     return {
       ok: false,
       code: result?.code || "checkout_failed",
       error:
-        result?.code === "datadome_challenge"
+        result?.code === "checkout_account_mismatch"
+          ? "Sign in to Vinted with the account linked to Vintrack."
+          : result?.code === "datadome_challenge"
           ? "Complete Vinted's security check in the browser tab."
           : "Vinted could not prepare checkout. Continue in the Vinted tab.",
     };

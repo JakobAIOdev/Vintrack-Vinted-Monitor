@@ -20,6 +20,33 @@ func checkoutResults() []fakeHTTPResult {
 
 const nativeHomeCheckout = `{"checkout":{"components":{"payment_method":{"pay_in_methods":[{"code":"MANGOPAY_PAYPAL"}],"selected_payment_method":null},"shipping_address":{"address":{"id":55}},"shipping_pickup_options":{"selected_pickup_option":1},"shipping_pickup_details":{"pickup_details":{"selected_rate_uuid":"synthetic-rate"}},"pay_button_v2":{"payments_available":true}}}}`
 
+func TestPrepareCheckoutCombinesPayPalAndDeliveryWhenBuildOffersIt(t *testing.T) {
+	results := checkoutResults()
+	results[1].body = strings.TrimSuffix(nativeHomeCheckout, "}") + `,"purchase":{"id":"synthetic-purchase"}}`
+	results[2].body = strings.Replace(nativeHomeCheckout, `"selected_payment_method":null`, `"selected_payment_method":{"pay_in_method":{"payment_method":"paypal"}}`, 1)
+	client, transport := testClient(results...)
+	link, err := client.PrepareCheckout(123, 456, func(session.CheckoutLink) error { return nil }, CheckoutPreferences{Shipping: "home", Payment: "paypal"})
+	if err != nil || link.Status != "checkout_prepared" || len(transport.requests) != 3 {
+		t.Fatalf("combined update failed: link=%#v err=%v requests=%d", link, err, len(transport.requests))
+	}
+	body, _ := io.ReadAll(transport.requests[2].Body)
+	var raw map[string]interface{}
+	_ = json.Unmarshal(body, &raw)
+	if firstStringPath(raw, []string{"components", "payment_method", "payment_method"}) != "paypal" || firstInt64Path(raw, []string{"components", "shipping_pickup_options", "pickup_type"}) != 1 {
+		t.Fatalf("delivery and payment not combined: %s", body)
+	}
+}
+
+func TestPrepareCheckoutDoesNotReselectSavedPayPal(t *testing.T) {
+	results := checkoutResults()
+	results[2].body = strings.Replace(nativeHomeCheckout, `"selected_payment_method":null`, `"selected_payment_method":{"pay_in_method":{"payment_method":"paypal"}}`, 1)
+	client, transport := testClient(results...)
+	link, err := client.PrepareCheckout(123, 456, func(session.CheckoutLink) error { return nil }, CheckoutPreferences{Shipping: "home", Payment: "paypal"})
+	if err != nil || link.Status != "checkout_prepared" || len(transport.requests) != 3 {
+		t.Fatalf("saved payment caused extra request: link=%#v err=%v", link, err)
+	}
+}
+
 func TestPrepareCheckoutSelectsHomeAndAvailablePayPalWithoutPayment(t *testing.T) {
 	results := checkoutResults()
 	results[2].body = nativeHomeCheckout
