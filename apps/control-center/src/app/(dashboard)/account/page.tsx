@@ -48,7 +48,7 @@ export default async function AccountPage({
             ? "github"
             : "vinted";
     const latestExtensionVersion =
-        process.env.BROWSER_EXTENSION_LATEST_VERSION?.trim() || "0.2.8";
+        process.env.BROWSER_EXTENSION_LATEST_VERSION?.trim() || "0.3.0";
     const minimumExtensionVersion =
         process.env.BROWSER_EXTENSION_MIN_VERSION?.trim() || "0.2.1";
     const firefoxExtensionUrl =

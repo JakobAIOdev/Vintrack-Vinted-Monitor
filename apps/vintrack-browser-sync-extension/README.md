@@ -51,7 +51,7 @@ handles signing, review, installation, and updates for the public build.
 
 ## Checkout handoff
 
-Version 0.2.8 advertises checkout preparation protocol 5 to Vintrack. The
+Version 0.3.0 advertises checkout preparation protocol 5 to Vintrack. The
 dashboard's Open Checkout action verifies that the Vinted browser account
 matches the linked account, applies the delivery/payment preferences selected
 in Vintrack Account, and opens its checkout page. Home delivery and available
@@ -276,7 +276,7 @@ Temporary extensions are removed by Firefox on restart by design.
    **Prepare Release** workflow.
 
 For the current release, both manifests and `BROWSER_EXTENSION_LATEST_VERSION`
-are `0.2.8`; the minimum compatible version remains `0.2.1`.
+are `0.3.0`; the minimum compatible version remains `0.2.1`.
 If the GitHub Actions variable `BROWSER_EXTENSION_LATEST_VERSION` is set,
 update it with every manifest version bump: the deploy workflow rejects a
 different value before submitting the Firefox build. Keep `.env.example`,

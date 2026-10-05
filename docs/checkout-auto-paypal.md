@@ -102,7 +102,7 @@ Browser-E2E-Tests arbeiten mit lokalen Stubs, ohne echten Vinted-Payment-Traffic
 - Control Center: 39 Unit-Tests, 22 bestandene Checkout-E2E auf Desktop/Mobil
   (2 Auth-Fälle im angemeldeten Testmodus übersprungen), ESLint und Build.
 - Extension: 55 bestandene synthetische Checkout-/Lifecycle-Tests und
-  Chrome-/Firefox-Pakete 0.2.8 gebaut. Neue Tests prüfen den Start nach
+  Chrome-/Firefox-Pakete für Release 0.3.0 gebaut. Neue Tests prüfen den Start nach
   HTML-Parsing, während die Seite noch nicht vollständig geladen ist, und
   Bridge-Bereitschaft nach dem Entfernen von HTML-Root-Attributen.
 - Vinted-Service: `go test ./...`.
