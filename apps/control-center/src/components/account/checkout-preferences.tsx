@@ -10,7 +10,7 @@ import {
     CHECKOUT_PAYMENT_LABELS,
     checkoutPaymentOptions,
     autoCheckoutAllowed,
-    AUTO_CHECKOUT_WARNING_VERSION,
+    autoCheckoutWarningVersion,
     type CheckoutPreferences,
 } from "@/lib/checkout";
 import {
@@ -168,12 +168,18 @@ export function CheckoutPreferencesCard({
                                 setWarningAccepted(false);
                             }}
                         />
-                        Auto-checkout to PayPal after clicking a buy link
+                        Auto-checkout with{" "}
+                        {preferences.payment === "card"
+                            ? "my saved card"
+                            : "PayPal"}{" "}
+                        after clicking a buy link
                     </Label>
                     <p className="text-muted-foreground text-xs leading-5">
                         {canAutoCheckout
-                            ? "Optional: skip Vinted’s final payment button and open PayPal. This applies to dashboard and notification buy links, and does not buy new monitor matches automatically."
-                            : "Auto-checkout currently supports PayPal only where it is offered for your linked region. Other payment methods use normal Oneclick."}
+                            ? preferences.payment === "card"
+                                ? "Optional: submit payment with the card saved in Vinted. Your card may be charged immediately. Only verified EUR checkouts within your limit qualify; bank authentication or CVV confirmation may still be required in Vinted. Dashboard and notification buy links use this mode after a click. Monitor matches do not buy automatically."
+                                : "Optional: skip Vinted’s final payment button and open PayPal. Only verified EUR checkouts within your limit qualify. This applies to dashboard and notification buy links, and does not buy new monitor matches automatically."
+                            : "Choose a saved card or PayPal (where offered in your linked region) to enable auto-checkout. Other payment methods use normal Oneclick."}
                     </p>
                     {autoEnabled && (
                         <div className="space-y-3">
@@ -185,15 +191,28 @@ export function CheckoutPreferencesCard({
                                     Warning: this starts a real payment.
                                 </strong>{" "}
                                 A buy-link click submits Vinted’s payment
-                                request using your saved delivery choice. Wallet
-                                funds can complete a purchase without a PayPal
-                                window. Vintrack stops when wallet funds are
-                                applied, amounts cannot be verified or the total
-                                exceeds your limit, but an external confirmation
-                                window is not guaranteed. Check your limit and
-                                delivery settings before enabling this. An item
-                                reservation is not guaranteed. Never repeat a
-                                payment with an unclear outcome.
+                                request using your saved delivery choice.{" "}
+                                {preferences.payment === "card" && (
+                                    <>
+                                        <strong>
+                                            Your saved card may be charged
+                                            immediately, without another
+                                            confirmation.
+                                        </strong>{" "}
+                                        Bank authentication (3-D Secure) or a
+                                        CVV request must be completed in Vinted.
+                                        Vintrack never saves your card number or
+                                        CVV.{" "}
+                                    </>
+                                )}
+                                Wallet funds can complete a purchase without
+                                another confirmation. Vintrack stops when wallet
+                                funds are applied, amounts cannot be verified or
+                                the total exceeds your limit, but an external
+                                confirmation window is not guaranteed. Check
+                                your limit and delivery settings before enabling
+                                this. An item reservation is not guaranteed.
+                                Never repeat a payment with an unclear outcome.
                             </div>
                             <div className="space-y-2">
                                 <Label htmlFor="checkout-max-total">
@@ -223,8 +242,11 @@ export function CheckoutPreferencesCard({
                                         setWarningAccepted(event.target.checked)
                                     }
                                 />
-                                I understand the payment risk and enable
-                                auto-checkout within this limit.
+                                I understand{" "}
+                                {preferences.payment === "card"
+                                    ? "that my card may be charged immediately"
+                                    : "the payment risk"}{" "}
+                                and enable auto-checkout within this limit.
                             </Label>
                         </div>
                     )}
@@ -251,7 +273,9 @@ export function CheckoutPreferencesCard({
                                         ? {
                                               autoCheckout: {
                                                   warningVersion:
-                                                      AUTO_CHECKOUT_WARNING_VERSION,
+                                                      autoCheckoutWarningVersion(
+                                                          preferences.payment,
+                                                      ),
                                                   maxTotalMinor,
                                                   currency: "EUR" as const,
                                               },

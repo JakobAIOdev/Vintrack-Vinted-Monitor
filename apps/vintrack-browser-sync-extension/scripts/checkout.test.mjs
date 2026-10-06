@@ -551,3 +551,89 @@ test("auto-checkout navigates to PayPal without persisting redirect tokens or re
   assert.equal(restarted.messages.filter(m=>m.type==="VINTRACK_RUN_BROWSER_BUY").length,0);
   assert.equal(starts,1);
 });
+
+const cardAutoTarget = { ...target, preferences: { shipping: "home", payment: "card", autoCheckout: { ...autoSetting, warningVersion: 2 } } };
+function cardAutoQuote() {
+  const quote = autoQuote();
+  const payment = quote.checkout.components.payment_method;
+  const method = { payment_method: "credit_card", enabled: true };
+  payment.pay_in_methods = [method];
+  payment.cards = [{ id: "synthetic-card", expired: false }];
+  payment.selected_payment_method = { pay_in_method: method, credit_card: { external_code: "synthetic-card", expired: false } };
+  return quote;
+}
+function cardBuild() {
+  const build = cardAutoQuote();
+  build.checkout.components.payment_method.selected_payment_method = null;
+  return build;
+}
+
+test("card auto-checkout submits once with native saved-card references and resumes Vinted payment", async () => {
+  for (const [response, status] of [
+    [{ payment: { status: "success" } }, "card_payment_confirmed"],
+    [{ payment: { status: "pending" } }, "card_payment_pending"],
+    [{ payment: { status: "failure" } }, "card_payment_failed"],
+    [{ payment: { status: "success" }, action: { type: "native_adyen_payment_3ds", parameters: { token: "synthetic-private-bank-data" } } }, "card_authentication_required"],
+    [{ action: { type: "payrails_cvv_resubmission" } }, "card_authentication_required"],
+    [{ action: { type: "redirect", parameters: { url: "https://evil.test/secret" } } }, "card_authentication_required"],
+    [{ payment: { status: "unrecognized" } }, "payment_outcome_unknown"],
+    [{ payment: { status: "success" }, errors: [] }, "payment_outcome_unknown"],
+    [{ payment: { status: "success" }, action: {} }, "payment_outcome_unknown"],
+    [() => { throw new Error("response lost"); }, "payment_outcome_unknown"],
+  ]) {
+    const h = bridge(42, [cardAutoQuote()], cardBuild(), response);
+    const result = await h.run(cardAutoTarget);
+    assert.equal(result.status, status);
+    assert.equal(h.requests.length, 5);
+    assert.equal(JSON.parse(h.requests[3].init.body).components.payment_method.card_id, "synthetic-card");
+    assert.equal(JSON.parse(h.requests[4].init.body).checksum, "synthetic-current-checksum");
+    assert.equal(h.requests[4].init.redirect, "error");
+    assert.equal(new URL(result.checkoutUrl).searchParams.get("after_payment_redirect"), "true");
+    assert.equal(result.paymentUrl, undefined);
+    assert.ok(!JSON.stringify(result).includes("synthetic-private-bank-data"));
+    assert.ok(!JSON.stringify(result).includes("evil.test"));
+  }
+});
+
+test("card auto-checkout rejects old PayPal consent before requests and unsafe card quotes before payment", async () => {
+  for (const warningVersion of [0, 1, 3]) {
+    const h = bridge();
+    const preferences = { ...cardAutoTarget.preferences, autoCheckout: { ...autoSetting, warningVersion } };
+    assert.equal((await h.run({ ...target, preferences })).code, "invalid_checkout_preferences");
+    assert.equal(h.requests.length, 0);
+    const bg = background();
+    assert.equal((await bg.run({ ...target, preferences })).code, "invalid_buy_payload");
+    assert.equal(bg.messages.length, 0);
+  }
+  for (const change of [
+    data => { data.checkout.components.payment_method.selected_payment_method.credit_card.expired = true; },
+    data => { data.checkout.components.payment_method.cards[0].expired = true; },
+    data => { data.checkout.components.payment_method.selected_payment_method.credit_card.external_code = 55.5; },
+    data => { delete data.checkout.components.payment_method.selected_payment_method.credit_card; },
+    data => { data.checkout.components.payment_method.selected_payment_method.credit_card.external_code = "different-card"; },
+    data => { data.checkout.components.payment_method.pay_in_methods[0].enabled = false; },
+    data => { data.checkout.adyen_protect_signals_enabled = true; },
+    data => { data.checkout.components.pay_button_v2.total.price.currency_code = "PLN"; },
+    data => { data.checkout.components.pay_button_v2.total.price.amount = "30.01"; },
+    data => { data.checkout.components.order_summary_v2.deductions = [{ type: "order-summary-wallet-deduction", price: { amount: "1.00", currency_code: "EUR" } }]; },
+  ]) {
+    const quote = cardAutoQuote(); change(quote);
+    const h = bridge(42, [quote], cardBuild());
+    const result = await h.run(cardAutoTarget);
+    assert.equal(result.status, "checkout_review_required");
+    assert.equal(h.requests.filter(r => r.url.endsWith("/payment")).length, 0);
+  }
+});
+
+test("card payment stays on Vinted and changing to PayPal cannot replay after restart", async () => {
+  let starts = 0;
+  const resumeUrl = `${checkoutUrl}&after_payment_redirect=true`;
+  const h = background({ run: () => { starts++; return { ok: true, checkoutUrl: resumeUrl, transactionId: 77, purchaseId: "synthetic", status: "card_authentication_required", paymentUrl: syntheticPayPalUrl }; } });
+  const result = await h.run(cardAutoTarget);
+  assert.equal(result.paymentUrl, undefined);
+  assert.equal(h.mutations.at(-1).changes.url, resumeUrl);
+  const restarted = background({ storage: h.storage });
+  await restarted.run(autoTarget);
+  assert.equal(restarted.messages.filter(m => m.type === "VINTRACK_RUN_BROWSER_BUY").length, 0);
+  assert.equal(starts, 1);
+});

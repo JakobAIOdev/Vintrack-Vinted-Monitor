@@ -27,13 +27,20 @@ export type CheckoutPreferences = {
         | "blik"
         | "przelewy24";
     autoCheckout?: {
-        warningVersion: 1;
+        warningVersion: 1 | 2;
         maxTotalMinor: number;
         currency: "EUR";
     };
 };
 
 export const AUTO_CHECKOUT_WARNING_VERSION = 1;
+export const CARD_AUTO_CHECKOUT_WARNING_VERSION = 2;
+
+export function autoCheckoutWarningVersion(payment: string) {
+    return payment === "card"
+        ? CARD_AUTO_CHECKOUT_WARNING_VERSION
+        : AUTO_CHECKOUT_WARNING_VERSION;
+}
 
 export function checkoutPreferencesKey(preferences: CheckoutPreferences) {
     const setting = preferences.autoCheckout;
@@ -45,21 +52,27 @@ export function checkoutPreferencesKey(preferences: CheckoutPreferences) {
 }
 
 export function autoCheckoutAllowed(domain: string, payment: string) {
+    const normalized = checkoutDomain(domain);
     return (
-        payment === "paypal" &&
-        ["www.vinted.de", "www.vinted.at", "www.vinted.be"].includes(
-            checkoutDomain(domain) || "",
-        )
+        Boolean(normalized) &&
+        (payment === "card" ||
+            (payment === "paypal" &&
+                ["www.vinted.de", "www.vinted.at", "www.vinted.be"].includes(
+                    normalized || "",
+                )))
     );
 }
 
-export function isAutoCheckoutPreference(value: unknown): boolean {
+export function isAutoCheckoutPreference(
+    value: unknown,
+    payment = "paypal",
+): boolean {
     if (!value || typeof value !== "object" || Array.isArray(value))
         return false;
     const setting = value as Record<string, unknown>;
     return (
         Object.keys(setting).length === 3 &&
-        setting.warningVersion === AUTO_CHECKOUT_WARNING_VERSION &&
+        setting.warningVersion === autoCheckoutWarningVersion(payment) &&
         setting.currency === "EUR" &&
         Number.isSafeInteger(setting.maxTotalMinor) &&
         (setting.maxTotalMinor as number) > 0 &&
@@ -143,8 +156,11 @@ export function isCheckoutPreferences(
             preferences.payment,
         ) &&
         (preferences.autoCheckout === undefined ||
-            (preferences.payment === "paypal" &&
-                isAutoCheckoutPreference(preferences.autoCheckout)))
+            (["paypal", "card"].includes(preferences.payment) &&
+                isAutoCheckoutPreference(
+                    preferences.autoCheckout,
+                    preferences.payment,
+                )))
     );
 }
 

@@ -956,14 +956,14 @@ type BuyResponse struct {
 }
 
 // PrepareCheckout applies explicit delivery and payment preferences. Normal
-// Oneclick stops before payment; opted-in auto-checkout may start PayPal once
+// Oneclick stops before payment; opted-in auto-checkout may start payment once
 // after validating the quote. Checkpoints prevent replay of uncertain mutations.
 func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.CheckoutLink) error, choices ...CheckoutPreferences) (*session.CheckoutLink, error) {
 	preferences := CheckoutPreferences{}
 	if len(choices) > 0 {
 		preferences = choices[0]
 	}
-	if !preferences.Valid() || (preferences.AutoCheckout != nil && !autoCheckoutRegion(c.session.Domain)) {
+	if !preferences.Valid() || (preferences.AutoCheckout != nil && !AutoCheckoutAllowed(c.session.Domain, preferences.Payment)) {
 		return nil, fmt.Errorf("invalid checkout preferences")
 	}
 	if itemID <= 0 || sellerID <= 0 || sellerID == c.session.VintedUserID || save == nil {
@@ -1005,11 +1005,12 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 	paymentChoice := build.Selection.Methods[preferences.Payment]
 	updated, updateErr := c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, paymentChoice))
 	if updateErr == nil && paymentChoice == nil && updated.Selection.SelectedPreference != preferences.Payment && updated.Selection.Methods[preferences.Payment] != nil {
+		paymentChoice = updated.Selection.Methods[preferences.Payment]
 		link.Status = "checkout_selecting_preferences"
 		if err := save(link); err != nil {
 			return &link, err
 		}
-		updated, updateErr = c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, updated.Selection.Methods[preferences.Payment]))
+		updated, updateErr = c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, paymentChoice))
 	}
 	if updateErr != nil {
 		// The built checkout can be completed by its owner in Vinted. Do not
@@ -1028,27 +1029,36 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 		}
 	}
 	if preferences.AutoCheckout != nil {
-		link.AutoCheckoutReason = "Review the checkout: PayPal, delivery or price could not be verified. No automatic payment was started."
+		link.AutoCheckoutReason = "Review the checkout: payment method, delivery or price could not be verified. No automatic payment was started."
 		if link.Status == "checkout_prepared" && updated.Selection.AutoAmountsVerified &&
 			updated.Selection.AutoTotalMinor <= preferences.AutoCheckout.MaxTotalMinor &&
-			updated.Selection.Methods["paypal"] != nil && updated.Checksum != "" {
+			updated.Selection.Methods[preferences.Payment] != nil && updated.Checksum != "" &&
+			(preferences.Payment != "card" || (updated.Selection.CardVerified && !updated.Selection.CardSignalsRequired &&
+				(paymentChoice == nil || fmt.Sprint(paymentChoice["card_id"]) == fmt.Sprint(updated.Selection.Methods["card"]["card_id"])))) {
 			link.Status = "payment_starting"
 			link.AutoCheckoutReason = "A payment was started. Check Vinted before trying again."
 			if err := save(link); err != nil {
 				return &link, err
 			}
-			redirect, paymentErr := c.startPayPalPayment(link.PurchaseID, link.TransactionID, updated.Checksum)
+			outcome, paymentErr := c.startCheckoutPayment(preferences.Payment, link.PurchaseID, link.TransactionID, updated.Checksum)
 			link.Status = "payment_outcome_unknown"
-			link.AutoCheckoutReason = "A payment request was sent but no verified PayPal redirect was returned. Check Vinted; do not start it again."
+			link.AutoCheckoutReason = "A payment request was sent but its outcome could not be verified. Check Vinted; do not start it again."
 			if paymentErr == nil {
-				link.Status = "paypal_redirect_ready"
-				link.AutoCheckoutReason = "Continue in PayPal to complete the payment."
+				link.Status = outcome.Status
+				link.AutoCheckoutReason = outcome.Reason
+			}
+			if preferences.Payment == "card" {
+				resume, _ := url.Parse(link.CheckoutURL)
+				query := resume.Query()
+				query.Set("after_payment_redirect", "true")
+				resume.RawQuery = query.Encode()
+				link.CheckoutURL = resume.String()
 			}
 			// Redirects can contain payment tokens. Persist only the checkpoint.
 			if err := save(link); err != nil {
 				return &link, err
 			}
-			link.PaymentURL = redirect
+			link.PaymentURL = outcome.PaymentURL
 			return &link, nil
 		}
 		link.Status = "checkout_review_required"

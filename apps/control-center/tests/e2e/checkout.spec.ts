@@ -763,3 +763,117 @@ test("protocol 3 forwards the regional payment preference without preparing twic
     expect(provider).toBe("google_pay");
     expect(preparations).toBe(0);
 });
+
+for (const protocol of [5, 6]) {
+    test(`card auto-checkout ${protocol === 6 ? "uses shared authorization and cannot repeat payment" : "blocks older extensions before consuming authorization"}`, async ({
+        page,
+    }) => {
+        const preferences = {
+            shipping: "home",
+            payment: "card",
+            autoCheckout: {
+                warningVersion: 2,
+                currency: "EUR",
+                maxTotalMinor: 3000,
+            },
+        };
+        let authorizations = 0;
+        let starts = 0;
+        await page.exposeFunction("cardCheckoutStarted", () => {
+            starts++;
+        });
+        await page.addInitScript((version) => {
+            window.addEventListener("message", (event) => {
+                if (event.source !== window) return;
+                if (event.data?.type === "VINTRACK_EXTENSION_PING")
+                    window.postMessage(
+                        {
+                            type: "VINTRACK_EXTENSION_READY",
+                            payload: {
+                                configured: true,
+                                checkoutPrepareVersion: version,
+                            },
+                        },
+                        window.location.origin,
+                    );
+                if (event.data?.type === "VINTRACK_EXTENSION_BUY") {
+                    const payload = event.data.payload;
+                    if (!payload.readinessOnly) {
+                        void (
+                            window as unknown as {
+                                cardCheckoutStarted(): Promise<void>;
+                            }
+                        ).cardCheckoutStarted();
+                    }
+                    window.postMessage(
+                        {
+                            type: "VINTRACK_EXTENSION_BUY_RESULT",
+                            payload: payload.readinessOnly
+                                ? {
+                                      requestId: payload.requestId,
+                                      ok: true,
+                                      ready: true,
+                                  }
+                                : {
+                                      requestId: payload.requestId,
+                                      ok: true,
+                                      status: "card_authentication_required",
+                                      checkoutUrl:
+                                          "https://www.vinted.de/checkout?purchase_id=synthetic&after_payment_redirect=true",
+                                      autoCheckoutReason:
+                                          "Continue in Vinted to complete card authentication. Do not pay again.",
+                                  },
+                        },
+                        window.location.origin,
+                    );
+                }
+            });
+        }, protocol);
+        await page.route("**/api/checkout/17/123", (route) => {
+            if (route.request().method() === "GET")
+                return route.fulfill({ json: { ...target, preferences } });
+            expect(
+                route.request().headers()["x-vintrack-checkout-preferences"],
+            ).toBe("home:card:auto:2:EUR:3000");
+            authorizations++;
+            return route.fulfill(
+                authorizations === 1
+                    ? { json: { browserPaymentAuthorized: true } }
+                    : {
+                          status: 409,
+                          json: {
+                              error: "Auto-checkout was already attempted. Check Vinted.",
+                          },
+                      },
+            );
+        });
+        await page.route("**/api/items/checkout-links", (route) =>
+            route.fulfill({ json: { ok: true } }),
+        );
+        await page.goto("/checkout/17/123");
+        if (protocol === 5) {
+            await expect(
+                page
+                    .getByRole("alert")
+                    .filter({ hasText: "version 0.3.1 or later" }),
+            ).toBeVisible();
+            expect(starts).toBe(0);
+            expect(authorizations).toBe(0);
+        } else {
+            await expect(
+                page
+                    .getByRole("status")
+                    .filter({ hasText: "card authentication" }),
+            ).toBeVisible();
+            expect(starts).toBe(1);
+            await page.getByRole("button", { name: "Reopen checkout" }).click();
+            await expect(
+                page
+                    .getByRole("alert")
+                    .filter({ hasText: "already attempted" }),
+            ).toBeVisible();
+            expect(starts).toBe(1);
+            expect(authorizations).toBe(2);
+        }
+    });
+}

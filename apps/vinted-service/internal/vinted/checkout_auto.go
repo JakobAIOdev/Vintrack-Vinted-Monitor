@@ -73,14 +73,46 @@ func validPayPalPaymentURL(raw string) bool {
 }
 
 // No refresh/retry, raw-response logs, persistent redirect tokens or payment
-// polling. Only a PayPal redirect is followed; every other outcome needs review.
-func (c *Client) startPayPalPayment(purchaseID string, transactionID int64, checksum string) (string, error) {
+// polling. Card authentication stays in Vinted; external card URLs are not used.
+type checkoutPaymentOutcome struct {
+	Status, Reason, PaymentURL string
+}
+
+func readCardPaymentOutcome(raw map[string]interface{}) (checkoutPaymentOutcome, error) {
+	if raw["errors"] != nil || raw["error"] != nil {
+		return checkoutPaymentOutcome{}, fmt.Errorf("payment outcome needs review")
+	}
+	action := firstStringPath(raw, []string{"action", "type"})
+	if raw["action"] != nil && action == "" {
+		return checkoutPaymentOutcome{}, fmt.Errorf("payment outcome needs review")
+	}
+	if action != "" {
+		switch action {
+		case "sca_required", "sca_challenge", "sca_blocked", "payrails_cvv_resubmission", "native_adyen_card_3ds", "native_adyen_payment_3ds", "redirect":
+			return checkoutPaymentOutcome{Status: "card_authentication_required", Reason: "Continue in Vinted to review or complete card authentication. A payment was already started; do not pay again."}, nil
+		default:
+			return checkoutPaymentOutcome{}, fmt.Errorf("payment outcome needs review")
+		}
+	}
+	switch firstStringPath(raw, []string{"payment", "status"}) {
+	case "success":
+		return checkoutPaymentOutcome{Status: "card_payment_confirmed", Reason: "Vinted reports that the card payment succeeded. Check the order in Vinted; do not pay again."}, nil
+	case "pending", "preparing":
+		return checkoutPaymentOutcome{Status: "card_payment_pending", Reason: "The card payment is processing. Check its status in Vinted; do not pay again."}, nil
+	case "failure":
+		return checkoutPaymentOutcome{Status: "card_payment_failed", Reason: "Vinted reports a failed card payment. Review it in Vinted; no automatic retry will run."}, nil
+	default:
+		return checkoutPaymentOutcome{}, fmt.Errorf("payment outcome needs review")
+	}
+}
+
+func (c *Client) startCheckoutPayment(payment, purchaseID string, transactionID int64, checksum string) (checkoutPaymentOutcome, error) {
 	payload := map[string]interface{}{"checksum": checksum, "payment_options": map[string]interface{}{"browser_info": defaultBrowserInfo(BrowserInfo{})}}
 	body, _ := json.Marshal(payload)
 	endpoint := fmt.Sprintf("https://%s/api/v2/purchases/%s/checkout/payment", c.session.Domain, url.PathEscape(purchaseID))
 	req, err := http.NewRequest("POST", endpoint, strings.NewReader(string(body)))
 	if err != nil {
-		return "", fmt.Errorf("could not create payment request")
+		return checkoutPaymentOutcome{}, fmt.Errorf("could not create payment request")
 	}
 	req.Header = c.apiHeadersWithBody()
 	req.Header.Set("Referer", fmt.Sprintf("https://%s/checkout?purchase_id=%s&order_id=%d&order_type=transaction", c.session.Domain, url.QueryEscape(purchaseID), transactionID))
@@ -89,27 +121,30 @@ func (c *Client) startPayPalPayment(purchaseID string, transactionID int64, chec
 	defer c.httpClient.SetFollowRedirect(wasFollowing)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("payment outcome is unknown")
+		return checkoutPaymentOutcome{}, fmt.Errorf("payment outcome is unknown")
 	}
 	defer resp.Body.Close()
-	log.Printf("[vinted] PayPal payment start -> %d", resp.StatusCode)
+	log.Printf("[vinted] checkout payment start -> %d", resp.StatusCode)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("payment outcome needs review")
+		return checkoutPaymentOutcome{}, fmt.Errorf("payment outcome needs review")
 	}
 	data, err := readCheckoutResponse(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("payment outcome needs review")
+		return checkoutPaymentOutcome{}, fmt.Errorf("payment outcome needs review")
 	}
 	var raw map[string]interface{}
 	if json.Unmarshal(data, &raw) != nil {
-		return "", fmt.Errorf("payment outcome needs review")
+		return checkoutPaymentOutcome{}, fmt.Errorf("payment outcome needs review")
+	}
+	if payment == "card" {
+		return readCardPaymentOutcome(raw)
 	}
 	if firstStringPath(raw, []string{"action", "type"}) != "redirect" {
-		return "", fmt.Errorf("payment outcome needs review")
+		return checkoutPaymentOutcome{}, fmt.Errorf("payment outcome needs review")
 	}
 	redirect := firstStringPath(raw, []string{"action", "parameters", "url"})
 	if !validPayPalPaymentURL(redirect) {
-		return "", fmt.Errorf("payment outcome needs review")
+		return checkoutPaymentOutcome{}, fmt.Errorf("payment outcome needs review")
 	}
-	return redirect, nil
+	return checkoutPaymentOutcome{Status: "paypal_redirect_ready", Reason: "Continue in PayPal to complete the payment.", PaymentURL: redirect}, nil
 }

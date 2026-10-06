@@ -114,6 +114,14 @@ async function startCheckout(
         startedAt = performance.now();
     }
     if (extensionAvailable) {
+        if (
+            target.preferences?.autoCheckout &&
+            target.preferences.payment === "card" &&
+            extensionAvailable < 6
+        )
+            throw new Error(
+                "Update or reload the Vintrack extension to use card auto-checkout (version 0.3.1 or later).",
+            );
         if (target.preferences?.autoCheckout && extensionAvailable < 5)
             throw new Error(
                 "Update or reload the Vintrack extension to use auto-checkout (version 0.2.6 or later).",
@@ -198,6 +206,7 @@ async function startCheckout(
         if (
             result.paymentUrl &&
             (!target.preferences?.autoCheckout ||
+                target.preferences.payment !== "paypal" ||
                 result.status !== "paypal_redirect_ready" ||
                 !isPayPalPaymentUrl(result.paymentUrl))
         )
@@ -264,6 +273,7 @@ async function startCheckout(
     if (
         data.paymentUrl &&
         target.preferences?.autoCheckout &&
+        target.preferences.payment === "paypal" &&
         data.status === "paypal_redirect_ready" &&
         isPayPalPaymentUrl(data.paymentUrl)
     )

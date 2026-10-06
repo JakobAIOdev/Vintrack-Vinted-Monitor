@@ -154,6 +154,7 @@ async function handle(
                 status: data.status,
                 autoCheckoutReason: data.auto_checkout_reason,
                 ...(target.preferences?.autoCheckout &&
+                target.preferences.payment === "paypal" &&
                 data.status === "paypal_redirect_ready" &&
                 isPayPalPaymentUrl(data.payment_url)
                     ? { paymentUrl: data.payment_url }

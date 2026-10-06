@@ -2,12 +2,13 @@ package vinted
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 )
 
-// These are account-level choices, not payment credentials. Wallet funds are
-// applied by Vinted itself; we never initiate a payment or save a payment method.
+// These are account-level choices, not payment credentials. Vinted applies
+// wallet funds; payment starts only with a separate validated auto-checkout opt-in.
 type CheckoutPreferences struct {
 	Shipping     string                  `json:"shipping"`
 	Payment      string                  `json:"payment"`
@@ -21,7 +22,11 @@ type AutoCheckoutPreference struct {
 }
 
 func (p CheckoutPreferences) Valid() bool {
-	if p.AutoCheckout != nil && (p.Payment != "paypal" || p.AutoCheckout.WarningVersion != 1 || p.AutoCheckout.Currency != "EUR" || p.AutoCheckout.MaxTotalMinor <= 0 || p.AutoCheckout.MaxTotalMinor > 1_000_000) {
+	warningVersion := 1
+	if p.Payment == "card" {
+		warningVersion = 2
+	}
+	if p.AutoCheckout != nil && ((p.Payment != "paypal" && p.Payment != "card") || p.AutoCheckout.WarningVersion != warningVersion || p.AutoCheckout.Currency != "EUR" || p.AutoCheckout.MaxTotalMinor <= 0 || p.AutoCheckout.MaxTotalMinor > 1_000_000) {
 		return false
 	}
 	switch p.Payment {
@@ -40,8 +45,10 @@ func (p CheckoutPreferences) Key() string {
 	return key
 }
 
-func autoCheckoutRegion(domain string) bool {
-	return domain == "www.vinted.de" || domain == "www.vinted.at" || domain == "www.vinted.be"
+var checkoutDomainPattern = regexp.MustCompile(`^www\.vinted\.(at|be|co\.uk|com|cz|de|dk|es|fi|fr|hr|hu|ie|it|lt|lu|nl|pl|pt|ro|se|sk)$`)
+
+func AutoCheckoutAllowed(domain, payment string) bool {
+	return checkoutDomainPattern.MatchString(domain) && (payment == "card" || (payment == "paypal" && (domain == "www.vinted.de" || domain == "www.vinted.at" || domain == "www.vinted.be")))
 }
 
 func checkoutComponents(p CheckoutPreferences, payment map[string]interface{}) map[string]interface{} {
@@ -73,6 +80,8 @@ type checkoutSelection struct {
 	SelectedPreference  string
 	AutoTotalMinor      int64
 	AutoAmountsVerified bool
+	CardVerified        bool
+	CardSignalsRequired bool
 }
 
 var checkoutMethodCode = regexp.MustCompile(`^[a-zA-Z0-9_]{1,64}$`)
@@ -82,6 +91,9 @@ var checkoutMethodCode = regexp.MustCompile(`^[a-zA-Z0-9_]{1,64}$`)
 func checkoutProvider(method map[string]interface{}) string {
 	value, _ := method["payment_method"].(string)
 	value = strings.ToLower(value)
+	if value == "credit_card" {
+		return "card"
+	}
 	switch value {
 	case "paypal", "card", "google_pay", "klarna", "tink", "bancontact", "ideal", "blik", "przelewy24":
 		return value
@@ -113,6 +125,38 @@ func checkoutMap(raw map[string]interface{}, keys ...string) map[string]interfac
 	return raw
 }
 
+// Card references are Vinted's existing identifiers, never card numbers/CVV.
+// Native checkout returns selected_payment_method.credit_card.external_code.
+func checkoutCardID(card map[string]interface{}, paths ...[]string) interface{} {
+	if card["expired"] == true || checkoutMap(card, "credit_card")["expired"] == true || checkoutMap(card, "card")["expired"] == true {
+		return nil
+	}
+	for _, path := range paths {
+		parent := checkoutMap(card, path[:len(path)-1]...)
+		switch value := parent[path[len(path)-1]].(type) {
+		case string:
+			if value != "0" && regexpCardReference.MatchString(value) {
+				return value
+			}
+		case float64:
+			if value > 0 && value <= 9007199254740991 && math.Trunc(value) == value {
+				return int64(value)
+			}
+		case int, int64:
+			if number := firstInt64Path(parent, []string{path[len(path)-1]}); number > 0 && number <= 9007199254740991 {
+				return number
+			}
+		}
+	}
+	return nil
+}
+
+var regexpCardReference = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
+
+func selectedCheckoutCardID(payment map[string]interface{}) interface{} {
+	return checkoutCardID(checkoutMap(payment, "selected_payment_method"), []string{"card_id"}, []string{"card", "id"}, []string{"credit_card", "external_code"})
+}
+
 func readCheckoutSelection(raw map[string]interface{}) checkoutSelection {
 	components := checkoutMap(raw, "checkout", "components")
 	payment := checkoutMap(components, "payment_method")
@@ -141,14 +185,23 @@ func readCheckoutSelection(raw map[string]interface{}) checkoutSelection {
 		}
 		choice := map[string]interface{}{"card_id": nil, "payment_method": native}
 		if provider == "card" {
-			selected := checkoutMap(payment, "selected_payment_method")
-			cardID := firstInt64Path(selected, []string{"card_id"}, []string{"card", "id"})
+			cardID := selectedCheckoutCardID(payment)
 			cards, _ := payment["cards"].([]interface{})
-			if cardID <= 0 && len(cards) == 1 {
+			if cardID == nil && len(cards) == 1 && checkoutProvider(checkoutMap(payment, "selected_payment_method", "pay_in_method")) != "card" {
 				card, _ := cards[0].(map[string]interface{})
-				cardID = firstInt64Path(card, []string{"id"})
+				cardID = checkoutCardID(card, []string{"id"})
 			}
-			if cardID <= 0 {
+			if cardID == nil {
+				continue
+			}
+			for _, rawCard := range cards {
+				card, _ := rawCard.(map[string]interface{})
+				if card["expired"] == true && fmt.Sprint(card["id"]) == fmt.Sprint(cardID) {
+					cardID = nil
+					break
+				}
+			}
+			if cardID == nil {
 				continue
 			}
 			choice["card_id"] = cardID
@@ -168,9 +221,11 @@ func readCheckoutSelection(raw map[string]interface{}) checkoutSelection {
 			}
 		}
 	}
-	if selection.SelectedPreference == "card" && firstInt64Path(checkoutMap(payment, "selected_payment_method"), []string{"card_id"}, []string{"card", "id"}) <= 0 {
+	if selection.SelectedPreference == "card" && selectedCheckoutCardID(payment) == nil {
 		selection.SelectedPreference = ""
 	}
+	selection.CardVerified = selection.SelectedPreference == "card" && selection.Methods["card"] != nil && fmt.Sprint(selection.Methods["card"]["card_id"]) == fmt.Sprint(selectedCheckoutCardID(payment))
+	selection.CardSignalsRequired = checkoutMap(raw, "checkout")["adyen_protect_signals_enabled"] == true || raw["adyen_protect_signals_enabled"] == true
 	selection.AutoTotalMinor, selection.AutoAmountsVerified = autoCheckoutTotal(components)
 	return selection
 }

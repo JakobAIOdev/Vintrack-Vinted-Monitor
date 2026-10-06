@@ -743,7 +743,7 @@ function formatRuntimeState(storage) {
 
   return {
     installed: true,
-    checkoutPrepareVersion: 5,
+    checkoutPrepareVersion: 6,
     version: extensionApi.runtime.getManifest().version || "",
     configured: Boolean(storage.browserLinkToken && storage.vintrackAppOrigin),
     companionMode:
@@ -1431,9 +1431,9 @@ function validAutoCheckoutPreference(preferences, domain) {
   const setting = preferences.autoCheckout;
   if (setting === undefined) return true;
   return setting && typeof setting === "object" && !Array.isArray(setting) && Object.keys(setting).length === 3 &&
-    setting.warningVersion === 1 && setting.currency === "EUR" &&
+    setting.warningVersion === (preferences.payment === "card" ? 2 : 1) && setting.currency === "EUR" &&
     Number.isSafeInteger(setting.maxTotalMinor) && setting.maxTotalMinor > 0 && setting.maxTotalMinor <= 1_000_000 &&
-    preferences.payment === "paypal" && ["www.vinted.de", "www.vinted.at", "www.vinted.be"].includes(domain);
+    (preferences.payment === "card" && isVintedDomain(domain) || preferences.payment === "paypal" && ["www.vinted.de", "www.vinted.at", "www.vinted.be"].includes(domain));
 }
 
 function validPayPalPaymentUrl(raw) {
@@ -1610,7 +1610,7 @@ async function prepareBrowserCheckout(target) {
       code: "invalid_checkout_url",
       error: "Vinted did not return a valid checkout link.",
     };
-  const paymentRedirectAllowed = target.preferences.autoCheckout && result.status === "paypal_redirect_ready" && validPayPalPaymentUrl(result.paymentUrl);
+  const paymentRedirectAllowed = target.preferences.autoCheckout && target.preferences.payment === "paypal" && result.status === "paypal_redirect_ready" && validPayPalPaymentUrl(result.paymentUrl);
   await checkoutStep("checkout_checkpoint_failed", "Checkout responded, but its result could not be saved. Check Vinted before trying again; the saved attempt prevents an automatic repeat.", () => withCheckoutAttempts(async (attempts) => {
     const completed = {
       ...attempt,

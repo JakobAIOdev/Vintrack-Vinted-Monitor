@@ -30,7 +30,7 @@ func (s *Server) handlePrepareCheckout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "valid item_id and seller_id are required", http.StatusBadRequest)
 		return
 	}
-	if req.Preferences.AutoCheckout != nil && req.Domain != "www.vinted.de" && req.Domain != "www.vinted.at" && req.Domain != "www.vinted.be" {
+	if req.Preferences.AutoCheckout != nil && !vinted.AutoCheckoutAllowed(req.Domain, req.Preferences.Payment) {
 		writeError(w, "auto-checkout is unavailable for this region", http.StatusBadRequest)
 		return
 	}

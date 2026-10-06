@@ -59,7 +59,7 @@ the server also blocks older clients and legacy endpoints. The separate
 auto-payment opt-in and price limit remain required. See
 [checkout risk warning](../../docs/checkout-risk-warning.md).
 
-Version 0.3.0 advertises checkout preparation protocol 5 to Vintrack. The
+Version 0.3.1 advertises checkout preparation protocol 6 to Vintrack. The
 dashboard's Open Checkout action verifies that the Vinted browser account
 matches the linked account, applies the delivery/payment preferences selected
 in Vintrack Account, and opens its checkout page. Home delivery and available
@@ -102,13 +102,22 @@ never automatically retried on another regional domain. Older extensions use
 the service handoff instead of the new browser protocol. The Companion does
 not expose a purchase action.
 
-### Optional PayPal auto-checkout
+### Optional PayPal or saved-card auto-checkout
 
 Account settings can explicitly enable auto-checkout for PayPal in DE/AT/BE
 after accepting the payment warning and setting a maximum EUR order total,
 including shipping and fees. It remains off by default. Dashboard and
 notification buy-link clicks use the same flow; monitor matches do not buy
-anything without a click. Protocol 5 is required for extension auto-checkout.
+anything without a click. Protocol 5 remains sufficient for PayPal; saved-card auto-checkout requires protocol 6 (extension 0.3.1).
+
+Saved-card mode requires a separate version-2 payment warning: the card may be
+charged immediately without another confirmation window. Switching methods
+disables auto-checkout until it is explicitly enabled and accepted again. Card
+availability is verified against the current checkout, and the total must be
+in EUR. No card numbers or CVVs are collected by Vintrack. Vinted handles
+3-D Secure/CVV confirmation through its native payment-resume checkout.
+Unknown outcomes never trigger a second payment. See
+[card auto-checkout evidence and limits](../../docs/checkout-auto-card.md).
 
 Before consuming the server payment-intent claim, protocol 5 checks the local
 Vinted receiver without account or checkout requests. Existing complete tabs
@@ -134,12 +143,16 @@ for context readiness, account verification, transaction, build, update,
 optional payment, browser handoff and optional server authorization. It never
 includes identifiers, URLs, account data, credentials or response bodies.
 
-The latest checkout response must confirm the delivery choice, enabled PayPal,
+The latest checkout response must confirm the delivery choice, enabled saved card or PayPal,
 a fresh checksum, a positive EUR total within the limit, and no applied wallet
 funds or currency conversion. Missing or ambiguous fields leave native checkout
 for review. One additional payment request is sent, without following redirects
 inside that request, refresh, retry or payment polling. Only Vinted's verified
-PayPal redirect action is opened; other results ask the user to check Vinted.
+PayPal redirect action is opened for PayPal. Card outcomes return to native Vinted
+with `after_payment_redirect=true`, so Vinted reads the existing payment and
+renders any bank authentication, CVV request, failure or completed order. Card
+mode never follows external bank URLs or retries payment. Required Adyen Protect
+signals that Vintrack cannot supply leave checkout for manual review.
 An external confirmation window and item reservation are not guaranteed.
 
 A shared server claim prevents another automatic attempt for the same member,
@@ -284,7 +297,7 @@ Temporary extensions are removed by Firefox on restart by design.
    **Prepare Release** workflow.
 
 For the current release, both manifests and `BROWSER_EXTENSION_LATEST_VERSION`
-are `0.3.0`; the minimum compatible version remains `0.2.1`.
+are `0.3.1`; the minimum compatible version remains `0.2.1`.
 If the GitHub Actions variable `BROWSER_EXTENSION_LATEST_VERSION` is set,
 update it with every manifest version bump: the deploy workflow rejects a
 different value before submitting the Firefox build. Keep `.env.example`,

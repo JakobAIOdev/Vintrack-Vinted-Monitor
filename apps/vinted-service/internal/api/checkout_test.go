@@ -90,4 +90,21 @@ func TestBrowserPaymentAuthorizationDoesNotRequireVintedTransportOrValidToken(t 
 			t.Fatal("missing authorization")
 		}
 	}
+	// Changing payment methods cannot bypass an existing item payment claim.
+	cardBody := strings.Replace(strings.Replace(body, `"payment":"paypal"`, `"payment":"card"`, 1), `"warningVersion":1`, `"warningVersion":2`, 1)
+	for _, tc := range []struct {
+		body   string
+		status int
+	}{
+		{cardBody, http.StatusConflict},
+		{strings.Replace(cardBody, `"item_id":123`, `"item_id":124`, 1), http.StatusOK},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/items/checkout/prepare", strings.NewReader(tc.body))
+		req.Header.Set("X-User-ID", "synthetic-user")
+		recorder := httptest.NewRecorder()
+		server.handlePrepareCheckout(recorder, req)
+		if recorder.Code != tc.status {
+			t.Fatalf("card authorization status %d, want %d", recorder.Code, tc.status)
+		}
+	}
 }

@@ -212,3 +212,49 @@ test("auto-checkout requires a supported linked region, warning version and posi
     assert.equal(h.writes.length, 1);
     assert.equal(foreign.writes.length, 0);
 });
+
+test("saved-card auto-checkout requires its own immediate-charge consent and linked region", async () => {
+    const preferences = {
+        shipping: "home",
+        payment: "card",
+        autoCheckout: {
+            warningVersion: 2,
+            currency: "EUR",
+            maxTotalMinor: 3000,
+        },
+    };
+    for (const domain of ["www.vinted.de", "www.vinted.fr", "www.vinted.pl"]) {
+        const h = harness(domain);
+        assert.equal(
+            ((await h.save(preferences)) as { success?: boolean }).success,
+            true,
+        );
+        assert.equal(h.writes.length, 1);
+    }
+    const denied = harness("www.vinted.fr", false, false, true);
+    assert.ok(((await denied.save(preferences)) as { error?: string }).error);
+    assert.equal(denied.writes.length, 0);
+    for (const warningVersion of [0, 1, 3]) {
+        const h = harness("www.vinted.fr");
+        assert.ok(
+            (
+                (await h.save({
+                    ...preferences,
+                    autoCheckout: {
+                        ...preferences.autoCheckout,
+                        warningVersion,
+                    },
+                })) as { error?: string }
+            ).error,
+        );
+        assert.equal(h.writes.length, 0);
+    }
+    assert.equal(
+        checkout.autoCheckoutAllowed("www.vinted.fr.evil.test", "card"),
+        false,
+    );
+    assert.equal(
+        checkout.isCheckoutPreferences({ ...preferences, payment: "wallet" }),
+        false,
+    );
+});

@@ -378,6 +378,22 @@ test("a PayPal redirect is returned only for an enabled auto-checkout and verifi
         ],
         [undefined, paymentUrl, "paypal_redirect_ready", undefined],
         [
+            {
+                ...storedAutoPreferences,
+                preferences: {
+                    ...autoPreferences,
+                    payment: "card",
+                    autoCheckout: {
+                        ...autoPreferences.autoCheckout,
+                        warningVersion: 2,
+                    },
+                },
+            },
+            paymentUrl,
+            "paypal_redirect_ready",
+            undefined,
+        ],
+        [
             storedAutoPreferences,
             paymentUrl,
             "payment_outcome_unknown",

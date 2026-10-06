@@ -441,6 +441,7 @@
 
   function checkoutProvider(method) {
     const value = String(method?.payment_method || "").toLowerCase();
+    if (value === "credit_card") return "card";
     if (checkoutPayments.includes(value) && !["wallet", "vinted"].includes(value)) return value;
     const tokens = `_${String(method?.code || "").toUpperCase()}_`;
     for (const provider of checkoutPayments) {
@@ -454,8 +455,34 @@
   function selectedCheckoutPayment(data) {
     const selected = data?.checkout?.components?.payment_method?.selected_payment_method;
     const provider = checkoutProvider(selected?.pay_in_method);
-    if (provider === "card" && !(Number(selected?.card_id || selected?.card?.id) > 0)) return "";
+    if (provider === "card" && !selectedCardId(selected)) return "";
     return provider;
+  }
+
+  function validCardId(value) {
+    if (typeof value === "number") return Number.isSafeInteger(value) && value > 0 ? value : null;
+    return typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value) && value !== "0" ? value : null;
+  }
+
+  function selectedCardId(selected) {
+    if (selected?.expired === true || selected?.card?.expired === true || selected?.credit_card?.expired === true) return null;
+    return validCardId(selected?.card_id || selected?.card?.id || selected?.credit_card?.external_code);
+  }
+
+  function cardPaymentOutcome(data) {
+    if (data?.errors != null || data?.error != null) return {};
+    if (data?.action != null && !data.action.type) return {};
+    if (data?.action?.type) {
+      if (["sca_required", "sca_challenge", "sca_blocked", "payrails_cvv_resubmission", "native_adyen_card_3ds", "native_adyen_payment_3ds", "redirect"].includes(data.action.type))
+        return { status: "card_authentication_required", autoCheckoutReason: "Continue in Vinted to review or complete card authentication. A payment was already started; do not pay again." };
+      return {};
+    }
+    switch (data?.payment?.status) {
+      case "success": return { status: "card_payment_confirmed", autoCheckoutReason: "Vinted reports that the card payment succeeded. Check the order in Vinted; do not pay again." };
+      case "pending": case "preparing": return { status: "card_payment_pending", autoCheckoutReason: "The card payment is processing. Check its status in Vinted; do not pay again." };
+      case "failure": return { status: "card_payment_failed", autoCheckoutReason: "Vinted reports a failed card payment. Review it in Vinted; no automatic retry will run." };
+      default: return {};
+    }
   }
 
   function checkoutPaymentChoice(data, preference) {
@@ -468,9 +495,12 @@
         let cardId = null;
         if (preference === "card") {
           const selected = payment.selected_payment_method;
-          cardId = Number(selected?.card_id || selected?.card?.id ||
-            (Array.isArray(payment.cards) && payment.cards.length === 1 ? payment.cards[0]?.id : 0));
-          if (!Number.isSafeInteger(cardId) || cardId <= 0) return null;
+          cardId = selectedCardId(selected);
+          if (!cardId && checkoutProvider(selected?.pay_in_method) !== "card" && Array.isArray(payment.cards) && payment.cards.length === 1 && payment.cards[0]?.expired !== true) {
+            cardId = validCardId(payment.cards[0]?.id);
+          }
+          if (!cardId) return null;
+          if (Array.isArray(payment.cards) && payment.cards.some(card => String(card?.id) === String(cardId) && card?.expired === true)) return null;
         }
         return { card_id: cardId, payment_method: native };
       }).filter(Boolean);
@@ -484,9 +514,9 @@
     const setting = preferences.autoCheckout;
     if (setting === undefined) return true;
     return isObject(setting) && Object.keys(setting).length === 3 &&
-      setting.warningVersion === 1 && setting.currency === "EUR" &&
+      setting.warningVersion === (preferences.payment === "card" ? 2 : 1) && setting.currency === "EUR" &&
       Number.isSafeInteger(setting.maxTotalMinor) && setting.maxTotalMinor > 0 && setting.maxTotalMinor <= 1_000_000 &&
-      preferences.payment === "paypal" && ["www.vinted.de", "www.vinted.at", "www.vinted.be"].includes(window.location.hostname);
+      (preferences.payment === "card" || preferences.payment === "paypal" && ["www.vinted.de", "www.vinted.at", "www.vinted.be"].includes(window.location.hostname));
   }
 
   function checkoutMoneyMinor(price) {
@@ -654,7 +684,7 @@
         shipping_pickup_details: {},
       };
     }
-    const paymentChoice = checkoutPaymentChoice(buildResult.data, preferences.payment);
+    let paymentChoice = checkoutPaymentChoice(buildResult.data, preferences.payment);
     let updateResult = await checkoutRequest("updateMs", "checkout update", {
       method: "PUT",
       url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout`,
@@ -668,6 +698,7 @@
     }
     const updatedChoice = checkoutPaymentChoice(updateResult.data, preferences.payment);
     if (!paymentChoice && updatedChoice && selectedCheckoutPayment(updateResult.data) !== preferences.payment) {
+      paymentChoice = updatedChoice;
       updateResult = await checkoutRequest("updateMs", "checkout preferences", {
         method: "PUT",
         url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout`,
@@ -758,17 +789,19 @@
     };
     if (!preferences.autoCheckout) return prepared;
     prepared.status = "checkout_review_required";
-    prepared.autoCheckoutReason = "Review the checkout: PayPal, delivery or price could not be verified. No automatic payment was started.";
+    prepared.autoCheckoutReason = "Review the checkout: payment method, delivery or price could not be verified. No automatic payment was started.";
     const total = autoCheckoutTotal(updateResult.data);
     const currentChecksum = findStringByPaths(updateResult.data, [["checksum"], ["checkout", "checksum"]]);
     // Contact updates may change the quote. Do not pay against an earlier state.
     if (!ready || phoneNumber || total === null || total > preferences.autoCheckout.maxTotalMinor ||
-        !currentChecksum || !checkoutPaymentChoice(updateResult.data, "paypal")) return prepared;
+        !currentChecksum || !checkoutPaymentChoice(updateResult.data, preferences.payment) ||
+        (preferences.payment === "card" && (updateResult.data?.checkout?.adyen_protect_signals_enabled === true || updateResult.data?.adyen_protect_signals_enabled === true ||
+          paymentChoice && String(paymentChoice.card_id) !== String(selectedCardId(selected?.payment_method?.selected_payment_method))))) return prepared;
     prepared.status = "payment_outcome_unknown";
-    prepared.autoCheckoutReason = "A payment request was sent but no verified PayPal redirect was returned. Check Vinted; do not start it again.";
+    prepared.autoCheckoutReason = "A payment request was sent but its outcome could not be verified. Check Vinted; do not start it again.";
     try {
       // Background persisted intent before the first mutation; no retries here.
-      const payment = await checkoutRequest("paymentMs", "PayPal payment start", {
+      const payment = await checkoutRequest("paymentMs", "Checkout payment start", {
         method: "POST",
         url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout/payment`,
         referrer: checkoutReferrer,
@@ -781,12 +814,23 @@
         } } },
       });
       const redirect = payment.data?.action?.parameters?.url;
-      if (payment.ok && payment.data?.action?.type === "redirect" && validPayPalPaymentUrl(redirect)) {
+      if (preferences.payment === "paypal" && payment.ok && payment.data?.action?.type === "redirect" && validPayPalPaymentUrl(redirect)) {
         prepared.status = "paypal_redirect_ready";
         prepared.autoCheckoutReason = "Continue in PayPal to complete the payment.";
         prepared.paymentUrl = redirect;
+      } else if (preferences.payment === "card" && payment.ok) {
+        Object.assign(prepared, cardPaymentOutcome(payment.data));
       }
     } catch { /* An uncertain payment must never be replayed automatically. */ }
+    if (preferences.payment === "card") {
+      // Native Vinted reads the existing payment with GET and renders its own
+      // 3-D Secure/CVV handler. Never resubmit payment or copy bank tokens.
+      const resume = new URL(prepared.checkoutUrl);
+      if (resume.origin === window.location.origin && resume.pathname === "/checkout") {
+        resume.searchParams.set("after_payment_redirect", "true");
+        prepared.checkoutUrl = resume.href;
+      }
+    }
     return prepared;
   }
 
