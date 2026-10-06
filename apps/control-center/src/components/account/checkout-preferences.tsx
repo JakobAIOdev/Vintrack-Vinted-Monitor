@@ -164,8 +164,25 @@ export function CheckoutPreferencesCard({
                             checked={autoEnabled}
                             disabled={!loaded || pending || !canAutoCheckout}
                             onChange={(event) => {
-                                setAutoEnabled(event.target.checked);
+                                const enable = event.target.checked;
                                 setWarningAccepted(false);
+                                if (!enable) {
+                                    setAutoEnabled(false);
+                                    return;
+                                }
+                                startTransition(async () => {
+                                    try {
+                                        // Review risks at the moment the mode
+                                        // is enabled, before it can be saved.
+                                        await requestCheckoutConsent();
+                                        setRiskConsentVersion(
+                                            CHECKOUT_RISK_WARNING_VERSION,
+                                        );
+                                        setAutoEnabled(true);
+                                    } catch {
+                                        setAutoEnabled(false);
+                                    }
+                                });
                             }}
                         />
                         Auto-checkout with{" "}

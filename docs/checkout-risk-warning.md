@@ -31,6 +31,10 @@ opt-in. A changed warning version requires acceptance again. Keep
 
 - Dashboard buttons and notification handoffs share the same consent prompt.
   Hidden notification pages still wait for visibility before showing it.
+- Switching auto-checkout on in Account opens the risk overlay immediately,
+  including for members who previously accepted it for Oneclick. The switch
+  stays off until acceptance; Cancel or Escape leaves it off. The separate
+  payment warning and price limit still need confirmation before saving.
 - Unaccepted GET handoffs return a read-only preview with HTTP 403 and
   `CHECKOUT_CONSENT_REQUIRED`, so older frontends cannot start checkout.
 - Prepare POSTs, browser payment claims, legacy buy/warm endpoints, saved
@@ -58,3 +62,7 @@ synthetic accounts, API fixtures and intercepted external navigation.
 ![Desktop warning](screenshots/checkout-risk-chromium.png)
 
 [Mobile warning](screenshots/checkout-risk-mobile-chrome.png).
+
+[Account switch warning](screenshots/checkout-risk-account-toggle.png): locally
+verified that switching on opens the overlay and cancelling leaves the mode off,
+without saving user consent or payment preferences.
