@@ -20,6 +20,8 @@ interface DashboardShellProps {
     inactivityPausedPriceWatchCount: number;
     features: Record<FeatureKey, FeatureAccessResult>;
     user?: {
+        id?: string;
+        accountUpdatesSeenVersion?: number;
         name?: string | null;
         image?: string | null;
         email?: string | null;

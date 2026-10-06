@@ -35,7 +35,11 @@ export default async function DashboardLayout({
     ] = await Promise.all([
         db.user.findUnique({
             where: { id: session.user.id },
-            select: { role: true, checkout_enabled: true },
+            select: {
+                role: true,
+                checkout_enabled: true,
+                account_updates_seen_version: true,
+            },
         }),
         getMemberAnnouncement(),
         getMonitorMaintenance(),
@@ -54,9 +58,16 @@ export default async function DashboardLayout({
         }),
     ]);
     const role = dbUser?.role ?? "free";
-    const features = await getFeatureCapabilities(role, dbUser?.checkout_enabled === true);
+    const features = await getFeatureCapabilities(
+        role,
+        dbUser?.checkout_enabled === true,
+    );
 
-    const user = { ...session.user, role };
+    const user = {
+        ...session.user,
+        role,
+        accountUpdatesSeenVersion: dbUser?.account_updates_seen_version ?? 0,
+    };
 
     return (
         <AccountProvider checkoutEnabled={features.checkout_links.allowed}>
