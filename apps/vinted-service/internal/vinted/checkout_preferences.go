@@ -167,11 +167,12 @@ func readCheckoutSelection(raw map[string]interface{}) checkoutSelection {
 	if numeric, ok := address["id"].(float64); ok && math.Trunc(numeric) != numeric {
 		addressOK = false
 	}
+	home, homeOK := checkoutMap(components, "shipping_pickup_options")["selected_pickup_option"].(float64)
 	selection := checkoutSelection{
 		Methods:            make(map[string]map[string]interface{}),
 		SelectedPreference: checkoutProvider(checkoutMap(payment, "selected_payment_method", "pay_in_method")),
 		PaymentSelected:    checkoutMap(payment, "selected_payment_method") != nil,
-		HomeSelected:       firstInt64Path(components, []string{"shipping_pickup_options", "selected_pickup_option"}) == 1,
+		HomeSelected:       homeOK && home == 1,
 		AddressSelected:    checkoutMap(components, "shipping_address", "address") != nil,
 		AddressVerified:    addressOK && addressID > 0 && addressID <= 9007199254740991,
 		RateSelected:       firstStringPath(components, []string{"shipping_pickup_details", "pickup_details", "selected_rate_uuid"}) != "",

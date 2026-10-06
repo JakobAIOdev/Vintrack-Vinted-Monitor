@@ -566,9 +566,11 @@
         !checkoutReady(data, preferences)) return false;
     const choice = checkoutPaymentChoice(data, preferences.payment);
     const selected = data.checkout.components.payment_method.selected_payment_method;
-    const addressId = Number(data.checkout.components.shipping_address.address.id);
+    const address = data.checkout.components.shipping_address.address.id;
+    const addressId = typeof address === "number" || typeof address === "string" && /^\d+$/.test(address) ? Number(address) : 0;
+    const rate = data.checkout.components.shipping_pickup_details.pickup_details.selected_rate_uuid;
     const checksum = findStringByPaths(data, [["checksum"], ["checkout", "checksum"]]);
-    return Boolean(checksum && Number.isSafeInteger(addressId) && addressId > 0 && choice &&
+    return Boolean(checksum && Number.isSafeInteger(addressId) && addressId > 0 && typeof rate === "string" && rate.trim() && choice &&
       choice.payment_method === (selected?.pay_in_method?.payment_method ||
         (selected?.pay_in_method?.code === "MANGOPAY_PAYPAL" ? "paypal" : "")) &&
       (preferences.payment !== "card" || String(choice.card_id) === String(selectedCardId(selected))));

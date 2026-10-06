@@ -61,6 +61,9 @@ func TestPrepareCheckoutKeepsUpdateForUnverifiedBuildSelections(t *testing.T) {
 		"pickup selected": func(raw map[string]interface{}) {
 			checkoutMap(raw, "checkout", "components", "shipping_pickup_options")["selected_pickup_option"] = 2
 		},
+		"fractional pickup": func(raw map[string]interface{}) {
+			checkoutMap(raw, "checkout", "components", "shipping_pickup_options")["selected_pickup_option"] = 1.5
+		},
 		"missing rate": func(raw map[string]interface{}) {
 			delete(checkoutMap(raw, "checkout", "components", "shipping_pickup_details", "pickup_details"), "selected_rate_uuid")
 		},
