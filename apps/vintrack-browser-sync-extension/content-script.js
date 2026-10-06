@@ -251,6 +251,24 @@
     });
   }
 
+  function requestCheckoutNavigation(payload) {
+    return new Promise(resolve => {
+      const requestId = crypto.randomUUID();
+      const timeout = window.setTimeout(() => finish({ ok: false }), 2500);
+      function finish(result) {
+        window.clearTimeout(timeout);
+        window.removeEventListener("message", handleResponse);
+        resolve(result);
+      }
+      function handleResponse(event) {
+        if (event.source === window && event.data?.type === "VINTRACK_PAGE_CHECKOUT_NAVIGATE_RESPONSE" &&
+            event.data.payload?.requestId === requestId) finish(event.data.payload);
+      }
+      window.addEventListener("message", handleResponse);
+      post("VINTRACK_PAGE_CHECKOUT_NAVIGATE_REQUEST", { checkoutUrl: payload?.checkoutUrl, requestId });
+    });
+  }
+
   function requestPageSessionRefresh(payload = {}) {
     return new Promise((resolve) => {
       const requestId = payload?.requestId || crypto.randomUUID();
@@ -856,6 +874,17 @@
             requestId: message.payload?.requestId,
           }),
         );
+      return true;
+    }
+
+    if (message?.type === "VINTRACK_NAVIGATE_CHECKOUT") {
+      if (!isVintedHost(window.location.hostname) || !pageBridgeReady) {
+        sendResponseSafely(sendResponse, { ok: false });
+        return false;
+      }
+      requestCheckoutNavigation(message.payload)
+        .then(response => sendResponseSafely(sendResponse, response))
+        .catch(() => sendResponseSafely(sendResponse, { ok: false }));
       return true;
     }
 

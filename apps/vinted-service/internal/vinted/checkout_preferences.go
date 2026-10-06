@@ -74,10 +74,12 @@ type checkoutSelection struct {
 	PaymentSelected     bool
 	HomeSelected        bool
 	AddressSelected     bool
+	AddressVerified     bool
 	RateSelected        bool
 	PaymentsAvailable   bool
 	Methods             map[string]map[string]interface{}
 	SelectedPreference  string
+	SelectedNative      string
 	AutoTotalMinor      int64
 	AutoAmountsVerified bool
 	CardVerified        bool
@@ -160,12 +162,19 @@ func selectedCheckoutCardID(payment map[string]interface{}) interface{} {
 func readCheckoutSelection(raw map[string]interface{}) checkoutSelection {
 	components := checkoutMap(raw, "checkout", "components")
 	payment := checkoutMap(components, "payment_method")
+	address := checkoutMap(components, "shipping_address", "address")
+	addressID, addressOK := int64AtPath(address, "id")
+	if numeric, ok := address["id"].(float64); ok && math.Trunc(numeric) != numeric {
+		addressOK = false
+	}
+	home, homeOK := checkoutMap(components, "shipping_pickup_options")["selected_pickup_option"].(float64)
 	selection := checkoutSelection{
 		Methods:            make(map[string]map[string]interface{}),
 		SelectedPreference: checkoutProvider(checkoutMap(payment, "selected_payment_method", "pay_in_method")),
 		PaymentSelected:    checkoutMap(payment, "selected_payment_method") != nil,
-		HomeSelected:       firstInt64Path(components, []string{"shipping_pickup_options", "selected_pickup_option"}) == 1,
+		HomeSelected:       homeOK && home == 1,
 		AddressSelected:    checkoutMap(components, "shipping_address", "address") != nil,
+		AddressVerified:    addressOK && addressID > 0 && addressID <= 9007199254740991,
 		RateSelected:       firstStringPath(components, []string{"shipping_pickup_details", "pickup_details", "selected_rate_uuid"}) != "",
 	}
 	selection.PaymentsAvailable, _ = checkoutMap(components, "pay_button_v2")["payments_available"].(bool)
@@ -209,6 +218,10 @@ func readCheckoutSelection(raw map[string]interface{}) checkoutSelection {
 		choices[provider] = append(choices[provider], choice)
 	}
 	selectedNative := firstStringPath(payment, []string{"selected_payment_method", "pay_in_method", "payment_method"})
+	selection.SelectedNative = selectedNative
+	if selectedNative == "" && firstStringPath(payment, []string{"selected_payment_method", "pay_in_method", "code"}) == "MANGOPAY_PAYPAL" {
+		selection.SelectedNative = "paypal"
+	}
 	for provider, options := range choices {
 		if len(options) == 1 {
 			selection.Methods[provider] = options[0]
@@ -234,4 +247,16 @@ func (s checkoutSelection) Ready() bool {
 	// The observed response does not prove that a pickup point was selected.
 	// Only advertise readiness for the verified home-delivery path.
 	return s.PaymentSelected && s.HomeSelected && s.AddressSelected && s.RateSelected && s.PaymentsAvailable
+}
+
+func (b *checkoutBuildResult) matchesReviewPreferences(p CheckoutPreferences) bool {
+	// Reuse only this fresh build for normal review. Automatic payment always
+	// obtains its final quote with the existing checkout update.
+	if p.AutoCheckout != nil || p.Shipping != "home" || b.Checksum == "" ||
+		!b.Selection.Ready() || !b.Selection.AddressVerified || b.Selection.SelectedPreference != p.Payment {
+		return false
+	}
+	choice := b.Selection.Methods[p.Payment]
+	return choice != nil && choice["payment_method"] == b.Selection.SelectedNative &&
+		(p.Payment != "card" || b.Selection.CardVerified)
 }

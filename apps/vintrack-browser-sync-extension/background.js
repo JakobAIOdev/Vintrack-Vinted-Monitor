@@ -1394,6 +1394,25 @@ async function checkoutStep(code, message, action) {
   }
 }
 
+async function openCheckoutTab(tabId, checkoutUrl, allowClientNavigation) {
+  if (allowClientNavigation) {
+    let timeout;
+    try {
+      const response = await Promise.race([
+        extensionApi.tabs.sendMessage(tabId, { type: "VINTRACK_NAVIGATE_CHECKOUT", payload: { checkoutUrl } }),
+        new Promise(resolve => { timeout = setTimeout(() => resolve(null), 2700); }),
+      ]);
+      if (response?.ok === true && response.clientNavigation === true) {
+        await extensionApi.tabs.update(tabId, { active: true });
+        return 1;
+      }
+    } catch { /* Optional native routing is unavailable; open the prepared URL. */ }
+    finally { clearTimeout(timeout); }
+  }
+  await extensionApi.tabs.update(tabId, { url: checkoutUrl, active: true });
+  return 0;
+}
+
 function limitCheckoutAttempts(attempts) {
   return [
     ...attempts.filter((entry) => entry.preferences?.autoCheckout),
@@ -1565,10 +1584,8 @@ async function prepareBrowserCheckout(target) {
           "Checkout was already attempted. Continue in Vinted before starting it again.",
       };
     }
-    await checkoutStep("checkout_navigation_failed", "The existing checkout could not be opened. Check Vinted; no automatic payment was repeated.", () => extensionApi.tabs.update(tabId, {
-      url: previous.checkoutUrl,
-      active: true,
-    }));
+    await checkoutStep("checkout_navigation_failed", "The existing checkout could not be opened. Check Vinted; no automatic payment was repeated.", () => openCheckoutTab(tabId, previous.checkoutUrl,
+      !target.preferences.autoCheckout && !previous.preferences?.autoCheckout));
     return {
       ok: true,
       status: !target.preferences.autoCheckout && !previous.preferences?.autoCheckout && previous.preferences?.shipping === target.preferences.shipping && previous.preferences?.payment === target.preferences.payment
@@ -1643,20 +1660,20 @@ async function prepareBrowserCheckout(target) {
       ]),
     });
   }));
-  // Local history is optional. It must not prevent a verified checkout handoff.
-  await storeCheckoutLink({
+  // The durable replay checkpoint above is mandatory. Optional link history
+  // runs alongside navigation and must not delay opening the native checkout.
+  void storeCheckoutLink({
     ...target,
     checkoutUrl: result.checkoutUrl,
     transactionId: result.transactionId,
     purchaseId: result.purchaseId,
     status: result.status,
   }).catch(() => {});
-  await checkoutStep("checkout_navigation_failed", target.preferences.autoCheckout
+  const navigationAt = Date.now();
+  const clientNavigation = await checkoutStep("checkout_navigation_failed", target.preferences.autoCheckout
     ? "Checkout is prepared, but the Vinted tab could not be opened. Check Vinted before trying again; payment may already have started."
-    : "Checkout is prepared, but the Vinted tab could not be opened. Open the existing checkout in Vinted; this attempt will not be repeated automatically.", () => extensionApi.tabs.update(tabId, {
-    url: paymentRedirectAllowed ? result.paymentUrl : result.checkoutUrl,
-    active: true,
-  }));
+    : "Checkout is prepared, but the Vinted tab could not be opened. Open the existing checkout in Vinted; this attempt will not be repeated automatically.", () => openCheckoutTab(tabId,
+      paymentRedirectAllowed ? result.paymentUrl : result.checkoutUrl, !target.preferences.autoCheckout));
   return {
     ok: true,
     status: result.status || "checkout_review_required",
@@ -1664,7 +1681,7 @@ async function prepareBrowserCheckout(target) {
     transactionId: result.transactionId,
     purchaseId: result.purchaseId,
     autoCheckoutReason: result.autoCheckoutReason,
-    timings: { ...result.timings, tabReadyMs, extensionMs: Date.now() - startedAt },
+    timings: { ...result.timings, tabReadyMs, clientNavigation, navigationMs: Date.now() - navigationAt, extensionMs: Date.now() - startedAt },
     ...(paymentRedirectAllowed ? { paymentUrl: result.paymentUrl } : {}),
   };
 }
