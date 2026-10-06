@@ -85,6 +85,17 @@ assert.equal(
   "Chrome and Firefox versions must be identical",
 );
 assert.match(chromeManifest.version, /^\d+(?:\.\d+){1,3}$/);
+// CI must catch stale advertised versions before a release reaches production.
+const repositoryDir = resolve(extensionDir, "../..");
+for (const [name, pattern] of [
+  [".env.example", /^BROWSER_EXTENSION_LATEST_VERSION=(\S+)$/m],
+  ["docker-compose.yml", /BROWSER_EXTENSION_LATEST_VERSION:-([\d.]+)/],
+  ["apps/control-center/src/app/(dashboard)/account/page.tsx", /BROWSER_EXTENSION_LATEST_VERSION\?\.trim\(\) \|\| "([\d.]+)"/],
+]) {
+  const source = await readFile(resolve(repositoryDir, name), "utf8");
+  assert.equal(source.match(pattern)?.[1], chromeManifest.version,
+    `${name} must advertise the current extension version`);
+}
 assertManifestOrigins(chromeManifest, "manifest.json");
 assertManifestOrigins(firefoxManifest, "manifest.firefox.json");
 
@@ -331,5 +342,6 @@ assert.ok(
 );
 // Execute lifecycle regressions during the same validation used by CI/releases.
 await import("./session-refresh.test.mjs");
+await import("./checkout.test.mjs");
 
 console.log(`Extension validation passed for v${chromeManifest.version}`);

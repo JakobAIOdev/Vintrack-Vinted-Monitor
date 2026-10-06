@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { CHECKOUT_CONSENT_REQUIRED } from "@/lib/checkout-consent";
+import { requestCheckoutConsent } from "@/lib/checkout-consent.client";
 
 type CheckoutLinkEntry = {
     item_id: number;
@@ -44,7 +46,23 @@ export function CheckoutLinksClient() {
     const loadLinks = useCallback(async () => {
         setLoading(true);
         try {
-            const res = await fetch("/api/items/checkout-links");
+            let res = await fetch("/api/items/checkout-links", {
+                cache: "no-store",
+            });
+            if (
+                res.status === 403 &&
+                (
+                    await res
+                        .clone()
+                        .json()
+                        .catch(() => null)
+                )?.code === CHECKOUT_CONSENT_REQUIRED
+            ) {
+                await requestCheckoutConsent();
+                res = await fetch("/api/items/checkout-links", {
+                    cache: "no-store",
+                });
+            }
             if (!res.ok) {
                 throw new Error(
                     `Failed to fetch checkout links: ${res.status}`,

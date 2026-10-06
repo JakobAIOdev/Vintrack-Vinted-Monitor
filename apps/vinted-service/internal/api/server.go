@@ -48,6 +48,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/items/like", s.handleLike)
 	mux.HandleFunc("POST /api/items/unlike", s.handleUnlike)
 	mux.HandleFunc("POST /api/items/buy", s.handleOneClickBuy)
+	mux.HandleFunc("POST /api/items/checkout/prepare", s.handlePrepareCheckout)
 	mux.HandleFunc("POST /api/items/buy/warm", s.handleBuyWarm)
 	mux.HandleFunc("GET /api/items/checkout-links", s.handleCheckoutLinks)
 	mux.HandleFunc("POST /api/items/checkout-links", s.handleStoreCheckoutLink)
@@ -89,7 +90,7 @@ func featureForPath(path string) string {
 		return "chats"
 	case strings.HasPrefix(path, "/api/offers/"):
 		return "offers"
-	case path == "/api/items/buy" || path == "/api/items/buy/warm" || path == "/api/items/checkout-links":
+	case path == "/api/items/buy" || path == "/api/items/buy/warm" || path == "/api/items/checkout-links" || path == "/api/items/checkout/prepare":
 		return "checkout_links"
 	default:
 		return ""
@@ -110,6 +111,9 @@ func (s *Server) requireFeature(w http.ResponseWriter, userID string, feature st
 		"feature": feature,
 		"reason":  access.Reason,
 	}
+	if access.Reason == "user_disabled" {
+		payload["error"] = "Enable the checkout module in Account before using checkout."
+	}
 	if access.Dependency != "" {
 		payload["dependency"] = access.Dependency
 	}
@@ -127,14 +131,32 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		if feature := featureForPath(r.URL.Path); feature != "" {
-			if userID := getUserID(r); userID != "" && !s.requireFeature(w, userID, feature) {
-				return
+			if userID := getUserID(r); userID != "" {
+				if !s.requireFeature(w, userID, feature) {
+					return
+				}
+				if feature == "checkout_links" && !s.requireCheckoutConsent(w, userID) {
+					return
+				}
 			}
 		}
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start).Round(time.Millisecond))
 	})
+}
+
+func (s *Server) requireCheckoutConsent(w http.ResponseWriter, userID string) bool {
+	accepted, err := s.sessions.CheckoutConsentAccepted(userID)
+	if err != nil {
+		writeError(w, "checkout consent unavailable", http.StatusServiceUnavailable)
+		return false
+	}
+	if !accepted {
+		writeJSON(w, http.StatusForbidden, map[string]string{"code": "CHECKOUT_CONSENT_REQUIRED", "error": "Accept the checkout risk warning in Vintrack before using checkout."})
+		return false
+	}
+	return true
 }
 
 func getUserID(r *http.Request) string {

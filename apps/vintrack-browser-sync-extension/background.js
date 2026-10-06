@@ -12,6 +12,7 @@ const STORAGE_KEYS = {
   syncedSessions: "vintrackSyncedSessions",
   syncReceipts: "vintrackSyncReceipts",
   checkoutLinks: "vintrackCheckoutLinks",
+  checkoutAttempts: "vintrackCheckoutAttempts",
   theme: "vintrackTheme",
   companionMode: "vintrackCompanionMode",
 };
@@ -208,22 +209,6 @@ function cookieDomainMatches(cookieDomain, targetDomain) {
   );
 }
 
-function itemUrlForDomain(itemUrl, domain, itemId) {
-  const normalizedDomain = sanitizeDomain(domain);
-  if (!itemUrl) {
-    return `https://${normalizedDomain}/items/${itemId}`;
-  }
-
-  try {
-    const parsed = new URL(itemUrl);
-    parsed.protocol = "https:";
-    parsed.hostname = normalizedDomain;
-    return parsed.toString();
-  } catch {
-    return `https://${normalizedDomain}/items/${itemId}`;
-  }
-}
-
 async function getConfig() {
   const storage = await extensionApi.storage.local.get(
     Object.values(STORAGE_KEYS),
@@ -318,41 +303,6 @@ async function storeCheckoutLink(entry) {
   await extensionApi.storage.local.set({
     [STORAGE_KEYS.checkoutLinks]: nextLinks,
   });
-}
-
-async function findStoredCheckoutLink(match) {
-  const links = await getStoredCheckoutLinks();
-  const normalizedDomain = sanitizeDomain(match?.domain || "");
-  const transactionId = Number(match?.transactionId || 0);
-  const itemId = Number(match?.itemId || 0);
-  const sellerId = Number(match?.sellerId || 0);
-
-  return (
-    links.find(
-      (link) =>
-        transactionId && Number(link?.transactionId || 0) === transactionId,
-    ) ||
-    links.find(
-      (link) =>
-        itemId &&
-        sellerId &&
-        Number(link?.itemId || 0) === itemId &&
-        Number(link?.sellerId || 0) === sellerId &&
-        sanitizeDomain(link?.domain || "") === normalizedDomain,
-    ) ||
-    null
-  );
-}
-
-async function findExistingCheckoutTab(domain) {
-  const normalizedDomain = sanitizeDomain(domain);
-  const matchingTabs = await extensionApi.tabs.query({
-    url: [`https://${normalizedDomain}/checkout*`],
-  });
-  const existingTab = matchingTabs
-    .filter((tab) => typeof tab.id === "number" && typeof tab.url === "string")
-    .sort((a, b) => (b.id || 0) - (a.id || 0))[0];
-  return existingTab || null;
 }
 
 function ensurePeriodicSyncAlarm() {
@@ -793,6 +743,7 @@ function formatRuntimeState(storage) {
 
   return {
     installed: true,
+    checkoutPrepareVersion: 6,
     version: extensionApi.runtime.getManifest().version || "",
     configured: Boolean(storage.browserLinkToken && storage.vintrackAppOrigin),
     companionMode:
@@ -1354,7 +1305,7 @@ async function waitForTabBridge(tabId, timeoutMs = BUY_TAB_READY_TIMEOUT_MS) {
       const response = await extensionApi.tabs.sendMessage(tabId, {
         type: "VINTRACK_TAB_PING",
       });
-      if (response?.ok) {
+      if (response?.ok && response.pageBridgeReady !== false) {
         return;
       }
     } catch {
@@ -1374,18 +1325,45 @@ async function ensureVintedBuyTab(targetUrl) {
   const matchingTabs = await extensionApi.tabs.query({
     url: [`https://${target.host}/*`],
   });
-  const existingTab = matchingTabs.find((tab) => typeof tab.id === "number");
-
-  if (existingTab?.id) {
-    if (existingTab.url !== targetUrl) {
-      await extensionApi.tabs.update(existingTab.id, {
-        url: targetUrl,
-        active: false,
-      });
-      await waitForTabLoad(existingTab.id);
+  const existingTabs = matchingTabs
+    .filter((tab) => typeof tab.id === "number")
+    .sort((a, b) => Number(b.active) - Number(a.active) || Number(b.lastAccessed || 0) - Number(a.lastAccessed || 0));
+  const completeTabs = existingTabs.filter((tab) => tab.status === "complete" && !tab.discarded);
+  // Probe existing receivers concurrently. Extension reloads can leave old
+  // content scripts disconnected; polling those pages cannot repair them.
+  let existingTab = null;
+  if (completeTabs.length) {
+    try {
+      // A silent receiver must not delay another tab that is ready now.
+      existingTab = await Promise.any(completeTabs.map(async (tab) => {
+        let timeout;
+        try {
+          const response = await Promise.race([
+            extensionApi.tabs.sendMessage(tab.id, { type: "VINTRACK_TAB_PING" }),
+            new Promise((resolve) => { timeout = setTimeout(() => resolve(null), 750); }),
+          ]);
+          if (!response?.ok || response.pageBridgeReady === false) {
+            throw new Error("Checkout receiver is unavailable");
+          }
+          return tab;
+        } finally { clearTimeout(timeout); }
+      }));
+    } catch {
+      // All probes failed; retain the loading-tab/reload handling below.
     }
-    await waitForTabBridge(existingTab.id);
+  }
+  if (existingTab) {
+    // Requests run on any same-region Vinted page. Loading the item first
+    // adds a full navigation without contributing to checkout preparation.
     return { tabId: existingTab.id, created: false };
+  }
+  const loadingTab = existingTabs.find((tab) => tab.status === "loading" && !tab.discarded);
+  if (loadingTab) {
+    await waitForTabBridge(loadingTab.id);
+    return { tabId: loadingTab.id, created: false };
+  }
+  if (existingTabs.length) {
+    throw new CheckoutError("checkout_tab_reload_required", "The Vinted tab is disconnected from the extension. Reload Vinted once, then open a new buy link. No checkout request was sent by this attempt.");
   }
 
   const createdTab = await extensionApi.tabs.create({
@@ -1396,171 +1374,299 @@ async function ensureVintedBuyTab(targetUrl) {
     throw new Error("Failed to open Vinted tab for browser checkout");
   }
 
-  await waitForTabLoad(createdTab.id);
   await waitForTabBridge(createdTab.id);
   return { tabId: createdTab.id, created: true };
+}
+
+const checkoutInFlight = new Map();
+const CHECKOUT_ATTEMPT_TTL_MS = 10 * 60 * 1000;
+let checkoutStorageQueue = Promise.resolve();
+
+class CheckoutError extends Error {
+  constructor(code, message) { super(message); this.code = code; }
+}
+
+async function checkoutStep(code, message, action) {
+  try { return await action(); }
+  catch (error) {
+    if (error instanceof CheckoutError) throw error;
+    throw new CheckoutError(code, message);
+  }
+}
+
+function limitCheckoutAttempts(attempts) {
+  return [
+    ...attempts.filter((entry) => entry.preferences?.autoCheckout),
+    ...attempts.filter((entry) => !entry.preferences?.autoCheckout).slice(0, 100),
+  ];
+}
+
+function withCheckoutAttempts(action) {
+  const task = checkoutStorageQueue.then(async () => {
+    const storage = await extensionApi.storage.local.get(
+      STORAGE_KEYS.checkoutAttempts,
+    );
+    const attempts = (
+      Array.isArray(storage[STORAGE_KEYS.checkoutAttempts])
+        ? storage[STORAGE_KEYS.checkoutAttempts]
+        : []
+    ).filter(
+      (entry) =>
+        Number.isFinite(entry.startedAt) &&
+        (entry.preferences?.autoCheckout || Date.now() - entry.startedAt < CHECKOUT_ATTEMPT_TTL_MS),
+    );
+    return action(attempts);
+  });
+  checkoutStorageQueue = task.catch(() => {});
+  return task;
+}
+
+function validCheckoutUrl(raw, domain) {
+  try {
+    const url = new URL(raw);
+    return (
+      url.protocol === "https:" &&
+      url.host === domain &&
+      !url.username &&
+      !url.password &&
+      url.pathname === "/checkout" &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
+}
+
+function validAutoCheckoutPreference(preferences, domain) {
+  const setting = preferences.autoCheckout;
+  if (setting === undefined) return true;
+  return setting && typeof setting === "object" && !Array.isArray(setting) && Object.keys(setting).length === 3 &&
+    setting.warningVersion === (preferences.payment === "card" ? 2 : 1) && setting.currency === "EUR" &&
+    Number.isSafeInteger(setting.maxTotalMinor) && setting.maxTotalMinor > 0 && setting.maxTotalMinor <= 1_000_000 &&
+    (preferences.payment === "card" && isVintedDomain(domain) || preferences.payment === "paypal" && ["www.vinted.de", "www.vinted.at", "www.vinted.be"].includes(domain));
+}
+
+function validPayPalPaymentUrl(raw) {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" && ["www.paypal.com", "paypal.com"].includes(url.host) &&
+      !url.username && !url.password && !url.hash && ["/checkoutnow", "/webscr", "/cgi-bin/webscr"].includes(url.pathname);
+  } catch { return false; }
 }
 
 async function handleBrowserBuy(payload) {
   const itemId = Number(payload?.itemId || 0);
   const sellerId = Number(payload?.sellerId || 0);
+  const expectedAccountId = Number(payload?.expectedAccountId || 0);
   const requestId = String(payload?.requestId || crypto.randomUUID());
-  const itemUrl = String(payload?.itemUrl || "").trim();
-  const preferredDomain = sanitizeDomain(String(payload?.domain || "").trim());
-  const itemDomain = domainFromUrl(itemUrl);
-  const normalizedDomain = sanitizeDomain(preferredDomain || itemDomain);
-
-  if (!itemId || !sellerId) {
+  const domain = sanitizeDomain(String(payload?.domain || ""));
+  const preferences = payload?.preferences || { shipping: "vinted", payment: "vinted" };
+  if (
+    ![itemId, sellerId, expectedAccountId].every(
+      (id) => Number.isSafeInteger(id) && id > 0,
+    ) ||
+    !isVintedDomain(domain) ||
+    sellerId === expectedAccountId ||
+    !preferences || typeof preferences !== "object" ||
+    Object.keys(preferences).some((key) => !["shipping", "payment", "autoCheckout"].includes(key)) ||
+    !["home", "vinted"].includes(preferences.shipping) ||
+    !["wallet", "paypal", "vinted", "card", "google_pay", "klarna", "tink", "bancontact", "ideal", "blik", "przelewy24"].includes(preferences.payment) ||
+    !validAutoCheckoutPreference(preferences, domain)
+  ) {
     return {
       ok: false,
       code: "invalid_buy_payload",
-      error: "Missing item or seller information",
+      error: "Invalid checkout target or linked account",
       requestId,
     };
   }
-
-  if (!normalizedDomain || !isVintedDomain(normalizedDomain)) {
-    return {
-      ok: false,
-      code: "invalid_domain",
-      error: "A valid Vinted domain is required for browser checkout",
-      requestId,
-    };
-  }
-
-  async function runCheckoutOnDomain(domain) {
-    const checkoutDomain = sanitizeDomain(domain);
-    const targetUrl = itemUrlForDomain(itemUrl, checkoutDomain, itemId);
-    const { tabId, created } = await ensureVintedBuyTab(targetUrl);
-    const result = await extensionApi.tabs.sendMessage(tabId, {
-      type: "VINTRACK_RUN_BROWSER_BUY",
-      payload: {
-        requestId,
-        itemId,
-        sellerId,
-        domain: checkoutDomain,
-        itemUrl: targetUrl,
-        phoneNumber: String(payload?.phoneNumber || "").trim(),
-        incogniaRequestToken: String(
-          payload?.incogniaRequestToken || "",
-        ).trim(),
-        browserInfo: payload?.browserInfo || {},
-        paymentMethod: payload?.paymentMethod || {},
-        pickupType: Number(payload?.pickupType || 1),
-      },
-    });
-
-    return { result, tabId, created, domain: checkoutDomain };
-  }
-
-  let attempt = await runCheckoutOnDomain(normalizedDomain);
-  let result = attempt.result;
-  let tabId = attempt.tabId;
-  let created = attempt.created;
-  let checkoutDomain = attempt.domain;
-
-  const fallbackDomain =
-    itemDomain && itemDomain !== checkoutDomain && isVintedDomain(itemDomain)
-      ? itemDomain
-      : "";
-  if (
-    fallbackDomain &&
-    result &&
-    !result.ok &&
-    !["datadome_challenge", "payment_already_processing"].includes(result.code)
-  ) {
-    if (created) {
-      await extensionApi.tabs.remove(tabId).catch(() => {});
-    }
-    attempt = await runCheckoutOnDomain(fallbackDomain);
-    result = attempt.result;
-    tabId = attempt.tabId;
-    created = attempt.created;
-    checkoutDomain = attempt.domain;
-  }
-
-  if (result?.ok) {
-    if (result.checkoutUrl) {
-      await storeCheckoutLink({
-        itemId,
-        sellerId,
-        transactionId: result.transactionId,
-        purchaseId: result.purchaseId,
-        checkoutUrl: result.checkoutUrl,
-        domain: checkoutDomain,
-      });
-    }
-
-    const nextUrl = result.paymentUrl || result.checkoutUrl;
-    if (nextUrl) {
-      await extensionApi.tabs.create({ url: nextUrl, active: true });
-      if (created) {
-        await extensionApi.tabs.remove(tabId).catch(() => {});
-      }
-      return { ...result, openedPayment: true };
+  if (payload?.readinessOnly === true) {
+    try {
+      await checkoutStep("checkout_tab_unavailable", "Vinted could not become ready. Open or reload Vinted before opening the buy link. No checkout request was sent.", () => ensureVintedBuyTab(`https://${domain}/items/${itemId}`));
+      return { ok: true, ready: true, requestId };
+    } catch (error) {
+      return { ok: false, code: error instanceof CheckoutError ? error.code : "checkout_tab_unavailable", error: error instanceof CheckoutError ? error.message : "Reload Vinted before opening the buy link.", requestId };
     }
   }
-
-  if (result?.code === "payment_already_processing") {
-    const existingCheckoutTab = await findExistingCheckoutTab(checkoutDomain);
-    if (existingCheckoutTab?.id) {
-      await extensionApi.tabs.update(existingCheckoutTab.id, { active: true });
-      if (created) {
-        await extensionApi.tabs.remove(tabId).catch(() => {});
-      }
-      return {
-        ok: true,
-        checkoutUrl: existingCheckoutTab.url,
-        openedPayment: true,
-        transactionId: result.transactionId,
-      };
-    }
-
-    const storedCheckout = await findStoredCheckoutLink({
+  const key = `${domain}:${expectedAccountId}:${itemId}`;
+  let task = checkoutInFlight.get(key);
+  if (!task) {
+    task = prepareBrowserCheckout({
       itemId,
       sellerId,
-      transactionId: result.transactionId,
-      domain: checkoutDomain,
+      expectedAccountId,
+      domain,
+      preferences,
     });
-    if (storedCheckout?.checkoutUrl) {
-      await extensionApi.tabs.create({
-        url: storedCheckout.checkoutUrl,
-        active: true,
-      });
-      if (created) {
-        await extensionApi.tabs.remove(tabId).catch(() => {});
-      }
+    checkoutInFlight.set(key, task);
+  }
+  try {
+    return { ...(await task), requestId };
+  } catch (error) {
+    return {
+      ok: false,
+      code: error instanceof CheckoutError ? error.code : "checkout_failed",
+      error:
+        error instanceof CheckoutError ? error.message : "Checkout could not be completed. Check the Vinted tab before starting it again.",
+      requestId,
+    };
+  } finally {
+    if (checkoutInFlight.get(key) === task) checkoutInFlight.delete(key);
+  }
+}
+
+async function prepareBrowserCheckout(target) {
+  const startedAt = Date.now();
+  const { itemId, sellerId, expectedAccountId, domain } = target;
+  const targetUrl = `https://${domain}/items/${itemId}`;
+  const { tabId } = await checkoutStep("checkout_tab_unavailable", "Vinted could not become ready. Open or reload Vinted before opening a new buy link. No checkout request was sent by this attempt.", () => ensureVintedBuyTab(targetUrl));
+  const tabReadyMs = Date.now() - startedAt;
+  const attempt = {
+    ...target,
+    accountId: expectedAccountId,
+    startedAt: Date.now(),
+  };
+  const previous = await checkoutStep("checkout_checkpoint_failed", "The extension could not save the checkout attempt. No checkout request was sent by this attempt.", () => withCheckoutAttempts(async (attempts) => {
+    const found = attempts.find(
+      (entry) =>
+        entry.itemId === itemId &&
+        entry.accountId === expectedAccountId &&
+        entry.domain === domain,
+    );
+    if (found) return found;
+    // Save intent before any POST. Serialize storage updates across items.
+    await extensionApi.storage.local.set({
+      [STORAGE_KEYS.checkoutAttempts]: limitCheckoutAttempts([attempt, ...attempts]),
+    });
+    return null;
+  }));
+  if (previous) {
+    // New checkouts verify identity in the page bridge before their first POST.
+    // Cached links do not run that bridge, so verify them here instead.
+    const account = await checkoutStep("checkout_account_check_failed", "The Vinted tab did not answer the account check. Reload Vinted and check the existing checkout before trying again.", () => extensionApi.tabs.sendMessage(tabId, {
+      type: "VINTRACK_GET_BROWSER_ACCOUNT",
+    }));
+    if (!account?.ok || account.accountId !== expectedAccountId) {
+      await extensionApi.tabs.update(tabId, { active: true }).catch(() => {});
       return {
-        ok: true,
-        checkoutUrl: storedCheckout.checkoutUrl,
-        openedPayment: true,
-        transactionId: storedCheckout.transactionId,
-        purchaseId: storedCheckout.purchaseId,
+        ok: false,
+        code: "checkout_account_mismatch",
+        error: "Sign in to Vinted with the account linked to Vintrack.",
       };
     }
-  }
-
-  if (result?.code === "datadome_challenge") {
-    if (result.captchaUrl) {
-      await extensionApi.tabs.update(tabId, {
-        active: true,
-        url: result.captchaUrl,
-      });
-    } else {
-      await extensionApi.tabs.update(tabId, {
-        active: true,
-      });
+    if (
+      previous.sellerId !== sellerId ||
+      !validCheckoutUrl(previous.checkoutUrl, domain)
+    ) {
+      return {
+        ok: false,
+        code: "checkout_uncertain",
+        error:
+          "Checkout was already attempted. Continue in Vinted before starting it again.",
+      };
     }
+    await checkoutStep("checkout_navigation_failed", "The existing checkout could not be opened. Check Vinted; no automatic payment was repeated.", () => extensionApi.tabs.update(tabId, {
+      url: previous.checkoutUrl,
+      active: true,
+    }));
+    return {
+      ok: true,
+      status: !target.preferences.autoCheckout && !previous.preferences?.autoCheckout && previous.preferences?.shipping === target.preferences.shipping && previous.preferences?.payment === target.preferences.payment
+        ? previous.status || "checkout_review_required"
+        : "checkout_review_required",
+      autoCheckoutReason: previous.preferences?.autoCheckout
+        ? "This checkout was already attempted. Continue in Vinted; an automatic payment will not be repeated."
+        : undefined,
+      checkoutUrl: previous.checkoutUrl,
+      transactionId: previous.transactionId,
+      purchaseId: previous.purchaseId,
+    };
   }
-
-  return (
-    result || {
+  const result = await checkoutStep("checkout_response_lost", "The connection to Vinted was lost during checkout. Check Vinted before trying again; this attempt will not be repeated automatically.", () => extensionApi.tabs.sendMessage(tabId, {
+    type: "VINTRACK_RUN_BROWSER_BUY",
+    payload: target,
+  }));
+  if (!result?.ok) {
+    if (result?.code === "checkout_account_mismatch") {
+      // This response is emitted before any remote mutation. Permit a retry
+      // after the user signs in with the correct account.
+      await checkoutStep("checkout_checkpoint_failed", "The account mismatch was detected, but the local attempt could not be cleared. No checkout request was sent by this attempt.", () => withCheckoutAttempts(async (attempts) => {
+        await extensionApi.storage.local.set({
+          [STORAGE_KEYS.checkoutAttempts]: attempts.filter((entry) =>
+            !(entry.itemId === itemId && entry.accountId === expectedAccountId &&
+              entry.domain === domain && entry.startedAt === attempt.startedAt)),
+        });
+      }));
+    }
+    await extensionApi.tabs.update(tabId, { active: true }).catch(() => {});
+    return {
       ok: false,
-      code: "empty_buy_result",
-      error: "Browser checkout did not return a result",
-      requestId,
-    }
-  );
+      code: result?.code || "checkout_failed",
+      error:
+        result?.code === "checkout_account_mismatch"
+          ? "Sign in to Vinted with the account linked to Vintrack."
+          : result?.code === "datadome_challenge"
+          ? "Complete Vinted's security check in the browser tab."
+          : result?.code === "page_bridge_error"
+          ? "The Vinted page bridge is unavailable. Reload Vinted before opening a new buy link."
+          : result?.code === "page_bridge_timeout"
+          ? "Vinted did not respond in time. Check Vinted; this checkout will not be repeated automatically."
+          : "Vinted could not prepare checkout. Continue in the Vinted tab.",
+    };
+  }
+  if (!validCheckoutUrl(result.checkoutUrl, domain))
+    return {
+      ok: false,
+      code: "invalid_checkout_url",
+      error: "Vinted did not return a valid checkout link.",
+    };
+  const paymentRedirectAllowed = target.preferences.autoCheckout && target.preferences.payment === "paypal" && result.status === "paypal_redirect_ready" && validPayPalPaymentUrl(result.paymentUrl);
+  await checkoutStep("checkout_checkpoint_failed", "Checkout responded, but its result could not be saved. Check Vinted before trying again; the saved attempt prevents an automatic repeat.", () => withCheckoutAttempts(async (attempts) => {
+    const completed = {
+      ...attempt,
+      checkoutUrl: result.checkoutUrl,
+      transactionId: result.transactionId,
+      purchaseId: result.purchaseId,
+      status: result.status,
+    };
+    await extensionApi.storage.local.set({
+      [STORAGE_KEYS.checkoutAttempts]: limitCheckoutAttempts([
+        completed,
+        ...attempts.filter(
+          (entry) =>
+            !(
+              entry.itemId === itemId &&
+              entry.accountId === expectedAccountId &&
+              entry.domain === domain
+            ),
+        ),
+      ]),
+    });
+  }));
+  // Local history is optional. It must not prevent a verified checkout handoff.
+  await storeCheckoutLink({
+    ...target,
+    checkoutUrl: result.checkoutUrl,
+    transactionId: result.transactionId,
+    purchaseId: result.purchaseId,
+    status: result.status,
+  }).catch(() => {});
+  await checkoutStep("checkout_navigation_failed", target.preferences.autoCheckout
+    ? "Checkout is prepared, but the Vinted tab could not be opened. Check Vinted before trying again; payment may already have started."
+    : "Checkout is prepared, but the Vinted tab could not be opened. Open the existing checkout in Vinted; this attempt will not be repeated automatically.", () => extensionApi.tabs.update(tabId, {
+    url: paymentRedirectAllowed ? result.paymentUrl : result.checkoutUrl,
+    active: true,
+  }));
+  return {
+    ok: true,
+    status: result.status || "checkout_review_required",
+    checkoutUrl: result.checkoutUrl,
+    transactionId: result.transactionId,
+    purchaseId: result.purchaseId,
+    autoCheckoutReason: result.autoCheckoutReason,
+    timings: { ...result.timings, tabReadyMs, extensionMs: Date.now() - startedAt },
+    ...(paymentRedirectAllowed ? { paymentUrl: result.paymentUrl } : {}),
+  };
 }
 
 const syncTimers = new Map();

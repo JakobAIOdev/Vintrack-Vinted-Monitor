@@ -98,6 +98,27 @@ jobs:
       - name: Lint Firefox build
         run: npx --yes web-ext@10 lint --source-dir apps/vintrack-browser-sync-extension/dist/firefox
 
+  control-center-unit-tests:
+    name: Control Center Unit Tests
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.control_center == 'true'
+    defaults:
+      run:
+        working-directory: apps/control-center
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/vintrack?schema=public
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/control-center/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run test:unit
+
   control-center-build:
     name: Control Center Build
     runs-on: ubuntu-latest
@@ -256,6 +277,7 @@ jobs:
       - changes
       - control-center-build
       - control-center-e2e
+      - control-center-unit-tests
     if: always()
 
     steps:
@@ -265,6 +287,7 @@ jobs:
           CHANGED: ${{ needs.changes.outputs.control_center }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           E2E_RESULT: ${{ needs.control-center-e2e.result }}
+          UNIT_RESULT: ${{ needs.control-center-unit-tests.result }}
         run: |
           if [ "$CHANGES_RESULT" != "success" ]; then
             echo "Change detection failed with result: $CHANGES_RESULT"
@@ -276,8 +299,8 @@ jobs:
             exit 0
           fi
 
-          if [ "$BUILD_RESULT" != "success" ] || [ "$E2E_RESULT" != "success" ]; then
-            echo "Control Center checks failed: build=$BUILD_RESULT e2e=$E2E_RESULT"
+          if [ "$BUILD_RESULT" != "success" ] || [ "$E2E_RESULT" != "success" ] || [ "$UNIT_RESULT" != "success" ]; then
+            echo "Control Center checks failed: build=$BUILD_RESULT e2e=$E2E_RESULT unit=$UNIT_RESULT"
             exit 1
           fi
 

@@ -17,6 +17,22 @@ import (
 	"vintrack-worker/internal/model"
 )
 
+func TestCheckoutButtonAppearsInBothItemStylesOnlyWithHandoffURL(t *testing.T) {
+	item := model.Item{URL: "https://www.vinted.de/items/123", CheckoutStartURL: "https://dashboard.example.test/checkout/17/123"}
+	for _, build := range []func(model.Item) map[string]interface{}{compactItemKeyboard, itemKeyboard} {
+		encoded, _ := json.Marshal(build(item))
+		if !strings.Contains(string(encoded), `"text":"Open checkout"`) || !strings.Contains(string(encoded), item.CheckoutStartURL) {
+			t.Fatalf("missing checkout button: %s", encoded)
+		}
+		item.CheckoutStartURL = "javascript:alert(1)"
+		encoded, _ = json.Marshal(build(item))
+		if strings.Contains(string(encoded), "Open checkout") {
+			t.Fatalf("unsafe checkout link accepted: %s", encoded)
+		}
+		item.CheckoutStartURL = "https://dashboard.example.test/checkout/17/123"
+	}
+}
+
 func TestSendAttemptReturnsTelegramRetryAfterWithoutSleeping(t *testing.T) {
 	withTelegramServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)

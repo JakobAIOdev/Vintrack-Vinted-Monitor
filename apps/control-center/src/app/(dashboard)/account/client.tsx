@@ -45,6 +45,7 @@ import {
     updateVintedDomain,
 } from "@/actions/account";
 import { toast } from "sonner";
+import { CheckoutPreferencesCard } from "@/components/account/checkout-preferences";
 
 export interface AccountStatus {
     linked: boolean;
@@ -832,6 +833,12 @@ export function AccountClient({
                 </CardContent>
             </Card>
 
+            {status.linked && (
+                <CheckoutPreferencesCard
+                    key={`${status.vinted_id}:${status.domain}`}
+                    accountKey={`${status.vinted_id}:${status.domain}`}
+                />
+            )}
             {status.linked ? (
                 <Card className="border-border/70 gap-0 overflow-hidden py-0 shadow-sm">
                     <CardHeader className="border-b p-5">

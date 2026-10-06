@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect } from "react";
 import {
     LayoutDashboard,
     PlusCircle,
@@ -25,8 +25,9 @@ import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { CreateMonitorLink } from "@/components/maintenance/create-monitor-link";
 import type { FeatureAccessResult, FeatureKey } from "@/lib/features";
+import { ACCOUNT_UPDATES_VERSION } from "@/lib/account-updates";
+import { markAccountUpdatesSeen } from "@/actions/account-updates";
 
-const ACCOUNT_SEEN_KEY = "vintrack:account-tab-seen";
 const GITHUB_SPONSORS_URL = "https://github.com/sponsors/JakobAIOdev";
 
 type NavItem = {
@@ -80,6 +81,8 @@ const adminNavItems = [{ href: "/admin", label: "Admin Panel", icon: Shield }];
 
 interface SidebarProps {
     user?: {
+        id?: string;
+        accountUpdatesSeenVersion?: number;
         name?: string | null;
         image?: string | null;
         email?: string | null;
@@ -92,13 +95,23 @@ interface SidebarProps {
 
 export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
     const pathname = usePathname();
-    const [showAccountBadge, setShowAccountBadge] = useState(false);
+    const router = useRouter();
+    const onAccount =
+        pathname === "/account" || pathname.startsWith("/account/");
+    const unseenAccountUpdates =
+        Boolean(user?.id) &&
+        (user?.accountUpdatesSeenVersion ?? 0) < ACCOUNT_UPDATES_VERSION;
+    const showAccountBadge = unseenAccountUpdates && !onAccount;
     useEffect(() => {
-        const frame = window.requestAnimationFrame(() => {
-            setShowAccountBadge(!localStorage.getItem(ACCOUNT_SEEN_KEY));
-        });
-        return () => window.cancelAnimationFrame(frame);
-    }, []);
+        if (!onAccount || !unseenAccountUpdates) return;
+        // Visiting the page acknowledges the announcement only. Checkout and
+        // payment consent are separate explicit actions.
+        void markAccountUpdatesSeen()
+            .then((result) => {
+                if (result.success) router.refresh();
+            })
+            .catch(() => {});
+    }, [onAccount, unseenAccountUpdates, router]);
 
     const initials = user?.name
         ? user.name
@@ -218,19 +231,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                 <Link
                                     key={item.href}
                                     href={item.href}
-                                    onClick={() => {
-                                        if (
-                                            item.href === "/account" &&
-                                            showAccountBadge
-                                        ) {
-                                            localStorage.setItem(
-                                                ACCOUNT_SEEN_KEY,
-                                                "1",
-                                            );
-                                            setShowAccountBadge(false);
-                                        }
-                                        onClose?.();
-                                    }}
+                                    onClick={onClose}
                                     className={cn(
                                         "mb-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                         isActive

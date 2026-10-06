@@ -37,15 +37,17 @@ type VintedSession struct {
 }
 
 type CheckoutLink struct {
-	ItemID        int64  `json:"item_id"`
-	SellerID      int64  `json:"seller_id"`
-	TransactionID int64  `json:"transaction_id"`
-	PurchaseID    string `json:"purchase_id,omitempty"`
-	CheckoutURL   string `json:"checkout_url,omitempty"`
-	PaymentURL    string `json:"payment_url,omitempty"`
-	Domain        string `json:"domain,omitempty"`
-	Status        string `json:"status"`
-	CreatedAt     string `json:"created_at"`
+	ItemID             int64  `json:"item_id"`
+	SellerID           int64  `json:"seller_id"`
+	TransactionID      int64  `json:"transaction_id"`
+	PurchaseID         string `json:"purchase_id,omitempty"`
+	CheckoutURL        string `json:"checkout_url,omitempty"`
+	PaymentURL         string `json:"payment_url,omitempty"`
+	Domain             string `json:"domain,omitempty"`
+	Status             string `json:"status"`
+	CreatedAt          string `json:"created_at"`
+	PreferencesKey     string `json:"preferences_key,omitempty"`
+	AutoCheckoutReason string `json:"auto_checkout_reason,omitempty"`
 }
 
 type BrowserSyncRequest struct {
@@ -122,6 +124,13 @@ func (m *Manager) FeatureAccess(userID string, feature string) (FeatureAccess, e
 		return FeatureAccess{Reason: "disabled"}, nil
 	}
 	return m.store.FeatureAccess(m.ctx, userID, feature)
+}
+
+func (m *Manager) CheckoutConsentAccepted(userID string) (bool, error) {
+	if m.store == nil {
+		return false, fmt.Errorf("checkout consent storage unavailable")
+	}
+	return m.store.CheckoutConsentAccepted(m.ctx, userID)
 }
 
 func (m *Manager) Close() error {

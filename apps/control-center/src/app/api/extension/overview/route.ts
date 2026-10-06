@@ -22,9 +22,9 @@ export async function GET(request: Request) {
     try {
         const user = await db.user.findUnique({
             where: { id: userId },
-            select: { role: true },
+            select: { role: true, checkout_enabled: true },
         });
-        const capabilities = await getFeatureCapabilities(user?.role);
+        const capabilities = await getFeatureCapabilities(user?.role, user?.checkout_enabled === true);
         const [account, monitors, priceWatchCount, recentFeed] =
             await Promise.all([
                 capabilities.vinted_account.allowed

@@ -253,6 +253,9 @@ func buildCompactItemWebhookPayload(item model.Item, monitorName string) map[str
 	if isHTTPURL(item.URL) {
 		embed["url"] = item.URL
 	}
+	if isHTTPURL(item.CheckoutStartURL) {
+		embed["description"] = fmt.Sprintf("**⚡ [Oneclick checkout](%s)**\n\n%s", item.CheckoutStartURL, itemPriceValue(item))
+	}
 
 	return map[string]interface{}{
 		"username":   "Vintrack",
@@ -294,6 +297,9 @@ func buildRichItemWebhookPayload(item model.Item, monitorName string, proxySourc
 	}
 	if item.SellerURL != "" {
 		links = fmt.Sprintf("%s  •  [Seller](%s)", links, item.SellerURL)
+	}
+	if isHTTPURL(item.CheckoutStartURL) {
+		links = fmt.Sprintf("**⚡ [Oneclick checkout](%s)**\n\n%s", item.CheckoutStartURL, links)
 	}
 
 	detectedAt := item.FoundAt

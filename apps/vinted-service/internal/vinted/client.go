@@ -955,6 +955,131 @@ type BuyResponse struct {
 	CheckoutURL   string `json:"checkout_url"`
 }
 
+// PrepareCheckout applies explicit delivery and payment preferences. Normal
+// Oneclick stops before payment; opted-in auto-checkout may start payment once
+// after validating the quote. Checkpoints prevent replay of uncertain mutations.
+func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.CheckoutLink) error, choices ...CheckoutPreferences) (*session.CheckoutLink, error) {
+	preferences := CheckoutPreferences{}
+	if len(choices) > 0 {
+		preferences = choices[0]
+	}
+	if !preferences.Valid() || (preferences.AutoCheckout != nil && !AutoCheckoutAllowed(c.session.Domain, preferences.Payment)) {
+		return nil, fmt.Errorf("invalid checkout preferences")
+	}
+	if itemID <= 0 || sellerID <= 0 || sellerID == c.session.VintedUserID || save == nil {
+		return nil, fmt.Errorf("invalid checkout target")
+	}
+	link := session.CheckoutLink{
+		ItemID: itemID, SellerID: sellerID, Domain: c.session.Domain,
+		Status: "transaction_creating", CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		PreferencesKey: preferences.Key(),
+	}
+	if err := save(link); err != nil {
+		return nil, err
+	}
+	transactionID, err := c.createBuyTransaction(itemID, sellerID)
+	if err != nil {
+		return &link, err
+	}
+	link.TransactionID = transactionID
+	link.Status = "checkout_building"
+	if err := save(link); err != nil {
+		return &link, err
+	}
+	build, err := c.buildPurchaseCheckout(itemID, transactionID, "")
+	if err != nil {
+		return &link, err
+	}
+	if build.PurchaseID == "" {
+		return &link, fmt.Errorf("checkout build did not return a purchase id")
+	}
+	link.PurchaseID = build.PurchaseID
+	link.CheckoutURL, err = c.validatedCheckoutURL(build.CheckoutURL, build.PurchaseID, transactionID)
+	if err != nil {
+		return &link, err
+	}
+	link.Status = "checkout_updating"
+	if err := save(link); err != nil {
+		return &link, err
+	}
+	paymentChoice := build.Selection.Methods[preferences.Payment]
+	updated, updateErr := c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, paymentChoice))
+	if updateErr == nil && paymentChoice == nil && updated.Selection.SelectedPreference != preferences.Payment && updated.Selection.Methods[preferences.Payment] != nil {
+		paymentChoice = updated.Selection.Methods[preferences.Payment]
+		link.Status = "checkout_selecting_preferences"
+		if err := save(link); err != nil {
+			return &link, err
+		}
+		updated, updateErr = c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, paymentChoice))
+	}
+	if updateErr != nil {
+		// The built checkout can be completed by its owner in Vinted. Do not
+		// recreate the transaction or retry the update on auth/challenge errors.
+		link.Status = "checkout_review_required"
+	} else {
+		if updated.CheckoutURL != "" {
+			link.CheckoutURL, err = c.validatedCheckoutURL(updated.CheckoutURL, build.PurchaseID, transactionID)
+			if err != nil {
+				return &link, err
+			}
+		}
+		link.Status = "checkout_review_required"
+		if updated.Selection.Ready() && preferences.Payment != "wallet" && (preferences.Payment == "" || preferences.Payment == "vinted" || updated.Selection.SelectedPreference == preferences.Payment) {
+			link.Status = "checkout_prepared"
+		}
+	}
+	if preferences.AutoCheckout != nil {
+		link.AutoCheckoutReason = "Review the checkout: payment method, delivery or price could not be verified. No automatic payment was started."
+		if link.Status == "checkout_prepared" && updated.Selection.AutoAmountsVerified &&
+			updated.Selection.AutoTotalMinor <= preferences.AutoCheckout.MaxTotalMinor &&
+			updated.Selection.Methods[preferences.Payment] != nil && updated.Checksum != "" &&
+			(preferences.Payment != "card" || (updated.Selection.CardVerified && !updated.Selection.CardSignalsRequired &&
+				(paymentChoice == nil || fmt.Sprint(paymentChoice["card_id"]) == fmt.Sprint(updated.Selection.Methods["card"]["card_id"])))) {
+			link.Status = "payment_starting"
+			link.AutoCheckoutReason = "A payment was started. Check Vinted before trying again."
+			if err := save(link); err != nil {
+				return &link, err
+			}
+			outcome, paymentErr := c.startCheckoutPayment(preferences.Payment, link.PurchaseID, link.TransactionID, updated.Checksum)
+			link.Status = "payment_outcome_unknown"
+			link.AutoCheckoutReason = "A payment request was sent but its outcome could not be verified. Check Vinted; do not start it again."
+			if paymentErr == nil {
+				link.Status = outcome.Status
+				link.AutoCheckoutReason = outcome.Reason
+			}
+			if preferences.Payment == "card" {
+				resume, _ := url.Parse(link.CheckoutURL)
+				query := resume.Query()
+				query.Set("after_payment_redirect", "true")
+				resume.RawQuery = query.Encode()
+				link.CheckoutURL = resume.String()
+			}
+			// Redirects can contain payment tokens. Persist only the checkpoint.
+			if err := save(link); err != nil {
+				return &link, err
+			}
+			link.PaymentURL = outcome.PaymentURL
+			return &link, nil
+		}
+		link.Status = "checkout_review_required"
+	}
+	if err := save(link); err != nil {
+		return &link, err
+	}
+	return &link, nil
+}
+
+func (c *Client) validatedCheckoutURL(raw, purchaseID string, transactionID int64) (string, error) {
+	if raw == "" {
+		raw = fmt.Sprintf("https://%s/checkout?purchase_id=%s&order_id=%d&order_type=transaction", c.session.Domain, url.QueryEscape(purchaseID), transactionID)
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || parsed.Host != c.session.Domain || parsed.User != nil || parsed.Path != "/checkout" || parsed.Fragment != "" {
+		return "", fmt.Errorf("Vinted returned an invalid checkout URL")
+	}
+	return parsed.String(), nil
+}
+
 type BrowserInfo struct {
 	Language       string `json:"language"`
 	ColorDepth     int    `json:"color_depth"`
@@ -1165,6 +1290,18 @@ func defaultPaymentMethod(paymentMethod map[string]interface{}) map[string]inter
 	}
 }
 
+func readCheckoutResponse(reader io.Reader) ([]byte, error) {
+	const limit = 2 * 1024 * 1024
+	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("could not read Vinted checkout response")
+	}
+	if len(body) > limit {
+		return nil, fmt.Errorf("Vinted checkout response exceeded size limit")
+	}
+	return body, nil
+}
+
 func (c *Client) createBuyTransaction(itemID, sellerID int64) (int64, error) {
 	convoURL := fmt.Sprintf("https://%s/api/v2/conversations", c.session.Domain)
 	payload := map[string]interface{}{
@@ -1187,9 +1324,12 @@ func (c *Client) createBuyTransaction(itemID, sellerID int64) (int64, error) {
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := readCheckoutResponse(resp.Body)
+	if err != nil {
+		return 0, err
+	}
 	bodyStr := strings.TrimSpace(string(respBody))
-	log.Printf("[vinted] POST /api/v2/conversations (buy) -> %d (%.300s)", resp.StatusCode, bodyStr)
+	log.Printf("[vinted] POST /api/v2/conversations (buy) -> %d", resp.StatusCode)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return 0, vintedHTTPError("buy conversation", resp.StatusCode, bodyStr)
@@ -1217,7 +1357,7 @@ func (c *Client) createBuyTransaction(itemID, sellerID int64) (int64, error) {
 		return txID, nil
 	}
 
-	return 0, fmt.Errorf("could not extract transaction ID from buy conversation response: %.200s", bodyStr)
+	return 0, fmt.Errorf("could not extract transaction ID from buy conversation response")
 }
 
 type checkoutBuildResult struct {
@@ -1225,6 +1365,7 @@ type checkoutBuildResult struct {
 	Checksum        string
 	CheckoutURL     string
 	ShippingOrderID int64
+	Selection       checkoutSelection
 }
 
 func (c *Client) buildPurchaseCheckout(itemID, transactionID int64, incogniaRequestToken string) (*checkoutBuildResult, error) {
@@ -1252,9 +1393,12 @@ func (c *Client) buildPurchaseCheckout(itemID, transactionID int64, incogniaRequ
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := readCheckoutResponse(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	bodyStr := strings.TrimSpace(string(respBody))
-	log.Printf("[vinted] POST /api/v2/purchases/checkout/build -> %d (%.300s)", resp.StatusCode, bodyStr)
+	log.Printf("[vinted] POST /api/v2/purchases/checkout/build -> %d", resp.StatusCode)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, vintedHTTPError("checkout build", resp.StatusCode, bodyStr)
@@ -1266,6 +1410,7 @@ func (c *Client) buildPurchaseCheckout(itemID, transactionID int64, incogniaRequ
 	}
 
 	result := &checkoutBuildResult{
+		Selection:       readCheckoutSelection(raw),
 		PurchaseID:      firstStringPath(raw, []string{"purchase", "id"}, []string{"purchase", "uid"}, []string{"checkout", "purchase_id"}, []string{"checkout", "id"}, []string{"purchase_id"}),
 		Checksum:        firstStringPath(raw, []string{"checksum"}, []string{"checkout", "checksum"}, []string{"payment", "checksum"}),
 		CheckoutURL:     firstStringPath(raw, []string{"checkout_url"}, []string{"checkout", "url"}),
@@ -1307,9 +1452,12 @@ func (c *Client) updatePurchaseCheckout(purchaseID string, transactionID int64, 
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := readCheckoutResponse(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	bodyStr := strings.TrimSpace(string(respBody))
-	log.Printf("[vinted] PUT /api/v2/purchases/%s/checkout -> %d (%.300s)", purchaseID, resp.StatusCode, bodyStr)
+	log.Printf("[vinted] PUT checkout -> %d", resp.StatusCode)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, vintedHTTPError("checkout update", resp.StatusCode, bodyStr)
@@ -1317,20 +1465,22 @@ func (c *Client) updatePurchaseCheckout(purchaseID string, transactionID int64, 
 
 	result := &checkoutBuildResult{}
 	var raw map[string]interface{}
-	if err := json.Unmarshal(respBody, &raw); err == nil {
-		result.PurchaseID = firstStringPath(raw, []string{"purchase", "id"}, []string{"purchase_id"})
-		result.Checksum = firstStringPath(raw, []string{"checksum"}, []string{"checkout", "checksum"}, []string{"payment", "checksum"})
-		result.CheckoutURL = firstStringPath(raw, []string{"checkout_url"}, []string{"checkout", "url"})
-		result.ShippingOrderID = firstInt64Path(raw, []string{"shipping_order_id"}, []string{"shippingOrderId"}, []string{"shipping_order", "id"}, []string{"shippingOrder", "id"}, []string{"checkout", "shipping_order_id"}, []string{"checkout", "shipping_order", "id"})
-		if result.Checksum == "" {
-			result.Checksum, _ = findStringByKey(raw, "checksum")
-		}
-		if result.CheckoutURL == "" {
-			result.CheckoutURL, _ = findURLContaining(raw, "/checkout")
-		}
-		if result.ShippingOrderID == 0 {
-			result.ShippingOrderID, _ = findInt64ByAnyKey(raw, "shipping_order_id", "shippingOrderId")
-		}
+	if err := json.Unmarshal(respBody, &raw); err != nil {
+		return nil, fmt.Errorf("invalid Vinted checkout update response")
+	}
+	result.Selection = readCheckoutSelection(raw)
+	result.PurchaseID = firstStringPath(raw, []string{"purchase", "id"}, []string{"purchase_id"})
+	result.Checksum = firstStringPath(raw, []string{"checksum"}, []string{"checkout", "checksum"}, []string{"payment", "checksum"})
+	result.CheckoutURL = firstStringPath(raw, []string{"checkout_url"}, []string{"checkout", "url"})
+	result.ShippingOrderID = firstInt64Path(raw, []string{"shipping_order_id"}, []string{"shippingOrderId"}, []string{"shipping_order", "id"}, []string{"shippingOrder", "id"}, []string{"checkout", "shipping_order_id"}, []string{"checkout", "shipping_order", "id"})
+	if result.Checksum == "" {
+		result.Checksum, _ = findStringByKey(raw, "checksum")
+	}
+	if result.CheckoutURL == "" {
+		result.CheckoutURL, _ = findURLContaining(raw, "/checkout")
+	}
+	if result.ShippingOrderID == 0 {
+		result.ShippingOrderID, _ = findInt64ByAnyKey(raw, "shipping_order_id", "shippingOrderId")
 	}
 	return result, nil
 }

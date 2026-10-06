@@ -156,23 +156,25 @@
 
   function waitForDocumentReady(timeoutMs = 15000) {
     return new Promise((resolve, reject) => {
-      if (document.readyState === "complete") {
-        window.setTimeout(resolve, 400);
+      // CSRF context is in the parsed document. Images, analytics and the load
+      // event are not prerequisites for the request-only checkout flow.
+      if (document.readyState !== "loading") {
+        resolve();
         return;
       }
 
       const timeout = window.setTimeout(() => {
-        window.removeEventListener("load", handleLoad);
+        document.removeEventListener("DOMContentLoaded", handleLoad);
         reject(new Error("Vinted page did not finish loading in time"));
       }, timeoutMs);
 
       function handleLoad() {
         window.clearTimeout(timeout);
-        window.removeEventListener("load", handleLoad);
-        window.setTimeout(resolve, 400);
+        document.removeEventListener("DOMContentLoaded", handleLoad);
+        resolve();
       }
 
-      window.addEventListener("load", handleLoad, { once: true });
+      document.addEventListener("DOMContentLoaded", handleLoad, { once: true });
     });
   }
 
@@ -345,6 +347,7 @@
       headers,
       body: input.body === undefined ? undefined : JSON.stringify(input.body),
       credentials: "include",
+      redirect: input.redirect || "follow",
       referrer: input.referrer,
       referrerPolicy: "strict-origin-when-cross-origin",
     });
@@ -434,12 +437,135 @@
     };
   }
 
+  const checkoutPayments = ["wallet", "paypal", "vinted", "card", "google_pay", "klarna", "tink", "bancontact", "ideal", "blik", "przelewy24"];
+
+  function checkoutProvider(method) {
+    const value = String(method?.payment_method || "").toLowerCase();
+    if (value === "credit_card") return "card";
+    if (checkoutPayments.includes(value) && !["wallet", "vinted"].includes(value)) return value;
+    const tokens = `_${String(method?.code || "").toUpperCase()}_`;
+    for (const provider of checkoutPayments) {
+      if (!["wallet", "vinted", "card"].includes(provider) && tokens.includes(`_${provider.toUpperCase()}_`)) return provider;
+    }
+    if (tokens.includes("_WERO_")) return "ideal";
+    if (tokens.includes("_CARD_")) return "card";
+    return "";
+  }
+
+  function selectedCheckoutPayment(data) {
+    const selected = data?.checkout?.components?.payment_method?.selected_payment_method;
+    const provider = checkoutProvider(selected?.pay_in_method);
+    if (provider === "card" && !selectedCardId(selected)) return "";
+    return provider;
+  }
+
+  function validCardId(value) {
+    if (typeof value === "number") return Number.isSafeInteger(value) && value > 0 ? value : null;
+    return typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value) && value !== "0" ? value : null;
+  }
+
+  function selectedCardId(selected) {
+    if (selected?.expired === true || selected?.card?.expired === true || selected?.credit_card?.expired === true) return null;
+    return validCardId(selected?.card_id || selected?.card?.id || selected?.credit_card?.external_code);
+  }
+
+  function cardPaymentOutcome(data) {
+    if (data?.errors != null || data?.error != null) return {};
+    if (data?.action != null && !data.action.type) return {};
+    if (data?.action?.type) {
+      if (["sca_required", "sca_challenge", "sca_blocked", "payrails_cvv_resubmission", "native_adyen_card_3ds", "native_adyen_payment_3ds", "redirect"].includes(data.action.type))
+        return { status: "card_authentication_required", autoCheckoutReason: "Continue in Vinted to review or complete card authentication. A payment was already started; do not pay again." };
+      return {};
+    }
+    switch (data?.payment?.status) {
+      case "success": return { status: "card_payment_confirmed", autoCheckoutReason: "Vinted reports that the card payment succeeded. Check the order in Vinted; do not pay again." };
+      case "pending": case "preparing": return { status: "card_payment_pending", autoCheckoutReason: "The card payment is processing. Check its status in Vinted; do not pay again." };
+      case "failure": return { status: "card_payment_failed", autoCheckoutReason: "Vinted reports a failed card payment. Review it in Vinted; no automatic retry will run." };
+      default: return {};
+    }
+  }
+
+  function checkoutPaymentChoice(data, preference) {
+    const payment = data?.checkout?.components?.payment_method;
+    const choices = (Array.isArray(payment?.pay_in_methods) ? payment.pay_in_methods : [])
+      .filter((method) => checkoutProvider(method) === preference && method.read_only !== true && method.enabled !== false)
+      .map((method) => {
+        const native = method.payment_method || (method.code === "MANGOPAY_PAYPAL" ? "paypal" : "");
+        if (typeof native !== "string" || !/^[a-zA-Z0-9_]{1,64}$/.test(native)) return null;
+        let cardId = null;
+        if (preference === "card") {
+          const selected = payment.selected_payment_method;
+          cardId = selectedCardId(selected);
+          if (!cardId && checkoutProvider(selected?.pay_in_method) !== "card" && Array.isArray(payment.cards) && payment.cards.length === 1 && payment.cards[0]?.expired !== true) {
+            cardId = validCardId(payment.cards[0]?.id);
+          }
+          if (!cardId) return null;
+          if (Array.isArray(payment.cards) && payment.cards.some(card => String(card?.id) === String(cardId) && card?.expired === true)) return null;
+        }
+        return { card_id: cardId, payment_method: native };
+      }).filter(Boolean);
+    if (choices.length === 1) return choices[0];
+    // Multiple variants must not silently choose a different saved method.
+    const selectedNative = payment?.selected_payment_method?.pay_in_method?.payment_method;
+    return choices.find((choice) => choice.payment_method === selectedNative) || null;
+  }
+
+  function validAutoCheckout(preferences) {
+    const setting = preferences.autoCheckout;
+    if (setting === undefined) return true;
+    return isObject(setting) && Object.keys(setting).length === 3 &&
+      setting.warningVersion === (preferences.payment === "card" ? 2 : 1) && setting.currency === "EUR" &&
+      Number.isSafeInteger(setting.maxTotalMinor) && setting.maxTotalMinor > 0 && setting.maxTotalMinor <= 1_000_000 &&
+      (preferences.payment === "card" || preferences.payment === "paypal" && ["www.vinted.de", "www.vinted.at", "www.vinted.be"].includes(window.location.hostname));
+  }
+
+  function checkoutMoneyMinor(price) {
+    if (price?.currency_code !== "EUR" || !["string", "number"].includes(typeof price.amount)) return null;
+    const amount = String(price.amount);
+    if (!/^\d{1,7}(?:\.\d{1,2})?$/.test(amount)) return null;
+    const [whole, fraction = ""] = amount.split(".");
+    return Number(whole) * 100 + Number((fraction + "00").slice(0, 2));
+  }
+
+  function autoCheckoutTotal(data) {
+    const components = data?.checkout?.components;
+    const summary = components?.order_summary_v2;
+    if (!summary || summary.currency_conversion != null || !Array.isArray(summary.deductions)) return null;
+    for (const deduction of summary.deductions) {
+      if (deduction?.type !== "order-summary-wallet-deduction" || checkoutMoneyMinor(deduction.price) !== 0) return null;
+    }
+    const total = checkoutMoneyMinor(components?.pay_button_v2?.total?.price);
+    return total > 0 ? total : null;
+  }
+
+  function validPayPalPaymentUrl(raw) {
+    try {
+      const url = new URL(raw);
+      return url.protocol === "https:" && ["www.paypal.com", "paypal.com"].includes(url.host) &&
+        !url.username && !url.password && !url.hash && ["/checkoutnow", "/webscr", "/cgi-bin/webscr"].includes(url.pathname);
+    } catch { return false; }
+  }
+
   async function runBrowserBuy(payload) {
+    const startedAt = Date.now();
     await waitForDocumentReady();
+    const timings = { contextMs: Date.now() - startedAt };
+    async function checkoutRequest(key, step, input) {
+      const requestAt = Date.now();
+      try { return await vintedRequest(step, input); }
+      finally { timings[key] = (timings[key] || 0) + Date.now() - requestAt; }
+    }
 
     const itemId = Number(payload?.itemId || 0);
     const sellerId = Number(payload?.sellerId || 0);
-    const pickupType = Number(payload?.pickupType || 1) || 1;
+    const expectedAccountId = Number(payload?.expectedAccountId || 0);
+    const preferences = payload?.preferences || { shipping: "vinted", payment: "vinted" };
+    if (!preferences || typeof preferences !== "object" ||
+        Object.keys(preferences).some((key) => !["shipping", "payment", "autoCheckout"].includes(key)) ||
+        !["home", "vinted"].includes(preferences.shipping) ||
+        !checkoutPayments.includes(preferences.payment) || !validAutoCheckout(preferences)) {
+      return { ok: false, code: "invalid_checkout_preferences", error: "Invalid checkout preferences" };
+    }
     const phoneNumber = typeof payload?.phoneNumber === "string" ? payload.phoneNumber.trim() : "";
     const itemUrl = typeof payload?.itemUrl === "string" && payload.itemUrl.trim()
       ? payload.itemUrl.trim()
@@ -448,7 +574,7 @@
       (typeof payload?.incogniaRequestToken === "string" && payload.incogniaRequestToken.trim()) ||
       extractIncogniaRequestToken();
 
-    if (!itemId || !sellerId) {
+    if (!Number.isSafeInteger(itemId) || itemId <= 0 || !Number.isSafeInteger(sellerId) || sellerId <= 0 || !Number.isSafeInteger(expectedAccountId) || expectedAccountId <= 0) {
       return {
         ok: false,
         code: "invalid_buy_payload",
@@ -456,7 +582,15 @@
       };
     }
 
-    const conversationResult = await vintedRequest("buy conversation", {
+    const accountAt = Date.now();
+    const account = await getBrowserAccount();
+    timings.accountMs = Date.now() - accountAt;
+    if (!account.ok) return account;
+    if (account.accountId !== expectedAccountId || sellerId === expectedAccountId) {
+      return { ok: false, code: "checkout_account_mismatch", error: "Open Vinted with the account linked to Vintrack before starting checkout." };
+    }
+
+    const conversationResult = await checkoutRequest("transactionMs", "buy conversation", {
       method: "POST",
       url: `${window.location.origin}/api/v2/conversations`,
       referrer: itemUrl,
@@ -484,7 +618,7 @@
       };
     }
 
-    const buildResult = await vintedRequest("checkout build", {
+    const buildResult = await checkoutRequest("buildMs", "checkout build", {
       method: "POST",
       url: `${window.location.origin}/api/v2/purchases/checkout/build`,
       referrer: itemUrl,
@@ -541,22 +675,37 @@
       ]) || findNumberByKeys(buildResult.data, ["shipping_order_id", "shippingOrderId"]);
 
     const checkoutReferrer = buildCheckoutUrl(purchaseId, transactionId);
-    const updateResult = await vintedRequest("checkout update", {
+    function components(payment = null) {
+      return {
+        additional_service: {},
+        payment_method: payment || {},
+        shipping_address: {},
+        shipping_pickup_options: preferences.shipping === "home" ? { pickup_type: 1 } : {},
+        shipping_pickup_details: {},
+      };
+    }
+    let paymentChoice = checkoutPaymentChoice(buildResult.data, preferences.payment);
+    let updateResult = await checkoutRequest("updateMs", "checkout update", {
       method: "PUT",
       url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout`,
       referrer: checkoutReferrer,
       body: {
-        components: {
-          additional_service: {},
-          payment_method: {},
-          shipping_address: {},
-          shipping_pickup_options: { pickup_type: pickupType },
-          shipping_pickup_details: {},
-        },
+        components: components(paymentChoice),
       },
     });
     if (!updateResult.ok) {
       return updateResult;
+    }
+    const updatedChoice = checkoutPaymentChoice(updateResult.data, preferences.payment);
+    if (!paymentChoice && updatedChoice && selectedCheckoutPayment(updateResult.data) !== preferences.payment) {
+      paymentChoice = updatedChoice;
+      updateResult = await checkoutRequest("updateMs", "checkout preferences", {
+        method: "PUT",
+        url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout`,
+        referrer: checkoutReferrer,
+        body: { components: components(updatedChoice) },
+      });
+      if (!updateResult.ok) return updateResult;
     }
 
     checksum =
@@ -587,7 +736,7 @@
       shippingOrderId;
 
     if (phoneNumber && shippingOrderId) {
-      const shippingContactResult = await vintedRequest("shipping contact", {
+      const shippingContactResult = await checkoutRequest("contactMs", "shipping contact", {
         method: "POST",
         url: `${window.location.origin}/api/v2/shipping_orders/${shippingOrderId}/shipping_contact`,
         referrer: checkoutReferrer,
@@ -617,18 +766,72 @@
         checkoutUrl;
     }
 
-    return {
+    const selected = updateResult.data?.checkout?.components;
+    const ready = Boolean(
+      selected?.payment_method?.selected_payment_method &&
+      selected?.shipping_address?.address &&
+      selected?.shipping_pickup_options?.selected_pickup_option === 1 &&
+      selected?.shipping_pickup_details?.pickup_details?.selected_rate_uuid &&
+      selected?.pay_button_v2?.payments_available === true &&
+      preferences.payment !== "wallet" &&
+      (preferences.payment === "vinted" || selectedCheckoutPayment(updateResult.data) === preferences.payment)
+    );
+    const prepared = {
       ok: true,
-      status: "checkout_ready",
+      status: ready ? "checkout_prepared" : "checkout_review_required",
       itemId,
       sellerId,
       transactionId,
       purchaseId,
       checkoutUrl: checkoutUrl || checkoutReferrer,
-      checksum,
-      incogniaRequestToken,
       shippingOrderId,
+      timings,
     };
+    if (!preferences.autoCheckout) return prepared;
+    prepared.status = "checkout_review_required";
+    prepared.autoCheckoutReason = "Review the checkout: payment method, delivery or price could not be verified. No automatic payment was started.";
+    const total = autoCheckoutTotal(updateResult.data);
+    const currentChecksum = findStringByPaths(updateResult.data, [["checksum"], ["checkout", "checksum"]]);
+    // Contact updates may change the quote. Do not pay against an earlier state.
+    if (!ready || phoneNumber || total === null || total > preferences.autoCheckout.maxTotalMinor ||
+        !currentChecksum || !checkoutPaymentChoice(updateResult.data, preferences.payment) ||
+        (preferences.payment === "card" && (updateResult.data?.checkout?.adyen_protect_signals_enabled === true || updateResult.data?.adyen_protect_signals_enabled === true ||
+          paymentChoice && String(paymentChoice.card_id) !== String(selectedCardId(selected?.payment_method?.selected_payment_method))))) return prepared;
+    prepared.status = "payment_outcome_unknown";
+    prepared.autoCheckoutReason = "A payment request was sent but its outcome could not be verified. Check Vinted; do not start it again.";
+    try {
+      // Background persisted intent before the first mutation; no retries here.
+      const payment = await checkoutRequest("paymentMs", "Checkout payment start", {
+        method: "POST",
+        url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout/payment`,
+        referrer: checkoutReferrer,
+        redirect: "error",
+        incogniaRequestToken,
+        body: { checksum: currentChecksum, payment_options: { browser_info: {
+          language: navigator.language || "en-US", color_depth: window.screen?.colorDepth || 24,
+          java_enabled: false, screen_height: window.screen?.height || 1080, screen_width: window.screen?.width || 1920,
+          timezone_offset: new Date().getTimezoneOffset(),
+        } } },
+      });
+      const redirect = payment.data?.action?.parameters?.url;
+      if (preferences.payment === "paypal" && payment.ok && payment.data?.action?.type === "redirect" && validPayPalPaymentUrl(redirect)) {
+        prepared.status = "paypal_redirect_ready";
+        prepared.autoCheckoutReason = "Continue in PayPal to complete the payment.";
+        prepared.paymentUrl = redirect;
+      } else if (preferences.payment === "card" && payment.ok) {
+        Object.assign(prepared, cardPaymentOutcome(payment.data));
+      }
+    } catch { /* An uncertain payment must never be replayed automatically. */ }
+    if (preferences.payment === "card") {
+      // Native Vinted reads the existing payment with GET and renders its own
+      // 3-D Secure/CVV handler. Never resubmit payment or copy bank tokens.
+      const resume = new URL(prepared.checkoutUrl);
+      if (resume.origin === window.location.origin && resume.pathname === "/checkout") {
+        resume.searchParams.set("after_payment_redirect", "true");
+        prepared.checkoutUrl = resume.href;
+      }
+    }
+    return prepared;
   }
 
   window.addEventListener("message", (event) => {

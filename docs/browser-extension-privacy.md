@@ -1,6 +1,6 @@
 # Vintrack Browser Sync Privacy Policy
 
-Effective date: October 2, 2026
+Effective date: October 5, 2026
 
 Vintrack Browser Sync links a Vinted account that the user is already signed in
 to with the Vintrack service. The extension runs only on the public Vintrack
@@ -54,6 +54,34 @@ history outside the supported Vintrack and Vinted pages.
 
 The companion does not automate checkout, purchase confirmation, likes, offers,
 or messages.
+
+When the user clicks Open Checkout in Vintrack or opens a checkout notification
+link in a visible browser tab, Vintrack automatically asks the
+extension to prepare a checkout in the matching signed-in Vinted account.
+The extension verifies the current Vinted account before creating a buy
+transaction, building checkout, and requesting saved delivery/payment defaults.
+Normal Oneclick opens Vinted for the user to review and confirm the purchase
+and does not initiate payment. Users can separately enable PayPal auto-checkout
+in supported regions after accepting a payment warning and setting a maximum
+EUR order total. A buy-link click can then submit one Vinted payment request
+and open the returned PayPal checkout. Missing or ambiguous prices, applied
+wallet funds, unavailable PayPal or a total above the limit require manual
+review. New monitor matches do not initiate purchases without a click.
+The local
+preparation checkpoint stores item, seller and account IDs, regional domain,
+start time and a generated checkout link for up to ten minutes of reuse; it
+prevents repeated starts after lost responses. Auto-checkout attempt records,
+including the selected preferences and limit, remain locally until extension
+state is cleared or the extension is removed. Vintrack retains a server-side
+identity/item attempt marker without automatic expiry while its Redis data is
+retained, preventing repeated automatic payment starts across browser changes,
+relinking and cache expiry. Completed links are also kept
+in a local history of up to twenty links. Clearing extension state removes
+both histories. Account tokens and payment-card data are not part of these
+checkout histories. PayPal redirect URLs can contain payment tokens; they are
+used only for immediate navigation and are not stored in those histories or
+Vintrack's preparation records. The immediate response is transmitted between
+the matching Vinted tab, extension and Vintrack page to finish the handoff.
 
 ## Purpose, storage, and deletion
 

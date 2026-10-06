@@ -36,6 +36,8 @@ jobs:
       - name: Read package version
         id: version
         working-directory: apps/control-center
+        env:
+          CONFIGURED_LATEST_VERSION: ${{ vars.BROWSER_EXTENSION_LATEST_VERSION }}
         run: |
           VERSION="$(node -p "require('./package.json').version")"
           MAJOR_MINOR="$(node -p "const v=require('./package.json').version.split('.'); v.slice(0, 2).join('.')")"
@@ -46,6 +48,11 @@ jobs:
 
           if [ "$EXTENSION_VERSION" != "$FIREFOX_VERSION" ]; then
             echo "Chrome and Firefox extension versions differ" >&2
+            exit 1
+          fi
+
+          if [ -n "$CONFIGURED_LATEST_VERSION" ] && [ "$CONFIGURED_LATEST_VERSION" != "$EXTENSION_VERSION" ]; then
+            echo "BROWSER_EXTENSION_LATEST_VERSION must match both extension manifests before building or deploying" >&2
             exit 1
           fi
 

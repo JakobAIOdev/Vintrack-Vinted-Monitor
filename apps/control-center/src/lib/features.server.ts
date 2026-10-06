@@ -54,12 +54,33 @@ export async function getFeatureAccessForUser(
     feature: FeatureKey,
     userId: string,
     client: FeaturePolicyClient & Pick<typeof db, "user"> = db,
+    checkCheckoutEnabled = true,
 ) {
-    const user = await client.user.findUnique({
-        where: { id: userId },
-        select: { role: true },
-    });
-    return getFeatureAccess(feature, user?.role, client);
+    const [user, policies] = await Promise.all([
+        client.user.findUnique({
+            where: { id: userId },
+            select: {
+                role: true,
+                ...(feature === "checkout_links"
+                    ? { checkout_enabled: true }
+                    : {}),
+            },
+        }),
+        loadFeaturePolicies(client),
+    ]);
+    const access = resolveFeatureAccess(feature, user?.role, policies);
+    if (
+        access.allowed &&
+        feature === "checkout_links" &&
+        checkCheckoutEnabled &&
+        user?.checkout_enabled !== true
+    )
+        return {
+            allowed: false as const,
+            feature,
+            reason: "user_disabled" as const,
+        };
+    return access;
 }
 
 export async function requireFeatureAccessForUser(
@@ -94,18 +115,37 @@ export async function requireFeatureAccess(
     return access;
 }
 
-export async function getFeatureCapabilities(role: string | null | undefined) {
+export async function getFeatureCapabilities(
+    role: string | null | undefined,
+    checkoutEnabled = false,
+) {
     const policies = await getFeaturePolicies();
     return Object.fromEntries(
-        FEATURE_KEYS.map((feature) => [
-            feature,
-            resolveFeatureAccess(feature, role, policies),
-        ]),
+        FEATURE_KEYS.map((feature) => {
+            const access = resolveFeatureAccess(feature, role, policies);
+            return [
+                feature,
+                access.allowed &&
+                feature === "checkout_links" &&
+                !checkoutEnabled
+                    ? { allowed: false, feature, reason: "user_disabled" }
+                    : access,
+            ];
+        }),
     ) as Record<FeatureKey, FeatureAccessResult>;
 }
 
-export async function guardApiFeature(userId: string, feature: FeatureKey) {
-    const access = await getFeatureAccessForUser(feature, userId);
+export async function guardApiFeature(
+    userId: string,
+    feature: FeatureKey,
+    ignoreUserCheckoutSwitch = false,
+) {
+    const access = await getFeatureAccessForUser(
+        feature,
+        userId,
+        db,
+        !ignoreUserCheckoutSwitch,
+    );
     return access.allowed ? null : featureUnavailableResponse(access);
 }
 
@@ -117,6 +157,11 @@ export function featureUnavailableResponse(
             code: "FEATURE_UNAVAILABLE",
             feature: access.feature,
             reason: access.reason,
+            ...(access.reason === "user_disabled"
+                ? {
+                      error: "Enable the checkout module in Account before using checkout.",
+                  }
+                : {}),
             ...(access.dependency ? { dependency: access.dependency } : {}),
         },
         { status: 403 },

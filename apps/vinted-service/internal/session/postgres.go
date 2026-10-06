@@ -46,16 +46,28 @@ type FeatureAccess struct {
 	Dependency string
 }
 
+// Keep this version in sync with control-center's CHECKOUT_RISK_WARNING_VERSION.
+const checkoutRiskWarningVersion = 1
+
+func (s *persistentStore) CheckoutConsentAccepted(ctx context.Context, userID string) (bool, error) {
+	var accepted bool
+	err := s.db.QueryRowContext(ctx, `SELECT checkout_risk_version = $2 AND checkout_risk_accepted_at IS NOT NULL FROM "User" WHERE id = $1`, userID, checkoutRiskWarningVersion).Scan(&accepted)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return accepted && err == nil, err
+}
+
 func (s *persistentStore) FeatureAccess(ctx context.Context, userID string, feature string) (FeatureAccess, error) {
 	var role string
-	var enabled, freeEnabled, premiumEnabled, adminEnabled bool
+	var enabled, freeEnabled, premiumEnabled, adminEnabled, checkoutEnabled bool
 	err := s.db.QueryRowContext(ctx, `
 		SELECT member.role, policy.enabled, policy.free_enabled,
-		       policy.premium_enabled, policy.admin_enabled
+		       policy.premium_enabled, policy.admin_enabled, member.checkout_enabled
 		FROM "User" member
 		INNER JOIN feature_policies policy ON policy.feature = $2
 		WHERE member.id = $1`, userID, feature,
-	).Scan(&role, &enabled, &freeEnabled, &premiumEnabled, &adminEnabled)
+	).Scan(&role, &enabled, &freeEnabled, &premiumEnabled, &adminEnabled, &checkoutEnabled)
 	if err == sql.ErrNoRows {
 		return FeatureAccess{Reason: "role_denied"}, nil
 	}
@@ -77,6 +89,9 @@ func (s *persistentStore) FeatureAccess(ctx context.Context, userID string, feat
 		if !parent.Allowed {
 			return FeatureAccess{Reason: "dependency_disabled", Dependency: "vinted_account"}, nil
 		}
+	}
+	if feature == "checkout_links" && !checkoutEnabled {
+		return FeatureAccess{Reason: "user_disabled"}, nil
 	}
 	return FeatureAccess{Allowed: true}, nil
 }

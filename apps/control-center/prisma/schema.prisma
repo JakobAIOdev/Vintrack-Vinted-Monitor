@@ -46,6 +46,11 @@ model User {
   role                      String    @default("free") @db.VarChar(20)
   monitor_onboarding_status String    @default("pending") @db.VarChar(20)
   dedupe_monitor_alerts     Boolean   @default(false)
+  checkout_enabled         Boolean   @default(false)
+  checkout_preferences     Json?
+  checkout_risk_version     Int       @default(0)
+  checkout_risk_accepted_at  DateTime? @db.Timestamp(6)
+  account_updates_seen_version Int   @default(0)
   telegram_message_style    String    @default("rich") @db.VarChar(20)
   discord_message_style     String    @default("rich") @db.VarChar(20)
   accounts                  Account[]

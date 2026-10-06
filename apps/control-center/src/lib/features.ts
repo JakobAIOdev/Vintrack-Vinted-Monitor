@@ -16,6 +16,7 @@ export const FEATURE_KEYS = [
 
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
 export type FeatureAccessReason =
+    | "user_disabled"
     | "disabled"
     | "role_denied"
     | "dependency_disabled";

@@ -152,6 +152,7 @@ type Item struct {
 	SellerID              int64     `json:"seller_id,omitempty"`
 	SellerLogin           string    `json:"seller_login,omitempty"`
 	SellerURL             string    `json:"seller_profile_url,omitempty"`
+	CheckoutStartURL      string    `json:"checkout_start_url,omitempty"`
 	FoundAt               time.Time `json:"found_at"`
 }
 
@@ -276,6 +277,7 @@ type AlertDelivery struct {
 	ClaimToken             string
 	NotificationsEnabled   bool
 	ChannelEnabled         bool
+	CheckoutEnabled        bool
 }
 
 type PriceWatchTarget struct {
