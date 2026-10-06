@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Loader2, ShoppingCart, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { getCheckoutTarget, openItemCheckout } from "@/lib/open-checkout";
+import { openItemCheckout } from "@/lib/open-checkout";
 import type { CheckoutTarget } from "@/lib/checkout";
 
 export function CheckoutHandoff({
@@ -16,39 +16,26 @@ export function CheckoutHandoff({
 }) {
     const [target, setTarget] = useState<CheckoutTarget | null>(null);
     const [error, setError] = useState("");
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(false);
     const [running, setRunning] = useState(false);
     const [opened, setOpened] = useState(false);
     const [checkoutMessage, setCheckoutMessage] = useState("");
     const started = useRef(false);
     const inFlight = useRef(false);
-    useEffect(() => {
-        let cancelled = false;
-        getCheckoutTarget(monitorId, itemId)
-            .then((data) => {
-                if (!cancelled) setTarget(data);
-            })
-            .catch((err: Error) => {
-                if (!cancelled) setError(err.message);
-            })
-            .finally(() => {
-                if (!cancelled) setLoading(false);
-            });
-        return () => {
-            cancelled = true;
-        };
-    }, [monitorId, itemId]);
-
     const start = useCallback(async () => {
         if (inFlight.current) return;
         inFlight.current = true;
         setRunning(true);
+        setLoading(true);
         setError("");
         try {
             const message = await openItemCheckout(
                 monitorId,
                 itemId,
-                target ?? undefined,
+                (currentTarget) => {
+                    setTarget(currentTarget);
+                    setLoading(false);
+                },
             );
             setCheckoutMessage(message || "");
             setOpened(true);
@@ -61,11 +48,11 @@ export function CheckoutHandoff({
         } finally {
             inFlight.current = false;
             setRunning(false);
+            setLoading(false);
         }
-    }, [monitorId, itemId, target]);
+    }, [monitorId, itemId]);
 
     useEffect(() => {
-        if (!target) return;
         function continueCheckout() {
             // Plain GET previews never prepare checkout. A hidden or
             // prerendered browser document waits until the user opens it.
@@ -88,7 +75,7 @@ export function CheckoutHandoff({
                 continueCheckout,
             );
         };
-    }, [target, start]);
+    }, [start]);
 
     return (
         <main className="mx-auto flex min-h-screen max-w-lg items-center px-5 py-10">

@@ -90,7 +90,7 @@ function ItemCardComponent({
     showMonitor = false,
     onSellerBanned,
 }: ItemCardProps) {
-    const { linked, likedIds, addLike, removeLike } = useVintedAccount();
+    const { linked, checkoutEnabled, likedIds, addLike, removeLike } = useVintedAccount();
     const liked = likedIds.has(Number(item.id));
     const [liking, setLiking] = useState(false);
     const [msgOpen, setMsgOpen] = useState(false);
@@ -406,9 +406,9 @@ function ItemCardComponent({
                             <button
                                 type="button"
                                 onClick={handleBuy}
-                                disabled={buying}
+                                disabled={buying || !checkoutEnabled}
                                 className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-white transition-colors hover:bg-white/15 hover:text-amber-300 disabled:cursor-not-allowed disabled:opacity-70"
-                                title="Open Vinted checkout"
+                                title={checkoutEnabled ? "Open Vinted checkout" : "Enable checkout in Account"}
                                 aria-label="Open Vinted checkout"
                             >
                                 {buying ? (

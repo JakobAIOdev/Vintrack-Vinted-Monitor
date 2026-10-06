@@ -21,7 +21,11 @@ export async function POST(request: NextRequest) {
             { error: "Invalid checkout origin." },
             { status: 403 },
         );
-    const denied = await guardApiFeature(session.user.id, "checkout_links");
+    const denied = await guardApiFeature(
+        session.user.id,
+        "checkout_links",
+        true,
+    );
     if (denied) return denied;
     const input = await request.json().catch(() => null);
     if (

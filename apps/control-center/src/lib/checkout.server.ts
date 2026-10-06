@@ -52,6 +52,9 @@ export async function loadCheckoutTarget(
         );
     if (sellerId === accountId)
         throw new CheckoutTargetError("You cannot buy your own item.", 400);
+    const settings = await loadCheckoutSettings(userId, accountId, domain);
+    if (!settings.checkoutEnabled)
+        throw new CheckoutTargetError("Enable the checkout module in Account before using checkout.", 403);
     return {
         itemId,
         monitorId,
@@ -62,6 +65,6 @@ export async function loadCheckoutTarget(
         itemUrl: `https://${domain}/items/${itemId}`,
         title: item.title || "Vinted item",
         price: item.price,
-        ...(await loadCheckoutSettings(userId, accountId, domain)),
+        ...settings,
     };
 }

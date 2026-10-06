@@ -77,13 +77,13 @@ export async function getCheckoutTarget(
 export function openItemCheckout(
     monitorId: number,
     itemId: number,
-    loadedTarget?: CheckoutTarget,
+    onTargetLoaded?: (target: CheckoutTarget) => void,
 ) {
     const key = `${monitorId}:${itemId}`;
     const current = pending.get(key);
     if (current) return current;
-    const promise = startCheckout(monitorId, itemId, loadedTarget).finally(() =>
-        pending.delete(key),
+    const promise = startCheckout(monitorId, itemId, onTargetLoaded).finally(
+        () => pending.delete(key),
     );
     pending.set(key, promise);
     return promise;
@@ -92,16 +92,18 @@ export function openItemCheckout(
 async function startCheckout(
     monitorId: number,
     itemId: number,
-    loadedTarget?: CheckoutTarget,
+    onTargetLoaded?: (target: CheckoutTarget) => void,
 ) {
     let startedAt = performance.now();
     let authorizationMs = 0;
     let readinessMs = 0;
     const [initialTarget, extensionAvailable] = await Promise.all([
-        loadedTarget ?? getCheckoutTarget(monitorId, itemId),
+        // Read persisted access when the visible handoff starts or retries.
+        getCheckoutTarget(monitorId, itemId),
         hasCheckoutExtension(),
     ]);
     let target = initialTarget;
+    onTargetLoaded?.(target);
     if (target.riskConsentVersion !== CHECKOUT_RISK_WARNING_VERSION) {
         await requestCheckoutConsent(Boolean(target.preferences?.autoCheckout));
         // Fetch current saved choices after reading the warning. No Vinted

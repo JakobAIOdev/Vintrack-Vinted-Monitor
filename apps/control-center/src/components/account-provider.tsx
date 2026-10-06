@@ -10,6 +10,7 @@ import {
 
 type AccountContextType = {
     linked: boolean;
+    checkoutEnabled: boolean;
     loading: boolean;
     domain: string | null;
     likedIds: Set<number>;
@@ -20,6 +21,7 @@ type AccountContextType = {
 
 const AccountContext = createContext<AccountContextType>({
     linked: false,
+    checkoutEnabled: false,
     loading: true,
     domain: null,
     likedIds: new Set(),
@@ -28,7 +30,13 @@ const AccountContext = createContext<AccountContextType>({
     syncLikes: () => {},
 });
 
-export function AccountProvider({ children }: { children: React.ReactNode }) {
+export function AccountProvider({
+    children,
+    checkoutEnabled = false,
+}: {
+    children: React.ReactNode;
+    checkoutEnabled?: boolean;
+}) {
     const [linked, setLinked] = useState(false);
     const [loading, setLoading] = useState(true);
     const [domain, setDomain] = useState<string | null>(null);
@@ -93,6 +101,7 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
         <AccountContext.Provider
             value={{
                 linked,
+                checkoutEnabled,
                 loading,
                 domain,
                 likedIds,

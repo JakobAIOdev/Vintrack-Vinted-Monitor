@@ -81,8 +81,8 @@ export async function saveCheckoutPreferences(
         return {
             error: "Accept the checkout risk warning before enabling auto-checkout.",
         };
-    await db.user.update({
-        where: { id: account.userId },
+    const saved = await db.user.updateMany({
+        where: { id: account.userId, checkout_enabled: true },
         data: {
             checkout_preferences: {
                 accountId: account.accountId,
@@ -91,6 +91,49 @@ export async function saveCheckoutPreferences(
             },
         },
     });
+    if (saved.count !== 1)
+        return { error: "Enable the checkout module in Account first." };
     revalidatePath("/account");
+    return { success: true };
+}
+
+export async function setCheckoutModuleEnabled(enabled: boolean) {
+    if (typeof enabled !== "boolean")
+        return { error: "Invalid checkout setting." };
+    const session = await auth();
+    if (!session?.user?.id) throw new Error("Sign in to Vintrack.");
+    const userId = session.user.id;
+    // Disabling stays available even if an administrator withdraws access.
+    if (enabled) {
+        const account = await linkedAccount();
+        if (
+            !(
+                await getFeatureAccessForUser(
+                    "checkout_links",
+                    account.userId,
+                    db,
+                    false,
+                )
+            ).allowed
+        )
+            return { error: "Checkout is unavailable for your account." };
+        if (await guardCheckoutConsent(userId))
+            return {
+                error: "Accept the checkout risk warning before enabling checkout.",
+            };
+    }
+    await db.$transaction(async (tx) => {
+        // Serialize concurrent settings changes and always disarm auto-payment.
+        await tx.user.update({
+            where: { id: userId },
+            data: { checkout_enabled: enabled },
+        });
+        await tx.$executeRaw`
+            UPDATE "User"
+            SET checkout_preferences = checkout_preferences #- '{preferences,autoCheckout}'
+            WHERE id = ${userId}
+        `;
+    });
+    revalidatePath("/", "layout");
     return { success: true };
 }

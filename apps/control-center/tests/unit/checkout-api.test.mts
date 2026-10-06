@@ -9,6 +9,7 @@ import * as checkoutConsent from "../../src/lib/checkout-consent.ts";
 function harness(
     options: {
         anonymous?: boolean;
+        checkoutEnabled?: boolean;
         denied?: boolean;
         missingItem?: boolean;
         unlinked?: boolean;
@@ -28,6 +29,7 @@ function harness(
         user: {
             async findUnique() {
                 return {
+                    checkout_enabled: options.checkoutEnabled ?? true,
                     checkout_preferences: options.preferences,
                     checkout_risk_version: options.riskConsentVersion ?? 1,
                     checkout_risk_accepted_at: options.missingConsentDate
@@ -414,4 +416,15 @@ test("a PayPal redirect is returned only for an enabled auto-checkout and verifi
         const data = await (await h.call("POST")).json();
         assert.equal(data.paymentUrl, expected);
     }
+});
+
+
+test("disabled checkout blocks existing notification links and browser payment claims", async () => {
+    const h = harness({ checkoutEnabled: false, preferences: storedAutoPreferences });
+    for (const method of ["GET", "POST"]) {
+        const response = await h.call(method);
+        assert.equal(response.status, 403);
+        assert.match((await response.json()).error, /Enable the checkout module/);
+    }
+    assert.equal(h.serviceCalls.length, 0);
 });

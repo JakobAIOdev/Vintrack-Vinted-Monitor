@@ -245,7 +245,7 @@ func (s *Store) ClaimAlertDeliveries(ctx context.Context, claimToken string, lim
 				END
 				ELSE FALSE
 			END AS channel_enabled,
-			COALESCE(vs.vinted_user_id > 0 AND cp.enabled AND ap.enabled AND
+			COALESCE(member.checkout_enabled AND vs.vinted_user_id > 0 AND cp.enabled AND ap.enabled AND
 				CASE member.role
 					WHEN 'free' THEN cp.free_enabled AND ap.free_enabled
 					WHEN 'premium' THEN cp.premium_enabled AND ap.premium_enabled

@@ -50,8 +50,9 @@ function harness(
                     },
                 },
                 user: {
-                    async update(query: unknown) {
+                    async updateMany(query: unknown) {
                         writes.push(query);
+                        return { count: 1 };
                     },
                 },
             },

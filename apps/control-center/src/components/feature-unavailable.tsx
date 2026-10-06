@@ -13,11 +13,13 @@ export function FeatureUnavailable({
 }) {
     const feature = FEATURE_DEFINITION_BY_KEY[access.feature];
     const message =
-        access.reason === "role_denied"
-            ? "This feature is not available for your current role."
-            : access.reason === "dependency_disabled"
-              ? "A required feature is currently unavailable."
-              : "This feature is currently disabled by an administrator.";
+        access.reason === "user_disabled"
+            ? "Enable the checkout module in Account to use this feature."
+            : access.reason === "role_denied"
+              ? "This feature is not available for your current role."
+              : access.reason === "dependency_disabled"
+                ? "A required feature is currently unavailable."
+                : "This feature is currently disabled by an administrator.";
 
     return (
         <div className="mx-auto flex min-h-[55vh] max-w-xl items-center justify-center">
@@ -30,7 +32,17 @@ export function FeatureUnavailable({
                 </h1>
                 <p className="text-muted-foreground mt-2 text-sm">{message}</p>
                 <Button asChild className="mt-6">
-                    <Link href="/dashboard">Back to dashboard</Link>
+                    <Link
+                        href={
+                            access.reason === "user_disabled"
+                                ? "/account"
+                                : "/dashboard"
+                        }
+                    >
+                        {access.reason === "user_disabled"
+                            ? "Open account settings"
+                            : "Back to dashboard"}
+                    </Link>
                 </Button>
             </div>
         </div>

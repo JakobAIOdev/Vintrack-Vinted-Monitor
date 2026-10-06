@@ -20,6 +20,7 @@ export async function loadCheckoutSettings(
     const user = await db.user.findUnique({
         where: { id: userId },
         select: {
+            checkout_enabled: true,
             checkout_preferences: true,
             checkout_risk_version: true,
             checkout_risk_accepted_at: true,
@@ -31,6 +32,7 @@ export async function loadCheckoutSettings(
     )
         ? CHECKOUT_RISK_WARNING_VERSION
         : null;
+    const checkoutEnabled = user?.checkout_enabled === true;
     const stored = user?.checkout_preferences;
     if (
         stored &&
@@ -42,6 +44,7 @@ export async function loadCheckoutSettings(
     ) {
         if (!checkoutPaymentAllowed(domain, stored.preferences.payment))
             return {
+                checkoutEnabled,
                 riskConsentVersion,
                 preferences: {
                     shipping: stored.preferences.shipping,
@@ -53,15 +56,29 @@ export async function loadCheckoutSettings(
             !autoCheckoutAllowed(domain, stored.preferences.payment)
         )
             return {
+                checkoutEnabled,
                 riskConsentVersion,
                 preferences: {
                     shipping: stored.preferences.shipping,
                     payment: stored.preferences.payment,
                 },
             };
-        return { riskConsentVersion, preferences: stored.preferences };
+        return {
+            checkoutEnabled,
+            riskConsentVersion,
+            preferences: checkoutEnabled
+                ? stored.preferences
+                : {
+                      shipping: stored.preferences.shipping,
+                      payment: stored.preferences.payment,
+                  },
+        };
     }
-    return { riskConsentVersion, preferences: DEFAULT_CHECKOUT_PREFERENCES };
+    return {
+        checkoutEnabled,
+        riskConsentVersion,
+        preferences: DEFAULT_CHECKOUT_PREFERENCES,
+    };
 }
 
 export async function loadCheckoutPreferences(

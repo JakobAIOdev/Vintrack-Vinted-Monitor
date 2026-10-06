@@ -877,3 +877,74 @@ for (const protocol of [5, 6]) {
         }
     });
 }
+
+test("an opted-out account never starts checkout through an existing notification link", async ({
+    page,
+}) => {
+    let posts = 0;
+    await page.route("**/api/checkout/17/123", (route) => {
+        if (route.request().method() === "POST") posts++;
+        return route.fulfill({
+            status: 403,
+            json: {
+                code: "FEATURE_UNAVAILABLE",
+                reason: "user_disabled",
+                error: "Enable the checkout module in Account before using checkout.",
+            },
+        });
+    });
+    await page.goto("/checkout/17/123");
+    await expect(page.getByRole("main").getByRole("alert")).toHaveText(
+        "Enable the checkout module in Account before using checkout.",
+    );
+    await expect(page.getByRole("button", { name: "Try again" })).toHaveCount(
+        0,
+    );
+    expect(posts).toBe(0);
+});
+
+test("a hidden handoff checks current access only when opened after opting out", async ({
+    page,
+}) => {
+    let gets = 0;
+    let posts = 0;
+    let enabled = true;
+    await page.addInitScript(() => {
+        let visibility = "hidden";
+        Object.defineProperty(document, "visibilityState", {
+            get: () => visibility,
+        });
+        document.addEventListener("activate-checkout-test", () => {
+            visibility = "visible";
+            document.dispatchEvent(new Event("visibilitychange"));
+        });
+    });
+    await page.route("**/api/checkout/17/123", (route) => {
+        if (route.request().method() === "POST") posts++;
+        else gets++;
+        return route.fulfill(
+            enabled
+                ? { json: target }
+                : {
+                      status: 403,
+                      json: {
+                          code: "FEATURE_UNAVAILABLE",
+                          reason: "user_disabled",
+                          error: "Enable the checkout module in Account before using checkout.",
+                      },
+                  },
+        );
+    });
+    await page.goto("/checkout/17/123");
+    await expect(page.getByText("Waiting for this tab to open…")).toBeVisible();
+    expect(gets).toBe(0);
+    enabled = false;
+    await page.evaluate(() =>
+        document.dispatchEvent(new Event("activate-checkout-test")),
+    );
+    await expect(page.getByRole("main").getByRole("alert")).toHaveText(
+        "Enable the checkout module in Account before using checkout.",
+    );
+    expect(gets).toBe(1);
+    expect(posts).toBe(0);
+});

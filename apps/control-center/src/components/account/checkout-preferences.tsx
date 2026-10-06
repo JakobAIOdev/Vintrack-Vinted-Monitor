@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import {
     getCheckoutPreferenceSettings,
     saveCheckoutPreferences,
+    setCheckoutModuleEnabled,
 } from "@/actions/checkout-preferences";
 import {
     DEFAULT_CHECKOUT_PREFERENCES,
@@ -21,6 +22,8 @@ import {
     CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { useRouter } from "next/navigation";
+import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { CHECKOUT_RISK_WARNING_VERSION } from "@/lib/checkout-consent";
@@ -34,6 +37,8 @@ export function CheckoutPreferencesCard({
     const [preferences, setPreferences] = useState<CheckoutPreferences>(
         DEFAULT_CHECKOUT_PREFERENCES,
     );
+    const router = useRouter();
+    const [checkoutEnabled, setCheckoutEnabled] = useState(false);
     const [loaded, setLoaded] = useState(false);
     const [domain, setDomain] = useState("");
     const [autoEnabled, setAutoEnabled] = useState(false);
@@ -48,6 +53,7 @@ export function CheckoutPreferencesCard({
         getCheckoutPreferenceSettings()
             .then((value) => {
                 if (!cancelled) {
+                    setCheckoutEnabled(value.checkoutEnabled);
                     setPreferences(value.preferences);
                     setRiskConsentVersion(value.riskConsentVersion);
                     setDomain(value.domain);
@@ -97,13 +103,80 @@ export function CheckoutPreferencesCard({
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4 p-5">
+                <div className="flex items-center justify-between gap-4 rounded-md border p-4">
+                    <div className="space-y-1">
+                        <Label htmlFor="checkout-module">
+                            Enable checkout module
+                        </Label>
+                        <p className="text-muted-foreground text-xs leading-5">
+                            Enable Oneclick in the dashboard and notification
+                            links. Turning this off also disables saved
+                            auto-checkout. Payment and delivery choices are
+                            kept.
+                        </p>
+                    </div>
+                    <Switch
+                        id="checkout-module"
+                        checked={checkoutEnabled}
+                        disabled={!loaded || pending}
+                        onCheckedChange={(enabled) => {
+                            startTransition(async () => {
+                                try {
+                                    if (enabled) {
+                                        await requestCheckoutConsent();
+                                        setRiskConsentVersion(
+                                            CHECKOUT_RISK_WARNING_VERSION,
+                                        );
+                                    }
+                                    const result =
+                                        await setCheckoutModuleEnabled(enabled);
+                                    if (result.error) {
+                                        toast.error(result.error);
+                                        return;
+                                    }
+                                    setCheckoutEnabled(enabled);
+                                    setAutoEnabled(false);
+                                    setWarningAccepted(false);
+                                    setPreferences((current) => ({
+                                        shipping: current.shipping,
+                                        payment: current.payment,
+                                    }));
+                                    router.refresh();
+                                    toast.success(
+                                        enabled
+                                            ? "Checkout module enabled."
+                                            : "Checkout module disabled.",
+                                    );
+                                } catch (error) {
+                                    if (
+                                        !(
+                                            error instanceof Error &&
+                                            error.message.startsWith(
+                                                "Checkout cancelled.",
+                                            )
+                                        )
+                                    )
+                                        toast.error(
+                                            "Checkout module setting could not be saved.",
+                                        );
+                                }
+                            });
+                        }}
+                    />
+                </div>
+                {!checkoutEnabled && (
+                    <p role="status" className="text-muted-foreground text-sm">
+                        Checkout is off. Enable the module above to use Oneclick
+                        or auto-checkout.
+                    </p>
+                )}
                 <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
                         <Label htmlFor="checkout-shipping">Delivery</Label>
                         <select
                             id="checkout-shipping"
                             className="border-input bg-background h-10 w-full rounded-md border px-3 text-sm"
-                            disabled={!loaded || pending}
+                            disabled={!loaded || pending || !checkoutEnabled}
                             value={preferences.shipping}
                             onChange={(event) =>
                                 setPreferences({
@@ -126,7 +199,7 @@ export function CheckoutPreferencesCard({
                         <select
                             id="checkout-payment"
                             className="border-input bg-background h-10 w-full rounded-md border px-3 text-sm"
-                            disabled={!loaded || pending}
+                            disabled={!loaded || pending || !checkoutEnabled}
                             value={preferences.payment}
                             onChange={(event) => {
                                 setAutoEnabled(false);
@@ -162,7 +235,12 @@ export function CheckoutPreferencesCard({
                         <input
                             type="checkbox"
                             checked={autoEnabled}
-                            disabled={!loaded || pending || !canAutoCheckout}
+                            disabled={
+                                !loaded ||
+                                pending ||
+                                !checkoutEnabled ||
+                                !canAutoCheckout
+                            }
                             onChange={(event) => {
                                 const enable = event.target.checked;
                                 setWarningAccepted(false);
@@ -269,7 +347,12 @@ export function CheckoutPreferencesCard({
                     )}
                 </div>
                 <Button
-                    disabled={!loaded || pending || !validAutoCheckout}
+                    disabled={
+                        !loaded ||
+                        pending ||
+                        !checkoutEnabled ||
+                        !validAutoCheckout
+                    }
                     onClick={() =>
                         startTransition(async () => {
                             try {

@@ -1,0 +1,1 @@
+ALTER TABLE "User" ADD COLUMN "checkout_enabled" BOOLEAN NOT NULL DEFAULT false;

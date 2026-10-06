@@ -111,6 +111,9 @@ func (s *Server) requireFeature(w http.ResponseWriter, userID string, feature st
 		"feature": feature,
 		"reason":  access.Reason,
 	}
+	if access.Reason == "user_disabled" {
+		payload["error"] = "Enable the checkout module in Account before using checkout."
+	}
 	if access.Dependency != "" {
 		payload["dependency"] = access.Dependency
 	}
