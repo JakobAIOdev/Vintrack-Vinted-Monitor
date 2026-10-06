@@ -1331,17 +1331,27 @@ async function ensureVintedBuyTab(targetUrl) {
   const completeTabs = existingTabs.filter((tab) => tab.status === "complete" && !tab.discarded);
   // Probe existing receivers concurrently. Extension reloads can leave old
   // content scripts disconnected; polling those pages cannot repair them.
-  const ready = await Promise.all(completeTabs.map(async (tab) => {
-    let timeout;
+  let existingTab = null;
+  if (completeTabs.length) {
     try {
-      return await Promise.race([
-        extensionApi.tabs.sendMessage(tab.id, { type: "VINTRACK_TAB_PING" }),
-        new Promise((resolve) => { timeout = setTimeout(() => resolve(null), 750); }),
-      ]);
-    } catch { return null; }
-    finally { clearTimeout(timeout); }
-  }));
-  const existingTab = completeTabs.find((_tab, index) => ready[index]?.ok && ready[index].pageBridgeReady !== false);
+      // A silent receiver must not delay another tab that is ready now.
+      existingTab = await Promise.any(completeTabs.map(async (tab) => {
+        let timeout;
+        try {
+          const response = await Promise.race([
+            extensionApi.tabs.sendMessage(tab.id, { type: "VINTRACK_TAB_PING" }),
+            new Promise((resolve) => { timeout = setTimeout(() => resolve(null), 750); }),
+          ]);
+          if (!response?.ok || response.pageBridgeReady === false) {
+            throw new Error("Checkout receiver is unavailable");
+          }
+          return tab;
+        } finally { clearTimeout(timeout); }
+      }));
+    } catch {
+      // All probes failed; retain the loading-tab/reload handling below.
+    }
+  }
   if (existingTab) {
     // Requests run on any same-region Vinted page. Loading the item first
     // adds a full navigation without contributing to checkout preparation.

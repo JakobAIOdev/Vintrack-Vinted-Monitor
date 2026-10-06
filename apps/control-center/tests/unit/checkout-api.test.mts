@@ -9,6 +9,8 @@ import * as checkoutConsent from "../../src/lib/checkout-consent.ts";
 function harness(
     options: {
         anonymous?: boolean;
+        itemLookup?: () => Promise<void>;
+        accountLookup?: () => void;
         checkoutEnabled?: boolean;
         denied?: boolean;
         missingItem?: boolean;
@@ -47,6 +49,7 @@ function harness(
                 };
             }) {
                 databaseCalls.push(query);
+                if (options.itemLookup) await options.itemLookup();
                 // Model a second member's item: the repository must scope both
                 // item and monitor to the authenticated member to see any row.
                 assert.equal(query.where.monitors.userId, "synthetic-member");
@@ -66,6 +69,7 @@ function harness(
                 where: { userId: string };
                 select: Record<string, boolean>;
             }) {
+                options.accountLookup?.();
                 assert.equal(query.where.userId, "synthetic-member");
                 assert.deepEqual(Object.keys(query.select).sort(), [
                     "domain",
@@ -418,13 +422,41 @@ test("a PayPal redirect is returned only for an enabled auto-checkout and verifi
     }
 });
 
-
 test("disabled checkout blocks existing notification links and browser payment claims", async () => {
-    const h = harness({ checkoutEnabled: false, preferences: storedAutoPreferences });
+    const h = harness({
+        checkoutEnabled: false,
+        preferences: storedAutoPreferences,
+    });
     for (const method of ["GET", "POST"]) {
         const response = await h.call(method);
         assert.equal(response.status, 403);
-        assert.match((await response.json()).error, /Enable the checkout module/);
+        assert.match(
+            (await response.json()).error,
+            /Enable the checkout module/,
+        );
     }
+    assert.equal(h.serviceCalls.length, 0);
+});
+
+test("linked-account metadata loads while the authorized item lookup is still pending", async () => {
+    let releaseItem!: () => void;
+    const itemPending = new Promise<void>((resolve) => {
+        releaseItem = resolve;
+    });
+    let accountStarted = false;
+    const h = harness({
+        itemLookup: () => itemPending,
+        accountLookup: () => {
+            accountStarted = true;
+        },
+    });
+    const request = h.call();
+    try {
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(accountStarted, true);
+    } finally {
+        releaseItem();
+    }
+    assert.equal((await request).status, 200);
     assert.equal(h.serviceCalls.length, 0);
 });

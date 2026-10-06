@@ -637,3 +637,38 @@ test("card payment stays on Vinted and changing to PayPal cannot replay after re
   assert.equal(restarted.messages.filter(m => m.type === "VINTRACK_RUN_BROWSER_BUY").length, 0);
   assert.equal(starts, 1);
 });
+
+test("a ready checkout receiver wins without waiting for a silent tab", async () => {
+  let releaseSilent;
+  const silent = new Promise(resolve => { releaseSilent = resolve; });
+  const h = background({
+    tabs: [{ id: 2, status: "complete", active: true }, { id: 1, status: "complete" }],
+    ping: id => id === 2 ? silent : { ok: true, pageBridgeReady: true },
+  });
+  const checkout = h.run();
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.messages.filter(message => message.type === "VINTRACK_RUN_BROWSER_BUY").length, 1);
+    assert.equal(h.mutations.at(-1)?.id, 1);
+    assert.equal((await checkout).ok, true);
+  } finally {
+    releaseSilent({ ok: false });
+    await checkout;
+  }
+});
+
+test("a fast unready tab cannot beat a slower ready receiver", async () => {
+  let releaseReady;
+  const ready = new Promise(resolve => { releaseReady = resolve; });
+  const h = background({
+    tabs: [{ id: 2, status: "complete", active: true }, { id: 1, status: "complete" }],
+    ping: id => id === 2 ? { ok: true, pageBridgeReady: false } : ready,
+  });
+  const checkout = h.run({ ...autoTarget, readinessOnly: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.mutations.length, 0);
+  assert.equal(h.messages.filter(message => message.type === "VINTRACK_RUN_BROWSER_BUY").length, 0);
+  releaseReady({ ok: true, pageBridgeReady: true });
+  assert.equal((await checkout).ready, true);
+  assert.ok(!h.storage.vintrackCheckoutAttempts);
+});

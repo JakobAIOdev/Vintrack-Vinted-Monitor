@@ -22,9 +22,9 @@ gespeicherten Karten muss die gewünschte Karte bereits in Vinted ausgewählt se
 Die Extension benötigt Version **0.3.1**, Prepare-Protokoll **6**. PayPal bleibt
 mit Protokoll 5 kompatibel. Alte Extensions werden bei Karten-Auto-Checkout vor
 Bereitschaftsprüfung, Serverfreigabe oder Vinted-Mutation zum Update aufgefordert.
-Chrome, Firefox, Compose, `.env.example` und Dashboard-Fallback sind auf 0.3.1
+Chrome, Firefox, Compose, `.env.example` und Dashboard-Fallback sind auf 0.3.2
 gesetzt. Vor Release muss eine gesetzte GitHub-Variable
-`BROWSER_EXTENSION_LATEST_VERSION` ebenfalls 0.3.1 sein; der Workflow prüft dies.
+`BROWSER_EXTENSION_LATEST_VERSION` ebenfalls 0.3.2 sein; der Workflow prüft dies.
 
 ## Requests und Zahlungsbestätigung
 

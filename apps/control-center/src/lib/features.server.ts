@@ -56,14 +56,19 @@ export async function getFeatureAccessForUser(
     client: FeaturePolicyClient & Pick<typeof db, "user"> = db,
     checkCheckoutEnabled = true,
 ) {
-    const user = await client.user.findUnique({
-        where: { id: userId },
-        select: {
-            role: true,
-            ...(feature === "checkout_links" ? { checkout_enabled: true } : {}),
-        },
-    });
-    const access = await getFeatureAccess(feature, user?.role, client);
+    const [user, policies] = await Promise.all([
+        client.user.findUnique({
+            where: { id: userId },
+            select: {
+                role: true,
+                ...(feature === "checkout_links"
+                    ? { checkout_enabled: true }
+                    : {}),
+            },
+        }),
+        loadFeaturePolicies(client),
+    ]);
+    const access = resolveFeatureAccess(feature, user?.role, policies);
     if (
         access.allowed &&
         feature === "checkout_links" &&

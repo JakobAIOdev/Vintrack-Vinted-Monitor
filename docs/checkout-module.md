@@ -52,3 +52,37 @@ Local Account UI: the enable switch opens the risk modal; cancelling leaves the
 module off. No real member consent, auto-payment or Vinted checkout was submitted.
 
 ![Checkout module off in Account](screenshots/checkout-module-toggle.png)
+
+## Clear disabled state and faster handoff (extension 0.3.2)
+
+The account card displays the saved state of Oneclick and auto-checkout
+separately. When the module is off, payment/delivery controls and the Save
+button are hidden. Stored choices appear as inactive text. Auto-checkout draft
+changes do not change the saved Enabled/Disabled badge; an unsaved-change notice
+explains whether the existing automatic-payment setting is still active. Turning
+the module off also discards local unsaved choices from the inactive summary.
+
+The extension probes existing Vinted receivers concurrently and uses the first
+ready receiver instead of waiting for all probes. A silent tab no longer imposes
+its 750 ms timeout when another tab answers. This applies to both auto-checkout
+preflight and checkout preparation. Account identity is still checked before the
+first Vinted mutation, and durable payment claims/checkpoints are unchanged.
+User/policy reads and item/linked-account metadata reads also run concurrently.
+No additional Vinted requests or retries were introduced. Vinted's dependent
+conversation → checkout build → quote update → optional payment requests still
+run in order; a new live end-to-end timing has not been measured.
+
+Chrome/Firefox packages and the latest-version defaults are 0.3.2; preparation
+protocol stays 6. Reload the unpacked development extension to apply the receiver
+change. Before a production release, a configured GitHub
+`BROWSER_EXTENSION_LATEST_VERSION` variable must match 0.3.2.
+
+Validation: production dashboard build and lint passed, as did 53 dashboard
+unit tests, 40 checkout browser tests and 60 extension tests. Synthetic component
+browser checks covered hidden inputs while off, unsaved auto-disable changes,
+failed-save status retention, successful-save status updates and mobile layout
+without horizontal overflow. These checks mocked preference actions; no real
+member preferences, consent or Vinted payments were changed.
+
+![Disabled checkout settings with synthetic preferences](screenshots/checkout-module-disabled.png)
+![Disabled checkout settings on mobile](screenshots/checkout-module-disabled-mobile.png)

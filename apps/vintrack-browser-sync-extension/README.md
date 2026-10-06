@@ -59,7 +59,7 @@ the server also blocks older clients and legacy endpoints. The separate
 auto-payment opt-in and price limit remain required. See
 [checkout risk warning](../../docs/checkout-risk-warning.md).
 
-Version 0.3.1 advertises checkout preparation protocol 6 to Vintrack. The
+Version 0.3.2 advertises checkout preparation protocol 6 to Vintrack. The
 dashboard's Open Checkout action verifies that the Vinted browser account
 matches the linked account, applies the delivery/payment preferences selected
 in Vintrack Account, and opens its checkout page. Home delivery and available
@@ -297,7 +297,7 @@ Temporary extensions are removed by Firefox on restart by design.
    **Prepare Release** workflow.
 
 For the current release, both manifests and `BROWSER_EXTENSION_LATEST_VERSION`
-are `0.3.1`; the minimum compatible version remains `0.2.1`.
+are `0.3.2`; the minimum compatible version remains `0.2.1`.
 If the GitHub Actions variable `BROWSER_EXTENSION_LATEST_VERSION` is set,
 update it with every manifest version bump: the deploy workflow rejects a
 different value before submitting the Firefox build. Keep `.env.example`,

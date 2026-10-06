@@ -18,20 +18,22 @@ export async function loadCheckoutTarget(
     monitorId: number,
     itemId: number,
 ): Promise<CheckoutTarget> {
-    const item = await db.items.findFirst({
-        where: {
-            id: BigInt(itemId),
-            monitor_id: monitorId,
-            monitors: { userId },
-        },
-        select: { seller_id: true, title: true, price: true },
-    });
+    const [item, account] = await Promise.all([
+        db.items.findFirst({
+            where: {
+                id: BigInt(itemId),
+                monitor_id: monitorId,
+                monitors: { userId },
+            },
+            select: { seller_id: true, title: true, price: true },
+        }),
+        db.vinted_sessions.findUnique({
+            where: { userId },
+            select: { vinted_user_id: true, vinted_name: true, domain: true },
+        }),
+    ]);
     if (!item)
         throw new CheckoutTargetError("Item not found in your monitors.", 404);
-    const account = await db.vinted_sessions.findUnique({
-        where: { userId },
-        select: { vinted_user_id: true, vinted_name: true, domain: true },
-    });
     if (!account)
         throw new CheckoutTargetError(
             "Link your Vinted account in Account before opening checkout.",
@@ -54,7 +56,10 @@ export async function loadCheckoutTarget(
         throw new CheckoutTargetError("You cannot buy your own item.", 400);
     const settings = await loadCheckoutSettings(userId, accountId, domain);
     if (!settings.checkoutEnabled)
-        throw new CheckoutTargetError("Enable the checkout module in Account before using checkout.", 403);
+        throw new CheckoutTargetError(
+            "Enable the checkout module in Account before using checkout.",
+            403,
+        );
     return {
         itemId,
         monitorId,

@@ -11,6 +11,8 @@ function harness({
     denied = false,
     accepted = true,
     anonymous = false,
+    userLookup = undefined as (() => Promise<void>) | undefined,
+    policyLookup = undefined as (() => void) | undefined,
 } = {}) {
     const writes: unknown[] = [];
     const user = { role: "free", checkout_enabled: enabled };
@@ -38,6 +40,7 @@ function harness({
         user: {
             findUnique: async ({ where }: { where: { id: string } }) => {
                 assert.equal(where.id, "synthetic-member");
+                if (userLookup) await userLookup();
                 return user;
             },
             updateMany: async (query: {
@@ -57,8 +60,9 @@ function harness({
             }),
         },
         feature_policies: {
-            findMany: async () =>
-                features.FEATURE_KEYS.map((feature) => ({
+            findMany: async () => {
+                policyLookup?.();
+                return features.FEATURE_KEYS.map((feature) => ({
                     feature,
                     enabled: !denied || feature !== "checkout_links",
                     free_enabled: true,
@@ -66,7 +70,8 @@ function harness({
                     admin_enabled: true,
                     revision: 1,
                     updated_at: new Date(),
-                })),
+                }));
+            },
         },
         $transaction: async (fn: (tx: unknown) => Promise<void>) =>
             fn({
@@ -224,4 +229,29 @@ test("payment preferences cannot rearm a module disabled while settings were bei
     })) as { error?: string };
     assert.ok(result.error);
     assert.equal(h.writes.length, 0);
+});
+
+test("feature policies load while the member lookup is pending", async () => {
+    let releaseUser!: () => void;
+    const userPending = new Promise<void>((resolve) => {
+        releaseUser = resolve;
+    });
+    let policyStarted = false;
+    const h = harness({
+        userLookup: () => userPending,
+        policyLookup: () => {
+            policyStarted = true;
+        },
+    });
+    const access = h.access.guardApiFeature(
+        "synthetic-member",
+        "checkout_links",
+    );
+    try {
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(policyStarted, true);
+    } finally {
+        releaseUser();
+    }
+    assert.equal(((await access) as Response).status, 403);
 });
