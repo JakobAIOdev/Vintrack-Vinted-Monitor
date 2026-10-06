@@ -59,7 +59,7 @@ the server also blocks older clients and legacy endpoints. The separate
 auto-payment opt-in and price limit remain required. See
 [checkout risk warning](../../docs/checkout-risk-warning.md).
 
-Version 0.3.2 advertises checkout preparation protocol 6 to Vintrack. The
+Version 0.3.3 advertises checkout preparation protocol 6 to Vintrack. The
 dashboard's Open Checkout action verifies that the Vinted browser account
 matches the linked account, applies the delivery/payment preferences selected
 in Vintrack Account, and opens its checkout page. Home delivery and available
@@ -88,6 +88,21 @@ loading the product page first. A new attempt verifies identity once in the
 page bridge, before any POST; reopening a cached link verifies identity in the
 background. Delivery and PayPal are combined into one update when the build
 response offers PayPal. An already selected PayPal method needs no extra update.
+Normal Oneclick can also omit the first update when the fresh build already
+confirms the requested home delivery, address, shipping rate, enabled native
+payment method and checksum. Missing or different selections use the existing
+update flow. Automatic payment always obtains the final quote with an update.
+Optional local link history is saved alongside navigation; the durable replay
+checkpoint is still saved before opening checkout.
+For normal Oneclick, the bridge can prefetch the prepared checkout route while
+the preference update is running and use Vinted's existing Next.js client
+router instead of reloading the document. This optional integration uses the
+router currently exposed by Vinted; if it is absent, throws or fails to change
+the URL within two seconds, the background opens the same prepared URL normally.
+An already open normal review is focused without reloading it. Automatic payment
+and payment-resume links retain full browser navigation. Native checkout still
+loads and validates its own current checkout data; no quote-response cache or
+payment interception is used.
 The final checkout page is then opened for the user's payment confirmation.
 When no Vinted tab exists, one must be opened to obtain the browser context.
 
@@ -297,7 +312,7 @@ Temporary extensions are removed by Firefox on restart by design.
    **Prepare Release** workflow.
 
 For the current release, both manifests and `BROWSER_EXTENSION_LATEST_VERSION`
-are `0.3.2`; the minimum compatible version remains `0.2.1`.
+are `0.3.3`; the minimum compatible version remains `0.2.1`.
 If the GitHub Actions variable `BROWSER_EXTENSION_LATEST_VERSION` is set,
 update it with every manifest version bump: the deploy workflow rejects a
 different value before submitting the Firefox build. Keep `.env.example`,

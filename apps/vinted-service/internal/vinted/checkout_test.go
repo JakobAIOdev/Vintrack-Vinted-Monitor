@@ -20,6 +20,113 @@ func checkoutResults() []fakeHTTPResult {
 
 const nativeHomeCheckout = `{"checkout":{"components":{"payment_method":{"pay_in_methods":[{"code":"MANGOPAY_PAYPAL"}],"selected_payment_method":null},"shipping_address":{"address":{"id":55}},"shipping_pickup_options":{"selected_pickup_option":1},"shipping_pickup_details":{"pickup_details":{"selected_rate_uuid":"synthetic-rate"}},"pay_button_v2":{"payments_available":true}}}}`
 
+func TestPrepareCheckoutReusesMatchingFreshBuildForReview(t *testing.T) {
+	for _, payment := range []string{"paypal", "card", "google_pay"} {
+		t.Run(payment, func(t *testing.T) {
+			build := autoQuote(t)
+			if payment == "card" {
+				build = cardAutoQuote(t)
+			} else if payment == "google_pay" {
+				method := map[string]interface{}{"payment_method": payment, "enabled": true}
+				pm := checkoutMap(build, "checkout", "components", "payment_method")
+				pm["pay_in_methods"] = []interface{}{method}
+				pm["selected_payment_method"] = map[string]interface{}{"pay_in_method": method}
+			}
+			build["purchase"] = map[string]interface{}{"id": "synthetic-purchase"}
+			body, _ := json.Marshal(build)
+			results := checkoutResults()[:2]
+			results[1].body = string(body)
+			client, transport := testClient(results...)
+			var statuses []string
+			link, err := client.PrepareCheckout(123, 456, func(link session.CheckoutLink) error { statuses = append(statuses, link.Status); return nil }, CheckoutPreferences{Shipping: "home", Payment: payment})
+			if err != nil || link.Status != "checkout_prepared" || len(transport.requests) != 2 || link.CheckoutURL == "" || link.PaymentURL != "" {
+				t.Fatalf("fresh build was not reused: %#v err=%v requests=%d", link, err, len(transport.requests))
+			}
+			if strings.Join(statuses, ",") != "transaction_creating,checkout_building,checkout_prepared" {
+				t.Fatalf("missing durable final checkpoint: %v", statuses)
+			}
+		})
+	}
+}
+
+func TestPrepareCheckoutKeepsUpdateForUnverifiedBuildSelections(t *testing.T) {
+	cases := map[string]func(map[string]interface{}){
+		"missing checksum": func(raw map[string]interface{}) { delete(raw, "checksum") },
+		"missing address ID": func(raw map[string]interface{}) {
+			delete(checkoutMap(raw, "checkout", "components", "shipping_address", "address"), "id")
+		},
+		"fractional address": func(raw map[string]interface{}) {
+			checkoutMap(raw, "checkout", "components", "shipping_address", "address")["id"] = 55.5
+		},
+		"pickup selected": func(raw map[string]interface{}) {
+			checkoutMap(raw, "checkout", "components", "shipping_pickup_options")["selected_pickup_option"] = 2
+		},
+		"missing rate": func(raw map[string]interface{}) {
+			delete(checkoutMap(raw, "checkout", "components", "shipping_pickup_details", "pickup_details"), "selected_rate_uuid")
+		},
+		"payment unavailable": func(raw map[string]interface{}) {
+			checkoutMap(raw, "checkout", "components", "pay_button_v2")["payments_available"] = false
+		},
+		"missing payment": func(raw map[string]interface{}) {
+			checkoutMap(raw, "checkout", "components", "payment_method")["selected_payment_method"] = nil
+		},
+		"wrong provider": func(raw map[string]interface{}) {
+			checkoutMap(raw, "checkout", "components", "payment_method", "selected_payment_method", "pay_in_method")["payment_method"] = "google_pay"
+		},
+		"disabled provider": func(raw map[string]interface{}) {
+			checkoutMap(raw, "checkout", "components", "payment_method")["pay_in_methods"] = []interface{}{map[string]interface{}{"payment_method": "paypal", "enabled": false}}
+		},
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			build := autoQuote(t)
+			change(build)
+			build["purchase"] = map[string]interface{}{"id": "synthetic-purchase"}
+			body, _ := json.Marshal(build)
+			results := autoResults(t, autoQuote(t))
+			results[1].body = string(body)
+			client, transport := testClient(results...)
+			link, err := client.PrepareCheckout(123, 456, func(session.CheckoutLink) error { return nil }, CheckoutPreferences{Shipping: "home", Payment: "paypal"})
+			if err != nil || link.Status != "checkout_prepared" || len(transport.requests) != 3 || transport.requests[2].Method != "PUT" {
+				t.Fatalf("unverified build skipped update: %#v err=%v requests=%d", link, err, len(transport.requests))
+			}
+		})
+	}
+}
+
+func TestAutoCheckoutStillUpdatesMatchingBuildBeforePayment(t *testing.T) {
+	for _, payment := range []string{"paypal", "card"} {
+		t.Run(payment, func(t *testing.T) {
+			build := autoQuote(t)
+			preferences := autoPreferences()
+			if payment == "card" {
+				build = cardAutoQuote(t)
+				preferences = cardAutoPreferences()
+			}
+			updated := autoQuote(t)
+			if payment == "card" {
+				updated = cardAutoQuote(t)
+			}
+			updated["checksum"] = "synthetic-updated-quote"
+			results := autoResults(t, updated)
+			build["purchase"] = map[string]interface{}{"id": "synthetic-purchase"}
+			body, _ := json.Marshal(build)
+			results[1].body = string(body)
+			results = append(results, fakeHTTPResult{status: 200, body: `{"payment":{"status":"pending"}}`})
+			client, transport := testClient(results...)
+			client.session.Domain = "www.vinted.de"
+			_, err := client.PrepareCheckout(123, 456, func(session.CheckoutLink) error { return nil }, preferences)
+			if err != nil || len(transport.requests) != 4 || transport.requests[2].Method != "PUT" {
+				t.Fatalf("automatic payment skipped final quote: err=%v requests=%d", err, len(transport.requests))
+			}
+			payload, _ := io.ReadAll(transport.requests[3].Body)
+			if !strings.Contains(string(payload), `"checksum":"synthetic-updated-quote"`) {
+				t.Fatal("automatic payment used an earlier quote")
+			}
+		})
+	}
+}
+
 func TestPrepareCheckoutCombinesPayPalAndDeliveryWhenBuildOffersIt(t *testing.T) {
 	results := checkoutResults()
 	results[1].body = strings.TrimSuffix(nativeHomeCheckout, "}") + `,"purchase":{"id":"synthetic-purchase"}}`

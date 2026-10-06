@@ -546,6 +546,72 @@
     } catch { return false; }
   }
 
+  function checkoutReady(data, preferences) {
+    const selected = data?.checkout?.components;
+    return Boolean(
+      selected?.payment_method?.selected_payment_method &&
+      selected?.shipping_address?.address &&
+      selected?.shipping_pickup_options?.selected_pickup_option === 1 &&
+      selected?.shipping_pickup_details?.pickup_details?.selected_rate_uuid &&
+      selected?.pay_button_v2?.payments_available === true &&
+      preferences.payment !== "wallet" &&
+      (preferences.payment === "vinted" || selectedCheckoutPayment(data) === preferences.payment)
+    );
+  }
+
+  function checkoutBuildMatchesPreferences(data, preferences, phoneNumber) {
+    // Only reuse this fresh build for manual review. Automatic payment still
+    // requires the final update/quote, even when Vinted's defaults match.
+    if (preferences.autoCheckout || phoneNumber || preferences.shipping !== "home" ||
+        !checkoutReady(data, preferences)) return false;
+    const choice = checkoutPaymentChoice(data, preferences.payment);
+    const selected = data.checkout.components.payment_method.selected_payment_method;
+    const addressId = Number(data.checkout.components.shipping_address.address.id);
+    const checksum = findStringByPaths(data, [["checksum"], ["checkout", "checksum"]]);
+    return Boolean(checksum && Number.isSafeInteger(addressId) && addressId > 0 && choice &&
+      choice.payment_method === (selected?.pay_in_method?.payment_method ||
+        (selected?.pay_in_method?.code === "MANGOPAY_PAYPAL" ? "paypal" : "")) &&
+      (preferences.payment !== "card" || String(choice.card_id) === String(selectedCardId(selected))));
+  }
+
+  function checkoutRouter(raw) {
+    try {
+      const url = new URL(raw);
+      if (url.origin !== window.location.origin || url.pathname !== "/checkout" ||
+          url.username || url.password || url.hash || url.searchParams.has("after_payment_redirect") ||
+          !url.searchParams.get("purchase_id") || url.searchParams.get("order_type") !== "transaction" ||
+          !/^[1-9]\d*$/.test(url.searchParams.get("order_id") || "")) return null;
+      const router = window.next?.appDir === true ? window.next.router : null;
+      return typeof router?.push === "function" ? { router, url } : null;
+    } catch { return null; }
+  }
+
+  function prefetchCheckout(raw) {
+    const target = checkoutRouter(raw);
+    if (typeof target?.router.prefetch !== "function") return;
+    // Router prefetch reads route data/assets; it does not mount checkout or
+    // start payment. Never let optional prefetch delay a Vinted request.
+    try { void Promise.resolve(target.router.prefetch(target.url.href)).catch(() => {}); } catch {}
+  }
+
+  async function navigateCheckout(raw) {
+    const target = checkoutRouter(raw);
+    if (!target) return { ok: false };
+    try {
+      if (new URL(window.location.href).href === target.url.href) return { ok: true, clientNavigation: true };
+      void Promise.resolve(target.router.push(target.url.href, { scroll: true })).catch(() => {});
+      const deadline = Date.now() + 2000;
+      while (Date.now() <= deadline) {
+        const current = new URL(window.location.href);
+        if (current.href === target.url.href) return { ok: true, clientNavigation: true };
+        await new Promise(resolve => window.setTimeout(resolve, 25));
+      }
+    } catch {}
+    // The background can still open this same prepared checkout with normal
+    // tab navigation. It must never repeat a checkout/payment request.
+    return { ok: false };
+  }
+
   async function runBrowserBuy(payload) {
     const startedAt = Date.now();
     await waitForDocumentReady();
@@ -675,6 +741,7 @@
       ]) || findNumberByKeys(buildResult.data, ["shipping_order_id", "shippingOrderId"]);
 
     const checkoutReferrer = buildCheckoutUrl(purchaseId, transactionId);
+    if (!preferences.autoCheckout) prefetchCheckout(checkoutReferrer);
     function components(payment = null) {
       return {
         additional_service: {},
@@ -685,7 +752,10 @@
       };
     }
     let paymentChoice = checkoutPaymentChoice(buildResult.data, preferences.payment);
-    let updateResult = await checkoutRequest("updateMs", "checkout update", {
+    const reuseBuild = checkoutBuildMatchesPreferences(buildResult.data, preferences, phoneNumber);
+    timings.updateSkipped = reuseBuild ? 1 : 0;
+    timings.updateMs = 0;
+    let updateResult = reuseBuild ? buildResult : await checkoutRequest("updateMs", "checkout update", {
       method: "PUT",
       url: `${window.location.origin}/api/v2/purchases/${encodeURIComponent(purchaseId)}/checkout`,
       referrer: checkoutReferrer,
@@ -767,15 +837,7 @@
     }
 
     const selected = updateResult.data?.checkout?.components;
-    const ready = Boolean(
-      selected?.payment_method?.selected_payment_method &&
-      selected?.shipping_address?.address &&
-      selected?.shipping_pickup_options?.selected_pickup_option === 1 &&
-      selected?.shipping_pickup_details?.pickup_details?.selected_rate_uuid &&
-      selected?.pay_button_v2?.payments_available === true &&
-      preferences.payment !== "wallet" &&
-      (preferences.payment === "vinted" || selectedCheckoutPayment(updateResult.data) === preferences.payment)
-    );
+    const ready = checkoutReady(updateResult.data, preferences);
     const prepared = {
       ok: true,
       status: ready ? "checkout_prepared" : "checkout_review_required",
@@ -836,6 +898,15 @@
 
   window.addEventListener("message", (event) => {
     if (event.source !== window || !event.data?.type) {
+      return;
+    }
+
+    if (event.data.type === "VINTRACK_PAGE_CHECKOUT_NAVIGATE_REQUEST") {
+      const requestId = event.data.payload?.requestId;
+      if (!requestId) return;
+      navigateCheckout(event.data.payload?.checkoutUrl).then(result => {
+        window.postMessage({ type: "VINTRACK_PAGE_CHECKOUT_NAVIGATE_RESPONSE", payload: { ...result, requestId } }, window.location.origin);
+      });
       return;
     }
 

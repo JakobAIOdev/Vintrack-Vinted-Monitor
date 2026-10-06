@@ -223,9 +223,12 @@ async function startCheckout(
             "transactionMs",
             "buildMs",
             "updateMs",
+            "updateSkipped",
             "contactMs",
             "paymentMs",
             "extensionMs",
+            "navigationMs",
+            "clientNavigation",
         ];
         const timings = Object.fromEntries(
             timingKeys.flatMap((key) => {

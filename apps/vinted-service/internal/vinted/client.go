@@ -998,12 +998,16 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 	if err != nil {
 		return &link, err
 	}
-	link.Status = "checkout_updating"
-	if err := save(link); err != nil {
-		return &link, err
-	}
 	paymentChoice := build.Selection.Methods[preferences.Payment]
-	updated, updateErr := c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, paymentChoice))
+	updated := build
+	var updateErr error
+	if !build.matchesReviewPreferences(preferences) {
+		link.Status = "checkout_updating"
+		if err := save(link); err != nil {
+			return &link, err
+		}
+		updated, updateErr = c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, paymentChoice))
+	}
 	if updateErr == nil && paymentChoice == nil && updated.Selection.SelectedPreference != preferences.Payment && updated.Selection.Methods[preferences.Payment] != nil {
 		paymentChoice = updated.Selection.Methods[preferences.Payment]
 		link.Status = "checkout_selecting_preferences"

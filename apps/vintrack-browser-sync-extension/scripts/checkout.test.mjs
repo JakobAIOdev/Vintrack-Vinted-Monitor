@@ -50,7 +50,35 @@ test("content bridge preserves checkout request IDs on synchronous, asynchronous
   }
 });
 
-function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paymentResponse = {}, pageState = "complete") {
+test("content navigation correlates the native response and sends no checkout or payment request", async () => {
+  let receive;
+  const listeners = new Set();
+  const posts = [];
+  const window = {
+    location: { origin: `https://${domain}`, hostname: domain },
+    setTimeout, clearTimeout,
+    addEventListener(type, listener) { if (type === "message") listeners.add(listener); },
+    removeEventListener(type, listener) { if (type === "message") listeners.delete(listener); },
+    postMessage(message) {
+      posts.push(message);
+      if (message.type !== "VINTRACK_PAGE_CHECKOUT_NAVIGATE_REQUEST") return;
+      queueMicrotask(() => {
+        for (const requestId of ["unrelated", message.payload.requestId]) {
+          for (const listener of [...listeners]) listener({ source: window, data: { type: "VINTRACK_PAGE_CHECKOUT_NAVIGATE_RESPONSE", payload: { requestId, ok: true, clientNavigation: true } } });
+        }
+      });
+    },
+  };
+  const context = vm.createContext({ window, document: { documentElement: { dataset: { vintrackPageBridge: "ready" } } }, crypto: webcrypto, MutationObserver: class { observe() {} },
+    chrome: { runtime: { sendMessage: () => new Promise(() => {}), onMessage: { addListener(listener) { receive = listener; } } } } });
+  vm.runInContext(contentSource, context);
+  const response = await new Promise(resolve => receive({ type: "VINTRACK_NAVIGATE_CHECKOUT", payload: { checkoutUrl } }, {}, resolve));
+  assert.equal(response.clientNavigation, true);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].payload.checkoutUrl, checkoutUrl);
+});
+
+function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paymentResponse = {}, pageState = "complete", options = {}) {
   const requests = [];
   const documentListeners = {};
   const document = {
@@ -74,6 +102,7 @@ function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paym
     postMessage() {},
     setTimeout: (fn) => setTimeout(fn, 0),
     clearTimeout,
+    next: options.router ? { appDir: true, router: options.router } : undefined,
   };
   const context = vm.createContext({
     window,
@@ -84,6 +113,7 @@ function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paym
     crypto: webcrypto,
     setTimeout,
     clearTimeout,
+    Date: options.Date || Date,
     fetch: async (url, init) => {
       requests.push({ url, init });
       const data =
@@ -106,12 +136,54 @@ function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paym
   vm.runInContext(
     bridgeSource.replace(
       '  window.addEventListener("message",',
-      '  window.testCheckout = runBrowserBuy;\n  window.addEventListener("message",',
+      '  window.testCheckout = runBrowserBuy; window.testNavigation = navigateCheckout;\n  window.addEventListener("message",',
     ),
     context,
   );
-  return { requests, run: (payload) => window.testCheckout(payload), parsed() { document.readyState = "interactive"; documentListeners.DOMContentLoaded?.(); } };
+  return { requests, window, run: (payload) => window.testCheckout(payload), navigate: raw => window.testNavigation(raw), parsed() { document.readyState = "interactive"; documentListeners.DOMContentLoaded?.(); } };
 }
+
+test("normal checkout prefetch overlaps preparation without starting native navigation or payment", async () => {
+  const calls = [];
+  const router = { push: url => calls.push(["push", url]), prefetch: url => { calls.push(["prefetch", url]); return new Promise(() => {}); } };
+  const h = bridge(42, [], {}, {}, "complete", { router });
+  const result = await h.run(target);
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, [["prefetch", checkoutUrl]]);
+  assert.deepEqual(h.requests.map(r => r.init.method), ["GET", "POST", "POST", "PUT"]);
+  const auto = bridge(42, [autoQuote()], selectedCheckout(), {}, "complete", { router });
+  await auto.run(autoTarget);
+  assert.equal(calls.length, 1);
+});
+
+test("native routing only opens a same-origin prepared transaction checkout and preserves an already open review", async () => {
+  const pushes = [];
+  const h = bridge(42, [], {}, {}, "complete", { router: { push(url) { pushes.push(url); h.window.location.href = url; } } });
+  assert.equal((await h.navigate(checkoutUrl)).clientNavigation, true);
+  assert.deepEqual(pushes, [checkoutUrl]);
+  assert.equal((await h.navigate(checkoutUrl)).ok, true);
+  assert.equal(pushes.length, 1);
+  for (const raw of [
+    "https://evil.test/checkout?purchase_id=synthetic&order_id=77&order_type=transaction",
+    "https://www.paypal.com/checkoutnow?token=synthetic",
+    `${checkoutUrl}&after_payment_redirect=true`,
+    `${checkoutUrl}#fragment`,
+    `https://user:secret@${domain}/checkout?purchase_id=synthetic&order_id=77&order_type=transaction`,
+    `https://${domain}/checkout?purchase_id=synthetic&order_id=77`,
+  ]) assert.equal((await h.navigate(raw)).ok, false);
+  assert.equal(pushes.length, 1);
+  assert.equal(h.requests.length, 0);
+});
+
+test("missing, throwing or unresponsive native routers fail safely without checkout requests", async () => {
+  assert.equal((await bridge().navigate(checkoutUrl)).ok, false);
+  const throws = bridge(42, [], {}, {}, "complete", { router: { push() { throw new Error("synthetic private failure"); } } });
+  assert.equal((await throws.navigate(checkoutUrl)).ok, false);
+  let now = 0;
+  const silent = bridge(42, [], {}, {}, "complete", { router: { push() {} }, Date: { now() { now += 1000; return now; } } });
+  assert.equal((await silent.navigate(checkoutUrl)).ok, false);
+  assert.equal(silent.requests.length, 0);
+});
 
 test("checkout starts after HTML parsing without waiting for the page load event", async () => {
   const h = bridge(42, [], {}, {}, "loading");
@@ -184,6 +256,58 @@ test("already selected PayPal does not cause another checkout update", async () 
   const result = await h.run({ ...target, preferences: { shipping: "home", payment: "paypal" } });
   assert.equal(result.status, "checkout_prepared");
   assert.equal(h.requests.length, 4);
+});
+
+test("a fresh complete build with matching home delivery and payment skips the redundant update", async () => {
+  for (const payment of ["paypal", "card", "google_pay"]) {
+    const data = payment === "card" ? cardAutoQuote() : autoQuote();
+    if (payment === "google_pay") {
+      const method = { payment_method: "google_pay", enabled: true };
+      data.checkout.components.payment_method.pay_in_methods = [method];
+      data.checkout.components.payment_method.selected_payment_method = { pay_in_method: method };
+    }
+    const h = bridge(42, [], data);
+    const result = await h.run({ ...target, preferences: { shipping: "home", payment } });
+    assert.equal(result.status, "checkout_prepared", payment);
+    assert.deepEqual(h.requests.map(({ init }) => init.method), ["GET", "POST", "POST"]);
+    assert.equal(result.timings.updateSkipped, 1);
+    assert.equal(result.timings.updateMs, 0);
+    assert.equal(result.checksum, undefined);
+  }
+});
+
+test("incomplete, disabled or mismatched build selections keep the preference update", async () => {
+  for (const change of [
+    data => { data.checksum = ""; },
+    data => { data.checkout.components.shipping_address.address = {}; },
+    data => { data.checkout.components.shipping_address.address.id = 55.5; },
+    data => { data.checkout.components.shipping_pickup_options.selected_pickup_option = 2; },
+    data => { delete data.checkout.components.shipping_pickup_details.pickup_details.selected_rate_uuid; },
+    data => { data.checkout.components.pay_button_v2.payments_available = false; },
+    data => { data.checkout.components.payment_method.selected_payment_method = null; },
+    data => { data.checkout.components.payment_method.selected_payment_method.pay_in_method.payment_method = "google_pay"; },
+    data => { data.checkout.components.payment_method.pay_in_methods = [{ payment_method: "paypal", enabled: false }]; },
+    data => { data.checkout.components.payment_method.pay_in_methods = [{ payment_method: "paypal", read_only: true }]; },
+  ]) {
+    const data = autoQuote(); change(data);
+    const h = bridge(42, [autoQuote()], data);
+    const result = await h.run({ ...target, preferences: { shipping: "home", payment: "paypal" } });
+    assert.equal(result.status, "checkout_prepared");
+    assert.deepEqual(h.requests.map(({ init }) => init.method), ["GET", "POST", "POST", "PUT"]);
+    assert.equal(result.timings.updateSkipped, 0);
+  }
+});
+
+test("matching builds never replace the final quote update for automatic payment", async () => {
+  for (const payload of [autoTarget, cardAutoTarget]) {
+    const data = payload.preferences.payment === "card" ? cardAutoQuote() : autoQuote();
+    const updated = structuredClone(data);
+    updated.checksum = "synthetic-updated-quote";
+    const h = bridge(42, [updated], data, { payment: { status: "pending" } });
+    await h.run(payload);
+    assert.deepEqual(h.requests.map(({ init }) => init.method), ["GET", "POST", "POST", "PUT", "POST"]);
+    assert.equal(JSON.parse(h.requests.at(-1).init.body).checksum, "synthetic-updated-quote");
+  }
 });
 
 test("wallet and unavailable PayPal never select a substitute payment method", async () => {
@@ -333,6 +457,7 @@ function background(options = {}) {
     storage: {
       local: {
         async get(key) {
+          if (key === "vintrackCheckoutLinks" && options.historyGate) await options.historyGate;
           return { [key]: structuredClone(storage[key]) };
         },
         async set(values) {
@@ -364,6 +489,7 @@ function background(options = {}) {
         if (message.type === "VINTRACK_TAB_PING") return { ok: true };
         if (message.type === "VINTRACK_GET_BROWSER_ACCOUNT")
           return { ok: true, accountId: options.accountId || 42 };
+        if (message.type === "VINTRACK_NAVIGATE_CHECKOUT") return options.navigate ? options.navigate(message.payload) : { ok: false };
         if (options.run) return options.run(message.payload);
         if (options.accountId && options.accountId !== 42)
           return { ok: false, code: "checkout_account_mismatch" };
@@ -411,6 +537,53 @@ test("concurrent clicks and repeated clicks reuse a single browser checkout", as
     h.messages.filter((msg) => msg.type === "VINTRACK_RUN_BROWSER_BUY").length,
     1,
   );
+});
+
+test("optional history cannot delay navigation but the replay checkpoint is already saved", async () => {
+  let releaseHistory;
+  const h = background({ historyGate: new Promise(resolve => { releaseHistory = resolve; }) });
+  let finished = false;
+  const checkout = h.run().then(result => { finished = true; return result; });
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.storage.vintrackCheckoutAttempts[0].checkoutUrl, checkoutUrl);
+    assert.equal(h.mutations.at(-1).changes.url, checkoutUrl);
+    assert.equal(finished, true);
+    assert.equal((await checkout).ok, true);
+  } finally {
+    releaseHistory();
+    await checkout;
+  }
+});
+
+test("normal native navigation focuses the prepared checkout without a full page reload or replay", async () => {
+  const h = background({ navigate: () => ({ ok: true, clientNavigation: true }) });
+  const result = await h.run();
+  assert.equal(result.timings.clientNavigation, 1);
+  assert.deepEqual(structuredClone(h.mutations.at(-1).changes), { active: true });
+  assert.equal(h.storage.vintrackCheckoutAttempts[0].checkoutUrl, checkoutUrl);
+  await h.run();
+  assert.equal(h.messages.filter(m => m.type === "VINTRACK_RUN_BROWSER_BUY").length, 1);
+  assert.equal(h.messages.filter(m => m.type === "VINTRACK_GET_BROWSER_ACCOUNT").length, 1);
+});
+
+test("failed native navigation falls back once to the same prepared URL without replay", async () => {
+  for (const navigate of [() => ({ ok: false }), () => { throw new Error("synthetic navigation failure"); }]) {
+    const h = background({ navigate });
+    const result = await h.run();
+    assert.equal(result.ok, true);
+    assert.equal(result.timings.clientNavigation, 0);
+    assert.equal(h.mutations.at(-1).changes.url, checkoutUrl);
+    assert.equal(h.messages.filter(m => m.type === "VINTRACK_RUN_BROWSER_BUY").length, 1);
+  }
+});
+
+test("automatic payment and previously started payments always use the full native handoff", async () => {
+  const h = background({ navigate: () => { throw new Error("auto-checkout must not use client routing"); } });
+  await h.run(autoTarget);
+  await h.run(target);
+  assert.equal(h.messages.filter(m => m.type === "VINTRACK_NAVIGATE_CHECKOUT").length, 0);
+  assert.equal(h.mutations.at(-1).changes.url, checkoutUrl);
 });
 
 test("disconnected complete tabs fail immediately without a checkout checkpoint or replay", async () => {
