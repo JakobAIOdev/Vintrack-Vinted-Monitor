@@ -41,7 +41,13 @@ const primaryProviders: Provider[] = oidcConfigured
               clientSecret: oidcClientSecret!,
           },
       ]
-    : [Discord];
+    : [
+          Discord({
+              // Discord includes `iss` in OAuth callbacks; Auth.js otherwise
+              // validates it against its fallback issuer (https://authjs.dev).
+              issuer: "https://discord.com",
+          }),
+      ];
 const providers: Provider[] = [
     ...primaryProviders,
     ...(githubAuthConfigured
