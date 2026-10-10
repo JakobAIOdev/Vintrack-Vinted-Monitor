@@ -18,18 +18,89 @@ import (
 )
 
 func TestCheckoutButtonAppearsInBothItemStylesOnlyWithHandoffURL(t *testing.T) {
+	t.Setenv("DASHBOARD_URL", "https://dashboard.example.test")
 	item := model.Item{URL: "https://www.vinted.de/items/123", CheckoutStartURL: "https://dashboard.example.test/checkout/17/123"}
-	for _, build := range []func(model.Item) map[string]interface{}{compactItemKeyboard, itemKeyboard} {
-		encoded, _ := json.Marshal(build(item))
-		if !strings.Contains(string(encoded), `"text":"Open checkout"`) || !strings.Contains(string(encoded), item.CheckoutStartURL) {
-			t.Fatalf("missing checkout button: %s", encoded)
-		}
-		item.CheckoutStartURL = "javascript:alert(1)"
-		encoded, _ = json.Marshal(build(item))
-		if strings.Contains(string(encoded), "Open checkout") {
-			t.Fatalf("unsafe checkout link accepted: %s", encoded)
-		}
-		item.CheckoutStartURL = "https://dashboard.example.test/checkout/17/123"
+	for name, build := range map[string]func(model.Item) map[string]interface{}{"compact": compactItemKeyboard, "rich": itemKeyboard} {
+		t.Run(name, func(t *testing.T) {
+			rows := build(item)["inline_keyboard"].([][]map[string]string)
+			if len(rows) != 2 || len(rows[0]) != 1 || rows[0][0]["text"] != "⚡ Oneclick checkout" || rows[0][0]["url"] != item.CheckoutStartURL {
+				t.Fatalf("checkout button must have its own first row: %#v", rows)
+			}
+			if rows[1][0]["text"] != "View on Vinted" || rows[1][0]["url"] != item.URL {
+				t.Fatalf("missing Vinted button below checkout: %#v", rows)
+			}
+			for _, checkoutURL := range []string{"", "javascript:alert(1)", "not-a-url", "http://localhost:3000/checkout/17/123"} {
+				withoutCheckout := item
+				withoutCheckout.CheckoutStartURL = checkoutURL
+				rows := build(withoutCheckout)["inline_keyboard"].([][]map[string]string)
+				if len(rows) != 1 || rows[0][0]["text"] != "View on Vinted" {
+					t.Fatalf("invalid checkout URL %q changed the regular buttons: %#v", checkoutURL, rows)
+				}
+				for _, button := range rows[0] {
+					if strings.Contains(button["text"], "checkout") {
+						t.Fatalf("invalid checkout URL %q got a button: %#v", checkoutURL, button)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSendItemAttemptIncludesOneclickButtonAcrossPayloads(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		style       model.NotificationMessageStyle
+		imageURL    string
+		rejectPhoto bool
+	}{
+		{name: "compact", style: model.NotificationMessageStyleCompact, imageURL: "https://example.test/image.jpg"},
+		{name: "rich photo", style: model.NotificationMessageStyleRich, imageURL: "https://example.test/image.jpg"},
+		{name: "rich text", style: model.NotificationMessageStyleRich},
+		{name: "rich photo fallback", style: model.NotificationMessageStyleRich, imageURL: "https://example.test/image.jpg", rejectPhoto: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			item := model.Item{
+				ID: 123, MonitorID: 17, Title: "Item", Price: "12 EUR",
+				URL: "https://www.vinted.de/items/123", ImageURL: test.imageURL,
+				CheckoutStartURL: "https://dashboard.example.test/checkout/17/123",
+			}
+			var methods []string
+			withTelegramServer(t, func(w http.ResponseWriter, r *http.Request) {
+				methods = append(methods, r.URL.Path)
+				var payload struct {
+					ReplyMarkup struct {
+						Rows [][]map[string]string `json:"inline_keyboard"`
+					} `json:"reply_markup"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Errorf("decode payload: %v", err)
+					return
+				}
+				rows := payload.ReplyMarkup.Rows
+				if len(rows) != 2 || len(rows[0]) != 1 || rows[0][0]["text"] != "⚡ Oneclick checkout" || rows[0][0]["url"] != item.CheckoutStartURL {
+					t.Errorf("missing prominent checkout button: %#v", rows)
+				}
+				if test.rejectPhoto && r.URL.Path == "/bottest-token/sendPhoto" {
+					http.Error(w, "bad photo", http.StatusBadRequest)
+					return
+				}
+				_, _ = w.Write([]byte(`{"ok":true}`))
+			})
+			result := SendItemAttempt(context.Background(), "-1001", item, "monitor", "server", test.style)
+			if !result.Success {
+				t.Fatalf("send failed: %#v", result)
+			}
+			expected := "/bottest-token/sendMessage"
+			if test.imageURL != "" && test.style == model.NotificationMessageStyleRich {
+				expected = "/bottest-token/sendPhoto"
+			}
+			if test.rejectPhoto {
+				expected += ",/bottest-token/sendMessage"
+			}
+			if strings.Join(methods, ",") != expected {
+				t.Fatalf("unexpected send methods: %v, want %s", methods, expected)
+			}
+		})
 	}
 }
 
