@@ -11,6 +11,12 @@ Turning it off keeps delivery and payment choices but removes the saved
 explicitly enable it again, accept its warnings and save a spending limit.
 The switch saves immediately; the separate Save button saves checkout choices.
 
+Telegram item alerts show **⚡ Oneclick checkout** in a separate first button
+row in both compact and rich styles, including photo-to-text fallback. It opens
+the same `/checkout/{monitorId}/{itemId}` handoff as Discord. The button requires
+an enabled checkout module, a linked Vinted account, allowed feature policies
+and a public dashboard URL. The handoff checks access again when opened.
+
 When off:
 
 - Dashboard cart buttons are disabled.
