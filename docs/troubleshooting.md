@@ -95,6 +95,10 @@ GitHub callback:
 https://vintrack.example.com/api/auth/callback/github
 ```
 
+The default local configuration uses port 3000 for `AUTH_URL`; Caddy listens
+on port 80 instead. Match your callback to the URL you actually use. `make dev`
+does not run Caddy or require OAuth credentials.
+
 When OIDC is partially configured, remove the incomplete values or set issuer,
 client ID, and client secret together.
 
@@ -119,6 +123,25 @@ docker compose logs --since=10m caddy
 
 For local development use `VINTRACK_SITE_ADDRESS=http://localhost`, or connect
 directly to `http://localhost:3000`.
+
+## My first account has no Admin menu
+
+Production signups start with the `free` role, including the first user. Follow
+the [first-admin setup](getting-started.md#5-grant-your-first-account-admin-access)
+to promote your own account, then reload the dashboard. The automatic admin
+from `make dev` belongs to a separate development database.
+
+## The extension works on the demo but not my own domain
+
+The public downloads authorize only `https://vintrack.jakobaio.dev`. Follow the
+[self-hosted extension guide](browser-extension.md#self-hosted-domain) to update
+both manifest permissions and the two JavaScript origin allowlists. Changing
+`AUTH_URL` or `BROWSER_EXTENSION_FIREFOX_URL` alone is insufficient.
+
+For localhost, Chrome needs `dist/chrome-development`; Firefox needs the
+separate development copy described in that guide. Use port 3000 and reload
+already-open pages after loading the extension. Temporary Firefox add-ons
+must be loaded again after a browser restart.
 
 ## Worker reports no usable proxies
 

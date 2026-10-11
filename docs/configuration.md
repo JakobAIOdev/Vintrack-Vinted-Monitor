@@ -39,7 +39,7 @@ For production:
 
 ```env
 AUTH_URL=https://vintrack.example.com
-SEO_INDEXING_ENABLED=true
+SEO_INDEXING_ENABLED=false
 VINTRACK_SITE_ADDRESS=vintrack.example.com
 ```
 
@@ -53,8 +53,10 @@ only for a deliberately public deployment with a valid `AUTH_URL`.
 
 ## Authentication
 
-Choose Discord or OIDC as the primary provider. GitHub can be enabled alongside
-either one as an equal login provider and reward identity.
+Choose Discord or OIDC as the login provider. GitHub can be connected afterwards
+from **Account** for rewards; it is not a separate login method. New users start
+with the `free` role. Follow the [first-admin setup](getting-started.md#5-grant-your-first-account-admin-access)
+to administer a new instance.
 
 ### Discord OAuth
 
@@ -89,7 +91,7 @@ When issuer, client ID, and client secret are all present, OIDC replaces Discord
 Existing Discord identities are not automatically linked to OIDC identities.
 Verify administrative access before switching an established installation.
 
-### GitHub login and rewards
+### GitHub linking and rewards
 
 ```env
 AUTH_GITHUB_ID=your-oauth-app-client-id
@@ -100,9 +102,9 @@ GITHUB_REWARDS_MAINTAINER_TOKEN=maintainer-token
 GITHUB_REWARDS_SYNC_SECRET=random-internal-bearer-secret
 ```
 
-GitHub is available only when both OAuth values are set. Its callback is
-`https://vintrack.example.com/api/auth/callback/github`. Existing members must
-link from **Account** after using their original provider. See [GitHub Login and
+GitHub linking is available only when both OAuth values are set. Its callback is
+`https://vintrack.example.com/api/auth/callback/github`. Members must
+link from **Account** after signing in with Discord or OIDC. See [GitHub Login and
 Rewards](github-rewards.md) for OAuth, webhook, backfill, privacy, admin policy,
 and safe rollout instructions.
 
@@ -126,8 +128,8 @@ persistent data.
 ## Browser extension
 
 ```env
-BROWSER_EXTENSION_LATEST_VERSION=0.2.1
-BROWSER_EXTENSION_MIN_VERSION=0.2
+BROWSER_EXTENSION_LATEST_VERSION=0.3.3
+BROWSER_EXTENSION_MIN_VERSION=0.2.1
 BROWSER_EXTENSION_FIREFOX_URL=https://addons.mozilla.org/firefox/addon/vintrack-browser-sync/
 ```
 
@@ -139,6 +141,10 @@ the public AMO listing and can be replaced after the first AMO approval if the
 final listing URL differs. GitHub releases attach the Chrome ZIP. During the
 same release, Firefox is published only when the manifest version has no
 corresponding marker tag such as `extension-v0.1.6`.
+
+For your own domain, follow the [self-hosted extension setup](browser-extension.md#self-hosted-domain).
+These variables control compatibility notices and the Firefox download link;
+they do not authorize a custom hostname in the public extension.
 
 ## Telegram
 
@@ -154,10 +160,43 @@ For an enabled bot:
 
 1. Create a bot with [@BotFather](https://t.me/BotFather).
 2. Set the bot token, public username without `@`, and a random webhook secret.
-3. Ensure `APP_PUBLIC_URL` is the canonical public HTTPS origin.
-4. Register the webhook without exposing the command in shared shell history or
-   logs.
-5. Verify it with Telegram's `getWebhookInfo` endpoint.
+3. Ensure `AUTH_URL` is the canonical public HTTPS origin.
+4. Recreate the services so they load the new settings:
+
+   ```bash
+   docker compose up -d --force-recreate control-center worker
+   ```
+
+5. Register and verify the webhook from the repository root. This reads secrets
+   inside the container, keeping the bot token out of command arguments and
+   shell history:
+
+   ```bash
+   docker compose exec -T control-center node --input-type=module <<'NODE'
+   const { TELEGRAM_BOT_TOKEN: token, TELEGRAM_WEBHOOK_SECRET: secret, AUTH_URL: origin } = process.env;
+   if (!token || !secret || !origin?.startsWith("https://")) {
+     throw new Error("Set the Telegram token, webhook secret and HTTPS AUTH_URL first.");
+   }
+   const target = new URL("/api/telegram/webhook", origin).href;
+   async function call(method, body) {
+     const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+       method: "POST", body,
+     });
+     const data = await response.json();
+     if (!response.ok || !data.ok) throw new Error(`Telegram ${method} failed; check the bot settings.`);
+     return data.result;
+   }
+   await call("setWebhook", new URLSearchParams({ url: target, secret_token: secret }));
+   const info = await call("getWebhookInfo");
+   if (info.url !== target) throw new Error("Telegram webhook URL does not match AUTH_URL.");
+   console.log("Webhook registered:", info.url);
+   console.log("Pending updates:", info.pending_update_count);
+   NODE
+   ```
+
+   Generate `TELEGRAM_WEBHOOK_SECRET` with `openssl rand -hex 32`. This uses
+   Telegram's documented [webhook API](https://core.telegram.org/bots/api#setwebhook).
+   A bot can have only one webhook; use a separate bot for separate instances.
 
 The webhook target is:
 
@@ -190,6 +229,9 @@ socks5://user:pass@host:port
 host:port:user:pass
 ```
 
+The **Admin → System** server-proxy setting takes precedence over this file
+when present, including an empty setting. The file is the startup fallback;
+restart the worker after file changes. Personal groups are configured separately.
 The file is intentionally ignored by Git. Do not commit proxy credentials.
 Vinted UK monitoring requires IPv4 proxies.
 

@@ -31,7 +31,7 @@
 <p align="center">
   <a href="https://vintrack.jakobaio.dev"><strong>Live demo</strong></a>
   ·
-  <a href="#self-host-in-five-minutes"><strong>Self-host</strong></a>
+  <a href="#self-host-step-by-step"><strong>Self-host</strong></a>
   ·
   <a href="docs/getting-started.md"><strong>Documentation</strong></a>
   ·
@@ -85,10 +85,11 @@ deliver matching items wherever you can act on them fastest.
 | I want to… | Go here |
 | --- | --- |
 | See Vintrack without installing anything | [Try the live demo](#try-the-live-demo) |
-| Run my own instance | [Self-host in five minutes](#self-host-in-five-minutes) |
+| Run my own instance | [Self-host step by step](#self-host-step-by-step) |
+| Connect a Vinted account on my own domain | [Browser extension setup](docs/browser-extension.md#self-hosted-domain) |
 | Understand the moving parts | [Architecture](#architecture) |
 | Configure auth, proxies, alerts, and tuning | [Configuration guide](docs/configuration.md) |
-| Configure GitHub login and 3/5/15 rewards | [GitHub rewards guide](docs/github-rewards.md) |
+| Link GitHub and configure 3/5/15 rewards | [GitHub rewards guide](docs/github-rewards.md) |
 | Develop or contribute | [Development guide](docs/development.md) · [Contributing](CONTRIBUTING.md) |
 | Fix a broken deployment | [Troubleshooting guide](docs/troubleshooting.md) |
 
@@ -96,7 +97,7 @@ deliver matching items wherever you can act on them fastest.
 <summary><strong>Full README contents</strong></summary>
 
 - [Try the live demo](#try-the-live-demo)
-- [Self-host in five minutes](#self-host-in-five-minutes)
+- [Self-host step by step](#self-host-step-by-step)
 - [Feature overview](#feature-overview)
 - [Product tour](#product-tour)
 - [Architecture](#architecture)
@@ -112,7 +113,7 @@ deliver matching items wherever you can act on them fastest.
 ## Try the live demo
 
 Open **[vintrack.jakobaio.dev](https://vintrack.jakobaio.dev)** and sign in with
-Discord or GitHub. Existing Discord members link GitHub from **Account**. New
+Discord. Members link GitHub for rewards from **Account**. New
 users start with the Free role and can create monitors using their
 own proxies or a shared starter pool when a region is marked ready.
 
@@ -158,17 +159,19 @@ Extension** to connect a Vinted account you control.
 
 [Read the five-minute demo walkthrough →](docs/getting-started.md#try-the-live-demo)
 
-## Self-host in five minutes
+<a id="self-host-in-five-minutes"></a>
+
+## Self-host step by step
 
 ### Requirements
 
 - Docker Engine with Docker Compose v2
 - Git
 - `make` and OpenSSL for the guided initializer
-- a Discord OAuth application **or** an OIDC provider
-- a public domain with ports 80/443 for production HTTPS
+- for real monitoring: a Discord OAuth application **or** an OIDC provider
+- for a public deployment: a domain with ports 80/443 for HTTPS
 
-### Start locally
+### Try locally with mock data
 
 ```bash
 git clone https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor.git vintrack
@@ -193,64 +196,26 @@ serial cached builds, and resource-capped containers. Run `make up` only when
 you intentionally need the full live/production-like worker stack and normal
 authentication.
 
-Open [http://localhost:3000](http://localhost:3000), which matches the default
-`AUTH_URL`. Caddy also exposes [http://localhost](http://localhost); if you use
-that as the canonical local URL, change `AUTH_URL` and the identity-provider callback to the same origin.
+Open [http://localhost:3000](http://localhost:3000). This workflow runs without
+Caddy and uses mock listings; it does not test real Vinted access. Stop it with
+`make dev-down`. Keep this automatic-admin development mode on your local machine.
 
-For Discord OAuth, register:
+### Deploy your own instance
 
-```text
-http://localhost:3000/api/auth/callback/discord
-```
+Follow [Getting Started → Self-host Vintrack](docs/getting-started.md#self-host-vintrack)
+in order. It covers public DNS and HTTPS, OAuth/OIDC, starting containers,
+granting your first account the admin role, adding proxies, and creating your
+first live monitor. The guide also includes [backups and updates](docs/getting-started.md#updating-production).
 
-For OIDC, use:
+The browser extension needs a separate setup for your own domain: the public
+Chrome ZIP and Firefox add-on only connect to `vintrack.jakobaio.dev`.
+Use the [self-hosted extension guide](docs/browser-extension.md#self-hosted-domain)
+to create and install a build for your hostname. Account linking is optional;
+catalog monitors do not require the extension or a linked Vinted account.
 
-```text
-http://localhost:3000/api/auth/callback/oidc
-```
-
-A production deployment must use the same public hostname in `AUTH_URL`, `VINTRACK_SITE_ADDRESS`, and the identity-provider callback.
 Keep `AUTH_SECRET` and `VINTED_SESSION_ENCRYPTION_KEY` stable after the instance
-contains users or linked sessions.
-
-For a public deployment, read the complete
-[Getting Started](docs/getting-started.md#self-host-vintrack) and
-[Configuration](docs/configuration.md) guides before exposing the service.
-
-<details>
-<summary><strong>Production deployment and update checklist</strong></summary>
-
-Before the first deployment:
-
-- point the public hostname to the server;
-- expose ports 80 and 443 to Caddy;
-- use public HTTPS URLs for auth and notification links;
-- configure the production OAuth/OIDC callback;
-- protect and back up `.env`;
-- configure reliable proxy capacity and conservative monitor intervals;
-- validate with `docker compose config --quiet`.
-
-Start from published images:
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-For updates, back up PostgreSQL and `.env`, then apply committed migrations
-before recreating the application services:
-
-```bash
-git pull --ff-only
-docker compose pull
-docker compose up --force-recreate control-center-migrate
-docker compose up -d --force-recreate control-center worker vinted-service caddy
-```
-
-Vintrack uses `prisma migrate deploy`. Do not use
-`prisma db push --accept-data-loss` against production.
-
-</details>
+contains users or linked sessions. Vintrack uses `prisma migrate deploy`; do not
+use `prisma db push --accept-data-loss` against production.
 
 ## Feature overview
 
@@ -507,12 +472,14 @@ apps/
 ├── control-center/                 Next.js dashboard, auth, API, and Prisma
 ├── worker/                         Catalog monitoring and proxy maintenance
 ├── vinted-service/                 Linked-account actions
-├── id-scanner/                     Standalone experimental utility
 └── vintrack-browser-sync-extension/
 docs/                               Setup, operations, API, and design notes
 requests/                           Example request payloads
 scripts/                            Initialization and validation helpers
 ```
+
+The optional pre-index scanner runs from the worker image; it is not a separate
+maintained app directory.
 
 ## Documentation
 
@@ -520,6 +487,7 @@ scripts/                            Initialization and validation helpers
 | --- | --- |
 | [Getting Started](docs/getting-started.md) | Live demo, local setup, and production deployment |
 | [Configuration](docs/configuration.md) | Authentication, URLs, notifications, proxies, and tuning |
+| [Browser extension](docs/browser-extension.md) | Demo, localhost, and self-hosted Chrome/Firefox installation |
 | [Architecture](docs/architecture.md) | Components, data flow, and security boundaries |
 | [Development](docs/development.md) | Local workflows, mock data, tests, and project conventions |
 | [Troubleshooting](docs/troubleshooting.md) | Logs, startup failures, auth, proxy, and migration issues |
@@ -547,7 +515,7 @@ Bug reports, focused features, documentation, and tests are welcome. Please read
 - [GitHub Issues](https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/issues)
 - [Vintrack Discord](https://discord.gg/WbEpEjaWjP)
 - [Security policy](SECURITY.md)
-- [Changelog](CHANGELOG.md)
+- [Release notes](https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor/releases)
 
 ## Acknowledgements
 
