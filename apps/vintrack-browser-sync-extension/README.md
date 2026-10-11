@@ -3,6 +3,12 @@
 Browser extension for automatic Vintrack/Vinted session sync. Chrome and
 Firefox use the same source and must always carry the same manifest version.
 
+**Installing for the demo, localhost, or your own domain?** Start with the
+[step-by-step installation guide](../../docs/browser-extension.md).
+The public Chrome ZIP and Firefox add-on only authorize
+`https://vintrack.jakobaio.dev`. Self-hosted domains need a custom build with
+matching manifest permissions and JavaScript origin allowlists.
+
 The popup also provides a Vintrack companion with linked-account status, recent
 monitor finds, and Price Watch controls. Inline Vinted actions are enabled by
 default. New installations show native Vintrack buttons on catalog and item
@@ -291,7 +297,7 @@ select `apps/vintrack-browser-sync-extension/dist/chrome-development` in step 5.
 Public users install the signed extension from the AMO listing. This works in
 Firefox Stable and Developer Edition and remains installed after a restart.
 
-For local development only:
+For testing the official-domain build:
 
 1. Run `apps/vintrack-browser-sync-extension/scripts/build-packages.sh`.
 2. Open `about:debugging#/runtime/this-firefox`.
@@ -299,6 +305,8 @@ For local development only:
 4. Select `apps/vintrack-browser-sync-extension/dist/firefox/manifest.json`.
 
 Temporary extensions are removed by Firefox on restart by design.
+This `dist/firefox` build has no localhost permissions. For localhost or your
+own domain, use the [local or self-hosted build instructions](../../docs/browser-extension.md).
 
 ## Publish to AMO
 
