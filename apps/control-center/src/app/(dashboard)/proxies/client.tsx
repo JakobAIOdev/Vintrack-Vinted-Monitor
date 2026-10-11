@@ -206,14 +206,14 @@ export function ProxiesClient({
             formData.set("name", editName);
             formData.set("proxies", editProxies);
             formData.set("bandwidth_limit_gb", editBandwidthLimitGb);
-            await updateProxyGroup(id, formData);
+            const updated = await updateProxyGroup(id, formData);
             setGroups((prev) =>
                 prev.map((g) =>
                     g.id === id
                         ? {
                               ...g,
                               name: editName,
-                              proxies: editProxies,
+                              proxies: updated.proxies,
                               bandwidthLimitBytes:
                                   editBandwidthLimitGb.trim().length > 0
                                       ? BigInt(

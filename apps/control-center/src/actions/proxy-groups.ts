@@ -2,12 +2,12 @@
 
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
+import { validateProxyLine } from "@/lib/custom-proxy-validation";
 import { REGIONS } from "@/lib/regions";
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { requireFeatureAccessForUser } from "@/lib/features.server";
 
-const VALID_SCHEMES = ["http", "https", "socks4", "socks5"];
 const BYTES_PER_GB = 1024 * 1024 * 1024;
 const MAX_PROXY_CHECK_SIZE = 100;
 const PROXY_CHECK_COOLDOWN_MS = 30_000;
@@ -83,41 +83,6 @@ function serializeProxyCheck(record: ProxyCheckRecord): ProxyCheckSnapshot {
         startedAt: record.proxy_check_started_at?.toISOString() ?? null,
         completedAt: record.proxy_check_completed_at?.toISOString() ?? null,
     };
-}
-
-function validateProxyLine(line: string): string | null {
-    line = line.trim();
-    if (!line) return null;
-
-    if (/^(https?|socks[45]):\/\//.test(line)) {
-        try {
-            const u = new URL(line);
-            if (!VALID_SCHEMES.includes(u.protocol.replace(":", "")))
-                return null;
-            if (!u.hostname || !u.port) return null;
-            return line;
-        } catch {
-            return null;
-        }
-    }
-
-    const parts = line.split(":");
-
-    if (parts.length >= 4) {
-        const pass = parts[parts.length - 1];
-        const user = parts[parts.length - 2];
-        const port = parts[parts.length - 3];
-        const host = parts.slice(0, parts.length - 3).join(":");
-        if (!host || !port || !user || !pass) return null;
-        if (!/^\d{1,5}$/.test(port)) return null;
-        return `http://${user}:${pass}@${host}:${port}`;
-    }
-
-    if (parts.length === 2 && /^\d{1,5}$/.test(parts[1])) {
-        return `http://${line}`;
-    }
-
-    return null;
 }
 
 function validateProxies(text: string) {
@@ -340,6 +305,7 @@ export async function updateProxyGroup(id: number, formData: FormData) {
     });
 
     revalidatePath("/proxies");
+    return { proxies: valid.join("\n") };
 }
 
 export async function resetProxyGroupBandwidth(id: number) {
