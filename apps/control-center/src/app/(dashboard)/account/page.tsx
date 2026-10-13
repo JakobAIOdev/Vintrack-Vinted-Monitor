@@ -8,7 +8,7 @@ import { getMemberGithubRewardStatus } from "@/lib/github-rewards.server";
 import { GithubRewardStatusCard } from "@/components/github-reward-status-card";
 import { CircleUserRound, Github, ShoppingBag } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CheckoutFeatureShortcut } from "@/components/announcements/checkout-update-notice";
+import { CheckoutFeatureShortcut } from "@/components/account/checkout-feature-shortcut";
 import { checkoutFeatureDiscoverable } from "@/lib/account-updates";
 import { getFeatureAccessForUser } from "@/lib/features.server";
 import { db } from "@/lib/db";

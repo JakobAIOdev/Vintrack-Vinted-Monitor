@@ -126,36 +126,26 @@ compact and the currency remains beside it even on wide Account pages.
 ## Member discovery
 
 Account update version 2 reactivates the existing **New** badge for members
-who saw the original account update. Dashboard, monitor, feed and guide pages
-show a compact, dismissible text link with a neutral **New** badge to
-`/account?connection=vinted#checkout-settings`. It also appears when the member
-has left the checkout module off, while respecting administrator role/feature
-restrictions. Maintenance takes precedence and hides this promotion.
+who saw the original account update. Discovery uses the existing Account badge
+in the sidebar and a small shortcut on Account. Both respect administrator
+role/feature restrictions and remain available when the checkout module is off.
 
 Account includes a small feature shortcut under its header description. Linked users
 can jump straight to the anchored checkout card; unlinked users are directed
 to their Vinted connection. Visiting Account acknowledges the update through
 the existing authenticated per-member version field. This removes the badge
-and dashboard notice across browsers without enabling checkout, accepting
-payment warnings or altering payment preferences. Dismissing the dashboard hint
-uses its existing local-storage revision key, so previous dismissals stay valid.
-The checkout promotion has no separate colored panel or banner.
-
-For local visual testing, open `/dashboard?previewCheckoutUpdate=1` on
-`localhost`, `127.0.0.1` or `[::1]`. This previews the hint even after an Account
-visit or previous dismissal. It still respects feature policies and maintenance.
-Closing the preview does not change stored dismissal or acknowledgement status.
-On other hosts the query parameter has no effect.
+across browsers without enabling checkout, accepting payment warnings or altering
+payment preferences. There is no checkout announcement on Dashboard, monitors,
+feed or guide, and no URL preview for one.
 
 Validation: 228 dashboard unit tests, lint and production build passed. Isolated
-desktop/mobile checks rendered the real sidebar, inline hint, header shortcut and
+desktop/mobile checks rendered the real sidebar, header shortcut and
 checkout card with synthetic data. They verified compact field widths,
-adjacent currency, direct-link anchors, policy and live-maintenance suppression,
-dismissal, and per-member acknowledgement. Currency changes still clear the
+adjacent currency, direct-link anchors, policy restrictions,
+and per-member acknowledgement. Currency changes still clear the
 amount and acceptance. No real member records were written during these checks.
 
 ![Compact limit and Account header shortcut](screenshots/checkout-compact-limit.png)
-![Compact checkout hint on mobile](screenshots/checkout-member-update-mobile.png)
 
 Isolated desktop/mobile checks passed for compact width, bounded results,
 search/keyboard selection, invalid-search isolation and exact JPY/KWD limits.

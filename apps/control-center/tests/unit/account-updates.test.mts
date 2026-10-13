@@ -5,36 +5,16 @@ import vm from "node:vm";
 import ts from "typescript";
 import {
     ACCOUNT_UPDATES_VERSION,
-    CHECKOUT_UPDATES_VERSION,
     checkoutFeatureDiscoverable,
-    shouldShowCheckoutUpdate,
 } from "../../src/lib/account-updates.ts";
 
-test("the checkout update reaches existing members with the module off, while respecting feature policies", () => {
+test("checkout discovery allows the module to be off while respecting feature policies", () => {
     const feature = "checkout_links" as const;
     for (const access of [
         { allowed: true as const, feature },
         { allowed: false as const, feature, reason: "user_disabled" as const },
     ]) {
         assert.equal(checkoutFeatureDiscoverable(access), true);
-        for (const route of ["/dashboard", "/monitors/17", "/feed", "/guide"]) {
-            assert.equal(shouldShowCheckoutUpdate(1, access, route), true);
-            assert.equal(
-                shouldShowCheckoutUpdate(
-                    CHECKOUT_UPDATES_VERSION,
-                    access,
-                    route,
-                ),
-                false,
-            );
-        }
-        for (const route of [
-            "/account",
-            "/admin",
-            "/checkout/17/123",
-            "/dashboard-elsewhere",
-        ])
-            assert.equal(shouldShowCheckoutUpdate(1, access, route), false);
     }
     for (const reason of [
         "disabled",
@@ -43,7 +23,6 @@ test("the checkout update reaches existing members with the module off, while re
     ] as const) {
         const access = { allowed: false as const, feature, reason };
         assert.equal(checkoutFeatureDiscoverable(access), false);
-        assert.equal(shouldShowCheckoutUpdate(0, access, "/dashboard"), false);
     }
 });
 
