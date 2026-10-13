@@ -26,12 +26,12 @@ func (p CheckoutPreferences) Valid() bool {
 	if p.Payment == "card" {
 		warningVersion = 2
 	}
-	if p.AutoCheckout != nil && ((p.Payment != "paypal" && p.Payment != "card") || p.AutoCheckout.WarningVersion != warningVersion || p.AutoCheckout.Currency != "EUR" || p.AutoCheckout.MaxTotalMinor <= 0 || p.AutoCheckout.MaxTotalMinor > 1_000_000) {
+	if p.AutoCheckout != nil && ((p.Payment != "paypal" && p.Payment != "card") || p.AutoCheckout.WarningVersion != warningVersion || !validCheckoutLimit(p.AutoCheckout.Currency, p.AutoCheckout.MaxTotalMinor)) {
 		return false
 	}
 	switch p.Payment {
 	case "", "wallet", "vinted", "paypal", "card", "google_pay", "klarna", "tink", "bancontact", "ideal", "blik", "przelewy24":
-		return p.Shipping == "" || p.Shipping == "home" || p.Shipping == "vinted"
+		return p.Shipping == "" || p.Shipping == "home" || p.Shipping == "pickup" || p.Shipping == "vinted"
 	default:
 		return false
 	}
@@ -51,7 +51,7 @@ func AutoCheckoutAllowed(domain, payment string) bool {
 	return checkoutDomainPattern.MatchString(domain) && (payment == "card" || (payment == "paypal" && (domain == "www.vinted.de" || domain == "www.vinted.at" || domain == "www.vinted.be")))
 }
 
-func checkoutComponents(p CheckoutPreferences, payment map[string]interface{}) map[string]interface{} {
+func checkoutComponents(p CheckoutPreferences, payment map[string]interface{}, point *checkoutPickupPoint) map[string]interface{} {
 	components := map[string]interface{}{
 		"additional_service":      map[string]interface{}{},
 		"payment_method":          map[string]interface{}{},
@@ -64,6 +64,12 @@ func checkoutComponents(p CheckoutPreferences, payment map[string]interface{}) m
 	if p.Shipping == "home" {
 		components["shipping_pickup_options"] = map[string]interface{}{"pickup_type": 1}
 	}
+	if p.Shipping == "pickup" {
+		components["shipping_pickup_options"] = map[string]interface{}{"pickup_type": 2}
+		if point != nil {
+			components["shipping_pickup_details"] = map[string]interface{}{"rate_uuid": point.RateUUID, "point_code": point.Code, "point_uuid": point.UUID}
+		}
+	}
 	if payment != nil {
 		components["payment_method"] = payment
 	}
@@ -73,6 +79,9 @@ func checkoutComponents(p CheckoutPreferences, payment map[string]interface{}) m
 type checkoutSelection struct {
 	PaymentSelected     bool
 	HomeSelected        bool
+	PickupSelected      bool
+	PickupPoint         *checkoutPickupPoint
+	ContactVerified     bool
 	AddressSelected     bool
 	AddressVerified     bool
 	RateSelected        bool
@@ -81,9 +90,42 @@ type checkoutSelection struct {
 	SelectedPreference  string
 	SelectedNative      string
 	AutoTotalMinor      int64
+	AutoCurrency        string
 	AutoAmountsVerified bool
 	CardVerified        bool
 	CardSignalsRequired bool
+}
+
+// Only use the point Vinted supplies for this checkout, never the first result
+// of a nearby-points search. Both native point and carrier must share a rate.
+type checkoutPickupPoint struct {
+	UUID, Code, RateUUID string
+}
+
+var checkoutShippingReference = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$`)
+
+func readCheckoutPickupPoint(details map[string]interface{}) *checkoutPickupPoint {
+	point := checkoutMap(details, "shipping_point")
+	uuid, _ := point["uuid"].(string)
+	code, _ := point["code"].(string)
+	rate, _ := point["rate_uuid"].(string)
+	if !checkoutShippingReference.MatchString(uuid) || !checkoutShippingReference.MatchString(code) || !checkoutShippingReference.MatchString(rate) ||
+		firstStringPath(details, []string{"shipping_option", "rate_uuid"}) != rate {
+		return nil
+	}
+	return &checkoutPickupPoint{UUID: uuid, Code: code, RateUUID: rate}
+}
+
+func (s checkoutSelection) matchesDelivery(p CheckoutPreferences, point *checkoutPickupPoint) bool {
+	if p.Shipping == "pickup" {
+		return s.matchesPickupPoint(point) &&
+			s.PaymentSelected && s.AddressVerified && s.ContactVerified && s.PaymentsAvailable
+	}
+	return s.Ready()
+}
+
+func (s checkoutSelection) matchesPickupPoint(point *checkoutPickupPoint) bool {
+	return s.PickupSelected && point != nil && s.PickupPoint != nil && *s.PickupPoint == *point
 }
 
 var checkoutMethodCode = regexp.MustCompile(`^[a-zA-Z0-9_]{1,64}$`)
@@ -168,13 +210,19 @@ func readCheckoutSelection(raw map[string]interface{}) checkoutSelection {
 		addressOK = false
 	}
 	home, homeOK := checkoutMap(components, "shipping_pickup_options")["selected_pickup_option"].(float64)
+	details := checkoutMap(components, "shipping_pickup_details", "pickup_details")
+	point := readCheckoutPickupPoint(details)
+	contact := checkoutMap(components, "shipping_contact")
 	selection := checkoutSelection{
 		Methods:            make(map[string]map[string]interface{}),
 		SelectedPreference: checkoutProvider(checkoutMap(payment, "selected_payment_method", "pay_in_method")),
 		PaymentSelected:    checkoutMap(payment, "selected_payment_method") != nil,
 		HomeSelected:       homeOK && home == 1,
+		PickupSelected:     homeOK && home == 2 && point != nil && firstStringPath(details, []string{"selected_rate_uuid"}) == point.RateUUID,
+		PickupPoint:        point,
+		ContactVerified:    contact["is_receiver_phone_number_required"] != true || strings.TrimSpace(firstStringPath(contact, []string{"phone_number"})) != "",
 		AddressSelected:    checkoutMap(components, "shipping_address", "address") != nil,
-		AddressVerified:    addressOK && addressID > 0 && addressID <= 9007199254740991,
+		AddressVerified:    addressOK && addressID > 0 && addressID <= 9007199254740991 && address["is_complete"] != false,
 		RateSelected:       firstStringPath(components, []string{"shipping_pickup_details", "pickup_details", "selected_rate_uuid"}) != "",
 	}
 	selection.PaymentsAvailable, _ = checkoutMap(components, "pay_button_v2")["payments_available"].(bool)
@@ -239,14 +287,15 @@ func readCheckoutSelection(raw map[string]interface{}) checkoutSelection {
 	}
 	selection.CardVerified = selection.SelectedPreference == "card" && selection.Methods["card"] != nil && fmt.Sprint(selection.Methods["card"]["card_id"]) == fmt.Sprint(selectedCheckoutCardID(payment))
 	selection.CardSignalsRequired = checkoutMap(raw, "checkout")["adyen_protect_signals_enabled"] == true || raw["adyen_protect_signals_enabled"] == true
-	selection.AutoTotalMinor, selection.AutoAmountsVerified = autoCheckoutTotal(components)
+	selection.AutoCurrency = firstStringPath(components, []string{"pay_button_v2", "total", "price", "currency_code"})
+	selection.AutoTotalMinor, selection.AutoAmountsVerified = autoCheckoutTotal(components, selection.AutoCurrency)
 	return selection
 }
 
 func (s checkoutSelection) Ready() bool {
-	// The observed response does not prove that a pickup point was selected.
-	// Only advertise readiness for the verified home-delivery path.
-	return s.PaymentSelected && s.HomeSelected && s.AddressSelected && s.RateSelected && s.PaymentsAvailable
+	// Saved-choice and home modes retain their home-delivery readiness contract.
+	// Explicit pickup mode separately verifies the frozen point and carrier rate.
+	return s.PaymentSelected && s.HomeSelected && s.AddressSelected && s.RateSelected && s.ContactVerified && s.PaymentsAvailable
 }
 
 func (b *checkoutBuildResult) matchesReviewPreferences(p CheckoutPreferences) bool {

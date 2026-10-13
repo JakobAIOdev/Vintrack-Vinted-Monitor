@@ -5,6 +5,71 @@ import vm from "node:vm";
 import ts from "typescript";
 import * as checkout from "../../src/lib/checkout.ts";
 
+test("GBP pickup settings preserve their exact limit and require card-specific consent", async () => {
+    const preferences = {
+        shipping: "pickup",
+        payment: "card",
+        autoCheckout: {
+            warningVersion: 2,
+            currency: "GBP",
+            maxTotalMinor: 1829,
+        },
+    };
+    const h = harness("www.vinted.co.uk");
+    assert.equal(
+        ((await h.save(preferences)) as { success?: boolean }).success,
+        true,
+    );
+    const write = JSON.parse(JSON.stringify(h.writes[0]));
+    assert.deepEqual(write.data.checkout_preferences.preferences, preferences);
+    assert.equal(
+        checkout.checkoutPreferencesKey(
+            preferences as checkout.CheckoutPreferences,
+        ),
+        "pickup:card:auto:2:GBP:1829",
+    );
+    assert.notEqual(
+        checkout.checkoutPreferencesKey(
+            preferences as checkout.CheckoutPreferences,
+        ),
+        checkout.checkoutPreferencesKey({
+            ...preferences,
+            autoCheckout: { ...preferences.autoCheckout, currency: "EUR" },
+        } as checkout.CheckoutPreferences),
+    );
+    assert.ok(
+        (
+            (await h.save({
+                ...preferences,
+                autoCheckout: {
+                    ...preferences.autoCheckout,
+                    warningVersion: 1,
+                },
+            })) as { error?: string }
+        ).error,
+    );
+    assert.ok(
+        (
+            (await h.save({
+                ...preferences,
+                autoCheckout: { ...preferences.autoCheckout, currency: "ZZZ" },
+            })) as { error?: string }
+        ).error,
+    );
+    assert.ok(
+        (
+            (await h.save({ ...preferences, point_uuid: "injected" })) as {
+                error?: string;
+            }
+        ).error,
+    );
+    assert.equal(h.writes.length, 1);
+    assert.equal(
+        checkout.autoCheckoutAllowed("www.vinted.co.uk", "paypal"),
+        false,
+    );
+});
+
 function harness(
     domain: string,
     anonymous = false,
@@ -179,7 +244,7 @@ test("auto-checkout requires a supported linked region, warning version and posi
         { ...setting, warningVersion: 0 },
         { ...setting, maxTotalMinor: 0 },
         { ...setting, maxTotalMinor: 100.5 },
-        { ...setting, currency: "PLN" },
+        { ...setting, currency: "ZZZ" },
         { ...setting, bypassWallet: true },
     ])
         assert.ok(

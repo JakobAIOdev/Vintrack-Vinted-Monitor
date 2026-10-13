@@ -65,7 +65,7 @@ the server also blocks older clients and legacy endpoints. The separate
 auto-payment opt-in and price limit remain required. See
 [checkout risk warning](../../docs/checkout-risk-warning.md).
 
-Version 0.3.3 advertises checkout preparation protocol 6 to Vintrack. The
+Version 0.4 advertises checkout preparation protocol 8 to Vintrack. The
 dashboard's Open Checkout action verifies that the Vinted browser account
 matches the linked account, applies the delivery/payment preferences selected
 in Vintrack Account, and opens its checkout page. Home delivery and available
@@ -126,19 +126,32 @@ not expose a purchase action.
 ### Optional PayPal or saved-card auto-checkout
 
 Account settings can explicitly enable auto-checkout for PayPal in DE/AT/BE
-after accepting the payment warning and setting a maximum EUR order total,
+after accepting the payment warning and setting a maximum order total in an explicit currency,
 including shipping and fees. It remains off by default. Dashboard and
 notification buy-link clicks use the same flow; monitor matches do not buy
-anything without a click. Protocol 5 remains sufficient for PayPal; saved-card auto-checkout requires protocol 6 (extension 0.3.1).
+anything without a click. Protocol 5 remains sufficient for EUR PayPal; EUR saved-card auto-checkout requires protocol 6 (extension 0.3.1). GBP limits and saved pickup points require protocol 7 (extension 0.3.4). All other currencies require protocol 8 (extension 0.4), checked before readiness, authorization or Vinted requests.
 
 Saved-card mode requires a separate version-2 payment warning: the card may be
 charged immediately without another confirmation window. Switching methods
 disables auto-checkout until it is explicitly enabled and accepted again. Card
 availability is verified against the current checkout, and the total must be
-in EUR. No card numbers or CVVs are collected by Vintrack. Vinted handles
+in the exact saved limit currency. All 165 current ISO currency/fund codes with
+numeric minor units are accepted; unknown codes stop payment. Amounts use each
+currency's own 0/2/3/4 decimal places, never rounding a nonzero extra fraction.
+Limits are never converted;
+an existing EUR opt-in cannot authorize GBP payment. Changing limit currency
+clears the draft amount and requires payment acceptance again. No card numbers or CVVs are collected by Vintrack. Vinted handles
 3-D Secure/CVV confirmation through its native payment-resume checkout.
 Unknown outcomes never trigger a second payment. See
 [card auto-checkout evidence and limits](../../docs/checkout-auto-card.md).
+
+Delivery can use **Pickup at my saved Vinted point**. Set the preferred point
+in Vinted first. Preparation selects native pickup type 2 and the exact point
+UUID/code with its matching carrier rate from this checkout. If switching to
+pickup reveals the saved point, one additional update confirms it. A missing
+or changed point, mismatched rate, incomplete address or required missing phone
+leaves native checkout for review. Vintrack does not search for or substitute
+a nearby point. See [pickup and GBP checkout](../../docs/checkout-pickup-gbp.md).
 
 Before consuming the server payment-intent claim, protocol 5 checks the local
 Vinted receiver without account or checkout requests. Existing complete tabs
@@ -165,7 +178,7 @@ optional payment, browser handoff and optional server authorization. It never
 includes identifiers, URLs, account data, credentials or response bodies.
 
 The latest checkout response must confirm the delivery choice, enabled saved card or PayPal,
-a fresh checksum, a positive EUR total within the limit, and no applied wallet
+a fresh checksum, a positive total in the saved currency within the limit, and no applied wallet
 funds or currency conversion. Missing or ambiguous fields leave native checkout
 for review. One additional payment request is sent, without following redirects
 inside that request, refresh, retry or payment polling. Only Vinted's verified
@@ -320,7 +333,7 @@ own domain, use the [local or self-hosted build instructions](../../docs/browser
    **Prepare Release** workflow.
 
 For the current release, both manifests and `BROWSER_EXTENSION_LATEST_VERSION`
-are `0.3.3`; the minimum compatible version remains `0.2.1`.
+are `0.4`; the minimum compatible version remains `0.2.1`.
 If the GitHub Actions variable `BROWSER_EXTENSION_LATEST_VERSION` is set,
 update it with every manifest version bump: the deploy workflow rejects a
 different value before submitting the Firefox build. Keep `.env.example`,

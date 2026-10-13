@@ -267,7 +267,7 @@ test("malformed stored preferences cannot supply arbitrary checkout components",
     for (const preferences of [
         { shipping: ["home"], payment: "paypal" },
         { shipping: "home", payment: "paypal", paymentToken: "synthetic" },
-        { shipping: "pickup", payment: "paypal" },
+        { shipping: "nearest", payment: "paypal" },
     ]) {
         const h = harness({
             preferences: {
@@ -371,6 +371,52 @@ test("browser payment authorization is bound to current saved preferences and li
     const normal = harness();
     assert.equal((await normal.call("POST", headers)).status, 400);
     assert.equal(normal.serviceCalls.length, 0);
+});
+
+test("GBP pickup authorization rejects stale currency or delivery before reserving payment", async () => {
+    const preferences = {
+        shipping: "pickup",
+        payment: "card",
+        autoCheckout: {
+            warningVersion: 2,
+            currency: "GBP",
+            maxTotalMinor: 1829,
+        },
+    };
+    const h = harness({
+        accountDomain: "www.vinted.co.uk",
+        browserAuthorized: true,
+        preferences: { accountId: 42, domain: "www.vinted.co.uk", preferences },
+    });
+    const headers = {
+        "X-Vintrack-Checkout-Mode": "browser",
+        "X-Vintrack-Checkout-Account": "42@www.vinted.co.uk",
+        "X-Vintrack-Checkout-Preferences": "pickup:card:auto:2:GBP:1829",
+    };
+    for (const key of [
+        "pickup:card:auto:2:EUR:1829",
+        "home:card:auto:2:GBP:1829",
+    ]) {
+        assert.equal(
+            (
+                await h.call("POST", {
+                    ...headers,
+                    "X-Vintrack-Checkout-Preferences": key,
+                })
+            ).status,
+            409,
+        );
+    }
+    assert.equal(h.serviceCalls.length, 0);
+    assert.deepEqual((await (await h.call()).json()).preferences, preferences);
+    assert.deepEqual(await (await h.call("POST", headers)).json(), {
+        browserPaymentAuthorized: true,
+    });
+    assert.equal(h.serviceCalls.length, 1);
+    assert.deepEqual(
+        JSON.parse(h.serviceCalls[0].init.body as string).preferences,
+        preferences,
+    );
 });
 
 test("a PayPal redirect is returned only for an enabled auto-checkout and verified destination", async () => {

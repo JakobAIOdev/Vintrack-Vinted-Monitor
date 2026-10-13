@@ -87,6 +87,18 @@ assert.equal(
 assert.match(chromeManifest.version, /^\d+(?:\.\d+){1,3}$/);
 // CI must catch stale advertised versions before a release reaches production.
 const repositoryDir = resolve(extensionDir, "../..");
+// Dashboard, service and both extension contexts must agree on currency units;
+// otherwise the same saved limit could mean a different payable amount.
+const currencies = JSON.parse(await readFile(resolve(repositoryDir, "data/checkout-currencies.json"), "utf8")).minorUnits;
+assert.deepEqual(JSON.parse(await readFile(resolve(repositoryDir, "apps/control-center/src/lib/checkout-currencies.generated.json"), "utf8")), currencies);
+for (const name of ["background.js", "page-bridge.js"]) {
+  const source = await readFile(resolve(extensionDir, name), "utf8");
+  const table = source.match(/const checkoutCurrencyMinorUnits = (\{[^\n]+\});/);
+  assert.ok(table, `${name} is missing its generated currency table`);
+  assert.deepEqual(JSON.parse(table[1]), currencies, `${name} currency units differ from the reviewed registry`);
+}
+const goCurrencies = await readFile(resolve(repositoryDir, "apps/vinted-service/internal/vinted/checkout_currencies_generated.go"), "utf8");
+assert.deepEqual(Object.fromEntries([...goCurrencies.matchAll(/"([A-Z]{3})": ([0-4]),/g)].map(([, code, digits]) => [code, Number(digits)])), currencies);
 for (const [name, pattern] of [
   [".env.example", /^BROWSER_EXTENSION_LATEST_VERSION=(\S+)$/m],
   ["docker-compose.yml", /BROWSER_EXTENSION_LATEST_VERSION:-([\d.]+)/],

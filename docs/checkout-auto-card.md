@@ -2,6 +2,10 @@
 
 Stand: 6. Oktober 2026, Branch `feature/checkout-handoff`.
 
+Erweiterung vom 13. Oktober: [GBP-Limits und gespeicherte Abholpunkte](checkout-pickup-gbp.md)
+sind ab Extension 0.3.4 / Protokoll 7 zusätzlich verfügbar. Die folgende
+Beschreibung dokumentiert den ursprünglichen EUR-/Hauszustellungsumfang.
+
 Unter Account kann der Nutzer „Card saved in Vinted“ wählen und Auto-Checkout
 explizit einschalten. Die separate Kartenwarnung (Version 2) erklärt, dass ein
 Klick auf einen Dashboard- oder Benachrichtigungs-Kauf-Link die gespeicherte Karte
