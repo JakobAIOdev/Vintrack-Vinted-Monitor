@@ -1,31 +1,23 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowRight, MapPin, Wallet, Zap } from "lucide-react";
+import { ArrowRight, X } from "lucide-react";
 import { shouldShowCheckoutUpdate } from "@/lib/account-updates";
 import type { FeatureAccessResult } from "@/lib/features";
-import type { MemberAnnouncement } from "@/lib/member-announcement";
-import { MemberAnnouncementBanner } from "@/components/announcements/member-announcement-banner";
 import { useMonitorMaintenance } from "@/components/maintenance/monitor-maintenance-context";
 
-const checkoutAnnouncement: MemberAnnouncement = {
-    enabled: true,
-    revision: "checkout-pickup-currencies-v2",
-    variant: "info",
-    title: "New in checkout: saved pickup points & currency limits",
-    message:
-        "Use your Vinted pickup point and set a spending limit in your currency. Automatic payment requires a separate opt-in.",
-    cta: {
-        label: "Explore checkout",
-        url: "/account?connection=vinted#checkout-settings",
-    },
-    dismissible: true,
-    audiences: ["free", "premium", "admin"],
-    placements: ["monitors", "live_feed", "guide"],
-    startsAt: null,
-    endsAt: null,
-};
+const dismissalKey =
+    "vintrack:member-announcement:dismissed:checkout-pickup-currencies-v2";
+
+function NewBadge() {
+    return (
+        <span className="bg-muted text-muted-foreground shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold">
+            New
+        </span>
+    );
+}
 
 export function CheckoutUpdateNotice({
     seenVersion,
@@ -36,56 +28,84 @@ export function CheckoutUpdateNotice({
 }) {
     const pathname = usePathname();
     const { maintenance } = useMonitorMaintenance();
+    const [dismissed, setDismissed] = useState(false);
+    const [dismissalChecked, setDismissalChecked] = useState(false);
+
+    useEffect(() => {
+        let active = true;
+        queueMicrotask(() => {
+            if (!active) return;
+            try {
+                setDismissed(localStorage.getItem(dismissalKey) === "1");
+            } catch {
+                // The notice remains dismissible when browser storage is unavailable.
+            }
+            setDismissalChecked(true);
+        });
+        return () => {
+            active = false;
+        };
+    }, []);
+
     if (
+        !dismissalChecked ||
+        dismissed ||
         maintenance.enabled ||
         !shouldShowCheckoutUpdate(seenVersion, access, pathname)
     )
         return null;
     return (
-        <div className="mb-4">
-            <MemberAnnouncementBanner announcement={checkoutAnnouncement} />
+        <div className="mb-4 flex w-fit max-w-full items-center gap-2">
+            <Link
+                href="/account?connection=vinted#checkout-settings"
+                className="text-muted-foreground hover:text-foreground group inline-flex min-w-0 items-center gap-2 rounded py-1 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-offset-2"
+            >
+                <NewBadge />
+                <span>Checkout: saved pickup points &amp; currency limits</span>
+                <ArrowRight
+                    className="size-3.5 shrink-0 transition-transform group-hover:translate-x-0.5"
+                    aria-hidden="true"
+                />
+            </Link>
+            <button
+                type="button"
+                aria-label="Dismiss checkout update"
+                className="text-muted-foreground hover:text-foreground hover:bg-muted inline-flex size-8 shrink-0 items-center justify-center rounded transition-colors focus-visible:outline-2 focus-visible:outline-offset-2"
+                onClick={() => {
+                    setDismissed(true);
+                    try {
+                        localStorage.setItem(dismissalKey, "1");
+                    } catch {
+                        // Dismissal still applies for the current page.
+                    }
+                }}
+            >
+                <X className="size-3.5" aria-hidden="true" />
+            </button>
         </div>
     );
 }
 
-export function CheckoutFeatureOverview({ linked }: { linked: boolean }) {
+export function CheckoutFeatureShortcut({ linked }: { linked: boolean }) {
     return (
-        <section
-            aria-label="What's new in checkout"
-            className="flex flex-col gap-4 rounded-xl border border-sky-500/20 bg-sky-500/5 p-4 sm:flex-row sm:items-center"
+        <Link
+            href={
+                linked
+                    ? "/account?connection=vinted#checkout-settings"
+                    : "/account?connection=vinted#vinted-connection"
+            }
+            className="text-muted-foreground hover:text-foreground group mt-2 inline-flex items-center gap-2 rounded py-1 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-offset-2"
         >
-            <div className="min-w-0 flex-1 space-y-2">
-                <p className="flex items-center gap-2 text-sm font-semibold">
-                    <Zap className="size-4 text-sky-500" aria-hidden="true" />
-                    Oneclick & auto-checkout
-                </p>
-                <p className="text-muted-foreground max-w-2xl text-sm leading-6">
-                    Open checkout from dashboard or notification buy links.
-                    Choose your saved Vinted pickup point and a limit in your
-                    currency. Automatic payment must be enabled separately.
-                </p>
-                <div className="text-muted-foreground flex flex-wrap gap-x-4 gap-y-1 text-xs">
-                    <span className="inline-flex items-center gap-1.5">
-                        <MapPin className="size-3.5" aria-hidden="true" />
-                        Saved pickup points
-                    </span>
-                    <span className="inline-flex items-center gap-1.5">
-                        <Wallet className="size-3.5" aria-hidden="true" />
-                        Limits in your currency
-                    </span>
-                </div>
-            </div>
-            <Link
-                href={
-                    linked
-                        ? "/account?connection=vinted#checkout-settings"
-                        : "/account?connection=vinted#vinted-connection"
-                }
-                className="inline-flex h-9 shrink-0 items-center justify-center gap-2 self-start rounded-lg bg-sky-600 px-3 text-xs font-semibold text-white hover:bg-sky-700 sm:self-auto"
-            >
-                {linked ? "Checkout settings" : "Link Vinted to get started"}
-                <ArrowRight className="size-3.5" aria-hidden="true" />
-            </Link>
-        </section>
+            <NewBadge />
+            <span>
+                {linked
+                    ? "Pickup points & currency limits"
+                    : "Link Vinted for pickup points & currency limits"}
+            </span>
+            <ArrowRight
+                className="size-3.5 shrink-0 transition-transform group-hover:translate-x-0.5"
+                aria-hidden="true"
+            />
+        </Link>
     );
 }

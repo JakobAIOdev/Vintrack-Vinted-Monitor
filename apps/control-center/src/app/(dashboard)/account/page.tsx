@@ -8,7 +8,7 @@ import { getMemberGithubRewardStatus } from "@/lib/github-rewards.server";
 import { GithubRewardStatusCard } from "@/components/github-reward-status-card";
 import { CircleUserRound, Github, ShoppingBag } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CheckoutFeatureOverview } from "@/components/announcements/checkout-update-notice";
+import { CheckoutFeatureShortcut } from "@/components/announcements/checkout-update-notice";
 import { checkoutFeatureDiscoverable } from "@/lib/account-updates";
 import { getFeatureAccessForUser } from "@/lib/features.server";
 import { db } from "@/lib/db";
@@ -77,12 +77,11 @@ export default async function AccountPage({
                         Manage login providers, rewards, and the Vinted session
                         used by member tools.
                     </p>
+                    {checkoutFeatureDiscoverable(checkoutAccess) && (
+                        <CheckoutFeatureShortcut linked={status.linked} />
+                    )}
                 </div>
             </header>
-
-            {checkoutFeatureDiscoverable(checkoutAccess) && (
-                <CheckoutFeatureOverview linked={status.linked} />
-            )}
 
             <nav
                 aria-label="Account connections"
