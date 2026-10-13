@@ -3,7 +3,49 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
-import { ACCOUNT_UPDATES_VERSION } from "../../src/lib/account-updates.ts";
+import {
+    ACCOUNT_UPDATES_VERSION,
+    CHECKOUT_UPDATES_VERSION,
+    checkoutFeatureDiscoverable,
+    shouldShowCheckoutUpdate,
+} from "../../src/lib/account-updates.ts";
+
+test("the checkout update reaches existing members with the module off, while respecting feature policies", () => {
+    const feature = "checkout_links" as const;
+    for (const access of [
+        { allowed: true as const, feature },
+        { allowed: false as const, feature, reason: "user_disabled" as const },
+    ]) {
+        assert.equal(checkoutFeatureDiscoverable(access), true);
+        for (const route of ["/dashboard", "/monitors/17", "/feed", "/guide"]) {
+            assert.equal(shouldShowCheckoutUpdate(1, access, route), true);
+            assert.equal(
+                shouldShowCheckoutUpdate(
+                    CHECKOUT_UPDATES_VERSION,
+                    access,
+                    route,
+                ),
+                false,
+            );
+        }
+        for (const route of [
+            "/account",
+            "/admin",
+            "/checkout/17/123",
+            "/dashboard-elsewhere",
+        ])
+            assert.equal(shouldShowCheckoutUpdate(1, access, route), false);
+    }
+    for (const reason of [
+        "disabled",
+        "role_denied",
+        "dependency_disabled",
+    ] as const) {
+        const access = { allowed: false as const, feature, reason };
+        assert.equal(checkoutFeatureDiscoverable(access), false);
+        assert.equal(shouldShowCheckoutUpdate(0, access, "/dashboard"), false);
+    }
+});
 
 function harness(anonymous = false, storageFailure = false) {
     const writes: unknown[] = [];

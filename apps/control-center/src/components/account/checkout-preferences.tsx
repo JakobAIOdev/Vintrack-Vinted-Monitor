@@ -113,7 +113,10 @@ export function CheckoutPreferencesCard({
             maxTotalMinor > 0 &&
             maxTotalMinor <= checkoutMaximumMinor(limitCurrency));
     return (
-        <Card className="border-border/70 gap-0 overflow-hidden py-0 shadow-sm">
+        <Card
+            id="checkout-settings"
+            className="border-border/70 scroll-mt-20 gap-0 overflow-hidden py-0 shadow-sm"
+        >
             <CardHeader className="border-b p-5">
                 <CardTitle className="flex items-center justify-between gap-3">
                     Oneclick checkout
@@ -475,7 +478,7 @@ export function CheckoutPreferencesCard({
                                         outcome.
                                     </div>
                                     <div className="space-y-2">
-                                        <div className="grid grid-cols-[minmax(0,1fr)_6rem] items-end gap-3">
+                                        <div className="grid w-full max-w-xs grid-cols-[minmax(0,1fr)_6rem] items-end gap-3">
                                             <div className="space-y-2">
                                                 <Label htmlFor="checkout-max-total">
                                                     Maximum order total
@@ -517,7 +520,7 @@ export function CheckoutPreferencesCard({
                                                 />
                                             </div>
                                         </div>
-                                        <p className="text-muted-foreground text-xs leading-5">
+                                        <p className="text-muted-foreground max-w-sm text-xs leading-5">
                                             Includes shipping and fees. The
                                             checkout currency must match; limits
                                             are never converted.

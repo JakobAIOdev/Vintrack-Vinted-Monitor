@@ -120,6 +120,36 @@ Unknown searches and cancelling do not change the saved/draft limit; selecting
 a different currency still clears the amount and acceptance. Selecting the
 same currency preserves them. Arrow keys, Enter and Escape are supported.
 
+The entire amount/currency row is capped at 320 pixels, so the amount stays
+compact and the currency remains beside it even on wide Account pages.
+
+## Member discovery
+
+Account update version 2 reactivates the existing **New** badge for members
+who saw the original account update. Dashboard, monitor, feed and guide pages
+show a dismissible checkout announcement with a direct link to
+`/account?connection=vinted#checkout-settings`. It also appears when the member
+has left the checkout module off, while respecting administrator role/feature
+restrictions. Maintenance takes precedence and hides this promotion.
+
+Account includes a short feature overview above its connections. Linked users
+can jump straight to the anchored checkout card; unlinked users are directed
+to their Vinted connection. Visiting Account acknowledges the update through
+the existing authenticated per-member version field. This removes the badge
+and dashboard notice across browsers without enabling checkout, accepting
+payment warnings or altering payment preferences. Dismissing only the banner
+uses its own existing local-storage revision key.
+
+Validation: 228 dashboard unit tests, lint and production build passed. Isolated
+desktop/mobile checks rendered the real sidebar, announcement, overview and
+checkout card with synthetic data. They verified compact field widths,
+adjacent currency, direct-link anchors, policy and live-maintenance suppression,
+dismissal, and per-member acknowledgement. Currency changes still clear the
+amount and acceptance. No real member records were written during these checks.
+
+![Compact limit and Account overview](screenshots/checkout-compact-limit.png)
+![Checkout announcement on mobile](screenshots/checkout-member-update-mobile.png)
+
 Isolated desktop/mobile checks passed for compact width, bounded results,
 search/keyboard selection, invalid-search isolation and exact JPY/KWD limits.
 No horizontal overflow occurred. Four PLN handoff browser tests passed with

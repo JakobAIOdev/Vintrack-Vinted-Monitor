@@ -5,6 +5,7 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { MonitorStreamProvider } from "@/components/monitors/monitor-stream-context";
 import { MemberAnnouncementHost } from "@/components/announcements/member-announcement-banner";
+import { CheckoutUpdateNotice } from "@/components/announcements/checkout-update-notice";
 import type { MemberAnnouncement } from "@/lib/member-announcement";
 import type { MonitorMaintenance } from "@/lib/monitor-maintenance";
 import { DashboardActivity } from "@/components/layout/dashboard-activity";
@@ -79,6 +80,14 @@ export function DashboardShell({
                                     initialAnnouncement={announcement}
                                     role={user?.role}
                                 />
+                                {user?.id && (
+                                    <CheckoutUpdateNotice
+                                        seenVersion={
+                                            user.accountUpdatesSeenVersion
+                                        }
+                                        access={features.checkout_links}
+                                    />
+                                )}
                                 {inactivityPausedCount > 0 ||
                                 inactivityPausedPriceWatchCount > 0 ? (
                                     <div
