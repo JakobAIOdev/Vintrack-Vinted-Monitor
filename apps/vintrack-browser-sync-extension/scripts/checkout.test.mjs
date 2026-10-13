@@ -13,6 +13,7 @@ const backgroundSource = await readFile(
   "utf8",
 );
 const contentSource = await readFile(new URL("../content-script.js", import.meta.url), "utf8");
+const currencyUnits = JSON.parse(await readFile(new URL("../../../data/checkout-currencies.json", import.meta.url), "utf8")).minorUnits;
 const domain = "www.vinted.de";
 const target = { itemId: 123, sellerId: 456, expectedAccountId: 42, domain };
 const checkoutUrl = `https://${domain}/checkout?purchase_id=synthetic&order_id=77&order_type=transaction`;
@@ -79,6 +80,7 @@ test("content navigation correlates the native response and sends no checkout or
 });
 
 function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paymentResponse = {}, pageState = "complete", options = {}) {
+  const domain = options.domain || "www.vinted.de";
   const requests = [];
   const documentListeners = {};
   const document = {
@@ -402,6 +404,158 @@ test("opted-in PayPal starts once using the final quote and returns only a verif
   assert.equal(result.checksum,undefined);
 });
 
+function savedPickupQuote() {
+  const data = autoQuote();
+  data.checkout.components.shipping_pickup_options.selected_pickup_option = 2;
+  data.checkout.components.shipping_pickup_details.pickup_details = {
+    selected_rate_uuid: "synthetic-rate",
+    shipping_option: { rate_uuid: "synthetic-rate" },
+    shipping_point: { uuid: "synthetic-point", code: "synthetic-code", rate_uuid: "synthetic-rate" },
+  };
+  return data;
+}
+
+test("saved pickup point is selected with its carrier rate and confirmed before payment", async () => {
+  for (const revealAfterSwitch of [false, true]) {
+    const responses = [savedPickupQuote(), ...(revealAfterSwitch ? [savedPickupQuote()] : [])];
+    const h = bridge(42, responses, revealAfterSwitch ? selectedCheckout() : savedPickupQuote(),
+      { action: { type: "redirect", parameters: { url: syntheticPayPalUrl } } });
+    const preferences = { ...autoTarget.preferences, shipping: "pickup" };
+    const result = await h.run({ ...target, preferences });
+    assert.equal(result.status, "paypal_redirect_ready");
+    const updates = h.requests.filter(r => r.init.method === "PUT");
+    assert.equal(updates.length, revealAfterSwitch ? 2 : 1);
+    const components = JSON.parse(updates.at(-1).init.body).components;
+    assert.deepEqual(components.shipping_pickup_options, { pickup_type: 2 });
+    assert.deepEqual(components.shipping_pickup_details, { point_uuid: "synthetic-point", point_code: "synthetic-code", rate_uuid: "synthetic-rate" });
+    assert.equal(h.requests.filter(r => r.url.endsWith("/payment")).length, 1);
+    assert.equal(JSON.parse(h.requests.at(-1).init.body).checksum, "synthetic-current-checksum");
+  }
+});
+
+test("missing or changed pickup points, mismatched rates and required contact details stop payment", async () => {
+  const changes = [
+    q => { delete q.checkout.components.shipping_pickup_details.pickup_details.shipping_point; },
+    q => { delete q.checkout.components.shipping_pickup_details.pickup_details.shipping_point.code; },
+    q => { q.checkout.components.shipping_pickup_details.pickup_details.shipping_point.uuid = "different-point"; },
+    q => { q.checkout.components.shipping_pickup_details.pickup_details.shipping_point.code = "different-code"; },
+    q => { q.checkout.components.shipping_pickup_details.pickup_details.shipping_option.rate_uuid = "different-rate"; },
+    q => { q.checkout.components.shipping_pickup_details.pickup_details.selected_rate_uuid = "different-rate"; },
+    q => { q.checkout.components.shipping_pickup_options.selected_pickup_option = 1; },
+    q => { q.checkout.components.shipping_contact = { is_receiver_phone_number_required: true, phone_number: " " }; },
+    q => { q.checkout.components.shipping_address.address.is_complete = false; },
+  ];
+  for (const change of changes) {
+    const quote = savedPickupQuote(); change(quote);
+    const h = bridge(42, [quote], savedPickupQuote());
+    const result = await h.run({ ...autoTarget, preferences: { ...autoTarget.preferences, shipping: "pickup" } });
+    assert.equal(result.status, "checkout_review_required");
+    assert.match(result.autoCheckoutReason, /No automatic payment was started/);
+    assert.equal(h.requests.filter(r => r.url.endsWith("/payment")).length, 0);
+    assert.equal(h.requests.filter(r => r.init.method === "PUT").length, 1);
+  }
+  const noSavedPoint = autoQuote();
+  noSavedPoint.checkout.components.shipping_pickup_options.selected_pickup_option = 2;
+  const h = bridge(42, [noSavedPoint], selectedCheckout());
+  const result = await h.run({ ...autoTarget, preferences: { ...autoTarget.preferences, shipping: "pickup" } });
+  assert.equal(result.status, "checkout_review_required");
+  assert.equal(h.requests.filter(r => r.init.method === "PUT").length, 1);
+  assert.equal(h.requests.filter(r => r.url.endsWith("/payment")).length, 0);
+});
+
+test("normal saved-point preparation never submits payment", async () => {
+  const h = bridge(42, [savedPickupQuote(), savedPickupQuote()], selectedCheckout());
+  const result = await h.run({ ...target, preferences: { shipping: "pickup", payment: "paypal" } });
+  assert.equal(result.status, "checkout_prepared");
+  assert.equal(h.requests.filter(r => r.init.method === "PUT").length, 2);
+  assert.equal(h.requests.filter(r => r.url.endsWith("/payment")).length, 0);
+});
+
+test("UK saved-card checkout requires an exact GBP quote within its GBP limit", async () => {
+  const ukDomain = "www.vinted.co.uk";
+  const preferences = { shipping: "home", payment: "card", autoCheckout: { warningVersion: 2, currency: "GBP", maxTotalMinor: 1829 } };
+  for (const [name, change, currency, expected] of [
+    ["within limit", () => {}, "GBP", "card_payment_confirmed"],
+    ["old EUR opt-in", () => {}, "EUR", "checkout_review_required"],
+    ["EUR quote", q => { q.checkout.components.pay_button_v2.total.price.currency_code = "EUR"; }, "GBP", "checkout_review_required"],
+    ["over limit", q => { q.checkout.components.pay_button_v2.total.price.amount = "18.30"; }, "GBP", "checkout_review_required"],
+    ["mixed wallet currency", q => { q.checkout.components.order_summary_v2.deductions = [{ type: "order-summary-wallet-deduction", price: { currency_code: "EUR", amount: "0.00" } }]; }, "GBP", "checkout_review_required"],
+    ["wallet applied", q => { q.checkout.components.order_summary_v2.deductions = [{ type: "order-summary-wallet-deduction", price: { currency_code: "GBP", amount: "0.01" } }]; }, "GBP", "checkout_review_required"],
+    ["conversion", q => { q.checkout.components.order_summary_v2.currency_conversion = {}; }, "GBP", "checkout_review_required"],
+    ["precision", q => { q.checkout.components.pay_button_v2.total.price.amount = "18.291"; }, "GBP", "checkout_review_required"],
+  ]) {
+    const quote = cardAutoQuote();
+    quote.checkout.components.pay_button_v2.total.price.currency_code = "GBP";
+    change(quote);
+    const h = bridge(42, [quote], cardBuild(), { payment: { status: "success" } }, "complete", { domain: ukDomain });
+    const result = await h.run({ ...target, domain: ukDomain, preferences: { ...preferences, autoCheckout: { ...preferences.autoCheckout, currency } } });
+    assert.equal(result.status, expected, name);
+    assert.equal(h.requests.filter(r => r.url.endsWith("/payment")).length, expected === "card_payment_confirmed" ? 1 : 0, name);
+    assert.ok(h.requests.every(r => new URL(r.url).hostname === ukDomain));
+    if (name === "old EUR opt-in") assert.match(result.autoCheckoutReason, /EUR spending limit/);
+  }
+});
+
+test("every ISO currency uses its own exact minor units and limit before payment", async () => {
+  for (const [currency, digits] of Object.entries(currencyUnits)) {
+    const amount = digits === 0 ? "18" : `18.${"1".repeat(digits)}`;
+    const minor = 18 * 10 ** digits + Number("1".repeat(digits));
+    for (const overLimit of [false, true]) {
+      const q = cardAutoQuote();
+      q.checkout.components.pay_button_v2.total.price = { currency_code: currency, amount };
+      q.checkout.components.order_summary_v2.deductions = [{ type: "order-summary-wallet-deduction", price: { currency_code: currency, amount: "0.00" } }];
+      const p = { shipping: "home", payment: "card", autoCheckout: { warningVersion: 2, currency, maxTotalMinor: minor - (overLimit ? 1 : 0) } };
+      const h = bridge(42, [q], cardBuild(), { payment: { status: "success" } });
+      const result = await h.run({ ...target, preferences: p });
+      assert.equal(result.status, overLimit ? "checkout_review_required" : "card_payment_confirmed", currency);
+      assert.equal(h.requests.filter(r => r.url.endsWith("/payment")).length, overLimit ? 0 : 1, currency);
+    }
+    const p = { shipping: "home", payment: "card", autoCheckout: { warningVersion: 2, currency, maxTotalMinor: 10_000 * 10 ** digits + 1 } };
+    const h = bridge();
+    assert.equal((await h.run({ ...target, preferences: p })).code, "invalid_checkout_preferences", currency);
+    assert.equal(h.requests.length, 0);
+    const bg = background();
+    assert.equal((await bg.run({ ...target, preferences: p })).code, "invalid_buy_payload", currency);
+    assert.equal(bg.messages.length, 0);
+  }
+});
+
+test("ISO minor units reject nonzero excess precision without rounding", async () => {
+  for (const [currency, amount, maxTotalMinor, paid] of [
+    ["JPY", "18.0000", 18, true], ["JPY", "18.01", 18, false],
+    ["PLN", "18.2900", 1829, true], ["PLN", "18.291", 1829, false],
+    ["KWD", "18.291", 18291, true], ["KWD", "18.2911", 18291, false],
+    ["CLF", "18.2914", 182914, true],
+  ]) {
+    const q = cardAutoQuote();
+    q.checkout.components.pay_button_v2.total.price = { currency_code: currency, amount };
+    const h = bridge(42, [q], cardBuild(), { payment: { status: "success" } });
+    const p = { shipping: "home", payment: "card", autoCheckout: { warningVersion: 2, currency, maxTotalMinor } };
+    assert.equal((await h.run({ ...target, preferences: p })).status, paid ? "card_payment_confirmed" : "checkout_review_required");
+  }
+});
+
+test("GBP saved pickup checkout keeps its durable claim across currency and delivery changes", async () => {
+  const ukDomain = "www.vinted.co.uk";
+  const q = cardAutoQuote();
+  Object.assign(q.checkout.components, {
+    shipping_pickup_options: savedPickupQuote().checkout.components.shipping_pickup_options,
+    shipping_pickup_details: savedPickupQuote().checkout.components.shipping_pickup_details,
+  });
+  q.checkout.components.pay_button_v2.total.price.currency_code = "GBP";
+  const p = { shipping: "pickup", payment: "card", autoCheckout: { warningVersion: 2, currency: "GBP", maxTotalMinor: 3000 } };
+  const h = bridge(42, [q, q], cardBuild(), { payment: { status: "success" } }, "complete", { domain: ukDomain });
+  const bg = background({ run: h.run });
+  const t = { ...target, domain: ukDomain, preferences: p };
+  assert.equal((await bg.run(t)).status, "card_payment_confirmed");
+  for (const preferences of [p, { ...p, shipping: "home" }, { ...p, autoCheckout: { ...p.autoCheckout, currency: "EUR" } }]) {
+    const restarted = background({ storage: bg.storage, run: h.run });
+    assert.equal((await restarted.run({ ...t, preferences })).status, "checkout_review_required");
+    assert.equal(h.requests.filter(r => r.url.endsWith("/payment")).length, 1);
+    assert.equal(restarted.messages.filter(m => m.type === "VINTRACK_RUN_BROWSER_BUY").length, 0);
+  }
+});
+
 test("auto-checkout stops for wallet deductions, unknown quotes and exceeded limits", async () => {
   const changes = [
     data => { data.checkout.components.order_summary_v2.deductions = [{ type: "order-summary-wallet-deduction", price: { amount: "1.00", currency_code: "EUR" } }]; },
@@ -443,7 +597,7 @@ test("unknown payment outcomes and hostile redirects never trigger retries or ex
 });
 
 test("invalid auto-checkout consent and limits fail before account lookup", async () => {
-  for(const setting of [null, {...autoSetting,warningVersion:0}, {...autoSetting,maxTotalMinor:0}, {...autoSetting,currency:"USD"}, {...autoSetting,force:true}]) {
+  for(const setting of [null, {...autoSetting,warningVersion:0}, {...autoSetting,maxTotalMinor:0}, {...autoSetting,currency:"ZZZ"}, {...autoSetting,force:true}]) {
     const h=bridge();
     assert.equal((await h.run({...autoTarget,preferences:{...autoTarget.preferences,autoCheckout:setting}})).code,"invalid_checkout_preferences");
     assert.equal(h.requests.length,0);

@@ -67,7 +67,7 @@ export async function saveCheckoutPreferences(
         !autoCheckoutAllowed(account.domain, preferences.payment)
     )
         return {
-            error: "Auto-checkout supports a saved card or PayPal in supported regions, with a verified EUR total.",
+            error: "Auto-checkout supports a saved card or PayPal in supported regions, with a verified total matching your limit currency.",
         };
     if (
         !(await getFeatureAccessForUser("checkout_links", account.userId))

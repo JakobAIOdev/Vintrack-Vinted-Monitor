@@ -12,10 +12,25 @@ import (
 	http "github.com/bogdanfinn/fhttp"
 )
 
-var checkoutDecimal = regexp.MustCompile(`^[0-9]{1,7}(\.[0-9]{1,2})?$`)
+var checkoutDecimal = regexp.MustCompile(`^[0-9]{1,7}(\.[0-9]{1,4})?$`)
 
-func checkoutMoneyMinor(raw map[string]interface{}) (int64, bool) {
-	if raw["currency_code"] != "EUR" {
+func checkoutCurrencyScale(currency string) (int64, int, bool) {
+	digits, ok := checkoutCurrencyMinorUnits[currency]
+	scale := int64(1)
+	for i := 0; i < digits; i++ {
+		scale *= 10
+	}
+	return scale, digits, ok
+}
+
+func validCheckoutLimit(currency string, minor int64) bool {
+	scale, _, ok := checkoutCurrencyScale(currency)
+	return ok && minor > 0 && minor <= 10_000*scale
+}
+
+func checkoutMoneyMinor(raw map[string]interface{}, currency string) (int64, bool) {
+	scale, digits, ok := checkoutCurrencyScale(currency)
+	if !ok || raw["currency_code"] != currency {
 		return 0, false
 	}
 	var amount string
@@ -34,14 +49,19 @@ func checkoutMoneyMinor(raw map[string]interface{}) (int64, bool) {
 	whole, _ := strconv.ParseInt(parts[0], 10, 64)
 	fraction := int64(0)
 	if len(parts) == 2 {
-		fraction, _ = strconv.ParseInt((parts[1] + "00")[:2], 10, 64)
+		if len(parts[1]) > digits && strings.Trim(parts[1][digits:], "0") != "" {
+			return 0, false
+		}
+		if digits > 0 {
+			fraction, _ = strconv.ParseInt((parts[1] + strings.Repeat("0", digits))[:digits], 10, 64)
+		}
 	}
-	return whole*100 + fraction, true
+	return whole*scale + fraction, true
 }
 
 // Exact fields consumed by Vinted's web checkout. Unknown pricing, currency
 // conversion or wallet deductions require manual review, never a payment POST.
-func autoCheckoutTotal(components map[string]interface{}) (int64, bool) {
+func autoCheckoutTotal(components map[string]interface{}, currency string) (int64, bool) {
 	summary := checkoutMap(components, "order_summary_v2")
 	if summary == nil || summary["currency_conversion"] != nil {
 		return 0, false
@@ -55,12 +75,12 @@ func autoCheckoutTotal(components map[string]interface{}) (int64, bool) {
 		if !ok || deduction["type"] != "order-summary-wallet-deduction" {
 			return 0, false
 		}
-		amount, valid := checkoutMoneyMinor(checkoutMap(deduction, "price"))
+		amount, valid := checkoutMoneyMinor(checkoutMap(deduction, "price"), currency)
 		if !valid || amount != 0 {
 			return 0, false
 		}
 	}
-	total, valid := checkoutMoneyMinor(checkoutMap(components, "pay_button_v2", "total", "price"))
+	total, valid := checkoutMoneyMinor(checkoutMap(components, "pay_button_v2", "total", "price"), currency)
 	return total, valid && total > 0
 }
 

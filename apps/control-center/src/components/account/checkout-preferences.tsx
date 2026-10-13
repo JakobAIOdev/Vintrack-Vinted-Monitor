@@ -12,6 +12,11 @@ import {
     checkoutPaymentOptions,
     autoCheckoutAllowed,
     autoCheckoutWarningVersion,
+    checkoutCurrencyDigits,
+    checkoutDefaultCurrency,
+    checkoutMaximumMinor,
+    parseCheckoutAmount,
+    type CheckoutCurrency,
     type CheckoutPreferences,
 } from "@/lib/checkout";
 import {
@@ -22,6 +27,7 @@ import {
     CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { CheckoutCurrencyPicker } from "@/components/account/checkout-currency-picker";
 import { useRouter } from "next/navigation";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -49,6 +55,7 @@ export function CheckoutPreferencesCard({
     const savedAutoEnabled = Boolean(savedPreferences.autoCheckout);
     const [warningAccepted, setWarningAccepted] = useState(false);
     const [maxTotal, setMaxTotal] = useState("");
+    const [limitCurrency, setLimitCurrency] = useState<CheckoutCurrency>("EUR");
     const [pending, startTransition] = useTransition();
     const [riskConsentVersion, setRiskConsentVersion] = useState<number | null>(
         null,
@@ -62,6 +69,10 @@ export function CheckoutPreferencesCard({
                     setPreferences(value.preferences);
                     setRiskConsentVersion(value.riskConsentVersion);
                     setDomain(value.domain);
+                    setLimitCurrency(
+                        value.preferences.autoCheckout?.currency ||
+                            checkoutDefaultCurrency(value.domain),
+                    );
                     setAutoEnabled(Boolean(value.preferences.autoCheckout));
                     setSavedPreferences(value.preferences);
                     setWarningAccepted(Boolean(value.preferences.autoCheckout));
@@ -69,8 +80,16 @@ export function CheckoutPreferencesCard({
                         value.preferences.autoCheckout
                             ? (
                                   value.preferences.autoCheckout.maxTotalMinor /
-                                  100
-                              ).toFixed(2)
+                                  10 **
+                                      checkoutCurrencyDigits(
+                                          value.preferences.autoCheckout
+                                              .currency,
+                                      )
+                              ).toFixed(
+                                  checkoutCurrencyDigits(
+                                      value.preferences.autoCheckout.currency,
+                                  ),
+                              )
                             : "",
                     );
                     setLoaded(true);
@@ -85,18 +104,19 @@ export function CheckoutPreferencesCard({
         };
     }, [accountKey]);
     const canAutoCheckout = autoCheckoutAllowed(domain, preferences.payment);
-    const maxTotalMinor = /^\d+(?:[.,]\d{1,2})?$/.test(maxTotal)
-        ? Math.round(Number(maxTotal.replace(",", ".")) * 100)
-        : 0;
+    const maxTotalMinor = parseCheckoutAmount(maxTotal, limitCurrency) || 0;
     const validAutoCheckout =
         !autoEnabled ||
         (canAutoCheckout &&
             warningAccepted &&
             Number.isSafeInteger(maxTotalMinor) &&
             maxTotalMinor > 0 &&
-            maxTotalMinor <= 1_000_000);
+            maxTotalMinor <= checkoutMaximumMinor(limitCurrency));
     return (
-        <Card className="border-border/70 gap-0 overflow-hidden py-0 shadow-sm">
+        <Card
+            id="checkout-settings"
+            className="border-border/70 scroll-mt-20 gap-0 overflow-hidden py-0 shadow-sm"
+        >
             <CardHeader className="border-b p-5">
                 <CardTitle className="flex items-center justify-between gap-3">
                     Oneclick checkout
@@ -242,7 +262,9 @@ export function CheckoutPreferencesCard({
                                 <p className="mt-1">
                                     {preferences.shipping === "home"
                                         ? "Home delivery to my Vinted address"
-                                        : "Vinted’s saved delivery choice"}
+                                        : preferences.shipping === "pickup"
+                                          ? "Pickup at my saved Vinted point"
+                                          : "Vinted’s saved delivery choice"}
                                 </p>
                             </div>
                             <div>
@@ -273,16 +295,20 @@ export function CheckoutPreferencesCard({
                                         !loaded || pending || !checkoutEnabled
                                     }
                                     value={preferences.shipping}
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                        setWarningAccepted(false);
                                         setPreferences({
                                             ...preferences,
                                             shipping: event.target
                                                 .value as CheckoutPreferences["shipping"],
-                                        })
-                                    }
+                                        });
+                                    }}
                                 >
                                     <option value="home">
                                         Home delivery to my Vinted address
+                                    </option>
+                                    <option value="pickup">
+                                        Pickup at my saved Vinted point
                                     </option>
                                     <option value="vinted">
                                         Keep Vinted&apos;s saved delivery choice
@@ -337,7 +363,11 @@ export function CheckoutPreferencesCard({
                             Vinted first. Home delivery uses the carrier Vinted
                             preselects. Missing address, contact details or
                             unavailable options still need your attention.
-                            Normal Oneclick stops before payment in Vinted.
+                            Pickup uses the point saved in Vinted. Choose your
+                            preferred point there first; if Vinted cannot
+                            confirm that point and its shipping rate, finish
+                            manually. Normal Oneclick stops before payment in
+                            Vinted.
                         </p>
                         <div className="border-border space-y-3 rounded-md border p-4">
                             <div className="flex items-center justify-between gap-3 text-sm">
@@ -405,8 +435,8 @@ export function CheckoutPreferencesCard({
                             <p className="text-muted-foreground text-xs leading-5">
                                 {canAutoCheckout
                                     ? preferences.payment === "card"
-                                        ? "Optional: submit payment with the card saved in Vinted. Your card may be charged immediately. Only verified EUR checkouts within your limit qualify; bank authentication or CVV confirmation may still be required in Vinted. Dashboard and notification buy links use this mode after a click. Monitor matches do not buy automatically."
-                                        : "Optional: skip Vinted’s final payment button and open PayPal. Only verified EUR checkouts within your limit qualify. This applies to dashboard and notification buy links, and does not buy new monitor matches automatically."
+                                        ? "Optional: submit payment with the card saved in Vinted. Your card may be charged immediately. Only verified checkouts matching your limit currency and within your limit qualify; bank authentication or CVV confirmation may still be required in Vinted. Dashboard and notification buy links use this mode after a click. Monitor matches do not buy automatically."
+                                        : "Optional: skip Vinted’s final payment button and open PayPal. Only verified checkouts matching your limit currency and within your limit qualify. This applies to dashboard and notification buy links, and does not buy new monitor matches automatically."
                                     : "Choose a saved card or PayPal (where offered in your linked region) to enable auto-checkout. Other payment methods use normal Oneclick."}
                             </p>
                             {autoEnabled && (
@@ -448,23 +478,53 @@ export function CheckoutPreferencesCard({
                                         outcome.
                                     </div>
                                     <div className="space-y-2">
-                                        <Label htmlFor="checkout-max-total">
-                                            Maximum order total (EUR, including
-                                            shipping and fees)
-                                        </Label>
-                                        <input
-                                            id="checkout-max-total"
-                                            type="text"
-                                            inputMode="decimal"
-                                            className="border-input bg-background h-10 w-full rounded-md border px-3 text-sm"
-                                            disabled={pending}
-                                            value={maxTotal}
-                                            placeholder="e.g. 30.00"
-                                            onChange={(event) => {
-                                                setMaxTotal(event.target.value);
-                                                setWarningAccepted(false);
-                                            }}
-                                        />
+                                        <div className="grid w-full max-w-xs grid-cols-[minmax(0,1fr)_6rem] items-end gap-3">
+                                            <div className="space-y-2">
+                                                <Label htmlFor="checkout-max-total">
+                                                    Maximum order total
+                                                </Label>
+                                                <input
+                                                    id="checkout-max-total"
+                                                    type="text"
+                                                    inputMode="decimal"
+                                                    className="border-input bg-background h-10 w-full min-w-0 rounded-md border px-3 text-sm"
+                                                    disabled={pending}
+                                                    value={maxTotal}
+                                                    placeholder={`e.g. ${(30).toFixed(checkoutCurrencyDigits(limitCurrency))}`}
+                                                    onChange={(event) => {
+                                                        setMaxTotal(
+                                                            event.target.value,
+                                                        );
+                                                        setWarningAccepted(
+                                                            false,
+                                                        );
+                                                    }}
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label htmlFor="checkout-limit-currency">
+                                                    Currency
+                                                </Label>
+                                                <CheckoutCurrencyPicker
+                                                    value={limitCurrency}
+                                                    disabled={pending}
+                                                    onChange={(currency) => {
+                                                        setLimitCurrency(
+                                                            currency,
+                                                        );
+                                                        setMaxTotal("");
+                                                        setWarningAccepted(
+                                                            false,
+                                                        );
+                                                    }}
+                                                />
+                                            </div>
+                                        </div>
+                                        <p className="text-muted-foreground max-w-sm text-xs leading-5">
+                                            Includes shipping and fees. The
+                                            checkout currency must match; limits
+                                            are never converted.
+                                        </p>
                                     </div>
                                     <Label className="flex items-start gap-2 leading-5">
                                         <input
@@ -520,7 +580,7 @@ export function CheckoutPreferencesCard({
                                                                   ),
                                                               maxTotalMinor,
                                                               currency:
-                                                                  "EUR" as const,
+                                                                  limitCurrency,
                                                           },
                                                       }
                                                     : {}),

@@ -118,6 +118,22 @@ async function startCheckout(
     if (extensionAvailable) {
         if (
             target.preferences?.autoCheckout &&
+            !["EUR", "GBP"].includes(target.preferences.autoCheckout.currency) &&
+            extensionAvailable < 8
+        )
+            throw new Error(
+                "Update or reload the Vintrack extension to use all checkout currencies (version 0.4 or later).",
+            );
+        if (
+            (target.preferences?.shipping === "pickup" ||
+                target.preferences?.autoCheckout?.currency === "GBP") &&
+            extensionAvailable < 7
+        )
+            throw new Error(
+                "Update or reload the Vintrack extension to use saved pickup points or GBP auto-checkout (version 0.3.4 or later).",
+            );
+        if (
+            target.preferences?.autoCheckout &&
             target.preferences.payment === "card" &&
             extensionAvailable < 6
         )

@@ -2,6 +2,10 @@
 
 Stand: 5. Oktober 2026, Branch `feature/checkout-handoff`.
 
+Erweiterung vom 13. Oktober: [GBP-Limits und gespeicherte Abholpunkte](checkout-pickup-gbp.md)
+sind ab Extension 0.3.4 / Protokoll 7 zusätzlich verfügbar. PayPal bleibt auf
+DE/AT/BE begrenzt; UK-GBP-Auto-Checkout verwendet eine gespeicherte Karte.
+
 Vor der Nutzung von Checkout oder Auto-Checkout muss jeder Nutzer zusätzlich
 das [allgemeine Risiko-Overlay](checkout-risk-warning.md) ausdrücklich
 akzeptieren. Die Zustimmung wird mit Textversion und Zeitpunkt am Nutzer

@@ -3,7 +3,28 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
-import { ACCOUNT_UPDATES_VERSION } from "../../src/lib/account-updates.ts";
+import {
+    ACCOUNT_UPDATES_VERSION,
+    checkoutFeatureDiscoverable,
+} from "../../src/lib/account-updates.ts";
+
+test("checkout discovery allows the module to be off while respecting feature policies", () => {
+    const feature = "checkout_links" as const;
+    for (const access of [
+        { allowed: true as const, feature },
+        { allowed: false as const, feature, reason: "user_disabled" as const },
+    ]) {
+        assert.equal(checkoutFeatureDiscoverable(access), true);
+    }
+    for (const reason of [
+        "disabled",
+        "role_denied",
+        "dependency_disabled",
+    ] as const) {
+        const access = { allowed: false as const, feature, reason };
+        assert.equal(checkoutFeatureDiscoverable(access), false);
+    }
+});
 
 function harness(anonymous = false, storageFailure = false) {
     const writes: unknown[] = [];

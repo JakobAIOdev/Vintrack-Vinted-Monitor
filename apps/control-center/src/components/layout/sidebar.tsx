@@ -25,7 +25,10 @@ import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { CreateMonitorLink } from "@/components/maintenance/create-monitor-link";
 import type { FeatureAccessResult, FeatureKey } from "@/lib/features";
-import { ACCOUNT_UPDATES_VERSION } from "@/lib/account-updates";
+import {
+    ACCOUNT_UPDATES_VERSION,
+    checkoutFeatureDiscoverable,
+} from "@/lib/account-updates";
 import { markAccountUpdatesSeen } from "@/actions/account-updates";
 
 const GITHUB_SPONSORS_URL = "https://github.com/sponsors/JakobAIOdev";
@@ -101,7 +104,10 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
     const unseenAccountUpdates =
         Boolean(user?.id) &&
         (user?.accountUpdatesSeenVersion ?? 0) < ACCOUNT_UPDATES_VERSION;
-    const showAccountBadge = unseenAccountUpdates && !onAccount;
+    const showAccountBadge =
+        unseenAccountUpdates &&
+        !onAccount &&
+        checkoutFeatureDiscoverable(features.checkout_links);
     useEffect(() => {
         if (!onAccount || !unseenAccountUpdates) return;
         // Visiting the page acknowledges the announcement only. Checkout and

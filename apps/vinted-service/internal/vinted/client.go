@@ -999,6 +999,10 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 		return &link, err
 	}
 	paymentChoice := build.Selection.Methods[preferences.Payment]
+	var pickupPoint *checkoutPickupPoint
+	if preferences.Shipping == "pickup" {
+		pickupPoint = build.Selection.PickupPoint
+	}
 	updated := build
 	var updateErr error
 	if !build.matchesReviewPreferences(preferences) {
@@ -1006,15 +1010,26 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 		if err := save(link); err != nil {
 			return &link, err
 		}
-		updated, updateErr = c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, paymentChoice))
+		updated, updateErr = c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, paymentChoice, pickupPoint))
 	}
-	if updateErr == nil && paymentChoice == nil && updated.Selection.SelectedPreference != preferences.Payment && updated.Selection.Methods[preferences.Payment] != nil {
-		paymentChoice = updated.Selection.Methods[preferences.Payment]
-		link.Status = "checkout_selecting_preferences"
-		if err := save(link); err != nil {
-			return &link, err
+	// Switching to pickup can reveal Vinted's saved point. Confirm that exact
+	// point once with its current rate; never substitute another point on failure.
+	if updateErr == nil {
+		selectPayment := paymentChoice == nil && updated.Selection.SelectedPreference != preferences.Payment && updated.Selection.Methods[preferences.Payment] != nil
+		selectPickup := preferences.Shipping == "pickup" && pickupPoint == nil && updated.Selection.PickupPoint != nil
+		if selectPayment {
+			paymentChoice = updated.Selection.Methods[preferences.Payment]
 		}
-		updated, updateErr = c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, paymentChoice))
+		if selectPickup {
+			pickupPoint = updated.Selection.PickupPoint
+		}
+		if selectPayment || selectPickup {
+			link.Status = "checkout_selecting_preferences"
+			if err := save(link); err != nil {
+				return &link, err
+			}
+			updated, updateErr = c.updatePurchaseCheckout(build.PurchaseID, transactionID, checkoutComponents(preferences, paymentChoice, pickupPoint))
+		}
 	}
 	if updateErr != nil {
 		// The built checkout can be completed by its owner in Vinted. Do not
@@ -1028,13 +1043,19 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 			}
 		}
 		link.Status = "checkout_review_required"
-		if updated.Selection.Ready() && preferences.Payment != "wallet" && (preferences.Payment == "" || preferences.Payment == "vinted" || updated.Selection.SelectedPreference == preferences.Payment) {
+		if updated.Selection.matchesDelivery(preferences, pickupPoint) && preferences.Payment != "wallet" && (preferences.Payment == "" || preferences.Payment == "vinted" || updated.Selection.SelectedPreference == preferences.Payment) {
 			link.Status = "checkout_prepared"
 		}
 	}
 	if preferences.AutoCheckout != nil {
 		link.AutoCheckoutReason = "Review the checkout: payment method, delivery or price could not be verified. No automatic payment was started."
+		if updateErr == nil && updated.Selection.AutoCurrency != preferences.AutoCheckout.Currency {
+			link.AutoCheckoutReason = fmt.Sprintf("The checkout currency does not match your %s spending limit. No automatic payment was started.", preferences.AutoCheckout.Currency)
+		} else if updateErr == nil && preferences.Shipping == "pickup" && !updated.Selection.matchesPickupPoint(pickupPoint) {
+			link.AutoCheckoutReason = "Vinted could not confirm your saved pickup point and its shipping rate. Select a pickup point in Vinted and finish manually. No automatic payment was started."
+		}
 		if link.Status == "checkout_prepared" && updated.Selection.AutoAmountsVerified &&
+			updated.Selection.AutoCurrency == preferences.AutoCheckout.Currency &&
 			updated.Selection.AutoTotalMinor <= preferences.AutoCheckout.MaxTotalMinor &&
 			updated.Selection.Methods[preferences.Payment] != nil && updated.Checksum != "" &&
 			(preferences.Payment != "card" || (updated.Selection.CardVerified && !updated.Selection.CardSignalsRequired &&

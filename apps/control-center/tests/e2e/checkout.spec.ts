@@ -19,6 +19,139 @@ const target = {
     price: "25.00 EUR",
 };
 
+for (const mode of ["GBP", "pickup", "PLN"] as const) {
+    const minimumProtocol = mode === "PLN" ? 8 : 7;
+    for (const protocol of [minimumProtocol - 1, minimumProtocol]) {
+        test(`${mode} checkout ${protocol < minimumProtocol ? "blocks an older extension before readiness or authorization" : "passes its exact saved preferences to shared authorization"}`, async ({
+            page,
+        }) => {
+            const domain =
+                mode === "GBP"
+                    ? "www.vinted.co.uk"
+                    : mode === "PLN"
+                      ? "www.vinted.pl"
+                      : "www.vinted.de";
+            const preferences = {
+                shipping: mode === "pickup" ? "pickup" : "home",
+                payment: "card",
+                autoCheckout: {
+                    warningVersion: 2,
+                    currency:
+                        mode === "GBP" ? "GBP" : mode === "PLN" ? "PLN" : "EUR",
+                    maxTotalMinor: 1829,
+                },
+            };
+            let authorizations = 0;
+            const received: unknown[] = [];
+            await page.exposeFunction(
+                "newCheckoutReceived",
+                (payload: unknown) => received.push(payload),
+            );
+            await page.addInitScript(
+                ({ protocol, domain }) => {
+                    window.addEventListener("message", (event) => {
+                        if (event.source !== window) return;
+                        if (event.data?.type === "VINTRACK_EXTENSION_PING")
+                            window.postMessage(
+                                {
+                                    type: "VINTRACK_EXTENSION_READY",
+                                    payload: {
+                                        configured: true,
+                                        checkoutPrepareVersion: protocol,
+                                    },
+                                },
+                                window.location.origin,
+                            );
+                        if (event.data?.type === "VINTRACK_EXTENSION_BUY") {
+                            const payload = event.data.payload;
+                            void (
+                                window as unknown as {
+                                    newCheckoutReceived(
+                                        payload: unknown,
+                                    ): Promise<void>;
+                                }
+                            ).newCheckoutReceived(payload);
+                            window.postMessage(
+                                {
+                                    type: "VINTRACK_EXTENSION_BUY_RESULT",
+                                    payload: payload.readinessOnly
+                                        ? {
+                                              requestId: payload.requestId,
+                                              ok: true,
+                                              ready: true,
+                                          }
+                                        : {
+                                              requestId: payload.requestId,
+                                              ok: true,
+                                              status: "card_authentication_required",
+                                              checkoutUrl: `https://${domain}/checkout?purchase_id=synthetic&after_payment_redirect=true`,
+                                              autoCheckoutReason:
+                                                  "Continue in Vinted to complete card authentication. Do not pay again.",
+                                          },
+                                },
+                                window.location.origin,
+                            );
+                        }
+                    });
+                },
+                { protocol, domain },
+            );
+            await page.route("**/api/checkout/17/123", (route) => {
+                if (route.request().method() === "GET")
+                    return route.fulfill({
+                        json: {
+                            ...target,
+                            domain,
+                            itemUrl: `https://${domain}/items/123`,
+                            preferences,
+                        },
+                    });
+                authorizations++;
+                expect(
+                    route.request().headers()[
+                        "x-vintrack-checkout-preferences"
+                    ],
+                ).toBe(
+                    `${preferences.shipping}:card:auto:2:${preferences.autoCheckout.currency}:1829`,
+                );
+                return route.fulfill({
+                    json: { browserPaymentAuthorized: true },
+                });
+            });
+            await page.route("**/api/items/checkout-links", (route) =>
+                route.fulfill({ json: { ok: true } }),
+            );
+            await page.goto("/checkout/17/123");
+            if (protocol < minimumProtocol) {
+                await expect(
+                    page
+                        .getByRole("alert")
+                        .filter({
+                            hasText:
+                                mode === "PLN"
+                                    ? "version 0.4 or later"
+                                    : "version 0.3.4 or later",
+                        }),
+                ).toBeVisible();
+                expect(authorizations).toBe(0);
+                expect(received).toHaveLength(0);
+            } else {
+                await expect(
+                    page
+                        .getByRole("status")
+                        .filter({ hasText: "card authentication" }),
+                ).toBeVisible();
+                expect(authorizations).toBe(1);
+                expect(received).toHaveLength(2);
+                for (const payload of received)
+                    expect(
+                        (payload as { preferences: unknown }).preferences,
+                    ).toEqual(preferences);
+            }
+        });
+    }
+}
+
 for (const auto of [false, true]) {
     test(`risk warning blocks ${auto ? "auto-checkout" : "normal checkout"} until explicitly accepted`, async ({
         page,

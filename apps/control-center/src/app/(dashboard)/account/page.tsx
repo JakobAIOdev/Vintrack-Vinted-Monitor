@@ -8,6 +8,10 @@ import { getMemberGithubRewardStatus } from "@/lib/github-rewards.server";
 import { GithubRewardStatusCard } from "@/components/github-reward-status-card";
 import { CircleUserRound, Github, ShoppingBag } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CheckoutFeatureShortcut } from "@/components/account/checkout-feature-shortcut";
+import { checkoutFeatureDiscoverable } from "@/lib/account-updates";
+import { getFeatureAccessForUser } from "@/lib/features.server";
+import { db } from "@/lib/db";
 
 function githubConnectionErrorMessage(reason?: string) {
     switch (reason) {
@@ -34,9 +38,10 @@ export default async function AccountPage({
     const session = await auth();
     if (!session?.user) redirect("/login");
 
-    const [status, githubRewards] = await Promise.all([
+    const [status, githubRewards, checkoutAccess] = await Promise.all([
         getAccountStatus(),
         getMemberGithubRewardStatus(session.user.id),
+        getFeatureAccessForUser("checkout_links", session.user.id, db, false),
     ]);
     const resolvedSearchParams = await searchParams;
     const githubResult = resolvedSearchParams?.github;
@@ -48,7 +53,7 @@ export default async function AccountPage({
             ? "github"
             : "vinted";
     const latestExtensionVersion =
-        process.env.BROWSER_EXTENSION_LATEST_VERSION?.trim() || "0.3.3";
+        process.env.BROWSER_EXTENSION_LATEST_VERSION?.trim() || "0.4";
     const minimumExtensionVersion =
         process.env.BROWSER_EXTENSION_MIN_VERSION?.trim() || "0.2.1";
     const firefoxExtensionUrl =
@@ -72,6 +77,9 @@ export default async function AccountPage({
                         Manage login providers, rewards, and the Vinted session
                         used by member tools.
                     </p>
+                    {checkoutFeatureDiscoverable(checkoutAccess) && (
+                        <CheckoutFeatureShortcut linked={status.linked} />
+                    )}
                 </div>
             </header>
 
@@ -144,7 +152,10 @@ export default async function AccountPage({
                 })}
             </nav>
 
-            <section className="min-w-0 space-y-3">
+            <section
+                id={`${activeConnection}-connection`}
+                className="min-w-0 scroll-mt-20 space-y-3"
+            >
                 <div className="flex items-center gap-3 px-0.5 py-0.5">
                     <div className="border-border/70 bg-muted/40 flex h-9 w-9 items-center justify-center rounded-lg border">
                         {activeConnection === "github" ? (

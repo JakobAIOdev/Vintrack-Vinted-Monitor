@@ -1,3 +1,61 @@
+import currencyMinorUnits from "./checkout-currencies.generated.json" with { type: "json" };
+
+export type CheckoutCurrency = keyof typeof currencyMinorUnits;
+export const CHECKOUT_CURRENCIES = Object.keys(
+    currencyMinorUnits,
+) as CheckoutCurrency[];
+
+export function isCheckoutCurrency(value: unknown): value is CheckoutCurrency {
+    return (
+        typeof value === "string" &&
+        Object.prototype.hasOwnProperty.call(currencyMinorUnits, value)
+    );
+}
+
+export function checkoutCurrencyDigits(currency: CheckoutCurrency) {
+    return currencyMinorUnits[currency];
+}
+
+export function checkoutMaximumMinor(currency: CheckoutCurrency) {
+    return 10_000 * 10 ** checkoutCurrencyDigits(currency);
+}
+
+// Decimal strings only: never round extra non-zero decimal places or convert
+// a spending limit into another currency. Some native quotes pad whole units.
+export function parseCheckoutAmount(
+    amount: string,
+    currency: CheckoutCurrency,
+): number | null {
+    if (
+        !isCheckoutCurrency(currency) ||
+        typeof amount !== "string" ||
+        !/^\d{1,7}(?:[.,]\d{1,4})?$/.test(amount)
+    )
+        return null;
+    const digits = checkoutCurrencyDigits(currency);
+    const [whole, fraction = ""] = amount.replace(",", ".").split(".");
+    if (/[1-9]/.test(fraction.slice(digits))) return null;
+    return (
+        Number(whole) * 10 ** digits +
+        Number((fraction + "0".repeat(digits)).slice(0, digits))
+    );
+}
+
+export function checkoutDefaultCurrency(domain: string): CheckoutCurrency {
+    const normalized = checkoutDomain(domain);
+    const currencies: Record<string, CheckoutCurrency> = {
+        "www.vinted.co.uk": "GBP",
+        "www.vinted.pl": "PLN",
+        "www.vinted.cz": "CZK",
+        "www.vinted.se": "SEK",
+        "www.vinted.dk": "DKK",
+        "www.vinted.ro": "RON",
+        "www.vinted.hu": "HUF",
+        "www.vinted.com": "USD",
+    };
+    return currencies[normalized || ""] || "EUR";
+}
+
 export type CheckoutTarget = {
     itemId: number;
     monitorId: number;
@@ -13,7 +71,7 @@ export type CheckoutTarget = {
 };
 
 export type CheckoutPreferences = {
-    shipping: "home" | "vinted";
+    shipping: "home" | "pickup" | "vinted";
     payment:
         | "wallet"
         | "paypal"
@@ -29,7 +87,7 @@ export type CheckoutPreferences = {
     autoCheckout?: {
         warningVersion: 1 | 2;
         maxTotalMinor: number;
-        currency: "EUR";
+        currency: CheckoutCurrency;
     };
 };
 
@@ -73,10 +131,11 @@ export function isAutoCheckoutPreference(
     return (
         Object.keys(setting).length === 3 &&
         setting.warningVersion === autoCheckoutWarningVersion(payment) &&
-        setting.currency === "EUR" &&
+        isCheckoutCurrency(setting.currency) &&
         Number.isSafeInteger(setting.maxTotalMinor) &&
         (setting.maxTotalMinor as number) > 0 &&
-        (setting.maxTotalMinor as number) <= 1_000_000
+        (setting.maxTotalMinor as number) <=
+            checkoutMaximumMinor(setting.currency)
     );
 }
 
@@ -150,7 +209,7 @@ export function isCheckoutPreferences(
         ) &&
         typeof preferences.shipping === "string" &&
         typeof preferences.payment === "string" &&
-        ["home", "vinted"].includes(preferences.shipping) &&
+        ["home", "pickup", "vinted"].includes(preferences.shipping) &&
         Object.prototype.hasOwnProperty.call(
             CHECKOUT_PAYMENT_LABELS,
             preferences.payment,
