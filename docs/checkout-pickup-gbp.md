@@ -141,6 +141,12 @@ payment warnings or altering payment preferences. Dismissing the dashboard hint
 uses its existing local-storage revision key, so previous dismissals stay valid.
 The checkout promotion has no separate colored panel or banner.
 
+For local visual testing, open `/dashboard?previewCheckoutUpdate=1` on
+`localhost`, `127.0.0.1` or `[::1]`. This previews the hint even after an Account
+visit or previous dismissal. It still respects feature policies and maintenance.
+Closing the preview does not change stored dismissal or acknowledgement status.
+On other hosts the query parameter has no effect.
+
 Validation: 228 dashboard unit tests, lint and production build passed. Isolated
 desktop/mobile checks rendered the real sidebar, inline hint, header shortcut and
 checkout card with synthetic data. They verified compact field widths,

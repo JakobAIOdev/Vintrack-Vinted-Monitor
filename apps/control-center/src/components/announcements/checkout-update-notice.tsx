@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { ArrowRight, X } from "lucide-react";
 import { shouldShowCheckoutUpdate } from "@/lib/account-updates";
 import type { FeatureAccessResult } from "@/lib/features";
@@ -27,7 +27,9 @@ export function CheckoutUpdateNotice({
     access: FeatureAccessResult;
 }) {
     const pathname = usePathname();
+    const searchParams = useSearchParams();
     const { maintenance } = useMonitorMaintenance();
+    const [preview, setPreview] = useState(false);
     const [dismissed, setDismissed] = useState(false);
     const [dismissalChecked, setDismissalChecked] = useState(false);
 
@@ -35,8 +37,15 @@ export function CheckoutUpdateNotice({
         let active = true;
         queueMicrotask(() => {
             if (!active) return;
+            const localPreview =
+                ["localhost", "127.0.0.1", "[::1]"].includes(
+                    window.location.hostname,
+                ) && searchParams.get("previewCheckoutUpdate") === "1";
+            setPreview(localPreview);
             try {
-                setDismissed(localStorage.getItem(dismissalKey) === "1");
+                setDismissed(
+                    !localPreview && localStorage.getItem(dismissalKey) === "1",
+                );
             } catch {
                 // The notice remains dismissible when browser storage is unavailable.
             }
@@ -45,13 +54,17 @@ export function CheckoutUpdateNotice({
         return () => {
             active = false;
         };
-    }, []);
+    }, [searchParams]);
 
     if (
         !dismissalChecked ||
         dismissed ||
         maintenance.enabled ||
-        !shouldShowCheckoutUpdate(seenVersion, access, pathname)
+        !shouldShowCheckoutUpdate(
+            preview ? undefined : seenVersion,
+            access,
+            pathname,
+        )
     )
         return null;
     return (
@@ -73,6 +86,7 @@ export function CheckoutUpdateNotice({
                 className="text-muted-foreground hover:text-foreground hover:bg-muted inline-flex size-8 shrink-0 items-center justify-center rounded transition-colors focus-visible:outline-2 focus-visible:outline-offset-2"
                 onClick={() => {
                     setDismissed(true);
+                    if (preview) return;
                     try {
                         localStorage.setItem(dismissalKey, "1");
                     } catch {
