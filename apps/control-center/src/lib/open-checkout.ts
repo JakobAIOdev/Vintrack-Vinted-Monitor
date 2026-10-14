@@ -273,6 +273,7 @@ async function startCheckout(
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 item_id: itemId,
+                monitor_id: monitorId,
                 seller_id: target.sellerId,
                 transaction_id: result.transactionId || 0,
                 purchase_id: result.purchaseId || "",

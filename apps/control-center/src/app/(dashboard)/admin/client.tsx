@@ -122,6 +122,8 @@ import type {
     InactivityMonitorScope,
 } from "@/lib/inactive-member-policy";
 import { GithubRewardsAdminPanel } from "@/components/admin/github-rewards-admin-panel";
+import { CheckoutNotificationsAdminPanel } from "@/components/admin/checkout-notifications-admin-panel";
+import type { getCheckoutNotificationsAdminState } from "@/actions/admin-checkout-notifications";
 import type { GithubRewardsAdminState } from "@/actions/github-rewards";
 import {
     FeaturePoliciesAdminPanel,
@@ -1188,6 +1190,7 @@ export function AdminClient({
     initialInactiveMemberPolicyState,
     freeProxyState: initialFreeProxyState,
     initialGithubRewardsState,
+    initialCheckoutNotificationsState,
     initialPriceWatchPollingState,
     initialFeaturePolicyState,
     initialWorkerPolicy,
@@ -1205,6 +1208,9 @@ export function AdminClient({
     initialInactiveMemberPolicyState: InactiveMemberPolicyAdminState;
     freeProxyState: FreeProxyState;
     initialGithubRewardsState: GithubRewardsAdminState;
+    initialCheckoutNotificationsState: Awaited<
+        ReturnType<typeof getCheckoutNotificationsAdminState>
+    >;
     initialPriceWatchPollingState: PriceWatchPollingAdminState;
     initialFeaturePolicyState: FeatureAdminState;
     initialWorkerPolicy: WorkerPolicy;
@@ -6037,9 +6043,14 @@ export function AdminClient({
             ) : null}
 
             {activeTab === "rewards" ? (
-                <GithubRewardsAdminPanel
-                    initialState={initialGithubRewardsState}
-                />
+                <div className="space-y-6">
+                    <CheckoutNotificationsAdminPanel
+                        initialState={initialCheckoutNotificationsState}
+                    />
+                    <GithubRewardsAdminPanel
+                        initialState={initialGithubRewardsState}
+                    />
+                </div>
             ) : null}
 
             {activeTab === "logs" ? (
