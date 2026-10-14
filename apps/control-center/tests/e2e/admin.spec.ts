@@ -5,6 +5,52 @@ function getAdminMain(page: Page) {
 }
 
 test.describe("admin running monitors", () => {
+    test("previews checkout fields and anonymized status without sending a webhook", async ({
+        page,
+    }) => {
+        await page.goto("/admin/integrations");
+        const panel = page.getByRole("region", {
+            name: "Checkout notifications",
+            exact: true,
+        });
+        await expect(
+            panel.getByRole("heading", {
+                name: "Checkout notifications",
+                exact: true,
+            }),
+        ).toBeVisible();
+        await panel
+            .getByRole("button", { name: "All details", exact: true })
+            .click();
+        await expect(
+            panel.getByLabel("Vintrack user (name / ID)", { exact: true }),
+        ).toBeChecked();
+        await expect(
+            panel.getByText("Vintage Nike jacket", { exact: true }),
+        ).toBeVisible();
+        await panel
+            .getByLabel("Preview checkout status")
+            .selectOption("paypal_redirect_ready");
+        await expect(
+            panel.getByText("PayPal opened · payment not confirmed", {
+                exact: true,
+            }),
+        ).toBeVisible();
+        await panel
+            .getByRole("button", { name: "Anonymized", exact: true })
+            .click();
+        await expect(
+            panel.getByLabel("Vintrack user (name / ID)", { exact: true }),
+        ).not.toBeChecked();
+        await expect(
+            panel.getByText("Vintage Nike jacket", { exact: true }),
+        ).toHaveCount(0);
+        await expect(
+            panel.getByLabel("Checkout method", { exact: true }),
+        ).toBeChecked();
+        await expect(panel.getByLabel("Region", { exact: true })).toBeChecked();
+    });
+
     test("reviews feature roles, dependencies, and job impact before apply", async ({
         page,
     }) => {

@@ -20,6 +20,8 @@ import {
 import { getMemberAnnouncement } from "@/lib/member-announcement.server";
 import { DEFAULT_MEMBER_ANNOUNCEMENT } from "@/lib/member-announcement";
 import { getGithubRewardsAdminState } from "@/actions/github-rewards";
+import { getCheckoutNotificationsAdminState } from "@/actions/admin-checkout-notifications";
+import { DEFAULT_CHECKOUT_NOTIFICATION_POLICY } from "@/lib/checkout-notifications";
 import { DEFAULT_GITHUB_REWARDS_POLICY } from "@/lib/github-rewards";
 import { getFeaturePoliciesAdminState } from "@/actions/admin-features";
 import { getDeploymentConfigDiagnostics } from "@/lib/deployment-config.server";
@@ -175,6 +177,7 @@ export async function renderAdminSection(initialTab: AdminSection) {
         featurePolicyState,
         workerPolicyState,
         ownProxyLimit,
+        checkoutNotificationsState,
     ] = await Promise.all([
         isMemberArea
             ? getMonitorLimits([
@@ -217,6 +220,18 @@ export async function renderAdminSection(initialTab: AdminSection) {
         isMemberArea
             ? getOwnProxyLimit()
             : Promise.resolve(DEFAULT_OWN_PROXY_ACTIVE_LIMIT),
+        isIntegrationsArea
+            ? getCheckoutNotificationsAdminState()
+            : Promise.resolve({
+                  settings: {
+                      enabled: DEFAULT_CHECKOUT_NOTIFICATION_POLICY.enabled,
+                      events: DEFAULT_CHECKOUT_NOTIFICATION_POLICY.events,
+                      fields: DEFAULT_CHECKOUT_NOTIFICATION_POLICY.fields,
+                  },
+                  hasWebhook: false,
+                  recent: [],
+                  counts: {},
+              }),
     ]);
 
     return (
@@ -231,6 +246,7 @@ export async function renderAdminSection(initialTab: AdminSection) {
             initialInactiveMemberPolicyState={inactiveMemberPolicyState}
             freeProxyState={freeProxyState}
             initialGithubRewardsState={githubRewardsState}
+            initialCheckoutNotificationsState={checkoutNotificationsState}
             initialPriceWatchPollingState={priceWatchPollingState}
             initialFeaturePolicyState={featurePolicyState}
             initialWorkerPolicy={workerPolicyState}

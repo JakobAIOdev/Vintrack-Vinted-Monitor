@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { guardCheckoutConsent } from "@/lib/checkout-consent.server";
 import { NextRequest, NextResponse } from "next/server";
 import { logAuditEvent } from "@/lib/audit";
+import { queueCheckoutNotification } from "@/lib/checkout-notifications.server";
 
 const API_URL = process.env.VINTED_SERVICE_URL || "http://localhost:4000";
 
@@ -37,6 +38,16 @@ export async function POST(req: NextRequest) {
     if (!session?.user?.id) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const origin = req.headers.get("origin");
+    if (
+        req.headers.get("sec-fetch-site") === "cross-site" ||
+        (origin && origin !== new URL(process.env.AUTH_URL || req.url).origin)
+    ) {
+        return NextResponse.json(
+            { error: "Invalid checkout origin." },
+            { status: 403 },
+        );
+    }
 
     const featureDenied = await guardApiFeature(
         session.user.id,
@@ -52,6 +63,10 @@ export async function POST(req: NextRequest) {
             item_id?: unknown;
             seller_id?: unknown;
             status?: unknown;
+            transaction_id?: unknown;
+            purchase_id?: unknown;
+            monitor_id?: unknown;
+            checkout_url?: unknown;
         };
         const res = await fetch(`${API_URL}/api/items/checkout-links`, {
             method: "POST",
@@ -64,6 +79,21 @@ export async function POST(req: NextRequest) {
         });
 
         const data = await res.json().catch(() => ({}));
+        if (res.ok)
+            await queueCheckoutNotification({
+                userId: session.user.id,
+                itemId: parsed.item_id,
+                transactionId: parsed.transaction_id,
+                purchaseId: parsed.purchase_id,
+                status: parsed.status,
+                browserReported: true,
+                checkoutUrl: parsed.checkout_url,
+                monitorId:
+                    Number.isSafeInteger(parsed.monitor_id) &&
+                    Number(parsed.monitor_id) > 0
+                        ? Number(parsed.monitor_id)
+                        : undefined,
+            });
         await logAuditEvent({
             userId: session.user.id,
             action: "checkout_link.store",

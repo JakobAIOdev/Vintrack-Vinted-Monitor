@@ -2,6 +2,7 @@ import { guardApiFeature } from "@/lib/features.server";
 import { auth } from "@/auth";
 import { guardCheckoutConsent } from "@/lib/checkout-consent.server";
 import { NextRequest, NextResponse } from "next/server";
+import { queueCheckoutNotification } from "@/lib/checkout-notifications.server";
 
 const API_URL = process.env.VINTED_SERVICE_URL || "http://localhost:4000";
 
@@ -51,6 +52,17 @@ export async function POST(req: NextRequest) {
             );
         }
 
+        await queueCheckoutNotification({
+            userId: session.user.id,
+            itemId: data.item_id,
+            transactionId: data.transaction_id,
+            purchaseId: data.purchase_id,
+            status: data.status,
+            method: "oneclick",
+            // The legacy endpoint can accept opaque Vinted payment selections;
+            // do not infer a card/bank method from arbitrary request data.
+            payment: "vinted",
+        });
         return NextResponse.json(data, { status: res.status });
     } catch {
         return NextResponse.json(

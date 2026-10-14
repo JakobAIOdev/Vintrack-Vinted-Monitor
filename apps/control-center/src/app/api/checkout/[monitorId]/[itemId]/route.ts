@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import { guardApiFeature } from "@/lib/features.server";
 import { CheckoutTargetError, loadCheckoutTarget } from "@/lib/checkout.server";
+import { queueCheckoutNotification } from "@/lib/checkout-notifications.server";
 import {
     isCheckoutUrl,
     isPayPalPaymentUrl,
@@ -148,6 +149,19 @@ async function handle(
                 { error: "Vinted did not return a valid checkout link." },
                 { status: 502 },
             );
+        await queueCheckoutNotification({
+            userId: session.user.id,
+            itemId: target.itemId,
+            monitorId: target.monitorId,
+            transactionId: data.transaction_id,
+            purchaseId: data.purchase_id,
+            status: data.status,
+            domain: target.domain,
+            method: target.preferences?.autoCheckout
+                ? "full_checkout"
+                : "oneclick",
+            payment: target.preferences?.payment,
+        });
         return NextResponse.json(
             {
                 checkoutUrl: data.checkout_url,

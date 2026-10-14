@@ -91,6 +91,9 @@ function harness(
         "@/lib/db": { db },
         "@/lib/checkout": checkout,
         "@/lib/checkout-consent": checkoutConsent,
+        "@/lib/checkout-notifications.server": {
+            queueCheckoutNotification: async () => {},
+        },
         "@/auth": {
             auth: async () =>
                 options.anonymous ? null : { user: { id: "synthetic-member" } },

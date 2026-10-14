@@ -152,6 +152,9 @@ test("legacy buy, warmup and saved-link endpoints enforce persisted consent befo
             let forwards = 0;
             const modules: Record<string, unknown> = {
                 "server-only": {},
+                "@/lib/checkout-notifications.server": {
+                    queueCheckoutNotification: async () => {},
+                },
                 "@/auth": {
                     auth: async () => ({ user: { id: "synthetic-member" } }),
                 },
