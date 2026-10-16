@@ -1706,25 +1706,13 @@ func importFreeProxies(ctx context.Context, store *database.Store) {
 		sourceCandidates = append(sourceCandidates, candidates)
 	}
 
-	inventory, err := store.GetFreeProxyImportInventoryContext(importCtx)
+	canonicalInventory, pruned, err := prepareFreeProxyImportInventory(importCtx, store, allSeenProxyURLs)
 	if err != nil {
-		log.Printf("free proxy import existing pool load failed: %v", err)
+		log.Printf("free proxy import inventory preparation failed: %v", err)
 		return
 	}
-	canonicalInventory := make(map[string]database.FreeProxyInventoryRecord, len(inventory))
-	touchedProxyURLs := make([]string, 0, len(inventory))
-	for storedProxyURL, record := range inventory {
-		canonicalProxyURL := canonicalFreeProxyURL(storedProxyURL)
-		current, exists := canonicalInventory[canonicalProxyURL]
-		if !exists || (storedProxyURL == canonicalProxyURL && current.ProxyURL != canonicalProxyURL) {
-			canonicalInventory[canonicalProxyURL] = record
-		}
-		if allSeenProxyURLs[canonicalProxyURL] {
-			touchedProxyURLs = append(touchedProxyURLs, record.ProxyURL)
-		}
-	}
-	if err := store.TouchFreeProxiesSeenContext(importCtx, touchedProxyURLs); err != nil {
-		log.Printf("free proxy last-seen refresh failed: %v", err)
+	if pruned > 0 {
+		log.Printf("free proxy import reclaimed %d stale candidates before selection", pruned)
 	}
 	selectedCandidates, newCandidates := selectFreeProxyImportCandidates(
 		sourceCandidates,
@@ -1746,14 +1734,6 @@ func importFreeProxies(ctx context.Context, store *database.Store) {
 	if err := store.RefreshFreeProxySourcesContext(importCtx, refreshedSources, currentMemberships); err != nil {
 		log.Printf("free proxy source membership refresh failed: %v", err)
 		return
-	}
-	selectedProxyURLs := make([]string, 0, len(selectedCandidates))
-	for _, candidate := range selectedCandidates {
-		selectedProxyURLs = append(selectedProxyURLs, candidate.ProxyURL)
-	}
-	pruned, err := store.PruneUnselectedFreeProxiesContext(importCtx, selectedProxyURLs)
-	if err != nil {
-		log.Printf("free proxy stale candidate prune failed: %v", err)
 	}
 	if processed > 0 {
 		log.Printf(

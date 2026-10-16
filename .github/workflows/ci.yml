@@ -312,6 +312,20 @@ jobs:
     needs: changes
     if: needs.changes.outputs.worker == 'true'
 
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: vintrack_worker_test
+          POSTGRES_PASSWORD: vintrack_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vintrack_worker_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     defaults:
       run:
         working-directory: apps/worker
@@ -329,6 +343,11 @@ jobs:
 
       - name: Run tests
         run: go test ./...
+
+      - name: Test proxy import cleanup against PostgreSQL
+        env:
+          FREE_PROXY_STORE_INTEGRATION_DATABASE_URL: postgresql://postgres:vintrack_test@localhost:5432/vintrack_worker_test?sslmode=disable
+        run: go test ./internal/database -run '^TestPruneFreeProxyImport' -count=1
 
   vinted-service-tests:
     name: Go Tests (apps/vinted-service)

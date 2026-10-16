@@ -59,6 +59,16 @@ Client selection favors low-latency, successful, idle sessions. HTTP 401/403/407
 
 The automatic free-proxy import combines IPLocate and ProxyScrape with measured, frequently refreshed Proxifly, Databay SOCKS4/SOCKS5, and Monosans feeds. Candidates are deduplicated before storage, interleaved across providers, and still have to pass the target Vinted region check before they become usable.
 
+Before selecting new imports, the maintainer reclaims up to 1,000 auto-imported
+candidates that disappeared from the feeds for more than 24 hours and have never
+succeeded globally or regionally, including candidates that were never checked.
+Current feed entries, manual/disabled proxies and active validation claims are
+preserved. Empty downloads cannot start cleanup. After pruning, inventory is
+reloaded so freed slots admit replacements in the same import cycle. Cleanup
+uses bounded batches and skips locked rows. Recovery is gradual across import
+and validation cycles; imported candidates still require normal regional checks
+before serving users. No schema migration or configuration change is required.
+
 ## Alert semantics
 
 Dashboard/SSE publishing, Discord, and Telegram use separate bounded worker queues, so a slow external channel cannot stall later items. Without a seller-country filter, the dashboard publishes immediately from catalog data while Discord and Telegram wait for seller enrichment so their alerts include region and rating. A configured seller-country filter remains strict: seller enrichment and the country check complete before the item is published, saved, or alerted.
