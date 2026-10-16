@@ -69,6 +69,15 @@ uses bounded batches and skips locked rows. Recovery is gradual across import
 and validation cycles; imported candidates still require normal regional checks
 before serving users. No schema migration or configuration change is required.
 
+When globally proven candidates are added to a regional window, trimming uses
+the same hourly tie-break as selection. Untested newer imports are not
+systematically displaced by older database IDs; proven candidates retain their
+higher priority and the regional window limit still applies.
+Claims also use that hourly order to break otherwise equal source, protocol
+and regional rankings, giving newer untested candidates a fair place in the
+existing exploration budget. Validation concurrency, lane quotas and promotion
+requirements are unchanged.
+
 ## Alert semantics
 
 Dashboard/SSE publishing, Discord, and Telegram use separate bounded worker queues, so a slow external channel cannot stall later items. Without a seller-country filter, the dashboard publishes immediately from catalog data while Discord and Telegram wait for seller enrichment so their alerts include region and rating. A configured seller-country filter remains strict: seller enrichment and the country check complete before the item is published, saved, or alerted.

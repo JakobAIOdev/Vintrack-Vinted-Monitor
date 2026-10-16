@@ -28,19 +28,42 @@ func freeProxyImportTestStore(t *testing.T) *Store {
 		CREATE TEMP TABLE free_proxies (
 			id SERIAL PRIMARY KEY,
 			proxy_url TEXT NOT NULL UNIQUE,
+			protocol TEXT NOT NULL DEFAULT 'http',
 			source TEXT NOT NULL DEFAULT 'iplocate',
+			sources TEXT[] NOT NULL DEFAULT '{}',
 			status TEXT NOT NULL DEFAULT 'pending',
 			success_count INTEGER NOT NULL DEFAULT 0,
+			failure_count INTEGER NOT NULL DEFAULT 0,
 			last_success_at TIMESTAMP,
 			last_checked_at TIMESTAMP,
 			last_seen_at TIMESTAMP DEFAULT NOW() - INTERVAL '2 days',
-			check_claimed_until TIMESTAMP
+			quarantined_until TIMESTAMP,
+			check_claimed_until TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 		);
 		CREATE TEMP TABLE free_proxy_health (
+			id BIGSERIAL PRIMARY KEY,
 			proxy_id INTEGER NOT NULL REFERENCES free_proxies(id) ON DELETE CASCADE,
 			region TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			success_count INTEGER NOT NULL DEFAULT 0,
 			last_success_at TIMESTAMP,
-			PRIMARY KEY (proxy_id, region)
+			failure_count INTEGER NOT NULL DEFAULT 0,
+			last_checked_at TIMESTAMP,
+			next_check_at TIMESTAMP,
+			candidate_window_token BIGINT DEFAULT FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint,
+			score INTEGER NOT NULL DEFAULT 0,
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			UNIQUE (proxy_id, region)
+		);
+		CREATE TEMP TABLE free_proxy_source_health_stats (
+			region TEXT NOT NULL,
+			source TEXT NOT NULL,
+			protocol TEXT NOT NULL,
+			success_count INTEGER NOT NULL DEFAULT 0,
+			failure_count INTEGER NOT NULL DEFAULT 0,
+			success_ewma DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+			PRIMARY KEY (region, source, protocol)
 		);`)
 	if err != nil {
 		t.Fatal(err)
