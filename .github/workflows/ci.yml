@@ -344,10 +344,10 @@ jobs:
       - name: Run tests
         run: go test ./...
 
-      - name: Test proxy import cleanup against PostgreSQL
+      - name: Test proxy inventory recovery against PostgreSQL
         env:
           FREE_PROXY_STORE_INTEGRATION_DATABASE_URL: postgresql://postgres:vintrack_test@localhost:5432/vintrack_worker_test?sslmode=disable
-        run: go test ./internal/database -run '^TestPruneFreeProxyImport' -count=1
+        run: go test ./internal/database -run '^Test(PruneFreeProxyImport|FreeProxyCandidateWindowPreservesNewCandidates|FreeProxyCandidateClaimsUseHourlyOrder)' -count=1
 
   vinted-service-tests:
     name: Go Tests (apps/vinted-service)

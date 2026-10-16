@@ -1811,6 +1811,8 @@ func (s *Store) EnsureFreeProxyHealthRowsWithLimitsContext(ctx context.Context, 
 			   )`, region, limit); err != nil {
 			return err
 		}
+		// Fanout can grow a frozen window. Keep its hourly tie-break when
+		// trimming so newly imported candidates do not always lose by ID.
 		{
 			if _, err := s.db.ExecContext(ctx, `
 			WITH excess AS (
@@ -1832,6 +1834,10 @@ func (s *Store) EnsureFreeProxyHealthRowsWithLimitsContext(ctx context.Context, 
 				  END,
 				  fph.last_success_at DESC NULLS LAST,
 				  fph.last_checked_at ASC NULLS FIRST,
+				  MD5(
+					fp.proxy_url || ':' ||
+					FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::text
+				  ),
 				  fp.id
 				OFFSET $2::bigint
 			)
@@ -1912,7 +1918,11 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 						(fph.success_count + fph.failure_count + 20.0) AS proxy_yield_score,
 					fp.last_success_at AS global_last_success_at,
 					fph.last_checked_at,
-					fph.score
+					fph.score,
+					MD5(
+						fp.proxy_url || ':' ||
+						FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::text
+					) AS hourly_order
 				FROM free_proxy_health fph
 				JOIN free_proxies fp ON fp.id = fph.proxy_id
 				CROSS JOIN LATERAL (
@@ -1971,14 +1981,16 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 							priority,
 							global_last_success_at DESC NULLS LAST,
 							last_checked_at ASC NULLS FIRST,
-							score DESC
+							score DESC,
+							hourly_order
 					) AS source_rank,
 					ROW_NUMBER() OVER (
 						PARTITION BY source, protocol
 						ORDER BY
 							priority,
 							last_checked_at ASC NULLS FIRST,
-							score DESC
+							score DESC,
+							hourly_order
 					) AS group_rank,
 					ROW_NUMBER() OVER (
 						PARTITION BY region
@@ -1988,7 +2000,8 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 							proxy_yield_score DESC,
 							global_last_success_at DESC NULLS LAST,
 							last_checked_at ASC NULLS FIRST,
-							score DESC
+							score DESC,
+							hourly_order
 					) AS region_rank
 				FROM proxy_ranked
 				CROSS JOIN source_summary
