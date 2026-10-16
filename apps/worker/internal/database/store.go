@@ -66,6 +66,7 @@ const (
 	// produces score 70, so requiring 80 here silently added a third check and
 	// deadlocked the UK canary below otherwise mature capacity.
 	freeProxyMinimumServingScore = 70
+	freeProxyPruneBatchSize      = 1000
 )
 
 type proxyGroupBandwidthDelta struct {
@@ -1599,24 +1600,35 @@ func (s *Store) PruneUnselectedFreeProxiesContext(ctx context.Context, keepProxy
 		return 0, nil
 	}
 	result, err := s.db.ExecContext(ctx, `
+		WITH stale AS (
+			SELECT fp.id
+			FROM free_proxies fp
+			WHERE (
+					fp.source LIKE 'iplocate%'
+					OR fp.source LIKE 'proxyscrape%'
+					OR fp.source LIKE 'proxifly%'
+					OR fp.source LIKE 'monosans%'
+					OR fp.source LIKE 'databay%'
+			  )
+			  AND NOT (fp.proxy_url = ANY($1))
+			  AND fp.status <> 'disabled'
+			  AND fp.success_count = 0
+			  AND fp.last_success_at IS NULL
+			  AND (fp.check_claimed_until IS NULL OR fp.check_claimed_until <= NOW())
+			  AND fp.last_seen_at < NOW() - INTERVAL '24 hours'
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM free_proxy_health fph
+				WHERE fph.proxy_id = fp.id
+				  AND fph.last_success_at IS NOT NULL
+			  )
+			ORDER BY fp.last_seen_at, fp.id
+			LIMIT $2
+			FOR UPDATE OF fp SKIP LOCKED
+		)
 		DELETE FROM free_proxies fp
-		WHERE (
-				fp.source LIKE 'iplocate%'
-				OR fp.source LIKE 'proxyscrape%'
-				OR fp.source LIKE 'proxifly%'
-				OR fp.source LIKE 'monosans%'
-				OR fp.source LIKE 'databay%'
-		  )
-		  AND NOT (fp.proxy_url = ANY($1))
-		  AND fp.success_count = 0
-		  AND fp.last_checked_at IS NOT NULL
-		  AND fp.last_seen_at < NOW() - INTERVAL '24 hours'
-		  AND NOT EXISTS (
-			SELECT 1
-			FROM free_proxy_health fph
-			WHERE fph.proxy_id = fp.id
-			  AND fph.last_success_at IS NOT NULL
-		  )`, pq.Array(keepProxyURLs))
+		USING stale
+		WHERE fp.id = stale.id`, pq.Array(keepProxyURLs), freeProxyPruneBatchSize)
 	if err != nil {
 		return 0, err
 	}
