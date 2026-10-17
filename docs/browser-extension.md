@@ -4,6 +4,10 @@ The extension is optional for catalog monitoring. It is needed to sync an
 authorized Vinted browser session for linked-account actions. Install it on the
 computer and browser where you use Vinted, even when Vintrack runs on a VPS.
 
+Android Firefox and iPhone Safari development previews are described in
+[Mobile checkout](mobile-checkout.md). They require device validation and are
+not yet available as supported public mobile releases.
+
 Choose the instructions for your dashboard:
 
 | Dashboard | Build to install |

@@ -1,0 +1,115 @@
+{
+  "tool": {
+    "package": "rea-agents",
+    "version": "6.5.0",
+    "route": "static CLI; no target execution"
+  },
+  "current_inventory": {
+    "page": "https://www.vinted.de/items/10403165777-zara-polo-size-xl",
+    "status": 200,
+    "retrieved_at": "2026-10-17T07:13:15.365186+00:00",
+    "script_count": 76,
+    "total_bytes": 5377836,
+    "root_artifact_sha256": "1340d3b3c8d1781fd6a21b6d3e7bbaa7924e7b3672c6a83b032600977efeb547",
+    "semantic_source_paths": [
+      "43f4fu--kqzgy.js",
+      "305ffp0abeebw.js",
+      "2ddua4rmy6jdt.js"
+    ]
+  },
+  "files": [
+    {
+      "file": "2ddua4rmy6jdt.js",
+      "url": "https://marketplace-web-assets.vinted.com/_next/static/chunks/2ddua4rmy6jdt.js",
+      "status": 200,
+      "bytes": 61556,
+      "sha256": "021474874a28d1c6961a9134783e70b81b478d8e5cf2295d75e510a9e414b884",
+      "matches": [
+        "/conversations"
+      ],
+      "analysis": "REA selected source"
+    },
+    {
+      "file": "43f4fu--kqzgy.js",
+      "url": "https://marketplace-web-assets.vinted.com/_next/static/chunks/43f4fu--kqzgy.js",
+      "status": 200,
+      "bytes": 23754,
+      "sha256": "b78d577f0b6b506aef4e65632ec65a9747c6732a37ef644624a613c2ec3450b8",
+      "matches": [
+        "/checkout/build",
+        "initiateSingleCheckout"
+      ],
+      "analysis": "REA selected source"
+    },
+    {
+      "file": "305ffp0abeebw.js",
+      "url": "https://marketplace-web-assets.vinted.com/_next/static/chunks/305ffp0abeebw.js",
+      "status": 200,
+      "bytes": 121389,
+      "sha256": "4b112c6462ed09795d33690ccda845b422783dd69287302c5d94922fe4ba7913",
+      "matches": [
+        "initiator",
+        "/conversations"
+      ],
+      "analysis": "REA selected source"
+    },
+    {
+      "file": "1i6revhf7x0bc.js",
+      "url": "https://marketplace-web-assets.vinted.com/_next/static/chunks/1i6revhf7x0bc.js",
+      "status": 200,
+      "bytes": 172748,
+      "sha256": "ad8bb35982b1ffc99046ae7384b613eef0820401d0073836c257c8f3ada4922a",
+      "matches": [
+        "initiator",
+        "/conversations"
+      ],
+      "analysis": "manual supplemental excerpt"
+    }
+  ],
+  "historical_files": [
+    {
+      "url": "https://marketplace-web-assets.vinted.com/_next/static/chunks/36m0sy627sdj1.js",
+      "file": "36m0sy627sdj1.js",
+      "status": 200,
+      "bytes": 204909,
+      "sha256": "36995ae8fc7a7ea5167402991b54a47f20da1ae2e808dcdbc2cd5d9e8a81ce58",
+      "content_type": "text/javascript",
+      "retrieved_at": "2026-10-17T07:11:56.250323+00:00",
+      "scope": "historical public checkout assets referenced by 2026-10-05 research; current page selection unverified"
+    },
+    {
+      "url": "https://marketplace-web-assets.vinted.com/_next/static/chunks/0ym25ppuz24ui.js",
+      "file": "0ym25ppuz24ui.js",
+      "status": 200,
+      "bytes": 27251,
+      "sha256": "26201b57eeda97bd2fd6f0f9019bacb09c471fb6b84d503f468e7d8c19cbfa62",
+      "content_type": "text/javascript",
+      "retrieved_at": "2026-10-17T07:11:56.428978+00:00",
+      "scope": "historical public checkout assets referenced by 2026-10-05 research; current page selection unverified"
+    }
+  ],
+  "evidence": {
+    "current": "ev_f274821f08d33aade3713cc3ed461ee12bc12c070385d1730300ec5cee625b09",
+    "current_summary": "ev_6c8e137d384f802ce12d3c5d7f721d7be6b42fab9f02aa70618138795b485a6a",
+    "current_build_trace": "ev_e88339bee67a69877564e83bb797e1be220ba50803e9a5fe6b0d44eb67acfd6d",
+    "historical": "ev_48062a74ea1e19852129ca8fa88f53c45ed3abe6805a988080b0470fec7c5b8f"
+  },
+  "limitations": [
+    "Static syntax is not observed execution or upstream acceptance.",
+    "Current semantic coverage partial; 73 files not selected; Turbopack factory exports not recovered.",
+    "Historical semantic analysis hit 20000 node per-file ceiling.",
+    "Current payment route and account feature flags not runtime verified.",
+    "No private session or payment data captured."
+  ],
+  "trace_summary": {
+    "matched_seeds": 1,
+    "traced_nodes": 4,
+    "traced_edges": 3,
+    "terminal_paths": 0,
+    "native_handoffs": 0,
+    "observed_facts": 6,
+    "inferred_facts": 1,
+    "unknown_facts": 0,
+    "unavailable_facts": 0
+  }
+}
