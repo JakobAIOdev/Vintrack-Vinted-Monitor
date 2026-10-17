@@ -64,6 +64,9 @@ const extensionApi = globalThis.browser || globalThis.chrome;
 const isFirefoxExtension = Boolean(
   extensionApi.runtime.getManifest().browser_specific_settings?.gecko,
 );
+const isSafariExtension = Boolean(
+  extensionApi.runtime.getManifest().browser_specific_settings?.safari,
+);
 const inFlightSyncs = new Map();
 const inFlightLifecycles = new Map();
 let syncLifecycleTail = Promise.resolve();
@@ -121,8 +124,10 @@ function senderOrigin(sender) {
 
 function isExtensionPageSender(sender) {
   try {
-    const protocol = new URL(sender?.url || "").protocol;
-    return protocol === "chrome-extension:" || protocol === "moz-extension:";
+    const url = new URL(sender?.url || "");
+    const own = new URL(extensionApi.runtime.getURL("/"));
+    return ["chrome-extension:", "moz-extension:", "safari-web-extension:"].includes(url.protocol) &&
+      url.protocol === own.protocol && url.host === own.host;
   } catch {
     return false;
   }
@@ -389,9 +394,25 @@ function mostRecentlyUsedTab(tabs) {
   )[0];
 }
 
+async function needsForegroundVintedTab() {
+  if (isSafariExtension || extensionApi.runtime.getManifest().browser_specific_settings?.gecko_android) return true;
+  try {
+    const platform = await extensionApi.runtime.getPlatformInfo();
+    return platform.os === "android" || platform.os === "ios";
+  } catch {
+    return false;
+  }
+}
+
 async function getBrowserAccountForTab(tab) {
   if (typeof tab?.id !== "number") {
     return { ok: false, error: "The selected Vinted tab is unavailable." };
+  }
+
+  // Called by explicit connection/sync actions, not automatic maintenance.
+  // Mobile browsers may suspend the Vinted tab while Vintrack is active.
+  if (await needsForegroundVintedTab()) {
+    await extensionApi.tabs.update(tab.id, { active: true });
   }
 
   try {
@@ -481,6 +502,16 @@ function browserRefreshError(status, retryAfter = "") {
 }
 
 async function refreshBrowserSessionInBackground(domain, storeId) {
+  if (isSafariExtension) {
+    // Safari's extension networking is not a verified substitute for the
+    // logged-in page context. Keep refresh in an existing Vinted tab.
+    return {
+      ok: false,
+      reason: "browser-context-required",
+      requiresUserAction: true,
+      error: "Open Vinted in Safari, then sync again.",
+    };
+  }
   // fetch uses the extension's default cookie store. Container/private sessions
   // must stay in their existing tab; never copy their cookies into another store.
   const defaultStoreId = isFirefoxExtension ? "firefox-default" : "0";
@@ -1326,6 +1357,7 @@ async function waitForTabBridge(tabId, timeoutMs = BUY_TAB_READY_TIMEOUT_MS) {
 
 async function ensureVintedBuyTab(targetUrl) {
   const target = new URL(targetUrl);
+  const foregroundCheckout = await needsForegroundVintedTab();
   const matchingTabs = await extensionApi.tabs.query({
     url: [`https://${target.host}/*`],
   });
@@ -1359,12 +1391,24 @@ async function ensureVintedBuyTab(targetUrl) {
   if (existingTab) {
     // Requests run on any same-region Vinted page. Loading the item first
     // adds a full navigation without contributing to checkout preparation.
+    // Keep the receiver in the foreground on mobile while it prepares
+    // checkout. A background mobile tab can be suspended by the browser.
+    if (foregroundCheckout) await extensionApi.tabs.update(existingTab.id, { active: true });
     return { tabId: existingTab.id, created: false };
   }
   const loadingTab = existingTabs.find((tab) => tab.status === "loading" && !tab.discarded);
   if (loadingTab) {
+    if (foregroundCheckout) await extensionApi.tabs.update(loadingTab.id, { active: true });
     await waitForTabBridge(loadingTab.id);
     return { tabId: loadingTab.id, created: false };
+  }
+  const discardedTab = foregroundCheckout && existingTabs.find((tab) => tab.discarded);
+  if (discardedTab) {
+    // Activation restores an unloaded mobile tab. Wait for its bridge
+    // before recording an intent or sending any account/checkout request.
+    await extensionApi.tabs.update(discardedTab.id, { active: true });
+    await waitForTabBridge(discardedTab.id);
+    return { tabId: discardedTab.id, created: false };
   }
   if (existingTabs.length) {
     throw new CheckoutError("checkout_tab_reload_required", "The Vinted tab is disconnected from the extension. Reload Vinted once, then open a new buy link. No checkout request was sent by this attempt.");
@@ -1372,7 +1416,7 @@ async function ensureVintedBuyTab(targetUrl) {
 
   const createdTab = await extensionApi.tabs.create({
     url: targetUrl,
-    active: false,
+    active: foregroundCheckout,
   });
   if (typeof createdTab.id !== "number") {
     throw new Error("Failed to open Vinted tab for browser checkout");
@@ -1503,6 +1547,9 @@ async function handleBrowserBuy(payload) {
       error: "Invalid checkout target or linked account",
       requestId,
     };
+  }
+  if (preferences.autoCheckout && await needsForegroundVintedTab()) {
+    return { ok: false, code: "mobile_auto_payment_unavailable", error: "Automatic payment is not enabled for this mobile preview. Turn off auto-checkout and use normal Oneclick.", requestId };
   }
   if (payload?.readinessOnly === true) {
     try {
@@ -1916,7 +1963,9 @@ async function notifyCompanionMode(mode) {
   );
 }
 
-extensionApi.cookies.onChanged.addListener(({ cookie }) => {
+// Safari versions may omit cookie events; tab events, alarms and explicit
+// sync still maintain the session without disabling the message handlers.
+extensionApi.cookies.onChanged?.addListener(({ cookie }) => {
   if (!cookie || cookie.name !== "access_token_web") {
     return;
   }
@@ -2106,7 +2155,10 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
       const config = await getConfig();
-      sendResponse({ ok: true, ...formatRuntimeState(config) });
+      sendResponse({ ok: true, ...formatRuntimeState(config), checkoutCapabilities: {
+        prepare: true,
+        automaticPayment: !(await needsForegroundVintedTab()),
+      } });
       return;
     }
 

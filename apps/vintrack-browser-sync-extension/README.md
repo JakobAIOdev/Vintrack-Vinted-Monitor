@@ -5,6 +5,9 @@ Firefox use the same source and must always carry the same manifest version.
 
 **Installing for the demo, localhost, or your own domain?** Start with the
 [step-by-step installation guide](../../docs/browser-extension.md).
+
+For Android Firefox and iPhone Safari preview builds, packaging and the remaining
+device-validation requirements, see [Mobile checkout](../../docs/mobile-checkout.md).
 The public Chrome ZIP and Firefox add-on only authorize
 `https://vintrack.jakobaio.dev`. Self-hosted domains need a custom build with
 matching manifest permissions and JavaScript origin allowlists.
@@ -119,8 +122,10 @@ security-check workaround was performed.
 
 Concurrent clicks share one attempt. A local checkpoint survives worker restarts
 and prevents replay for ten minutes after an uncertain result. Checkouts are
-never automatically retried on another regional domain. Older extensions use
-the service handoff instead of the new browser protocol. The Companion does
+never automatically retried on another regional domain. Missing, unconfigured
+or outdated extensions receive setup/update guidance; a missing response does
+not start service checkout. Capability detection allows three seconds and
+repeats only non-mutating pings. The Companion does
 not expose a purchase action.
 
 ### Optional PayPal or saved-card auto-checkout
@@ -333,7 +338,8 @@ own domain, use the [local or self-hosted build instructions](../../docs/browser
    **Prepare Release** workflow.
 
 For the current release, both manifests and `BROWSER_EXTENSION_LATEST_VERSION`
-are `0.4`; the minimum compatible version remains `0.2.1`.
+are `0.4.1`; the minimum compatible version remains `0.2.1`. The Android/Safari
+targets remain unreleased previews; their availability is not enabled in AMO.
 If the GitHub Actions variable `BROWSER_EXTENSION_LATEST_VERSION` is set,
 update it with every manifest version bump: the deploy workflow rejects a
 different value before submitting the Firefox build. Keep `.env.example`,

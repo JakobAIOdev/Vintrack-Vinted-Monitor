@@ -7,7 +7,10 @@ import {
     checkoutPreferencesKey,
     type CheckoutTarget,
 } from "@/lib/checkout";
-import { runBrowserBuyViaExtension } from "@/lib/vintrack-extension";
+import {
+    detectCheckoutExtension,
+    runBrowserBuyViaExtension,
+} from "@/lib/vintrack-extension";
 import {
     CHECKOUT_RISK_WARNING_VERSION,
     CHECKOUT_CONSENT_REQUIRED,
@@ -15,38 +18,6 @@ import {
 import { requestCheckoutConsent } from "@/lib/checkout-consent.client";
 
 const pending = new Map<string, Promise<string | undefined>>();
-
-function hasCheckoutExtension() {
-    return new Promise<number>((resolve) => {
-        const timeout = window.setTimeout(() => finish(0), 750);
-        function finish(version: number) {
-            window.clearTimeout(timeout);
-            window.removeEventListener("message", onMessage);
-            resolve(version);
-        }
-        function onMessage(event: MessageEvent) {
-            if (
-                event.source === window &&
-                event.origin === window.location.origin &&
-                event.data?.type === "VINTRACK_EXTENSION_READY"
-            )
-                finish(
-                    event.data.payload?.configured === true &&
-                        Number.isSafeInteger(
-                            event.data.payload?.checkoutPrepareVersion,
-                        ) &&
-                        event.data.payload.checkoutPrepareVersion >= 2
-                        ? event.data.payload.checkoutPrepareVersion
-                        : 0,
-                );
-        }
-        window.addEventListener("message", onMessage);
-        window.postMessage(
-            { type: "VINTRACK_EXTENSION_PING" },
-            window.location.origin,
-        );
-    });
-}
 
 export async function getCheckoutTarget(
     monitorId: number,
@@ -97,10 +68,10 @@ async function startCheckout(
     let startedAt = performance.now();
     let authorizationMs = 0;
     let readinessMs = 0;
-    const [initialTarget, extensionAvailable] = await Promise.all([
+    const [initialTarget, extension] = await Promise.all([
         // Read persisted access when the visible handoff starts or retries.
         getCheckoutTarget(monitorId, itemId),
-        hasCheckoutExtension(),
+        detectCheckoutExtension(),
     ]);
     let target = initialTarget;
     onTargetLoaded?.(target);
@@ -115,10 +86,28 @@ async function startCheckout(
             );
         startedAt = performance.now();
     }
+    if (extension.state !== "ready") {
+        throw new Error(
+            extension.state === "outdated"
+                ? "Update the Vintrack extension before opening checkout."
+                : "Open this buy link in a browser with the connected Vintrack extension. Connect or check the extension in Account, then try again. Checkout has not started.",
+        );
+    }
+    const extensionAvailable = extension.protocol;
+    if (
+        target.preferences?.autoCheckout &&
+        extension.automaticPayment === false
+    ) {
+        throw new Error(
+            "Automatic payment is not available in this mobile preview. Turn off auto-checkout in Account and use normal Oneclick to review payment in Vinted.",
+        );
+    }
     if (extensionAvailable) {
         if (
             target.preferences?.autoCheckout &&
-            !["EUR", "GBP"].includes(target.preferences.autoCheckout.currency) &&
+            !["EUR", "GBP"].includes(
+                target.preferences.autoCheckout.currency,
+            ) &&
             extensionAvailable < 8
         )
             throw new Error(
@@ -283,23 +272,7 @@ async function startCheckout(
         }).catch(() => {});
         return result.autoCheckoutReason;
     }
-    const response = await fetch(checkoutApiPath(monitorId, itemId), {
-        method: "POST",
-    });
-    const data = await response.json();
-    if (!response.ok)
-        throw new Error(data.error || "Checkout could not be prepared.");
-    if (!isCheckoutUrl(data.checkoutUrl, target.domain))
-        throw new Error("Vinted did not return a valid checkout link.");
-    // Navigation in this tab also works in mobile browsers with popup blocking.
-    if (
-        data.paymentUrl &&
-        target.preferences?.autoCheckout &&
-        target.preferences.payment === "paypal" &&
-        data.status === "paypal_redirect_ready" &&
-        isPayPalPaymentUrl(data.paymentUrl)
-    )
-        window.location.assign(data.paymentUrl);
-    else window.location.assign(data.checkoutUrl);
-    return data.autoCheckoutReason as string | undefined;
+    throw new Error(
+        "The connected extension could not start checkout. Check Account and try again.",
+    );
 }

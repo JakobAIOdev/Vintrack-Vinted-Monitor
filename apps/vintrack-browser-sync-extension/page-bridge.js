@@ -701,21 +701,22 @@
       referrer: itemUrl,
       body: {
         initiator: "buy",
-        item_id: String(itemId),
-        opposite_user_id: String(sellerId),
+        item_id: itemId,
+        opposite_user_id: sellerId,
       },
     });
     if (!conversationResult.ok) {
       return conversationResult;
     }
 
-    const transactionId =
-      findNumberByPaths(conversationResult.data, [
-        ["conversation", "transaction", "id"],
-        ["transaction", "id"],
-      ]) || findNumberByKeys(conversationResult.data, ["id"]);
+    // Conversation, item and user IDs are unrelated to the purchase transaction.
+    // Only explicit transaction fields may select the next checkout request.
+    const rawTransactionId = conversationResult.data?.conversation?.transaction?.id ??
+      conversationResult.data?.transaction?.id;
+    const transactionId = typeof rawTransactionId === "number" ? rawTransactionId
+      : typeof rawTransactionId === "string" && /^[1-9]\d*$/.test(rawTransactionId) ? Number(rawTransactionId) : 0;
 
-    if (!transactionId) {
+    if (!Number.isSafeInteger(transactionId) || transactionId <= 0) {
       return {
         ok: false,
         code: "missing_transaction_id",

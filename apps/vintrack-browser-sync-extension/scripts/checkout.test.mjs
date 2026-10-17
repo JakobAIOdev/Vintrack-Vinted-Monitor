@@ -51,6 +51,20 @@ test("content bridge preserves checkout request IDs on synchronous, asynchronous
   }
 });
 
+test("capability probes echo their own request ID without replacing runtime capabilities", async () => {
+  let receive;
+  const posts = [];
+  const window = { location: { origin: "http://localhost:3000", hostname: "localhost" }, addEventListener(type, listener) { if (type === "message") receive = listener; }, postMessage(message) { posts.push(message); } };
+  const context = vm.createContext({ window, document: { documentElement: { dataset: { vintrackThemeBridge: "ready" } } }, chrome: { runtime: { sendMessage() { return { configured: true, checkoutPrepareVersion: 8, checkoutCapabilities: { prepare: true, automaticPayment: false } }; }, onMessage: { addListener() {} } } } });
+  vm.runInContext(contentSource, context);
+  receive({ source: window, data: { type: "VINTRACK_EXTENSION_PING", requestId: "synthetic-probe" } });
+  await new Promise(resolve => setImmediate(resolve));
+  const response = posts.find(message => message.payload?.requestId === "synthetic-probe");
+  assert.equal(response.type, "VINTRACK_EXTENSION_READY");
+  assert.equal(response.payload.configured, true);
+  assert.equal(response.payload.checkoutCapabilities.automaticPayment, false);
+});
+
 test("content navigation correlates the native response and sends no checkout or payment request", async () => {
   let receive;
   const listeners = new Set();
@@ -124,7 +138,7 @@ function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paym
           : url.endsWith("/payment")
             ? (typeof paymentResponse === "function" ? paymentResponse() : paymentResponse)
           : url.endsWith("/conversations")
-            ? { conversation: { transaction: { id: 77 } } }
+            ? (options.conversationResponse ?? { conversation: { transaction: { id: 77 } } })
             : url.endsWith("/build")
               ? {
                   purchase: { id: "synthetic" },
@@ -218,6 +232,30 @@ test("page checkout uses the linked account and stops before payment", async () 
     "shipping_pickup_details",
   ])
     assert.deepEqual(components[field], {});
+});
+
+test("conversation request uses numeric IDs and only an explicit transaction ID reaches checkout build", async () => {
+  for (const conversationResponse of [{ conversation: { id: 999, transaction: { id: 77 } } }, { transaction: { id: "77" }, conversation: { id: 999 } }]) {
+    const h = bridge(42, [], {}, {}, "complete", { conversationResponse });
+    assert.equal((await h.run(target)).ok, true);
+    assert.deepEqual(JSON.parse(h.requests[1].init.body), { initiator: "buy", item_id: 123, opposite_user_id: 456 });
+    assert.deepEqual(JSON.parse(h.requests[2].init.body), { purchase_items: [{ id: 77, type: "transaction" }] });
+  }
+});
+
+test("malformed conversation transaction IDs stop before build without guessing another ID", async () => {
+  const responses = [
+    { id: 77 }, { conversation: { id: 77 } }, { user: { id: 77 }, item: { id: 77 } },
+    { conversation: { transaction: { id: -1 } }, transaction: { id: 77 } },
+    ...[undefined, null, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, true, {}, [77], "1e2", "1.5", "077"].map(id => ({ conversation: { id: 77, transaction: { id } } })),
+  ];
+  for (const conversationResponse of responses) {
+    const h = bridge(42, [], {}, {}, "complete", { conversationResponse });
+    const result = await h.run(target);
+    assert.equal(result.code, "missing_transaction_id", JSON.stringify(conversationResponse));
+    assert.equal(h.requests.length, 2);
+    assert.ok(h.requests.every(request => !request.url.includes("/checkout") && !request.url.includes("/payment")));
+  }
 });
 
 function selectedCheckout(paypalAvailable = true, paymentSelected = false) {
@@ -622,7 +660,13 @@ function background(options = {}) {
       },
     },
     runtime: {
-      getManifest: () => ({ version: "synthetic", content_scripts: [] }),
+      getManifest: () => ({ version: "synthetic", content_scripts: [],
+        ...(options.safari ? { browser_specific_settings: { safari: { strict_min_version: "18.0" } } } : options.androidPreview ? { browser_specific_settings: { gecko_android: { strict_min_version: "142.0" } } } : {}),
+      }),
+      async getPlatformInfo() {
+        if (options.platformError) throw new Error("platform information unavailable");
+        return { os: options.os || "linux" };
+      },
       onStartup: event,
       onInstalled: event,
       onMessage: event,
@@ -767,6 +811,76 @@ test("a cold checkout starts as soon as the bridge attaches, before page load co
   assert.equal(h.mutations[0].created, true);
   assert.equal(h.mutations.at(-1).changes.url, checkoutUrl);
   assert.equal(h.messages.filter(m=>m.type==="VINTRACK_RUN_BROWSER_BUY").length, 1);
+});
+
+test("Android cold checkout opens Vinted in the foreground before starting preparation", async () => {
+  const h = background({ tabs: [], os: "android", run() {
+    assert.equal(h.mutations[0].created, true);
+    assert.equal(h.mutations[0].changes.active, true);
+    return { ok: true, checkoutUrl, transactionId: 77, purchaseId: "synthetic" };
+  } });
+  assert.equal((await h.run()).ok, true);
+  assert.equal(h.messages.filter(m => m.type === "VINTRACK_RUN_BROWSER_BUY").length, 1);
+  assert.equal(h.mutations.at(-1).changes.url, checkoutUrl);
+});
+
+test("Android existing receivers are activated before preparing checkout without item navigation", async () => {
+  const h = background({ tabs: [{ id: 7, status: "complete", active: false }], os: "android", run() {
+    assert.deepEqual(structuredClone(h.mutations), [{ id: 7, changes: { active: true } }]);
+    return { ok: true, checkoutUrl, transactionId: 77, purchaseId: "synthetic" };
+  } });
+  assert.equal((await h.run()).ok, true);
+  assert.equal(h.mutations.at(-1).id, 7);
+});
+
+test("Android loading and discarded tabs are activated and become ready before any checkout intent", async () => {
+  for (const tab of [{ id: 7, status: "loading" }, { id: 7, status: "complete", discarded: true }]) {
+    const h = background({ tabs: [tab], os: "android", ping() {
+      assert.deepEqual(structuredClone(h.mutations), [{ id: 7, changes: { active: true } }]);
+      assert.equal(h.storage.vintrackCheckoutAttempts, undefined);
+      return { ok: true, pageBridgeReady: true };
+    } });
+    assert.equal((await h.run()).ok, true);
+    assert.equal(h.mutations.filter(m => m.created).length, 0);
+    assert.equal(h.messages.filter(m => m.type === "VINTRACK_RUN_BROWSER_BUY").length, 1);
+  }
+});
+
+test("Android activation failures cannot record an intent or start checkout", async () => {
+  const h = background({ tabs: [{ id: 7, status: "complete" }], os: "android", updateError: true });
+  assert.equal((await h.run()).code, "checkout_tab_unavailable");
+  assert.equal(h.storage.vintrackCheckoutAttempts, undefined);
+  assert.equal(h.messages.filter(m => m.type === "VINTRACK_RUN_BROWSER_BUY").length, 0);
+});
+
+test("Android lost responses remain blocked after restart and tab restoration", async () => {
+  const tabs = [{ id: 7, status: "complete", discarded: true }];
+  const h = background({ tabs, os: "android", run() { throw new Error("response lost"); } });
+  assert.equal((await h.run(target)).code, "checkout_response_lost");
+  const restarted = background({ tabs, os: "android", storage: h.storage });
+  assert.equal((await restarted.run(target)).code, "checkout_uncertain");
+  assert.equal(restarted.messages.filter(m => m.type === "VINTRACK_RUN_BROWSER_BUY").length, 0);
+  assert.ok(restarted.mutations.every(m => !m.changes.url));
+});
+
+test("desktop and unavailable platform APIs preserve background tab creation", async () => {
+  for (const options of [{ os: "win" }, { platformError: true }]) {
+    const h = background({ tabs: [], ...options });
+    assert.equal((await h.run()).ok, true);
+    assert.equal(h.mutations[0].changes.active, false);
+  }
+});
+
+test("Safari foregrounds new and restored receivers even without platform detection", async () => {
+  for (const tabs of [[], [{ id: 7, status: "complete" }], [{ id: 7, discarded: true }]]) {
+    const h = background({ tabs, safari: true, platformError: true, run() {
+      assert.equal(h.mutations[0].changes.active, true);
+      return { ok: true, checkoutUrl, transactionId: 77, purchaseId: "synthetic" };
+    } });
+    assert.equal((await h.run()).ok, true);
+    assert.equal(h.messages.filter(m => m.type === "VINTRACK_RUN_BROWSER_BUY").length, 1);
+    assert.equal(h.storage.vintrackCheckoutAttempts[0].checkoutUrl, checkoutUrl);
+  }
 });
 
 test("a stale tab does not block a ready same-region receiver", async () => {
@@ -1000,4 +1114,23 @@ test("a fast unready tab cannot beat a slower ready receiver", async () => {
   releaseReady({ ok: true, pageBridgeReady: true });
   assert.equal((await checkout).ready, true);
   assert.ok(!h.storage.vintrackCheckoutAttempts);
+});
+
+for (const options of [{ os: "android" }, { os: "ios" }, { safari: true, platformError: true }, { androidPreview: true, platformError: true }]) {
+  test(`mobile automatic payment is blocked before readiness or a direct command (${JSON.stringify(options)})`, async () => {
+    for (const readinessOnly of [true, false]) {
+      const h = background({ tabs: [], ...options });
+      const result = await h.run({ ...autoTarget, readinessOnly });
+      assert.equal(result.code, "mobile_auto_payment_unavailable");
+      assert.equal(h.messages.length, 0);
+      assert.equal(h.mutations.length, 0);
+      assert.equal(h.storage.vintrackCheckoutAttempts, undefined);
+    }
+  });
+}
+
+test("Android preview foregrounds normal preparation when platform detection fails", async () => {
+  const h = background({ tabs: [], androidPreview: true, platformError: true });
+  assert.equal((await h.run()).ok, true);
+  assert.equal(h.mutations[0].changes.active, true);
 });
