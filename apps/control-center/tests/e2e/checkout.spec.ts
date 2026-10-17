@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const autoPreferences = {
     shipping: "home",
@@ -18,6 +18,62 @@ const target = {
     title: "Vintage Nike jacket",
     price: "25.00 EUR",
 };
+
+async function mockPrepareExtension(
+    page: Page,
+    onPrepare: () => void,
+    error?: string,
+) {
+    await page.exposeFunction("syntheticCheckoutPrepared", onPrepare);
+    await page.addInitScript(
+        ({ error }) => {
+            window.addEventListener("message", async (event) => {
+                if (event.source !== window) return;
+                if (event.data?.type === "VINTRACK_EXTENSION_PING")
+                    window.postMessage(
+                        {
+                            type: "VINTRACK_EXTENSION_READY",
+                            payload: {
+                                configured: true,
+                                checkoutPrepareVersion: 8,
+                                requestId: event.data.requestId,
+                            },
+                        },
+                        window.location.origin,
+                    );
+                if (event.data?.type === "VINTRACK_EXTENSION_BUY") {
+                    await (
+                        window as unknown as {
+                            syntheticCheckoutPrepared(): Promise<void>;
+                        }
+                    ).syntheticCheckoutPrepared();
+                    window.postMessage(
+                        {
+                            type: "VINTRACK_EXTENSION_BUY_RESULT",
+                            payload: error
+                                ? {
+                                      requestId: event.data.payload.requestId,
+                                      ok: false,
+                                      error,
+                                  }
+                                : {
+                                      requestId: event.data.payload.requestId,
+                                      ok: true,
+                                      checkoutUrl:
+                                          "https://www.vinted.de/checkout?purchase_id=synthetic",
+                                  },
+                        },
+                        window.location.origin,
+                    );
+                }
+            });
+        },
+        { error },
+    );
+    await page.route("**/api/items/checkout-links", (route) =>
+        route.fulfill({ json: { ok: true } }),
+    );
+}
 
 for (const mode of ["GBP", "pickup", "PLN"] as const) {
     const minimumProtocol = mode === "PLN" ? 8 : 7;
@@ -124,14 +180,12 @@ for (const mode of ["GBP", "pickup", "PLN"] as const) {
             await page.goto("/checkout/17/123");
             if (protocol < minimumProtocol) {
                 await expect(
-                    page
-                        .getByRole("alert")
-                        .filter({
-                            hasText:
-                                mode === "PLN"
-                                    ? "version 0.4 or later"
-                                    : "version 0.3.4 or later",
-                        }),
+                    page.getByRole("alert").filter({
+                        hasText:
+                            mode === "PLN"
+                                ? "version 0.4 or later"
+                                : "version 0.3.4 or later",
+                    }),
                 ).toBeVisible();
                 expect(authorizations).toBe(0);
                 expect(received).toHaveLength(0);
@@ -159,6 +213,58 @@ for (const auto of [false, true]) {
         let accepted = false;
         let preparations = 0;
         let saves = 0;
+        await page.exposeFunction("consentedCheckoutStarted", () => {
+            expect(accepted).toBe(true);
+            preparations++;
+        });
+        await page.addInitScript(() => {
+            window.addEventListener("message", (event) => {
+                if (event.source !== window) return;
+                if (event.data?.type === "VINTRACK_EXTENSION_PING") {
+                    window.postMessage(
+                        {
+                            type: "VINTRACK_EXTENSION_READY",
+                            payload: {
+                                configured: true,
+                                checkoutPrepareVersion: 8,
+                                requestId: event.data.requestId,
+                            },
+                        },
+                        window.location.origin,
+                    );
+                }
+                if (event.data?.type === "VINTRACK_EXTENSION_BUY") {
+                    const payload = event.data.payload;
+                    if (!payload.readinessOnly)
+                        void (
+                            window as unknown as {
+                                consentedCheckoutStarted(): Promise<void>;
+                            }
+                        ).consentedCheckoutStarted();
+                    window.postMessage(
+                        {
+                            type: "VINTRACK_EXTENSION_BUY_RESULT",
+                            payload: payload.readinessOnly
+                                ? {
+                                      requestId: payload.requestId,
+                                      ok: true,
+                                      ready: true,
+                                  }
+                                : {
+                                      requestId: payload.requestId,
+                                      ok: true,
+                                      checkoutUrl:
+                                          "https://www.vinted.de/checkout?purchase_id=synthetic",
+                                  },
+                        },
+                        window.location.origin,
+                    );
+                }
+            });
+        });
+        await page.route("**/api/items/checkout-links", (route) =>
+            route.fulfill({ json: { ok: true } }),
+        );
         const currentTarget = () => ({
             ...target,
             preferences: auto ? autoPreferences : undefined,
@@ -166,13 +272,12 @@ for (const auto of [false, true]) {
         });
         await page.route("**/api/checkout/17/123", (route) => {
             if (route.request().method() === "POST") {
-                preparations++;
                 expect(accepted).toBe(true);
+                expect(
+                    route.request().headers()["x-vintrack-checkout-mode"],
+                ).toBe("browser");
                 return route.fulfill({
-                    json: {
-                        checkoutUrl:
-                            "https://www.vinted.de/checkout?purchase_id=synthetic",
-                    },
+                    json: { browserPaymentAuthorized: true },
                 });
             }
             return route.fulfill(
@@ -231,17 +336,17 @@ for (const auto of [false, true]) {
             });
         await dialog.getByRole("checkbox").check();
         await accept.click();
-        await expect(page).toHaveURL(
-            "https://www.vinted.de/checkout?purchase_id=synthetic",
-        );
+        await expect(
+            page.getByRole("status").filter({ hasText: "Checkout is open" }),
+        ).toBeVisible();
         expect(saves).toBe(1);
         expect(preparations).toBe(1);
         // Persisted server consent skips the warning on the next link; there is
         // no additional consent-status request on the normal fast path.
         await page.goto("/checkout/17/123");
-        await expect(page).toHaveURL(
-            "https://www.vinted.de/checkout?purchase_id=synthetic",
-        );
+        await expect(
+            page.getByRole("status").filter({ hasText: "Checkout is open" }),
+        ).toBeVisible();
         expect(saves).toBe(1);
         expect(preparations).toBe(2);
     });
@@ -495,7 +600,7 @@ test("PayPal auto-checkout requires shared authorization and cannot replay after
     expect(starts).toBe(1);
 });
 
-test("server auto-checkout opens only the verified PayPal redirect", async ({
+test("missing extension never starts server checkout or redirects to PayPal", async ({
     page,
 }) => {
     let starts = 0;
@@ -524,10 +629,11 @@ test("server auto-checkout opens only the verified PayPal redirect", async ({
         }),
     );
     await page.goto("/checkout/17/123");
-    await expect(page).toHaveURL(
-        "https://www.paypal.com/checkoutnow?token=synthetic",
-    );
-    expect(starts).toBe(1);
+    await expect(
+        page.getByRole("alert").filter({ hasText: "Checkout has not started" }),
+    ).toBeVisible();
+    await expect(page).toHaveURL(/\/checkout\/17\/123$/);
+    expect(starts).toBe(0);
 });
 
 test("disconnected auto-checkout receivers do not consume server payment authorization", async ({
@@ -633,54 +739,36 @@ test("slow checkout history does not keep a completed handoff waiting", async ({
     }
 });
 
-test("opening a notification link prepares and opens checkout without another click", async ({
+test("opening a notification link prepares checkout without another click", async ({
     page,
 }) => {
     let preparations = 0;
     let targetLoads = 0;
-    await page.route("**/api/checkout/17/123", async (route) => {
-        if (route.request().method() === "POST") {
-            preparations++;
-            if (
-                process.env.E2E_CHECKOUT_SCREENSHOT === "true" &&
-                test.info().project.name === "chromium"
-            ) {
-                await page.screenshot({
-                    path: "../../docs/screenshots/checkout-handoff.png",
-                    fullPage: true,
-                });
-            }
-            await route.fulfill({
-                json: {
-                    status: "checkout_prepared",
-                    checkoutUrl:
-                        "https://www.vinted.de/checkout?purchase_id=synthetic",
-                },
-            });
-        } else {
-            targetLoads++;
-            await route.fulfill({ json: target });
-        }
+    let serverMutations = 0;
+    await mockPrepareExtension(page, () => {
+        preparations++;
     });
-    // All external navigation is a synthetic fixture; no Vinted traffic.
-    await page.route("https://www.vinted.de/**", (route) =>
-        route.fulfill({
-            contentType: "text/html",
-            body: "<h1>Synthetic Vinted checkout</h1>",
-        }),
-    );
+    await page.route("**/api/checkout/17/123", (route) => {
+        if (route.request().method() !== "GET") serverMutations++;
+        else targetLoads++;
+        return route.fulfill({ json: target });
+    });
     await page.goto("/checkout/17/123");
-    await expect(page).toHaveURL(
-        "https://www.vinted.de/checkout?purchase_id=synthetic",
-    );
+    await expect(
+        page.getByRole("status").filter({ hasText: "Checkout is open" }),
+    ).toBeVisible();
     expect(preparations).toBe(1);
     expect(targetLoads).toBe(1);
+    expect(serverMutations).toBe(0);
 });
 
 test("a hidden notification tab waits for activation before preparing checkout", async ({
     page,
 }) => {
     let preparations = 0;
+    await mockPrepareExtension(page, () => {
+        preparations++;
+    });
     await page.addInitScript(() => {
         let visibility = "hidden";
         Object.defineProperty(document, "visibilityState", {
@@ -691,31 +779,19 @@ test("a hidden notification tab waits for activation before preparing checkout",
             document.dispatchEvent(new Event("visibilitychange"));
         });
     });
-    await page.route("**/api/checkout/17/123", async (route) => {
-        if (route.request().method() === "GET") {
-            await route.fulfill({ json: target });
-            return;
-        }
-        preparations++;
-        await route.fulfill({
-            json: {
-                checkoutUrl:
-                    "https://www.vinted.de/checkout?purchase_id=synthetic",
-            },
-        });
+    await page.route("**/api/checkout/17/123", (route) => {
+        expect(route.request().method()).toBe("GET");
+        return route.fulfill({ json: target });
     });
-    await page.route("https://www.vinted.de/**", (route) =>
-        route.fulfill({ body: "Synthetic checkout" }),
-    );
     await page.goto("/checkout/17/123");
     await expect(page.getByText("Waiting for this tab to open…")).toBeVisible();
     expect(preparations).toBe(0);
     await page.evaluate(() =>
         document.dispatchEvent(new Event("activate-checkout-test")),
     );
-    await expect(page).toHaveURL(
-        "https://www.vinted.de/checkout?purchase_id=synthetic",
-    );
+    await expect(
+        page.getByRole("status").filter({ hasText: "Checkout is open" }),
+    ).toBeVisible();
     expect(preparations).toBe(1);
 });
 
@@ -723,16 +799,16 @@ test("a preparation failure shows recovery without automatically replaying check
     page,
 }) => {
     let preparations = 0;
-    await page.route("**/api/checkout/17/123", async (route) => {
-        if (route.request().method() === "GET") {
-            await route.fulfill({ json: target });
-            return;
-        }
-        preparations++;
-        await route.fulfill({
-            status: 502,
-            json: { error: "Continue in Vinted before trying again." },
-        });
+    await mockPrepareExtension(
+        page,
+        () => {
+            preparations++;
+        },
+        "Continue in Vinted before trying again.",
+    );
+    await page.route("**/api/checkout/17/123", (route) => {
+        expect(route.request().method()).toBe("GET");
+        return route.fulfill({ json: target });
     });
     await page.goto("/checkout/17/123");
     await expect(
@@ -1080,4 +1156,122 @@ test("a hidden handoff checks current access only when opened after opting out",
     );
     expect(gets).toBe(1);
     expect(posts).toBe(0);
+});
+
+test("cold extension responds after 900ms and prepares once without server fallback", async ({
+    page,
+}) => {
+    let commands = 0;
+    let serverMutations = 0;
+    await page.exposeFunction("checkoutPrepareStarted", () => commands++);
+    await page.addInitScript(() => {
+        let scheduled = false;
+        window.addEventListener("message", (event) => {
+            if (event.source !== window) return;
+            if (event.data?.type === "VINTRACK_EXTENSION_PING" && !scheduled) {
+                scheduled = true;
+                const requestId = event.data.requestId;
+                window.setTimeout(
+                    () =>
+                        window.postMessage(
+                            {
+                                type: "VINTRACK_EXTENSION_READY",
+                                payload: {
+                                    configured: true,
+                                    checkoutPrepareVersion: 8,
+                                    requestId,
+                                    checkoutCapabilities: {
+                                        prepare: true,
+                                        automaticPayment: false,
+                                    },
+                                },
+                            },
+                            window.location.origin,
+                        ),
+                    900,
+                );
+            }
+            if (event.data?.type === "VINTRACK_EXTENSION_BUY") {
+                void (
+                    window as unknown as {
+                        checkoutPrepareStarted(): Promise<void>;
+                    }
+                ).checkoutPrepareStarted();
+                window.postMessage(
+                    {
+                        type: "VINTRACK_EXTENSION_BUY_RESULT",
+                        payload: {
+                            requestId: event.data.payload.requestId,
+                            ok: true,
+                            checkoutUrl:
+                                "https://www.vinted.de/checkout?purchase_id=synthetic",
+                        },
+                    },
+                    window.location.origin,
+                );
+            }
+        });
+    });
+    await page.route("**/api/checkout/17/123", (route) => {
+        if (route.request().method() !== "GET") serverMutations++;
+        return route.fulfill({ json: target });
+    });
+    await page.route("**/api/items/checkout-links", (route) =>
+        route.fulfill({ json: { ok: true } }),
+    );
+    await page.goto("/checkout/17/123");
+    await expect(
+        page.getByRole("status").filter({ hasText: "Checkout is open" }),
+    ).toBeVisible();
+    expect(commands).toBe(1);
+    expect(serverMutations).toBe(0);
+});
+
+test("extension capability blocks saved automatic payment before readiness or authorization", async ({
+    page,
+}) => {
+    let commands = 0;
+    let authorizations = 0;
+    await page.exposeFunction("unexpectedUnsupportedCheckout", () => commands++);
+    await page.addInitScript(() => {
+        window.addEventListener("message", (event) => {
+            if (event.source !== window) return;
+            if (event.data?.type === "VINTRACK_EXTENSION_PING")
+                window.postMessage(
+                    {
+                        type: "VINTRACK_EXTENSION_READY",
+                        payload: {
+                            configured: true,
+                            checkoutPrepareVersion: 8,
+                            requestId: event.data.requestId,
+                            checkoutCapabilities: {
+                                prepare: true,
+                                automaticPayment: false,
+                            },
+                        },
+                    },
+                    window.location.origin,
+                );
+            if (event.data?.type === "VINTRACK_EXTENSION_BUY")
+                void (
+                    window as unknown as {
+                        unexpectedUnsupportedCheckout(): Promise<void>;
+                    }
+                ).unexpectedUnsupportedCheckout();
+        });
+    });
+    await page.route("**/api/checkout/17/123", (route) => {
+        if (route.request().method() !== "GET") authorizations++;
+        return route.fulfill({
+            json: { ...target, preferences: autoPreferences },
+        });
+    });
+    await page.goto("/checkout/17/123");
+    await expect(
+        page
+            .getByRole("alert")
+            .filter({ hasText: "not supported by this extension" }),
+    ).toBeVisible();
+    expect(commands).toBe(0);
+    expect(authorizations).toBe(0);
 });

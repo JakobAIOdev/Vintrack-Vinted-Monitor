@@ -51,6 +51,20 @@ test("content bridge preserves checkout request IDs on synchronous, asynchronous
   }
 });
 
+test("capability probes echo their own request ID without replacing runtime capabilities", async () => {
+  let receive;
+  const posts = [];
+  const window = { location: { origin: "http://localhost:3000", hostname: "localhost" }, addEventListener(type, listener) { if (type === "message") receive = listener; }, postMessage(message) { posts.push(message); } };
+  const context = vm.createContext({ window, document: { documentElement: { dataset: { vintrackThemeBridge: "ready" } } }, chrome: { runtime: { sendMessage() { return { configured: true, checkoutPrepareVersion: 8, checkoutCapabilities: { prepare: true, automaticPayment: false } }; }, onMessage: { addListener() {} } } } });
+  vm.runInContext(contentSource, context);
+  receive({ source: window, data: { type: "VINTRACK_EXTENSION_PING", requestId: "synthetic-probe" } });
+  await new Promise(resolve => setImmediate(resolve));
+  const response = posts.find(message => message.payload?.requestId === "synthetic-probe");
+  assert.equal(response.type, "VINTRACK_EXTENSION_READY");
+  assert.equal(response.payload.configured, true);
+  assert.equal(response.payload.checkoutCapabilities.automaticPayment, false);
+});
+
 test("content navigation correlates the native response and sends no checkout or payment request", async () => {
   let receive;
   const listeners = new Set();
@@ -124,7 +138,7 @@ function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paym
           : url.endsWith("/payment")
             ? (typeof paymentResponse === "function" ? paymentResponse() : paymentResponse)
           : url.endsWith("/conversations")
-            ? { conversation: { transaction: { id: 77 } } }
+            ? (options.conversationResponse ?? { conversation: { transaction: { id: 77 } } })
             : url.endsWith("/build")
               ? {
                   purchase: { id: "synthetic" },
@@ -218,6 +232,30 @@ test("page checkout uses the linked account and stops before payment", async () 
     "shipping_pickup_details",
   ])
     assert.deepEqual(components[field], {});
+});
+
+test("conversation request uses numeric IDs and only an explicit transaction ID reaches checkout build", async () => {
+  for (const conversationResponse of [{ conversation: { id: 999, transaction: { id: 77 } } }, { transaction: { id: "77" }, conversation: { id: 999 } }]) {
+    const h = bridge(42, [], {}, {}, "complete", { conversationResponse });
+    assert.equal((await h.run(target)).ok, true);
+    assert.deepEqual(JSON.parse(h.requests[1].init.body), { initiator: "buy", item_id: 123, opposite_user_id: 456 });
+    assert.deepEqual(JSON.parse(h.requests[2].init.body), { purchase_items: [{ id: 77, type: "transaction" }] });
+  }
+});
+
+test("malformed conversation transaction IDs stop before build without guessing another ID", async () => {
+  const responses = [
+    { id: 77 }, { conversation: { id: 77 } }, { user: { id: 77 }, item: { id: 77 } },
+    { conversation: { transaction: { id: -1 } }, transaction: { id: 77 } },
+    ...[undefined, null, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, true, {}, [77], "1e2", "1.5", "077"].map(id => ({ conversation: { id: 77, transaction: { id } } })),
+  ];
+  for (const conversationResponse of responses) {
+    const h = bridge(42, [], {}, {}, "complete", { conversationResponse });
+    const result = await h.run(target);
+    assert.equal(result.code, "missing_transaction_id", JSON.stringify(conversationResponse));
+    assert.equal(h.requests.length, 2);
+    assert.ok(h.requests.every(request => !request.url.includes("/checkout") && !request.url.includes("/payment")));
+  }
 });
 
 function selectedCheckout(paypalAvailable = true, paymentSelected = false) {

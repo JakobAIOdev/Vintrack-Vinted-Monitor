@@ -121,8 +121,10 @@ function senderOrigin(sender) {
 
 function isExtensionPageSender(sender) {
   try {
-    const protocol = new URL(sender?.url || "").protocol;
-    return protocol === "chrome-extension:" || protocol === "moz-extension:";
+    const url = new URL(sender?.url || "");
+    const own = new URL(extensionApi.runtime.getURL("/"));
+    return ["chrome-extension:", "moz-extension:"].includes(url.protocol) &&
+      url.protocol === own.protocol && url.host === own.host;
   } catch {
     return false;
   }
@@ -2106,7 +2108,10 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
       const config = await getConfig();
-      sendResponse({ ok: true, ...formatRuntimeState(config) });
+      sendResponse({ ok: true, ...formatRuntimeState(config), checkoutCapabilities: {
+        prepare: true,
+        automaticPayment: true,
+      } });
       return;
     }
 

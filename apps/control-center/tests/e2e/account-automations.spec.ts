@@ -5,6 +5,12 @@ const db = new PrismaClient();
 const userId = process.env.E2E_TEST_USER_ID ?? "e2e-user";
 let monitorId: number;
 
+function screenshotPath(name: string) {
+    return process.env.E2E_UPDATE_DOC_SCREENSHOTS === "true"
+        ? `../../docs/screenshots/${name}`
+        : test.info().outputPath(name);
+}
+
 test.describe("Account automations", () => {
     test.skip(
         process.env.E2E_TEST_MODE !== "true",
@@ -70,7 +76,7 @@ test.describe("Account automations", () => {
         ).toHaveCount(0);
         await expect(page.getByLabel("Message template")).toHaveCount(0);
         await page.screenshot({
-            path: `../../docs/screenshots/account-automations-${test.info().project.name}.png`,
+            path: screenshotPath(`account-automations-${test.info().project.name}.png`),
             fullPage: true,
         });
         await trigger.click();
@@ -86,12 +92,19 @@ test.describe("Account automations", () => {
         // The outer dialog stays in place, even when tab content differs.
         for (const tab of ["Auto-Message", "Activity", "Auto-Offer"]) {
             await dialog.getByRole("tab", { name: tab, exact: true }).click();
+            // The opening animation can leave fractional initial bounds.
+            // Keep the layout stable within one CSS pixel across tabs.
             await expect
-                .poll(async () => await dialog.boundingBox())
-                .toEqual(initialBounds);
+                .poll(async () => {
+                    const bounds = await dialog.boundingBox();
+                    if (!bounds || !initialBounds) return Infinity;
+                    return Math.max(...(["x", "y", "width", "height"] as const)
+                        .map((key) => Math.abs(bounds[key] - initialBounds[key])));
+                })
+                .toBeLessThanOrEqual(1);
             if (tab !== "Auto-Message") {
                 await dialog.screenshot({
-                    path: `../../docs/screenshots/account-automations-${tab === "Auto-Offer" ? "offer" : "activity"}-${test.info().project.name}.png`,
+                    path: screenshotPath(`account-automations-${tab === "Auto-Offer" ? "offer" : "activity"}-${test.info().project.name}.png`),
                 });
             }
         }
@@ -212,14 +225,14 @@ test.describe("Account automations", () => {
         expect(bounds!.width).toBeLessThanOrEqual(520);
         expect(bounds!.height).toBeLessThan(viewport.height);
         await dialog.screenshot({
-            path: `../../docs/screenshots/account-automations-modal-${test.info().project.name}.png`,
+            path: screenshotPath(`account-automations-modal-${test.info().project.name}.png`),
         });
         await dialog
             .getByRole("button", { name: "Close", exact: true })
             .click();
         await expect(trigger).toHaveText(/Automations\s*1 active/);
         await page.screenshot({
-            path: `../../docs/screenshots/account-automations-${test.info().project.name}.png`,
+            path: screenshotPath(`account-automations-${test.info().project.name}.png`),
             fullPage: true,
         });
         expect(

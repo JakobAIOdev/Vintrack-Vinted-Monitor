@@ -13,7 +13,7 @@ type freeProxyImportInventoryStore interface {
 	PruneUnselectedFreeProxiesContext(context.Context, []string) (int64, error)
 }
 
-// Reclaim stale unsuccessful candidates before selection checks the inventory
+// Reclaim expired candidates before selection checks the inventory
 // limit. Otherwise a full pool can never admit their replacements. An empty
 // download cannot authorize cleanup; an unseen candidate still needs to have
 // aged out of the feeds before the store will remove it.

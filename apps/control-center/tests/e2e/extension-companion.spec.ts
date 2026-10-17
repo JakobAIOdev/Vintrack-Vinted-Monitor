@@ -102,7 +102,7 @@ test("refreshes the feed only while its tab is active", async ({ page }) => {
         const container = document.querySelector("#companion");
         if (!(container instanceof HTMLElement))
             throw new Error("Missing mount");
-        globalThis.VintrackCompanion.mount(container, { surface: "popup" });
+        window.VintrackCompanion.mount(container, { surface: "popup" });
     });
 
     const tabs = page.getByRole("navigation", { name: "Companion views" });
@@ -135,9 +135,9 @@ test("refreshes the feed only while its tab is active", async ({ page }) => {
     await expect
         .poll(() =>
             page.evaluate(() => ({
-                requests: globalThis.__vintrackTest.feedRequests.length,
+                requests: window.__vintrackTest.feedRequests.length,
                 delays: Array.from(
-                    globalThis.__vintrackTest.timers.values(),
+                    window.__vintrackTest.timers.values(),
                 ).map((timer) => timer.delay),
             })),
         )
@@ -145,7 +145,7 @@ test("refreshes the feed only while its tab is active", async ({ page }) => {
 
     await tabs.getByRole("button", { name: "Overview", exact: true }).click();
     await expect
-        .poll(() => page.evaluate(() => globalThis.__vintrackTest.timers.size))
+        .poll(() => page.evaluate(() => window.__vintrackTest.timers.size))
         .toBe(0);
 });
 
@@ -205,7 +205,7 @@ test("shows the persisted browser login failure in the linked-account card", asy
         const container = document.querySelector("#companion");
         if (!(container instanceof HTMLElement))
             throw new Error("Missing mount");
-        globalThis.VintrackCompanion.mount(container, { surface: "popup" });
+        window.VintrackCompanion.mount(container, { surface: "popup" });
     });
     const account = page.locator(".vtc-account-card");
     await expect(

@@ -260,6 +260,8 @@ func (e *Engine) enrichmentMetricsHeartbeat() {
 			e.enrichmentScheduler.BackgroundQueueAge(now),
 			sellerNegativeCache.HitCount(),
 		)
+		snapshot["cacheQueueDepth"] = len(e.enrichmentCacheJobs)
+		snapshot["cacheQueueCapacity"] = cap(e.enrichmentCacheJobs)
 		payload, err := json.Marshal(snapshot)
 		if err == nil {
 			ctx, cancel := context.WithTimeout(e.jobsCtx, 3*time.Second)

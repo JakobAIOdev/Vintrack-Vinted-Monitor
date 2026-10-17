@@ -760,7 +760,10 @@
           if (runtimeError) {
             return;
           }
-          post("VINTRACK_EXTENSION_READY", response || { installed: true });
+          post("VINTRACK_EXTENSION_READY", {
+            ...(response || { installed: true }),
+            ...(typeof event.data.requestId === "string" && event.data.requestId.length < 128 ? { requestId: event.data.requestId } : {}),
+          });
         },
       );
       return;

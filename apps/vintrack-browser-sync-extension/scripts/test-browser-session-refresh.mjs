@@ -120,12 +120,14 @@ async function startFixture(directory) {
     rotate: true,
     csrfFormat: "flight",
     freshToken: "",
+    conversationStatus: 200,
+    missingTransaction: false,
     requests,
     connections: { accepted: 0, rejected: 0, tlsErrors: [] },
   };
   const server = https.createServer(
     { key: await readFile(keyPath), cert: certificate },
-    (req, res) => {
+    async (req, res) => {
       const host = req.headers.host?.split(":")[0];
       res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
       res.setHeader("Access-Control-Allow-Credentials", "true");
@@ -138,10 +140,13 @@ async function startFixture(directory) {
         res.end();
         return;
       }
+      let requestBody = "";
+      for await (const chunk of req) requestBody += chunk;
       requests.push({
         host,
         path: req.url,
         method: req.method,
+        json: requestBody ? JSON.parse(requestBody) : undefined,
         fromVintedPage: req.headers.origin === "https://www.vinted.de",
         refreshCookieSent: (req.headers.cookie || "").includes(
           "refresh_token_web=synthetic-refresh",
@@ -153,7 +158,9 @@ async function startFixture(directory) {
       });
       if (
         host === "www.vinted.de" &&
-        (req.url === "/" || req.url.startsWith("/items/"))
+        (req.url === "/" ||
+          req.url.startsWith("/items/") ||
+          req.url.startsWith("/checkout?"))
       ) {
         res.setHeader("Content-Type", "text/html");
         const csrf =
@@ -166,6 +173,56 @@ async function startFixture(directory) {
           "<!doctype html><html><head>" +
             csrf +
             "</head><body>Isolated Vinted fixture</body></html>",
+        );
+      } else if (
+        host === "www.vinted.de" &&
+        req.url === "/api/v2/users/current"
+      ) {
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ user: { id: 42, login: "synthetic-buyer" } }));
+      } else if (
+        host === "www.vinted.de" &&
+        req.url === "/api/v2/conversations"
+      ) {
+        res.statusCode = fixture.conversationStatus;
+        res.setHeader("Content-Type", "application/json");
+        res.end(
+          JSON.stringify(
+            fixture.missingTransaction
+              ? { conversation: { id: 999 } }
+              : { conversation: { id: 999, transaction: { id: 77 } } },
+          ),
+        );
+      } else if (
+        host === "www.vinted.de" &&
+        [
+          "/api/v2/purchases/checkout/build",
+          "/api/v2/purchases/synthetic/checkout",
+        ].includes(req.url)
+      ) {
+        const selected = req.method === "PUT";
+        res.setHeader("Content-Type", "application/json");
+        res.end(
+          JSON.stringify({
+            purchase: { id: "synthetic" },
+            checksum: "synthetic-checksum",
+            checkout: {
+              components: {
+                payment_method: {
+                  pay_in_methods: [{ code: "MANGOPAY_PAYPAL" }],
+                  selected_payment_method: selected
+                    ? { pay_in_method: { payment_method: "paypal" } }
+                    : null,
+                },
+                shipping_address: { address: { id: 55 } },
+                shipping_pickup_options: { selected_pickup_option: 1 },
+                shipping_pickup_details: {
+                  pickup_details: { selected_rate_uuid: "synthetic-rate" },
+                },
+                pay_button_v2: { payments_available: true },
+              },
+            },
+          }),
         );
       } else if (
         host === "www.vinted.de" &&
@@ -447,6 +504,8 @@ async function runBrowser(name, directory, transport) {
   async function seed() {
     fixture.requests.length = 0;
     fixture.status = 200;
+    fixture.conversationStatus = 200;
+    fixture.missingTransaction = false;
     fixture.rotate = true;
     fixture.csrfFormat = "flight";
     fixture.freshToken = syntheticToken(
@@ -649,6 +708,133 @@ async function runBrowser(name, directory, transport) {
           ": closed container never falls back to the default store passed",
       );
     }
+
+    await seed();
+    await driver.evaluate(
+      "extensionApi.cookies.set({url:'https://www.vinted.de/',name:'access_token_web',value:" +
+        JSON.stringify(fixture.freshToken) +
+        ",domain:'.vinted.de',path:'/',secure:true,sameSite:'strict',storeId:" +
+        JSON.stringify(driver.defaultStoreId) +
+        "}).then(()=>true)",
+    );
+    const target = {
+      itemId: 123,
+      sellerId: 456,
+      expectedAccountId: 42,
+      domain: "www.vinted.de",
+      preferences: { shipping: "home", payment: "paypal" },
+    };
+    const buy = (payload) =>
+      driver.evaluate("handleBrowserBuy(" + JSON.stringify(payload) + ")");
+    const mutations = () =>
+      fixture.requests.filter(
+        (request) =>
+          request.host === "www.vinted.de" &&
+          request.path.startsWith("/api/v2/") &&
+          ["POST", "PUT"].includes(request.method),
+      );
+    const [result, concurrent] = await driver.evaluate(
+      "Promise.all([handleBrowserBuy(" +
+        JSON.stringify(target) +
+        "),handleBrowserBuy(" +
+        JSON.stringify(target) +
+        ")])",
+    );
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(concurrent.ok, true, JSON.stringify(concurrent));
+    assert.equal(concurrent.checkoutUrl, result.checkoutUrl);
+    assert.equal(result.status, "checkout_prepared");
+    assert.deepEqual(
+      mutations().map((request) => [request.method, request.path]),
+      [
+        ["POST", "/api/v2/conversations"],
+        ["POST", "/api/v2/purchases/checkout/build"],
+        ["PUT", "/api/v2/purchases/synthetic/checkout"],
+      ],
+    );
+    assert.deepEqual(mutations()[0].json, {
+      initiator: "buy",
+      item_id: 123,
+      opposite_user_id: 456,
+    });
+    assert.deepEqual(mutations()[1].json, {
+      purchase_items: [{ id: 77, type: "transaction" }],
+    });
+    assert.deepEqual(mutations()[2].json.components.payment_method, {
+      card_id: null,
+      payment_method: "paypal",
+    });
+    // tabs.update resolves after navigation starts. Firefox can still expose
+    // the previous URL until the new document commits, especially under load.
+    let checkoutTab;
+    const navigationStarted = Date.now();
+    while (Date.now() - navigationStarted < 10000) {
+      checkoutTab = (await tabs()).find(
+        (tab) => tab.url === result.checkoutUrl && tab.active,
+      );
+      if (checkoutTab) break;
+      await new Promise((done) => setTimeout(done, 50));
+    }
+    assert.ok(checkoutTab?.active, "prepared checkout was not foregrounded");
+    await driver.evaluate(
+      "waitForTabLoad(" +
+        checkoutTab.id +
+        ").then(()=>waitForTabBridge(" +
+        checkoutTab.id +
+        ")).then(()=>true)",
+    );
+    const completed = await driver.evaluate(
+      "extensionApi.storage.local.get('vintrackCheckoutAttempts')",
+    );
+    assert.equal(
+      completed.vintrackCheckoutAttempts[0].checkoutUrl,
+      result.checkoutUrl,
+    );
+    assert.equal((await buy(target)).ok, true);
+    assert.equal(
+      mutations().length,
+      3,
+      "reopening checkout replayed a mutation",
+    );
+    console.log(
+      name +
+        ": native checkout bridge, numeric payloads, preferences, navigation and cached replay passed",
+    );
+
+    fixture.requests.length = 0;
+    const mismatch = await buy({
+      ...target,
+      itemId: 124,
+      expectedAccountId: 43,
+    });
+    assert.equal(mismatch.code, "checkout_account_mismatch");
+    assert.equal(mutations().length, 0);
+    fixture.missingTransaction = true;
+    assert.equal((await buy({ ...target, itemId: 124 })).ok, false);
+    assert.equal(mutations().length, 1);
+    assert.equal(mutations()[0].path, "/api/v2/conversations");
+    assert.equal(
+      (await buy({ ...target, itemId: 124 })).code,
+      "checkout_uncertain",
+    );
+    assert.equal(mutations().length, 1);
+    fixture.missingTransaction = false;
+    fixture.conversationStatus = 403;
+    assert.equal((await buy({ ...target, itemId: 125 })).ok, false);
+    assert.equal(mutations().length, 2);
+    assert.equal(
+      (await buy({ ...target, itemId: 125 })).code,
+      "checkout_uncertain",
+    );
+    assert.equal(mutations().length, 2);
+    assert.ok(
+      fixture.requests.every((request) => !request.path.endsWith("/payment")),
+    );
+    console.log(
+      name +
+        ": native account mismatch, invalid transaction and 403 stop without build/payment/retry passed",
+    );
+
   } finally {
     await driver.close();
   }

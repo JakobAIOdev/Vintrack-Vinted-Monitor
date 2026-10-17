@@ -468,19 +468,26 @@ func (s *Server) refreshSessionWithLock(userID string, sess *session.VintedSessi
 	return updated, client, nil
 }
 
-func accountInfoWithRefresh(client *vinted.Client) (*vinted.AccountInfo, error) {
+type accountSessionClient interface {
+	GetAccountInfo() (*vinted.AccountInfo, error)
+	GetSession() *session.VintedSession
+	RefreshAccessToken() error
+}
+
+func accountInfoWithRefresh(client accountSessionClient) (*vinted.AccountInfo, error) {
 	info, err := client.GetAccountInfo()
 	if err == nil {
 		return info, nil
 	}
 
 	sess := client.GetSession()
-	if !serverSideTokenRefreshAllowed(sess) {
+	var authErr *vinted.AuthError
+	if !serverSideTokenRefreshAllowed(sess) || (vinted.UpstreamStatus(err) != http.StatusUnauthorized && !errors.As(err, &authErr)) {
 		return nil, err
 	}
 
 	if refreshErr := client.RefreshAccessToken(); refreshErr != nil {
-		return nil, fmt.Errorf("%v (refresh failed: %v)", err, refreshErr)
+		return nil, fmt.Errorf("account session refresh failed: %w", refreshErr)
 	}
 
 	info, retryErr := client.GetAccountInfo()
@@ -588,12 +595,13 @@ func (s *Server) getSessionAndClient(r *http.Request, w http.ResponseWriter) (*s
 }
 
 type linkRequest struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	CookieHeader string `json:"cookie_header"`
-	UserAgent    string `json:"user_agent"`
-	PhoneNumber  string `json:"phone_number"`
-	Domain       string `json:"domain"`
+	browserLinked bool   // Set only by browser-sync handlers, never from JSON input.
+	AccessToken   string `json:"access_token"`
+	RefreshToken  string `json:"refresh_token"`
+	CookieHeader  string `json:"cookie_header"`
+	UserAgent     string `json:"user_agent"`
+	PhoneNumber   string `json:"phone_number"`
+	Domain        string `json:"domain"`
 }
 
 type browserSyncCompleteRequest struct {
@@ -640,18 +648,22 @@ func (s *Server) buildLinkedSession(userID string, req linkRequest) (*session.Vi
 		return nil, errors.New("domain is required")
 	}
 
-	if userAgent == "" && existingSession != nil {
+	sameContext := existingSession != nil && accessToken != "" &&
+		accessToken == existingSession.AccessToken && domain == existingSession.Domain &&
+		(userAgent == "" || userAgent == existingSession.UserAgent) &&
+		(cookieHeader == "" || cookieHeader == existingSession.CookieHeader)
+	if userAgent == "" && sameContext {
 		userAgent = strings.TrimSpace(existingSession.UserAgent)
 	}
 
 	preservedCookieHeader := cookieHeader
-	if preservedCookieHeader == "" && existingSession != nil {
+	if preservedCookieHeader == "" && sameContext {
 		preservedCookieHeader = strings.TrimSpace(existingSession.CookieHeader)
 	}
 
 	preservedCsrfToken := ""
 	preservedAnonID := ""
-	if existingSession != nil {
+	if sameContext {
 		preservedCsrfToken = strings.TrimSpace(existingSession.CsrfToken)
 		preservedAnonID = strings.TrimSpace(existingSession.AnonID)
 	}
@@ -671,7 +683,7 @@ func (s *Server) buildLinkedSession(userID string, req linkRequest) (*session.Vi
 		AnonID:        preservedAnonID,
 		UserAgent:     userAgent,
 		PhoneNumber:   phoneNumber,
-		BrowserLinked: existingSession != nil && existingSession.BrowserLinked,
+		BrowserLinked: req.browserLinked,
 		LastBrowserSync: firstNonEmpty(func() string {
 			if existingSession == nil {
 				return ""
@@ -841,7 +853,7 @@ func (s *Server) handleBrowserSyncComplete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	linkReq := linkRequest{
+	linkReq := linkRequest{browserLinked: true,
 		CookieHeader: req.CookieHeader,
 		UserAgent:    req.UserAgent,
 		Domain:       req.Domain,
@@ -994,7 +1006,7 @@ func (s *Server) handleExtensionSyncComplete(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	sess, err := s.buildLinkedSession(link.UserID, linkRequest{
+	sess, err := s.buildLinkedSession(link.UserID, linkRequest{browserLinked: true,
 		AccessToken:  req.AccessToken,
 		RefreshToken: req.RefreshToken,
 		UserAgent:    req.UserAgent,

@@ -129,6 +129,7 @@ function harness(options = {}) {
           : {}),
         content_scripts: [{ matches: [`${appOrigin}/*`] }],
       }),
+      getURL: path => `${options.firefox ? "moz-extension" : "chrome-extension"}://synthetic-own${path}`,
       onStartup: event("startup"),
       onInstalled: event("installed"),
       onMessage: event("message"),
@@ -633,4 +634,27 @@ test("Chromium browser namespace alias does not change its cookie-store identity
   const h = harness({ browserAlias: true });
   const results = await h.context.syncAndPersistAllDomains();
   assert.equal(results[0].ok, true);
+});
+
+
+test("extension pages are authorized only for their own extension origin", () => {
+  for (const [options, scheme] of [[{}, "chrome-extension"], [{ firefox: true }, "moz-extension"]]) {
+    const h = harness(options);
+    assert.equal(h.context.isExtensionPageSender({ url: `${scheme}://synthetic-own/popup.html` }), true);
+    for (const url of [`${scheme}://foreign/popup.html`, "https://synthetic-own/popup.html", "https://vintrack.jakobaio.dev", "invalid"]) {
+      assert.equal(h.context.isExtensionPageSender({ url }), false, url);
+    }
+  }
+});
+
+test("runtime capabilities advertise desktop checkout without network requests", async () => {
+  for (const options of [{}, { firefox: true }]) {
+    const h = harness(options);
+    const result = await new Promise(resolve => h.listeners.message({ type: "VINTRACK_EXTENSION_PING" }, { url: `${appOrigin}/checkout/17/123` }, resolve));
+    assert.equal(result.ok, true);
+    assert.equal(result.configured, true);
+    assert.deepEqual(clone(result.checkoutCapabilities), { prepare: true, automaticPayment: true });
+    assert.equal(h.calls.length, 0);
+    assert.equal(h.tabMessages.length, 0);
+  }
 });

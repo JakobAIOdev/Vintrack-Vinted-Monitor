@@ -1225,23 +1225,30 @@ func (s *Store) tryClaimMatureFreeProxyForCanaryContext(
 	seconds := max(1, int(duration.Seconds()))
 	var claimedUntil time.Time
 	err := s.db.QueryRowContext(ctx, `
+		WITH available AS (
+			SELECT fp.id
+			FROM free_proxies fp
+			WHERE fp.proxy_url = $1
+			  AND fp.status <> 'disabled'
+			  AND (fp.quarantined_until IS NULL OR fp.quarantined_until <= NOW())
+			  AND (fp.check_claimed_until IS NULL OR fp.check_claimed_until <= NOW())
+			  AND EXISTS (
+				SELECT 1
+				FROM free_proxy_health fph
+				WHERE fph.proxy_id = fp.id
+				  AND fph.region = $2
+				  AND fph.status = 'active'
+				  AND fph.success_streak >= 2
+				  AND fph.failure_streak = 0
+				  AND (NOT $4 OR fph.last_success_at >= NOW() - INTERVAL '20 minutes')
+			  )
+			FOR UPDATE OF fp SKIP LOCKED
+		)
 		UPDATE free_proxies fp
 		SET check_claimed_until = NOW() + $3::bigint * INTERVAL '1 second',
 			updated_at = NOW()
-		WHERE fp.proxy_url = $1
-		  AND fp.status <> 'disabled'
-		  AND (fp.quarantined_until IS NULL OR fp.quarantined_until <= NOW())
-		  AND (fp.check_claimed_until IS NULL OR fp.check_claimed_until <= NOW())
-		  AND EXISTS (
-			SELECT 1
-			FROM free_proxy_health fph
-			WHERE fph.proxy_id = fp.id
-			  AND fph.region = $2
-			  AND fph.status = 'active'
-			  AND fph.success_streak >= 2
-			  AND fph.failure_streak = 0
-			  AND (NOT $4 OR fph.last_success_at >= NOW() - INTERVAL '20 minutes')
-		  )
+		FROM available
+		WHERE fp.id = available.id
 		RETURNING fp.check_claimed_until`, proxyURL, region, seconds, requireFresh).Scan(&claimedUntil)
 	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, false, nil
@@ -1599,6 +1606,8 @@ func (s *Store) PruneUnselectedFreeProxiesContext(ctx context.Context, keepProxy
 	if len(keepProxyURLs) == 0 {
 		return 0, nil
 	}
+	// Never-working imports expire after a day off-feed. A historical success
+	// extends retention to seven days, but must not reserve inventory forever.
 	result, err := s.db.ExecContext(ctx, `
 		WITH stale AS (
 			SELECT fp.id
@@ -1612,15 +1621,25 @@ func (s *Store) PruneUnselectedFreeProxiesContext(ctx context.Context, keepProxy
 			  )
 			  AND NOT (fp.proxy_url = ANY($1))
 			  AND fp.status <> 'disabled'
-			  AND fp.success_count = 0
-			  AND fp.last_success_at IS NULL
 			  AND (fp.check_claimed_until IS NULL OR fp.check_claimed_until <= NOW())
 			  AND fp.last_seen_at < NOW() - INTERVAL '24 hours'
-			  AND NOT EXISTS (
-				SELECT 1
-				FROM free_proxy_health fph
-				WHERE fph.proxy_id = fp.id
-				  AND fph.last_success_at IS NOT NULL
+			  AND (
+				(
+					fp.success_count = 0
+					AND fp.last_success_at IS NULL
+					AND NOT EXISTS (
+						SELECT 1 FROM free_proxy_health fph
+						WHERE fph.proxy_id = fp.id AND fph.last_success_at IS NOT NULL
+					)
+				) OR (
+					fp.last_seen_at < NOW() - INTERVAL '7 days'
+					AND (fp.last_success_at IS NULL OR fp.last_success_at < NOW() - INTERVAL '7 days')
+					AND NOT EXISTS (
+						SELECT 1 FROM free_proxy_health fph
+						WHERE fph.proxy_id = fp.id
+						  AND fph.last_success_at >= NOW() - INTERVAL '7 days'
+					)
+				)
 			  )
 			ORDER BY fp.last_seen_at, fp.id
 			LIMIT $2
@@ -1704,20 +1723,14 @@ func (s *Store) EnsureFreeProxyHealthRowsWithLimitsContext(ctx context.Context, 
 			limit,
 		)
 		if fillWindow {
+			// Retain proven/current candidates first, then interleave protocols
+			// within each priority class so a large HTTP feed cannot exclude SOCKS.
 			if _, err := s.db.ExecContext(ctx, `
-			WITH desired AS (
-				SELECT fp.id
-				FROM free_proxies fp
-				LEFT JOIN free_proxy_health current_health
-				  ON current_health.proxy_id = fp.id
-				 AND current_health.region = $1
-				WHERE fp.status <> 'disabled'
-				ORDER BY
-				  CASE
-					WHEN current_health.candidate_window_token =
-					  FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint THEN 0
-					ELSE 1
-				  END,
+			WITH candidates AS (
+				SELECT fp.id, fp.protocol,
+				  CASE WHEN current_health.candidate_window_token =
+					FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint
+					THEN 0 ELSE 1 END AS window_priority,
 				  CASE
 					WHEN current_health.status = 'active' THEN 0
 					WHEN current_health.success_count > 0 THEN 1
@@ -1725,32 +1738,38 @@ func (s *Store) EnsureFreeProxyHealthRowsWithLimitsContext(ctx context.Context, 
 					WHEN current_health.status = 'pending' THEN 3
 					WHEN current_health.status = 'cooldown' THEN 4
 					ELSE 5
-				  END,
-				  CASE
-					WHEN current_health.next_check_at IS NULL
-					  OR current_health.next_check_at <= NOW() THEN 0
-					ELSE 1
-				  END,
+				  END AS health_priority,
+				  CASE WHEN current_health.next_check_at IS NULL
+					OR current_health.next_check_at <= NOW()
+					THEN 0 ELSE 1 END AS due_priority,
 				  CASE WHEN EXISTS (
 					SELECT 1
 					FROM unnest(array_append(COALESCE(fp.sources, ARRAY[]::text[]), fp.source)) source_name
 					WHERE LOWER(BTRIM(source_name)) = 'iplocate:' || LOWER($1)
 					   OR LOWER(BTRIM(source_name)) LIKE '%:' || LOWER($1)
-				  ) THEN 0 ELSE 1 END,
-				  CASE fp.protocol
-					WHEN 'http' THEN 0
-					WHEN 'https' THEN 1
-					WHEN 'socks5' THEN 2
-					WHEN 'socks4' THEN 3
-					ELSE 3
-				  END,
-				  fp.last_success_at DESC NULLS LAST,
-				  fp.failure_count ASC,
-				  MD5(
-					fp.proxy_url || ':' ||
-					FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::text
-				  ),
-				  fp.updated_at DESC
+				  ) THEN 0 ELSE 1 END AS affinity_rank,
+				  fp.last_success_at, fp.failure_count,
+				  MD5(fp.proxy_url || ':' ||
+					FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::text) AS hourly_order
+				FROM free_proxies fp
+				LEFT JOIN free_proxy_health current_health
+				  ON current_health.proxy_id = fp.id
+				 AND current_health.region = $1
+				WHERE fp.status <> 'disabled'
+			), protocol_ranked AS (
+				SELECT candidates.*,
+				  ROW_NUMBER() OVER (
+					PARTITION BY window_priority, health_priority, due_priority, protocol
+					ORDER BY affinity_rank, last_success_at DESC NULLS LAST, failure_count, hourly_order, id
+				  ) AS protocol_rank
+				FROM candidates
+			), desired AS (
+				SELECT fp.id
+				FROM protocol_ranked ranked
+				JOIN free_proxies fp ON fp.id = ranked.id
+				ORDER BY ranked.window_priority, ranked.health_priority,
+				  ranked.due_priority, ranked.protocol_rank, ranked.affinity_rank,
+				  ranked.hourly_order, ranked.id
 				LIMIT $2::bigint
 				FOR KEY SHARE OF fp
 			)
@@ -2210,7 +2229,8 @@ func (s *Store) RecordFreeProxySuccessContext(ctx context.Context, proxyURL stri
 
 // TouchFreeProxyRuntimeSuccessContext records sampled positive data-plane
 // evidence without incrementing validator counters. Runtime failures are kept
-// local until the maintainer independently reproduces them.
+// local until the maintainer independently reproduces them. A sampled write
+// skips contended rows rather than waiting behind validation or source imports.
 func (s *Store) TouchFreeProxyRuntimeSuccessContext(
 	ctx context.Context,
 	proxyURL string,
@@ -2221,7 +2241,17 @@ func (s *Store) TouchFreeProxyRuntimeSuccessContext(
 		return nil
 	}
 	_, err := s.db.ExecContext(ctx, `
-		WITH updated_health AS (
+		WITH available AS (
+			SELECT fph.id
+			FROM free_proxy_health fph
+			JOIN free_proxies fp ON fp.id = fph.proxy_id
+			WHERE fp.proxy_url = $1
+			  AND fph.region = $2
+			  AND fph.status = 'active'
+			  AND fph.success_streak >= 2
+			  AND fph.failure_streak = 0
+			FOR UPDATE OF fp, fph SKIP LOCKED
+		), updated_health AS (
 			UPDATE free_proxy_health fph
 			SET latency_ms = $3,
 				last_status_code = 200,
@@ -2233,13 +2263,8 @@ func (s *Store) TouchFreeProxyRuntimeSuccessContext(
 				next_check_at = NOW() + INTERVAL '8 minutes',
 				score = GREATEST(fph.score, 50),
 				updated_at = NOW()
-			FROM free_proxies fp
-			WHERE fp.id = fph.proxy_id
-			  AND fp.proxy_url = $1
-			  AND fph.region = $2
-			  AND fph.status = 'active'
-			  AND fph.success_streak >= 2
-			  AND fph.failure_streak = 0
+			FROM available
+			WHERE fph.id = available.id
 			RETURNING fph.proxy_id
 		)
 		UPDATE free_proxies fp
