@@ -550,9 +550,11 @@ test.describe("first monitor onboarding", () => {
         await expect(
             db.monitors.findUniqueOrThrow({
                 where: { id: monitorId },
-                select: { vinted_extra_params: true },
+                select: { region: true, proxy_source: true, vinted_extra_params: true },
             }),
         ).resolves.toEqual({
+            region: "fr",
+            proxy_source: "free",
             vinted_extra_params: "material_ids%5B%5D=12",
         });
         await db.monitors.delete({ where: { id: monitorId } });

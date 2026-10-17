@@ -213,7 +213,11 @@ test("missing, outdated or undated consent blocks checkout and browser payment c
         const data = await preview.json();
         assert.equal(data.code, "CHECKOUT_CONSENT_REQUIRED");
         assert.equal(data.target.riskConsentVersion, null);
-        for (const headers of [{}, { "X-Vintrack-Checkout-Mode": "browser" }]) {
+        const checkoutModes: Record<string, string>[] = [
+            {},
+            { "X-Vintrack-Checkout-Mode": "browser" },
+        ];
+        for (const headers of checkoutModes) {
             const response = await h.call("POST", headers);
             assert.equal(response.status, 403);
             assert.equal(

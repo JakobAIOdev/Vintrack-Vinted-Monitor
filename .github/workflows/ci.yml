@@ -117,6 +117,7 @@ jobs:
           cache-dependency-path: apps/control-center/package-lock.json
       - run: npm ci
       - run: npx prisma generate
+      - run: npm run test:types
       - run: npm run test:unit
 
   control-center-build:

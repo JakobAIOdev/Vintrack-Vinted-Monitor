@@ -89,6 +89,7 @@ run node --test "$ROOT_DIR/scripts/config-check.test.mjs"
 run_in apps/worker go test ./...
 run_in apps/vinted-service go test ./...
 
+run_in apps/control-center npm run test:types
 run_in apps/control-center npm run test:unit
 run_in apps/control-center npm run lint
 

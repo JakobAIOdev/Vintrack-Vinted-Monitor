@@ -82,7 +82,7 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
         process.env.E2E_ONBOARDING === "true"
     ) {
         const now = new Date();
-        return {
+        const health: FreeProxyPoolHealth = {
             enabled: true,
             state: "ready",
             minActivePerRegion: 1,
@@ -125,6 +125,14 @@ export async function getFreeProxyPoolHealth(): Promise<FreeProxyPoolHealth> {
                 },
             },
         };
+        // Onboarding exercises regional URL imports as well as the DE preset.
+        // Supply only synthetic health for every supported starter market.
+        const template = health.regions.de;
+        for (const region of DEFAULT_STARTER_REGIONS.split(",")) {
+            health.regions[region] = { ...template, region };
+        }
+        health.activeCount = Object.keys(health.regions).length;
+        return health;
     }
 
     const [

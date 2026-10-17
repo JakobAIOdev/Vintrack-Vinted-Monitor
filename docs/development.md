@@ -127,6 +127,7 @@ Useful checks:
 
 ```bash
 npm run lint
+npm run test:types
 npm run build
 npm run test:e2e
 npm run format:check

@@ -764,9 +764,17 @@ async function runBrowser(name, directory, transport) {
       card_id: null,
       payment_method: "paypal",
     });
-    const checkoutTab = (await tabs()).find(
-      (tab) => tab.url === result.checkoutUrl,
-    );
+    // tabs.update resolves after navigation starts. Firefox can still expose
+    // the previous URL until the new document commits, especially under load.
+    let checkoutTab;
+    const navigationStarted = Date.now();
+    while (Date.now() - navigationStarted < 10000) {
+      checkoutTab = (await tabs()).find(
+        (tab) => tab.url === result.checkoutUrl && tab.active,
+      );
+      if (checkoutTab) break;
+      await new Promise((done) => setTimeout(done, 50));
+    }
     assert.ok(checkoutTab?.active, "prepared checkout was not foregrounded");
     await driver.evaluate(
       "waitForTabLoad(" +
