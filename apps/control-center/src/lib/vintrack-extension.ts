@@ -5,7 +5,7 @@ export type CheckoutExtensionState = {
 };
 
 // Probe only capabilities. A slow/missing receiver must never choose another
-// checkout executor. A cold extension can need time to start.
+// checkout executor. Mobile event pages can need time to start.
 export function detectCheckoutExtension(): Promise<CheckoutExtensionState> {
     if (typeof window === "undefined")
         return Promise.resolve({ state: "unavailable", protocol: 0 });

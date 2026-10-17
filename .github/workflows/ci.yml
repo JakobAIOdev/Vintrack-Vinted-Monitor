@@ -93,10 +93,13 @@ jobs:
         run: node apps/vintrack-browser-sync-extension/scripts/validate-extension.mjs
 
       - name: Build packages
-        run: apps/vintrack-browser-sync-extension/scripts/build-packages.sh
+        run: apps/vintrack-browser-sync-extension/scripts/build-packages.sh --mobile-previews
 
       - name: Lint Firefox build
         run: npx --yes web-ext@10 lint --source-dir apps/vintrack-browser-sync-extension/dist/firefox
+
+      - name: Lint Firefox Android preview
+        run: npx --yes web-ext@10 lint --source-dir apps/vintrack-browser-sync-extension/dist/firefox-android
 
   control-center-unit-tests:
     name: Control Center Unit Tests

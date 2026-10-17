@@ -19,6 +19,13 @@ const browserArgument = process.argv.find((value) =>
 const browsers = browserArgument
   ? [browserArgument.split("=")[1]]
   : ["chromium", "firefox"];
+const androidPreview = process.argv.includes("--android-preview");
+if (androidPreview)
+  assert.deepEqual(
+    browsers,
+    ["firefox"],
+    "--android-preview requires --browser=firefox",
+  );
 for (const browser of browsers)
   assert.ok(["chromium", "firefox"].includes(browser));
 
@@ -441,7 +448,12 @@ async function firefoxDriver(directory, proxyPort, certificate) {
         JSON.stringify(certificateBase64) +
         ",'CT,,');return {trustedTestCertificate:true};})())",
     );
-    await remote.installTemporaryAddon(join(extensionDir, "dist/firefox"));
+    await remote.installTemporaryAddon(
+      join(
+        extensionDir,
+        androidPreview ? "dist/firefox-android" : "dist/firefox",
+      ),
+    );
     const addon = await remote.getInstalledAddon(
       "vintrack-browser-sync@jakobaio.dev",
     );
@@ -826,7 +838,27 @@ async function runBrowser(name, directory, transport) {
       name +
         ": native account mismatch, invalid transaction and 403 stop without build/payment/retry passed",
     );
-
+    if (androidPreview) {
+      fixture.requests.length = 0;
+      const blocked = await buy({
+        ...target,
+        itemId: 126,
+        preferences: {
+          ...target.preferences,
+          autoCheckout: {
+            warningVersion: 1,
+            currency: "EUR",
+            maxTotalMinor: 3000,
+          },
+        },
+      });
+      assert.equal(blocked.code, "mobile_auto_payment_unavailable");
+      assert.equal(mutations().length, 0);
+      console.log(
+        name +
+          ": Android preview manifest blocks automatic payment in actual extension runtime passed",
+      );
+    }
   } finally {
     await driver.close();
   }

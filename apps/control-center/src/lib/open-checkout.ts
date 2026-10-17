@@ -99,7 +99,7 @@ async function startCheckout(
         extension.automaticPayment === false
     ) {
         throw new Error(
-            "Automatic payment is not supported by this extension. Update the extension or turn off auto-checkout in Account to review payment in Vinted.",
+            "Automatic payment is not available in this mobile preview. Turn off auto-checkout in Account and use normal Oneclick to review payment in Vinted.",
         );
     }
     if (extensionAvailable) {
