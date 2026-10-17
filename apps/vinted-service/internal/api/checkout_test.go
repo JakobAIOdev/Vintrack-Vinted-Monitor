@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"vintrack-vinted/internal/vinted"
 
 	"vintrack-vinted/internal/session"
 )
@@ -105,6 +108,33 @@ func TestBrowserPaymentAuthorizationDoesNotRequireVintedTransportOrValidToken(t 
 		server.handlePrepareCheckout(recorder, req)
 		if recorder.Code != tc.status {
 			t.Fatalf("card authorization status %d, want %d", recorder.Code, tc.status)
+		}
+	}
+}
+
+func TestCheckoutFailureDiagnosticsAreBoundedAndSanitized(t *testing.T) {
+	for _, tc := range []struct {
+		err              error
+		code, step       string
+		status, upstream int
+	}{
+		{&vinted.UpstreamHTTPError{Operation: "buy conversation", StatusCode: 403, Message: "synthetic-secret"}, "vinted_checkout_rejected", "transaction", 409, 403},
+		{&vinted.UpstreamHTTPError{Operation: "checkout build", StatusCode: 429}, "vinted_rate_limited", "build", 429, 429},
+		{&vinted.UpstreamHTTPError{Operation: "checkout update", StatusCode: 503}, "vinted_unavailable", "update", 502, 503},
+		{&vinted.AuthError{Step: "buy conversation", StatusCode: 401, Message: "synthetic-secret"}, "invalid_authentication_token", "transaction", 401, 401},
+		{&vinted.DataDomeChallengeError{Step: "checkout build", StatusCode: 403, CaptchaURL: "https://example.test/synthetic-secret"}, "vinted_security_check", "build", 409, 403},
+		{errors.New("synthetic-secret"), "checkout_failed", "unknown", 502, 0},
+	} {
+		payload, status := checkoutFailureResponse(tc.err)
+		if payload["code"] != tc.code || payload["failed_step"] != tc.step || status != tc.status {
+			t.Fatalf("wrong failure classification: %v", payload)
+		}
+		if tc.upstream != 0 && payload["upstream_status"] != tc.upstream {
+			t.Fatal("upstream status missing")
+		}
+		encoded, _ := json.Marshal(payload)
+		if strings.Contains(string(encoded), "synthetic-secret") {
+			t.Fatal("private upstream data leaked")
 		}
 	}
 }

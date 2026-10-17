@@ -128,20 +128,39 @@ func (s *Server) handlePrepareCheckout(w http.ResponseWriter, r *http.Request) {
 	}, req.Preferences)
 	s.persistIfRefreshed(sess, client)
 	if err != nil {
-		// Never return raw authenticated responses, request headers or tokens.
-		code, message, status := "checkout_failed", "Vinted could not prepare checkout. Open the item in Vinted to continue.", http.StatusBadGateway
-		var authErr *vinted.AuthError
-		var challengeErr *vinted.DataDomeChallengeError
-		if errors.As(err, &authErr) {
-			code, message, status = "invalid_authentication_token", "Reconnect your Vinted account before preparing checkout.", http.StatusUnauthorized
-		} else if errors.As(err, &challengeErr) {
-			code, message, status = "vinted_security_check", "Open Vinted in your browser to complete its security check.", http.StatusConflict
-		}
-		writeJSON(w, status, map[string]string{"code": code, "error": message})
+		payload, status := checkoutFailureResponse(err)
+		writeJSON(w, status, payload)
 		return
 	}
 	historyLink := *link
 	historyLink.PaymentURL = ""
 	s.storeCheckoutLink(getUserID(r), sess, historyLink)
 	writeJSON(w, http.StatusOK, link)
+}
+
+// Keep diagnostics useful without exposing upstream response text or IDs.
+func checkoutFailureResponse(err error) (map[string]interface{}, int) {
+	code, message, status := "checkout_failed", "Vinted could not prepare checkout. Open the item in Vinted to continue.", http.StatusBadGateway
+	upstream := vinted.UpstreamStatus(err)
+	var auth *vinted.AuthError
+	var challenge *vinted.DataDomeChallengeError
+	switch {
+	case errors.As(err, &auth):
+		code, message, status = "invalid_authentication_token", "Reconnect your Vinted account before preparing checkout.", http.StatusUnauthorized
+	case errors.As(err, &challenge):
+		code, message, status = "vinted_security_check", "Open Vinted in your browser to complete its security check.", http.StatusConflict
+	case upstream == http.StatusUnauthorized:
+		code, message, status = "invalid_authentication_token", "Reconnect your Vinted account before preparing checkout.", http.StatusUnauthorized
+	case upstream == http.StatusForbidden:
+		code, message, status = "vinted_checkout_rejected", "Vinted rejected this checkout request. Continue in Vinted; do not repeatedly start checkout.", http.StatusConflict
+	case upstream == http.StatusTooManyRequests:
+		code, message, status = "vinted_rate_limited", "Vinted is limiting requests. Wait before continuing in Vinted.", http.StatusTooManyRequests
+	case upstream >= 500:
+		code, message = "vinted_unavailable", "Vinted is temporarily unavailable. Check Vinted before starting checkout again."
+	}
+	payload := map[string]interface{}{"code": code, "error": message, "failed_step": vinted.CheckoutFailureStep(err)}
+	if upstream >= 400 && upstream <= 599 {
+		payload["upstream_status"] = upstream
+	}
+	return payload, status
 }

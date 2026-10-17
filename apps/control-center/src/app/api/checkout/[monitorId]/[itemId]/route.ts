@@ -133,6 +133,10 @@ async function handle(
                 {
                     error: data?.error || "Vinted could not prepare checkout.",
                     code: data?.code,
+                    failedStep: ["transaction", "build", "update", "payment", "unknown"].includes(data?.failed_step)
+                        ? data.failed_step : undefined,
+                    upstreamStatus: Number.isInteger(data?.upstream_status) && data.upstream_status >= 400 && data.upstream_status <= 599
+                        ? data.upstream_status : undefined,
                 },
                 { status: response.status },
             );

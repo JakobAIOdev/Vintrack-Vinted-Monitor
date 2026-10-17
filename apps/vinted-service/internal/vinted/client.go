@@ -30,6 +30,7 @@ const maxWarmupResponseBytes = 2 * 1024 * 1024
 const maxFilterSearchResponseBytes = 512 * 1024
 const maxBrandPageInspectionBytes = 512 * 1024
 const maxBrandPageRedirects = 3
+const maxCheckoutSafeID int64 = 1<<53 - 1
 
 type Client struct {
 	httpClient      vintedHTTPClient
@@ -317,7 +318,7 @@ func (c *Client) warmUpPage(pagePath string, force bool) error {
 	for _, re := range csrfPatterns {
 		if m := re.FindSubmatch(body); len(m) > 1 {
 			c.csrfToken = string(m[1])
-			log.Printf("[vinted] extracted CSRF token: %s...", truncate(c.csrfToken, 20))
+			log.Printf("[vinted] extracted CSRF token")
 			break
 		}
 	}
@@ -686,10 +687,6 @@ func DomainForRegion(region string) (string, bool) {
 	return domain, ok
 }
 
-type userWrapper struct {
-	User AccountInfo `json:"user"`
-}
-
 func parseUserIDFromJWT(token string) (int64, string) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -736,102 +733,105 @@ func parseUserIDFromJWT(token string) (int64, string) {
 	return userID, fmt.Sprintf("%d", userID)
 }
 
+// validateAccountAccess verifies a protected endpoint before profile metadata
+// or JWT claims can be treated as evidence of an authenticated session.
+// Keep the response in memory and never log conversations or response bodies.
+func (c *Client) validateAccountAccess() error {
+	req, err := http.NewRequest("GET", fmt.Sprintf("https://%s/api/v2/inbox?page=1&per_page=1", c.session.Domain), nil)
+	if err != nil {
+		return fmt.Errorf("create account validation request: %w", err)
+	}
+	req.Header = c.apiHeaders()
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("account validation request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFilterSearchResponseBytes+1))
+	if err != nil {
+		return fmt.Errorf("read account validation response: %w", err)
+	}
+	if len(body) > maxFilterSearchResponseBytes {
+		return fmt.Errorf("account validation response exceeds limit")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return vintedHTTPError("account validation", resp.StatusCode, string(body))
+	}
+	var result struct {
+		Code          int                `json:"code"`
+		Conversations *[]json.RawMessage `json:"conversations"`
+		Pagination    *struct {
+			CurrentPage int `json:"current_page"`
+		} `json:"pagination"`
+	}
+	if json.Unmarshal(body, &result) != nil || result.Code != 0 || result.Conversations == nil || result.Pagination == nil {
+		return fmt.Errorf("account validation response is invalid")
+	}
+	return nil
+}
+
 func (c *Client) GetAccountInfo() (*AccountInfo, error) {
 	if err := c.WarmUp(); err != nil {
-		log.Printf("[vinted] warmup failed: %v", err)
+		return nil, fmt.Errorf("account warmup: %w", err)
+	}
+	if err := c.validateAccountAccess(); err != nil {
+		return nil, err
 	}
 
 	jwtUserID, _ := parseUserIDFromJWT(c.session.AccessToken)
-
 	if jwtUserID > 0 {
-		userURL := fmt.Sprintf("https://%s/api/v2/users/%d", c.session.Domain, jwtUserID)
-		req, err := http.NewRequest("GET", userURL, nil)
-		if err == nil {
-			req.Header = c.apiHeaders()
-			resp, err := c.httpClient.Do(req)
-			if err == nil {
-				defer resp.Body.Close()
-				body, _ := io.ReadAll(resp.Body)
-				log.Printf("[vinted] GET /api/v2/users/%d -> %d (%.200s)", jwtUserID, resp.StatusCode, string(body))
-
-				if resp.StatusCode == 200 {
-					var wrapper userWrapper
-					if err := json.Unmarshal(body, &wrapper); err == nil && wrapper.User.ID > 0 {
-						return &wrapper.User, nil
-					}
-					var info AccountInfo
-					if err := json.Unmarshal(body, &info); err == nil && info.ID > 0 {
-						return &info, nil
-					}
-					var raw map[string]interface{}
-					if err := json.Unmarshal(body, &raw); err == nil {
-						if userMap, ok := raw["user"].(map[string]interface{}); ok {
-							raw = userMap
-						}
-						login, _ := raw["login"].(string)
-						photo, _ := raw["photo"].(map[string]interface{})
-						photoURL := ""
-						if photo != nil {
-							photoURL, _ = photo["url"].(string)
-						}
-						return &AccountInfo{
-							ID:       jwtUserID,
-							Login:    login,
-							PhotoURL: photoURL,
-						}, nil
-					}
-				}
-
-				if resp.StatusCode == 401 || resp.StatusCode == 403 {
-					log.Printf("[vinted] /users/%d rejected with HTTP %d, trying /users/current", jwtUserID, resp.StatusCode)
-				}
-			}
+		info, err := c.getAccountProfile(fmt.Sprintf("/api/v2/users/%d", jwtUserID), jwtUserID)
+		// Only a missing profile route permits the compatibility fallback. Never
+		// follow an access denial, challenge, rate limit or invalid response.
+		if UpstreamStatus(err) != http.StatusNotFound {
+			return info, err
 		}
 	}
+	return c.getAccountProfile("/api/v2/users/current", jwtUserID)
+}
 
-	currentURL := fmt.Sprintf("https://%s/api/v2/users/current", c.session.Domain)
-	req, err := http.NewRequest("GET", currentURL, nil)
+func (c *Client) getAccountProfile(path string, expectedID int64) (*AccountInfo, error) {
+	req, err := http.NewRequest("GET", "https://"+c.session.Domain+path, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create account profile request: %w", err)
 	}
 	req.Header = c.apiHeaders()
-
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetch current user: %w", err)
+		return nil, fmt.Errorf("fetch account profile: %w", err)
 	}
 	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[vinted] GET /api/v2/users/current -> %d (%.300s)", resp.StatusCode, string(body))
-
-	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return nil, fmt.Errorf("authentication failed (HTTP %d)", resp.StatusCode)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFilterSearchResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read account profile: %w", err)
+	}
+	if len(body) > maxFilterSearchResponseBytes {
+		return nil, fmt.Errorf("account profile response exceeds limit")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, vintedHTTPError("account profile", resp.StatusCode, string(body))
 	}
 
-	if resp.StatusCode != 200 {
-		if jwtUserID > 0 {
-			log.Printf("[vinted] /users/current failed but JWT has user ID %d, using that", jwtUserID)
-			return &AccountInfo{ID: jwtUserID, Login: fmt.Sprintf("user_%d", jwtUserID)}, nil
+	var wrapper struct {
+		Code int         `json:"code"`
+		User AccountInfo `json:"user"`
+	}
+	if err := json.Unmarshal(body, &wrapper); err != nil || wrapper.Code != 0 {
+		return nil, fmt.Errorf("account profile response is invalid")
+	}
+	info := wrapper.User
+	if info.ID == 0 {
+		if err := json.Unmarshal(body, &info); err != nil {
+			return nil, fmt.Errorf("account profile response is invalid")
 		}
-		return nil, fmt.Errorf("unexpected status %d: %.200s", resp.StatusCode, string(body))
 	}
-
-	var wrapper userWrapper
-	if err := json.Unmarshal(body, &wrapper); err == nil && wrapper.User.ID > 0 {
-		return &wrapper.User, nil
+	if info.ID <= 0 || strings.TrimSpace(info.Login) == "" {
+		return nil, fmt.Errorf("account profile response is incomplete")
 	}
-	var info AccountInfo
-	if err := json.Unmarshal(body, &info); err == nil && info.ID > 0 {
-		return &info, nil
+	if expectedID > 0 && info.ID != expectedID {
+		return nil, fmt.Errorf("account profile does not match the authenticated token")
 	}
-
-	if jwtUserID > 0 {
-		log.Printf("[vinted] could not parse user response, using JWT ID %d", jwtUserID)
-		return &AccountInfo{ID: jwtUserID, Login: fmt.Sprintf("user_%d", jwtUserID)}, nil
-	}
-
-	return nil, fmt.Errorf("could not extract user info from response: %.200s", string(body))
+	return &info, nil
 }
 
 func (c *Client) ValidateSession() bool {
@@ -1328,11 +1328,14 @@ func readCheckoutResponse(reader io.Reader) ([]byte, error) {
 }
 
 func (c *Client) createBuyTransaction(itemID, sellerID int64) (int64, error) {
+	if itemID <= 0 || sellerID <= 0 || itemID > maxCheckoutSafeID || sellerID > maxCheckoutSafeID {
+		return 0, fmt.Errorf("invalid buy conversation target")
+	}
 	convoURL := fmt.Sprintf("https://%s/api/v2/conversations", c.session.Domain)
 	payload := map[string]interface{}{
 		"initiator":        "buy",
-		"item_id":          fmt.Sprintf("%d", itemID),
-		"opposite_user_id": fmt.Sprintf("%d", sellerID),
+		"item_id":          itemID,
+		"opposite_user_id": sellerID,
 	}
 	body, _ := json.Marshal(payload)
 
@@ -1363,26 +1366,31 @@ func (c *Client) createBuyTransaction(itemID, sellerID int64) (int64, error) {
 	var convoResp struct {
 		Conversation struct {
 			Transaction struct {
-				ID int64 `json:"id"`
+				ID json.RawMessage `json:"id"`
 			} `json:"transaction"`
 		} `json:"conversation"`
+		Transaction struct {
+			ID json.RawMessage `json:"id"`
+		} `json:"transaction"`
 	}
-	if err := json.Unmarshal(respBody, &convoResp); err == nil && convoResp.Conversation.Transaction.ID > 0 {
-		return convoResp.Conversation.Transaction.ID, nil
+	if err := json.Unmarshal(respBody, &convoResp); err != nil {
+		return 0, fmt.Errorf("invalid buy conversation response")
 	}
-
-	var raw map[string]interface{}
-	if err := json.Unmarshal(respBody, &raw); err != nil {
-		return 0, fmt.Errorf("parse buy conversation response: %w", err)
+	id := convoResp.Conversation.Transaction.ID
+	if len(id) == 0 || string(id) == "null" {
+		id = convoResp.Transaction.ID
 	}
-	if txID, ok := int64AtPath(raw, "conversation", "transaction", "id"); ok {
-		return txID, nil
+	value := string(id)
+	if strings.HasPrefix(value, "\"") {
+		if err := json.Unmarshal(id, &value); err != nil {
+			return 0, fmt.Errorf("invalid transaction ID in buy conversation response")
+		}
 	}
-	if txID, ok := int64AtPath(raw, "transaction", "id"); ok {
-		return txID, nil
+	txID, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || txID <= 0 || txID > maxCheckoutSafeID || strconv.FormatInt(txID, 10) != value {
+		return 0, fmt.Errorf("invalid transaction ID in buy conversation response")
 	}
-
-	return 0, fmt.Errorf("could not extract transaction ID from buy conversation response")
+	return txID, nil
 }
 
 type checkoutBuildResult struct {
@@ -1853,9 +1861,6 @@ type DataDomeChallengeError struct {
 }
 
 func (e *DataDomeChallengeError) Error() string {
-	if e.CaptchaURL != "" {
-		return fmt.Sprintf("datadome challenge at %s (HTTP %d): captcha_url=%s", e.Step, e.StatusCode, e.CaptchaURL)
-	}
 	return fmt.Sprintf("datadome challenge at %s (HTTP %d)", e.Step, e.StatusCode)
 }
 
@@ -1878,9 +1883,6 @@ type AuthError struct {
 }
 
 func (e *AuthError) Error() string {
-	if e.Message != "" {
-		return fmt.Sprintf("invalid authentication token at %s (HTTP %d): %s", e.Step, e.StatusCode, e.Message)
-	}
 	return fmt.Sprintf("invalid authentication token at %s (HTTP %d)", e.Step, e.StatusCode)
 }
 
@@ -1912,7 +1914,46 @@ func UpstreamStatus(err error) int {
 	if errors.As(err, &authErr) {
 		return authErr.StatusCode
 	}
+	var challenge *DataDomeChallengeError
+	if errors.As(err, &challenge) {
+		return challenge.StatusCode
+	}
+	var payment *PaymentStateError
+	if errors.As(err, &payment) {
+		return payment.StatusCode
+	}
 	return 0
+}
+
+// CheckoutFailureStep returns only fixed diagnostic labels, never upstream text.
+func CheckoutFailureStep(err error) string {
+	var step string
+	var upstream *UpstreamHTTPError
+	var auth *AuthError
+	var challenge *DataDomeChallengeError
+	var payment *PaymentStateError
+	switch {
+	case errors.As(err, &upstream):
+		step = upstream.Operation
+	case errors.As(err, &auth):
+		step = auth.Step
+	case errors.As(err, &challenge):
+		step = challenge.Step
+	case errors.As(err, &payment):
+		step = payment.Step
+	}
+	switch step {
+	case "buy conversation":
+		return "transaction"
+	case "checkout build":
+		return "build"
+	case "checkout update":
+		return "update"
+	case "checkout payment":
+		return "payment"
+	default:
+		return "unknown"
+	}
 }
 
 func newUpstreamHTTPError(operation string, statusCode int, contentType string, body []byte) error {
@@ -1953,9 +1994,6 @@ type PaymentStateError struct {
 }
 
 func (e *PaymentStateError) Error() string {
-	if e.Message != "" {
-		return fmt.Sprintf("%s at %s (HTTP %d): %s", e.Code, e.Step, e.StatusCode, e.Message)
-	}
 	return fmt.Sprintf("%s at %s (HTTP %d)", e.Code, e.Step, e.StatusCode)
 }
 
@@ -1992,7 +2030,7 @@ func vintedHTTPError(step string, statusCode int, body string) error {
 			CaptchaURL: extractCaptchaURL(body),
 		}
 	}
-	return fmt.Errorf("%s failed (HTTP %d): %s", step, statusCode, truncate(body, 300))
+	return &UpstreamHTTPError{Operation: step, StatusCode: statusCode}
 }
 
 func paymentStateError(step string, statusCode int, code string, body string) *PaymentStateError {
@@ -2149,23 +2187,17 @@ func (c *Client) RefreshAccessToken() error {
 
 	c.warmedUp = false
 	if err := c.WarmUp(); err != nil {
-		log.Printf("[vinted] warmup before refresh failed: %v (continuing anyway)", err)
+		return fmt.Errorf("warmup before refresh: %w", err)
 	}
 
 	c.httpClient.SetCookies(domainURL, []*http.Cookie{
 		{Name: "refresh_token_web", Value: c.session.RefreshToken, Path: "/"},
 	})
 
-	_, err := c.executeRefreshRequest()
-	if err != nil {
-		log.Printf("[vinted] refresh attempt failed, forcing fresh warmup and retrying once: %v", err)
-		if warmErr := c.ForceWarmUp(); warmErr != nil {
-			return fmt.Errorf("%v; force warmup failed: %w", err, warmErr)
-		}
-		_, err = c.executeRefreshRequest()
-		if err != nil {
-			return err
-		}
+	// A failed refresh can have rotated server credentials before the response
+	// was lost. Do not replay it, including after a challenge or rate limit.
+	if _, err := c.executeRefreshRequest(); err != nil {
+		return err
 	}
 
 	var newAccessToken, newRefreshToken string
@@ -2178,8 +2210,8 @@ func (c *Client) RefreshAccessToken() error {
 		}
 	}
 
-	if newAccessToken == "" {
-		return fmt.Errorf("refresh response did not contain new access token")
+	if newAccessToken == "" || newAccessToken == c.session.AccessToken {
+		return fmt.Errorf("refresh response did not contain a changed access token")
 	}
 
 	c.session.AccessToken = newAccessToken
@@ -2191,7 +2223,7 @@ func (c *Client) RefreshAccessToken() error {
 	c.rememberWarmupState()
 	c.warmedUp = false
 
-	log.Printf("[vinted] token refresh successful, new access token: %s...", truncate(newAccessToken, 20))
+	log.Printf("[vinted] token refresh successful")
 	return nil
 }
 
@@ -2227,11 +2259,17 @@ func (c *Client) executeRefreshRequest() ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[vinted] POST /web/api/auth/refresh -> %d (%.200s)", resp.StatusCode, string(body))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFilterSearchResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read session refresh response: %w", err)
+	}
+	if len(body) > maxFilterSearchResponseBytes {
+		return nil, fmt.Errorf("session refresh response exceeds limit")
+	}
+	log.Printf("[vinted] POST /web/api/auth/refresh -> %d", resp.StatusCode)
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("refresh failed (HTTP %d): %s", resp.StatusCode, truncate(string(body), 200))
+		return nil, vintedHTTPError("session refresh", resp.StatusCode, string(body))
 	}
 
 	return body, nil
