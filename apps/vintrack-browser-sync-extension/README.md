@@ -6,8 +6,6 @@ Firefox use the same source and must always carry the same manifest version.
 **Installing for the demo, localhost, or your own domain?** Start with the
 [step-by-step installation guide](../../docs/browser-extension.md).
 
-For Android Firefox and iPhone Safari preview builds, packaging and the remaining
-device-validation requirements, see [Mobile checkout](../../docs/mobile-checkout.md).
 The public Chrome ZIP and Firefox add-on only authorize
 `https://vintrack.jakobaio.dev`. Self-hosted domains need a custom build with
 matching manifest permissions and JavaScript origin allowlists.
