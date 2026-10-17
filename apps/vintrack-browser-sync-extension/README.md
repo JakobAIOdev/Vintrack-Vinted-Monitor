@@ -336,8 +336,7 @@ own domain, use the [local or self-hosted build instructions](../../docs/browser
    **Prepare Release** workflow.
 
 For the current release, both manifests and `BROWSER_EXTENSION_LATEST_VERSION`
-are `0.4.1`; the minimum compatible version remains `0.2.1`. The Android/Safari
-targets remain unreleased previews; their availability is not enabled in AMO.
+are `0.4.1`; the minimum compatible version remains `0.2.1`.
 If the GitHub Actions variable `BROWSER_EXTENSION_LATEST_VERSION` is set,
 update it with every manifest version bump: the deploy workflow rejects a
 different value before submitting the Firefox build. Keep `.env.example`,

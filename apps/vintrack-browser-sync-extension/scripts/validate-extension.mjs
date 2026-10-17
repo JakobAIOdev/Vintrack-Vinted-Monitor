@@ -111,31 +111,6 @@ for (const [name, pattern] of [
 assertManifestOrigins(chromeManifest, "manifest.json");
 assertManifestOrigins(firefoxManifest, "manifest.firefox.json");
 
-const androidManifestArgumentIndex = process.argv.indexOf("--android-manifest");
-if (androidManifestArgumentIndex !== -1) {
-  const androidManifestPath = process.argv[androidManifestArgumentIndex + 1] || "";
-  assert.ok(androidManifestPath, "Android manifest path is required");
-  const androidManifest = JSON.parse(await readFile(resolve(androidManifestPath), "utf8"));
-  const expected = structuredClone(firefoxManifest);
-  expected.name += " (Android Preview)";
-  expected.browser_specific_settings.gecko_android = { strict_min_version: "142.0" };
-  assert.deepEqual(androidManifest, expected,
-    "Android preview must preserve Firefox permissions, identity and event-page background");
-}
-
-const safariManifestArgumentIndex = process.argv.indexOf("--safari-manifest");
-if (safariManifestArgumentIndex !== -1) {
-  const safariManifestPath = process.argv[safariManifestArgumentIndex + 1] || "";
-  assert.ok(safariManifestPath, "Safari manifest path is required");
-  const safariManifest = JSON.parse(await readFile(resolve(safariManifestPath), "utf8"));
-  const expected = structuredClone(firefoxManifest);
-  expected.name += " (Safari Preview)";
-  expected.browser_specific_settings = { safari: { strict_min_version: "18.0" } };
-  expected.background.persistent = false;
-  assert.deepEqual(safariManifest, expected,
-    "Safari preview must preserve the origin allowlist and use a nonpersistent background");
-}
-
 const expectedTagArgumentIndex = process.argv.indexOf("--tag");
 if (expectedTagArgumentIndex !== -1) {
   const tag = process.argv[expectedTagArgumentIndex + 1] || "";

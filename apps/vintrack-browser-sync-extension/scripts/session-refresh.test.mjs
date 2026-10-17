@@ -88,7 +88,7 @@ function harness(options = {}) {
               (details.storeId || (options.firefox ? "firefox-default" : "0")),
         );
       },
-      ...(options.noCookieEvents ? {} : { onChanged: event("cookie") }),
+      onChanged: event("cookie"),
     },
     tabs: {
       async query() {
@@ -111,9 +111,6 @@ function harness(options = {}) {
           name,
           async (...args) => {
             tabMutations.push({ name, args });
-            if (name === "update" && options.allowActivation && args[1]?.active === true) {
-              return { id: args[0], ...args[1] };
-            }
             throw new Error(`Unexpected tab mutation: ${name}`);
           },
         ]),
@@ -130,11 +127,9 @@ function harness(options = {}) {
               browser_specific_settings: { gecko: { id: "synthetic-firefox" } },
             }
           : {}),
-        ...(options.safari ? { browser_specific_settings: { safari: { strict_min_version: "18.0" } } } : options.androidPreview ? { browser_specific_settings: { gecko_android: { strict_min_version: "142.0" } } } : {}),
         content_scripts: [{ matches: [`${appOrigin}/*`] }],
       }),
-      getURL: path => `${options.safari ? "safari-web-extension" : options.firefox ? "moz-extension" : "chrome-extension"}://synthetic-own${path}`,
-      getPlatformInfo: async () => { if (options.platformError) throw new Error("platform unavailable"); return { os: options.os || "linux" }; },
+      getURL: path => `${options.firefox ? "moz-extension" : "chrome-extension"}://synthetic-own${path}`,
       onStartup: event("startup"),
       onInstalled: event("installed"),
       onMessage: event("message"),
@@ -157,7 +152,7 @@ function harness(options = {}) {
     else cookies.push(fresh);
   }
   const context = vm.createContext({
-    [options.firefox || options.safari ? "browser" : "chrome"]: api,
+    [options.firefox ? "browser" : "chrome"]: api,
     ...(options.browserAlias ? { browser: api } : {}),
     crypto: webcrypto,
     TextEncoder,
@@ -212,59 +207,6 @@ function harness(options = {}) {
 const target = [{ domain: "www.vinted.de", storeId: "0" }];
 const vintedCalls = (h) =>
   h.calls.filter(({ url }) => !url.startsWith(appOrigin));
-
-test("extension pages are authorized only for this extension, including Safari's URL scheme", () => {
-  for (const [options, scheme] of [[{}, "chrome-extension"], [{ firefox: true }, "moz-extension"], [{ safari: true }, "safari-web-extension"]]) {
-    const h = harness(options);
-    assert.equal(h.context.isExtensionPageSender({ url: `${scheme}://synthetic-own/popup.html` }), true);
-    for (const url of [`${scheme}://foreign/popup.html`, "https://synthetic-own/popup.html", "https://vintrack.jakobaio.dev", "safari-web-extension://foreign/popup.html", "invalid"]) {
-      assert.equal(h.context.isExtensionPageSender({ url }), false, url);
-    }
-  }
-});
-
-test("Safari without cookie events still registers tab, alarm and message handlers", () => {
-  const h = harness({ safari: true, noCookieEvents: true });
-  for (const event of ["activated", "updated", "alarm", "message", "startup", "installed"]) {
-    assert.equal(typeof h.listeners[event], "function", event);
-  }
-});
-
-test("explicit mobile linking activates Vinted before looking up the browser account", async () => {
-  for (const options of [{ safari: true }, { firefox: true, os: "android" }]) {
-    const h = harness({ ...options, allowActivation: true });
-    assert.equal((await h.context.getBrowserAccountForTab({ id: 7 })).accountId, 42);
-    assert.deepEqual(clone(h.tabMutations), [{ name: "update", args: [7, { active: true }] }]);
-    assert.equal(h.calls.length, 0);
-  }
-});
-
-test("failed mobile activation stops linking before account or sync requests", async () => {
-  const h = harness({ safari: true });
-  await assert.rejects(h.context.getBrowserAccountForTab({ id: 7 }));
-  assert.equal(h.tabMessages.length, 0);
-  assert.equal(h.calls.length, 0);
-});
-
-test("Safari cannot refresh a closed Vinted session from the extension's network context", async () => {
-  const h = harness({ safari: true, noCookieEvents: true });
-  const result = await h.context.refreshVintedBrowserSessions(target);
-  assert.equal(result[0].reason, "browser-context-required");
-  assert.equal(result[0].requiresUserAction, true);
-  assert.equal(h.calls.length, 0);
-  assert.deepEqual(h.tabMutations, []);
-});
-
-test("Safari renews through its existing Vinted page without cookie events or cookie forwarding", async () => {
-  const h = harness({ safari: true, noCookieEvents: true,
-    tabs: [{ id: 7, url: "https://www.vinted.de/", active: true }],
-    onTabRefresh(_id, _message, rotate) { rotate(); return { ok: true }; },
-  });
-  assert.equal((await h.context.refreshVintedBrowserSessions(target))[0].ok, true);
-  assert.equal(h.tabMessages.filter(entry => entry.message.type === "VINTRACK_REFRESH_BROWSER_SESSION").length, 1);
-  assert.equal(h.calls.length, 0);
-  assert.deepEqual(h.tabMutations, []);
-});
 
 test("expired token refreshes silently, rotates cookies and syncs only the access token", async () => {
   const h = harness();
@@ -694,13 +636,24 @@ test("Chromium browser namespace alias does not change its cookie-store identity
   assert.equal(results[0].ok, true);
 });
 
-test("runtime capabilities expose prepare-only mobile previews and preserve desktop automatic payment", async () => {
-  for (const [options, automaticPayment] of [[{}, true], [{ os: "android" }, false], [{ safari: true, platformError: true }, false], [{ androidPreview: true, platformError: true }, false]]) {
+
+test("extension pages are authorized only for their own extension origin", () => {
+  for (const [options, scheme] of [[{}, "chrome-extension"], [{ firefox: true }, "moz-extension"]]) {
+    const h = harness(options);
+    assert.equal(h.context.isExtensionPageSender({ url: `${scheme}://synthetic-own/popup.html` }), true);
+    for (const url of [`${scheme}://foreign/popup.html`, "https://synthetic-own/popup.html", "https://vintrack.jakobaio.dev", "invalid"]) {
+      assert.equal(h.context.isExtensionPageSender({ url }), false, url);
+    }
+  }
+});
+
+test("runtime capabilities advertise desktop checkout without network requests", async () => {
+  for (const options of [{}, { firefox: true }]) {
     const h = harness(options);
     const result = await new Promise(resolve => h.listeners.message({ type: "VINTRACK_EXTENSION_PING" }, { url: `${appOrigin}/checkout/17/123` }, resolve));
     assert.equal(result.ok, true);
     assert.equal(result.configured, true);
-    assert.deepEqual(clone(result.checkoutCapabilities), { prepare: true, automaticPayment });
+    assert.deepEqual(clone(result.checkoutCapabilities), { prepare: true, automaticPayment: true });
     assert.equal(h.calls.length, 0);
     assert.equal(h.tabMessages.length, 0);
   }

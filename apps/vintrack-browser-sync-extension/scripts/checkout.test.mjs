@@ -660,13 +660,7 @@ function background(options = {}) {
       },
     },
     runtime: {
-      getManifest: () => ({ version: "synthetic", content_scripts: [],
-        ...(options.safari ? { browser_specific_settings: { safari: { strict_min_version: "18.0" } } } : options.androidPreview ? { browser_specific_settings: { gecko_android: { strict_min_version: "142.0" } } } : {}),
-      }),
-      async getPlatformInfo() {
-        if (options.platformError) throw new Error("platform information unavailable");
-        return { os: options.os || "linux" };
-      },
+      getManifest: () => ({ version: "synthetic", content_scripts: [] }),
       onStartup: event,
       onInstalled: event,
       onMessage: event,
@@ -811,76 +805,6 @@ test("a cold checkout starts as soon as the bridge attaches, before page load co
   assert.equal(h.mutations[0].created, true);
   assert.equal(h.mutations.at(-1).changes.url, checkoutUrl);
   assert.equal(h.messages.filter(m=>m.type==="VINTRACK_RUN_BROWSER_BUY").length, 1);
-});
-
-test("Android cold checkout opens Vinted in the foreground before starting preparation", async () => {
-  const h = background({ tabs: [], os: "android", run() {
-    assert.equal(h.mutations[0].created, true);
-    assert.equal(h.mutations[0].changes.active, true);
-    return { ok: true, checkoutUrl, transactionId: 77, purchaseId: "synthetic" };
-  } });
-  assert.equal((await h.run()).ok, true);
-  assert.equal(h.messages.filter(m => m.type === "VINTRACK_RUN_BROWSER_BUY").length, 1);
-  assert.equal(h.mutations.at(-1).changes.url, checkoutUrl);
-});
-
-test("Android existing receivers are activated before preparing checkout without item navigation", async () => {
-  const h = background({ tabs: [{ id: 7, status: "complete", active: false }], os: "android", run() {
-    assert.deepEqual(structuredClone(h.mutations), [{ id: 7, changes: { active: true } }]);
-    return { ok: true, checkoutUrl, transactionId: 77, purchaseId: "synthetic" };
-  } });
-  assert.equal((await h.run()).ok, true);
-  assert.equal(h.mutations.at(-1).id, 7);
-});
-
-test("Android loading and discarded tabs are activated and become ready before any checkout intent", async () => {
-  for (const tab of [{ id: 7, status: "loading" }, { id: 7, status: "complete", discarded: true }]) {
-    const h = background({ tabs: [tab], os: "android", ping() {
-      assert.deepEqual(structuredClone(h.mutations), [{ id: 7, changes: { active: true } }]);
-      assert.equal(h.storage.vintrackCheckoutAttempts, undefined);
-      return { ok: true, pageBridgeReady: true };
-    } });
-    assert.equal((await h.run()).ok, true);
-    assert.equal(h.mutations.filter(m => m.created).length, 0);
-    assert.equal(h.messages.filter(m => m.type === "VINTRACK_RUN_BROWSER_BUY").length, 1);
-  }
-});
-
-test("Android activation failures cannot record an intent or start checkout", async () => {
-  const h = background({ tabs: [{ id: 7, status: "complete" }], os: "android", updateError: true });
-  assert.equal((await h.run()).code, "checkout_tab_unavailable");
-  assert.equal(h.storage.vintrackCheckoutAttempts, undefined);
-  assert.equal(h.messages.filter(m => m.type === "VINTRACK_RUN_BROWSER_BUY").length, 0);
-});
-
-test("Android lost responses remain blocked after restart and tab restoration", async () => {
-  const tabs = [{ id: 7, status: "complete", discarded: true }];
-  const h = background({ tabs, os: "android", run() { throw new Error("response lost"); } });
-  assert.equal((await h.run(target)).code, "checkout_response_lost");
-  const restarted = background({ tabs, os: "android", storage: h.storage });
-  assert.equal((await restarted.run(target)).code, "checkout_uncertain");
-  assert.equal(restarted.messages.filter(m => m.type === "VINTRACK_RUN_BROWSER_BUY").length, 0);
-  assert.ok(restarted.mutations.every(m => !m.changes.url));
-});
-
-test("desktop and unavailable platform APIs preserve background tab creation", async () => {
-  for (const options of [{ os: "win" }, { platformError: true }]) {
-    const h = background({ tabs: [], ...options });
-    assert.equal((await h.run()).ok, true);
-    assert.equal(h.mutations[0].changes.active, false);
-  }
-});
-
-test("Safari foregrounds new and restored receivers even without platform detection", async () => {
-  for (const tabs of [[], [{ id: 7, status: "complete" }], [{ id: 7, discarded: true }]]) {
-    const h = background({ tabs, safari: true, platformError: true, run() {
-      assert.equal(h.mutations[0].changes.active, true);
-      return { ok: true, checkoutUrl, transactionId: 77, purchaseId: "synthetic" };
-    } });
-    assert.equal((await h.run()).ok, true);
-    assert.equal(h.messages.filter(m => m.type === "VINTRACK_RUN_BROWSER_BUY").length, 1);
-    assert.equal(h.storage.vintrackCheckoutAttempts[0].checkoutUrl, checkoutUrl);
-  }
 });
 
 test("a stale tab does not block a ready same-region receiver", async () => {
@@ -1114,23 +1038,4 @@ test("a fast unready tab cannot beat a slower ready receiver", async () => {
   releaseReady({ ok: true, pageBridgeReady: true });
   assert.equal((await checkout).ready, true);
   assert.ok(!h.storage.vintrackCheckoutAttempts);
-});
-
-for (const options of [{ os: "android" }, { os: "ios" }, { safari: true, platformError: true }, { androidPreview: true, platformError: true }]) {
-  test(`mobile automatic payment is blocked before readiness or a direct command (${JSON.stringify(options)})`, async () => {
-    for (const readinessOnly of [true, false]) {
-      const h = background({ tabs: [], ...options });
-      const result = await h.run({ ...autoTarget, readinessOnly });
-      assert.equal(result.code, "mobile_auto_payment_unavailable");
-      assert.equal(h.messages.length, 0);
-      assert.equal(h.mutations.length, 0);
-      assert.equal(h.storage.vintrackCheckoutAttempts, undefined);
-    }
-  });
-}
-
-test("Android preview foregrounds normal preparation when platform detection fails", async () => {
-  const h = background({ tabs: [], androidPreview: true, platformError: true });
-  assert.equal((await h.run()).ok, true);
-  assert.equal(h.mutations[0].changes.active, true);
 });

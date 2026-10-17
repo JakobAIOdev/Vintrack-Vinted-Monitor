@@ -86,7 +86,7 @@ function receiver() {
     };
 }
 
-test("cold mobile receiver responding after 900ms is accepted and all resources are cleaned", async () => {
+test("cold extension receiver responding after 900ms is accepted and all resources are cleaned", async () => {
     const h = receiver();
     const result = h.detect();
     h.advance(900);
@@ -153,7 +153,7 @@ for (const state of [
     "unavailable",
     "unconfigured",
     "outdated",
-    "mobile-auto",
+    "unsupported-auto",
 ] as const) {
     test(`${state} detection never mutates server checkout or dispatches browser commands`, async () => {
         const calls: RequestInit[] = [];
@@ -168,7 +168,7 @@ for (const state of [
             },
             "@/lib/vintrack-extension": {
                 detectCheckoutExtension: async () => ({
-                    state: state === "mobile-auto" ? "ready" : state,
+                    state: state === "unsupported-auto" ? "ready" : state,
                     protocol: 8,
                     automaticPayment: false,
                 }),
@@ -191,7 +191,7 @@ for (const state of [
                     json: async () => ({
                         riskConsentVersion: 1,
                         preferences:
-                            state === "mobile-auto"
+                            state === "unsupported-auto"
                                 ? {
                                       shipping: "home",
                                       payment: "paypal",
@@ -208,7 +208,7 @@ for (const state of [
         });
         await assert.rejects(
             client.openItemCheckout(17, 123),
-            /extension|mobile preview/,
+            /extension/,
         );
         assert.equal(calls.length, 1);
         assert.ok(calls.every((call) => !call.method || call.method === "GET"));

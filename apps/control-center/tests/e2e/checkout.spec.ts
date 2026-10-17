@@ -1158,12 +1158,12 @@ test("a hidden handoff checks current access only when opened after opting out",
     expect(posts).toBe(0);
 });
 
-test("cold mobile extension responds after 900ms and prepares once without server fallback", async ({
+test("cold extension responds after 900ms and prepares once without server fallback", async ({
     page,
 }) => {
     let commands = 0;
     let serverMutations = 0;
-    await page.exposeFunction("mobilePrepareStarted", () => commands++);
+    await page.exposeFunction("checkoutPrepareStarted", () => commands++);
     await page.addInitScript(() => {
         let scheduled = false;
         window.addEventListener("message", (event) => {
@@ -1194,9 +1194,9 @@ test("cold mobile extension responds after 900ms and prepares once without serve
             if (event.data?.type === "VINTRACK_EXTENSION_BUY") {
                 void (
                     window as unknown as {
-                        mobilePrepareStarted(): Promise<void>;
+                        checkoutPrepareStarted(): Promise<void>;
                     }
-                ).mobilePrepareStarted();
+                ).checkoutPrepareStarted();
                 window.postMessage(
                     {
                         type: "VINTRACK_EXTENSION_BUY_RESULT",
@@ -1227,12 +1227,12 @@ test("cold mobile extension responds after 900ms and prepares once without serve
     expect(serverMutations).toBe(0);
 });
 
-test("mobile capability blocks saved automatic payment before readiness or authorization", async ({
+test("extension capability blocks saved automatic payment before readiness or authorization", async ({
     page,
 }) => {
     let commands = 0;
     let authorizations = 0;
-    await page.exposeFunction("unexpectedMobileCheckout", () => commands++);
+    await page.exposeFunction("unexpectedUnsupportedCheckout", () => commands++);
     await page.addInitScript(() => {
         window.addEventListener("message", (event) => {
             if (event.source !== window) return;
@@ -1255,9 +1255,9 @@ test("mobile capability blocks saved automatic payment before readiness or autho
             if (event.data?.type === "VINTRACK_EXTENSION_BUY")
                 void (
                     window as unknown as {
-                        unexpectedMobileCheckout(): Promise<void>;
+                        unexpectedUnsupportedCheckout(): Promise<void>;
                     }
-                ).unexpectedMobileCheckout();
+                ).unexpectedUnsupportedCheckout();
         });
     });
     await page.route("**/api/checkout/17/123", (route) => {
@@ -1270,7 +1270,7 @@ test("mobile capability blocks saved automatic payment before readiness or autho
     await expect(
         page
             .getByRole("alert")
-            .filter({ hasText: "not available in this mobile preview" }),
+            .filter({ hasText: "not supported by this extension" }),
     ).toBeVisible();
     expect(commands).toBe(0);
     expect(authorizations).toBe(0);
