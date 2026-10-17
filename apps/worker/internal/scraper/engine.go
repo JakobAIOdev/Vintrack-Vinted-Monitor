@@ -59,6 +59,7 @@ type Engine struct {
 	alertJobs              chan alertJob
 	enrichmentScheduler    *SellerEnrichmentScheduler
 	enrichmentFastJobs     chan enrichmentJob
+	enrichmentCacheJobs    chan enrichmentJob
 	alertDeliveryWake      chan struct{}
 	claimedAlertDeliveries chan model.AlertDelivery
 	alertDeliveryInFlight  atomic.Int64
@@ -127,6 +128,7 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 		alertJobs:              make(chan alertJob, 4096),
 		enrichmentScheduler:    NewSellerEnrichmentScheduler(4096, enrichmentWorkers),
 		enrichmentFastJobs:     make(chan enrichmentJob, 4096),
+		enrichmentCacheJobs:    make(chan enrichmentJob, 4096),
 		alertDeliveryWake:      make(chan struct{}, 64),
 		claimedAlertDeliveries: make(chan model.AlertDelivery, alertDeliveryWorkerCount()),
 		priceWatchJobs:         make(chan model.PriceWatchTarget, priceWatchWorkers),

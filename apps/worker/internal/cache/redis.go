@@ -48,6 +48,9 @@ func NewRedisCache(addr, password string, db int) (*RedisCache, error) {
 		DialTimeout:  5 * time.Second,
 		ReadTimeout:  3 * time.Second,
 		WriteTimeout: 3 * time.Second,
+		// Seller cache lookups have millisecond budgets. go-redis otherwise
+		// ignores their context deadlines while waiting on the socket.
+		ContextTimeoutEnabled: true,
 	}
 
 	client := redis.NewClient(opts)

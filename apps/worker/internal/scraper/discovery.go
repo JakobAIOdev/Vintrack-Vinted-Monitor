@@ -174,9 +174,10 @@ func (e *Engine) DiscoveryTask(ctx context.Context, spec DiscoverySpec) {
 	}
 	log.Printf("[discovery:%s] started | monitors=%d | proxy=%s (%d proxies) | clients=%d | interval=%s | per_page=%d | timeout=%s | hedge=%s", discoveryMode, len(spec.Monitors), proxySource, pm.Count(), pool.Size(), interval, perPage, timeout, hedgeDelay)
 
-	seen := make(map[int64]time.Time, perPage*4)
-	previousPage := make(map[int64]struct{}, perPage)
-	initialized := false
+	scan := discoveryScan{
+		seen:         make(map[int64]time.Time, perPage*4),
+		previousPage: make(map[int64]struct{}, perPage),
+	}
 	checks := 0
 	consecutiveFailures := 0
 
@@ -206,47 +207,13 @@ func (e *Engine) DiscoveryTask(ctx context.Context, spec DiscoverySpec) {
 		}
 		consecutiveFailures = 0
 
-		pageOne := result.items
-		allItems := append([]model.VintedItem(nil), pageOne...)
-		if initialized && len(pageOne) > 0 && !hasDiscoveryOverlap(pageOne, previousPage) {
-			for page := 2; page <= maxBackfillPages; page++ {
-				pageCtx, pageCancel := context.WithTimeout(ctx, timeout)
-				pageResult := e.fetchCatalogHedgedWithDelay(pageCtx, pool, BuildDiscoveryURLWithPerPage(representative, page, perPage), domain, hedgeDelay)
-				pageCancel()
-				if pageResult.err != nil || pageResult.status != 200 || len(pageResult.items) == 0 {
-					break
-				}
-				allItems = append(allItems, pageResult.items...)
-				if hasDiscoveryOverlap(pageResult.items, previousPage) {
-					break
-				}
-			}
-		}
-
-		now := time.Now()
-		newItems := make([]model.VintedItem, 0)
-		for _, item := range allItems {
-			if _, exists := seen[item.ID]; !exists && initialized {
-				newItems = append(newItems, item)
-			}
-			seen[item.ID] = now
-		}
-		previousPage = discoveryIDSet(pageOne)
-		if !initialized {
-			initialized = true
-		}
-		if checks%100 == 0 {
-			cutoff := now.Add(-10 * time.Minute)
-			for id, seenAt := range seen {
-				if seenAt.Before(cutoff) {
-					delete(seen, id)
-				}
-			}
-		}
-
 		matchesByMonitor := make(map[int]int)
 		monitorMatchers := compileDiscoveryMonitorMatchers(spec.Monitors)
-		for _, vintedItem := range newItems {
+		itemCount := scan.processPages(ctx, result.items, maxBackfillPages, func(page int) catalogFetchResult {
+			pageCtx, pageCancel := context.WithTimeout(ctx, timeout)
+			defer pageCancel()
+			return e.fetchCatalogHedgedWithDelay(pageCtx, pool, BuildDiscoveryURLWithPerPage(representative, page, perPage), domain, hedgeDelay)
+		}, func(vintedItem model.VintedItem) {
 			for _, matcher := range monitorMatchers {
 				if !matcher.matches(vintedItem) {
 					continue
@@ -261,18 +228,74 @@ func (e *Engine) DiscoveryTask(ctx context.Context, spec DiscoverySpec) {
 					e.handleDetectedItem(ctx, monitor, vintedItem, "discovery", proxySource, enricher)
 				}
 			}
+		})
+		if checks%100 == 0 {
+			cutoff := time.Now().Add(-10 * time.Minute)
+			for id, seenAt := range scan.seen {
+				if seenAt.Before(cutoff) {
+					delete(scan.seen, id)
+				}
+			}
 		}
 
 		for _, monitor := range spec.Monitors {
 			e.db.RecordMonitorRun(model.MonitorRun{
 				MonitorID: monitor.ID, Status: "success", StatusCode: 200,
-				DurationMS: int(time.Since(cycleStart).Milliseconds()), ItemCount: len(allItems),
+				DurationMS: int(time.Since(cycleStart).Milliseconds()), ItemCount: itemCount,
 				NewItemCount: matchesByMonitor[monitor.ID], ProxySource: proxySource,
 				FetchSource: "discovery", Region: monitor.Region,
 			})
 		}
 		sleepDiscoveryCycle(ctx, cycleStart, interval)
 	}
+}
+
+// discoveryScan keeps the baseline and dedupe state across discovery cycles.
+// Each page is processed before fetching older backfill pages, so a slow or
+// failed backfill cannot hold up detections already returned on page one.
+type discoveryScan struct {
+	seen         map[int64]time.Time
+	previousPage map[int64]struct{}
+	initialized  bool
+}
+
+func (s *discoveryScan) processPages(
+	ctx context.Context,
+	pageOne []model.VintedItem,
+	maxBackfillPages int,
+	fetchPage func(int) catalogFetchResult,
+	processItem func(model.VintedItem),
+) int {
+	itemCount := 0
+	processPage := func(items []model.VintedItem) {
+		itemCount += len(items)
+		now := time.Now()
+		for _, item := range items {
+			_, exists := s.seen[item.ID]
+			s.seen[item.ID] = now
+			if !exists && s.initialized {
+				processItem(item)
+			}
+		}
+	}
+
+	processPage(pageOne)
+	if s.initialized && len(pageOne) > 0 && !hasDiscoveryOverlap(pageOne, s.previousPage) {
+		for page := 2; page <= maxBackfillPages && ctx.Err() == nil; page++ {
+			result := fetchPage(page)
+			if result.err != nil || result.status != 200 || len(result.items) == 0 {
+				break
+			}
+			processPage(result.items)
+			if hasDiscoveryOverlap(result.items, s.previousPage) {
+				break
+			}
+		}
+	}
+	// Overlap checks above must retain the previous cycle's page-one IDs.
+	s.previousPage = discoveryIDSet(pageOne)
+	s.initialized = true
+	return itemCount
 }
 
 func discoveryFailureBackoff(proxySource string, consecutiveFailures int) time.Duration {

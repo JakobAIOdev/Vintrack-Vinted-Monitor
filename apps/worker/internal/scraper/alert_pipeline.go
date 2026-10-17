@@ -107,6 +107,12 @@ func (e *Engine) startPipelines() {
 		e.jobsWG.Add(1)
 		go e.enrichmentWorker()
 	}
+	// Cache I/O has its own bounded workers so a slow Redis/Postgres lookup
+	// cannot stall the catalog loop or wait behind remote seller fetches.
+	for i := 0; i < min(8, enrichmentWorkers); i++ {
+		e.jobsWG.Add(1)
+		go e.enrichmentCacheWorker()
+	}
 	fastWorkers := min(4, enrichmentWorkers)
 	for i := 0; i < fastWorkers; i++ {
 		e.jobsWG.Add(1)
@@ -123,6 +129,9 @@ func (e *Engine) enqueueItem(job enrichmentJob, publishNow bool) {
 	// Once an item is atomically claimed, its alert and persistence must survive
 	// a monitor config refresh that cancels the polling task context.
 	job.ctx = e.jobsCtx
+	if job.enqueuedAt.IsZero() {
+		job.enqueuedAt = time.Now()
+	}
 	if publishNow {
 		// The browser live feed deliberately has no dependency on Postgres or the
 		// durable external-delivery outbox.
@@ -133,60 +142,96 @@ func (e *Engine) enqueueItem(job enrichmentJob, publishNow bool) {
 		}
 	}
 
-	if job.enricher != nil && job.vintedItem.User.ID > 0 {
-		cacheCtx, cancel := context.WithTimeout(job.ctx, 90*time.Millisecond)
+	// Arm the deadline before queueing: cache congestion must not extend the
+	// notification budget measured from discovery.
+	e.armNormalAlertDeadline(&job)
+	if job.cachedInfo == nil && job.enricher != nil && job.vintedItem.User.ID > 0 {
+		// Memory hits keep their fast lane even when distributed-cache I/O is
+		// congested. This lookup never touches Redis, Postgres or Vinted.
 		freshTTL, staleTTL := job.enricher.cacheTTLs()
-		info, cacheStatus, cacheSource := lookupCachedSellerInfo(
-			cacheCtx,
-			e.db,
-			job.enricher.domain,
-			job.vintedItem.User.ID,
-			freshTTL,
-			staleTTL,
-		)
-		if cacheStatus != sellerCacheMiss && isSellerInfoComplete(info) {
-			job.cachedInfo = &info
-			if e.enrichmentMetrics != nil {
-				e.enrichmentMetrics.recordCacheResult(cacheStatus, cacheSource, job.monitor.Region, job.proxySource)
+		if info, fetchedAt, ok := sellerCache.GetWithFetchedAt(job.enricher.domain, job.vintedItem.User.ID, staleTTL); ok && isSellerInfoComplete(info) {
+			status := sellerCacheFresh
+			if !fetchedAt.IsZero() && time.Since(fetchedAt) > freshTTL {
+				status = sellerCacheStale
 			}
-			if cacheStatus == sellerCacheStale {
-				refreshKey := sellerCacheKey(job.enricher.domain, job.vintedItem.User.ID)
-				if _, loaded := e.sellerRefreshes.LoadOrStore(refreshKey, struct{}{}); !loaded {
-					if e.enrichmentMetrics != nil {
-						e.enrichmentMetrics.recordRefresh()
-					}
-					refresh := job
-					refresh.cachedInfo = nil
-					refresh.alertAfterEnrich = false
-					refresh.publishUpdate = false
-					refresh.requireSellerMatch = false
-					refresh.backgroundOnly = true
-					refresh.refreshOnly = true
-					refresh.refreshKey = refreshKey
-					refresh.readyAt = time.Time{}
-					refresh.enqueuedAt = time.Now()
-					if !e.enrichmentScheduler.Submit(refresh.ctx, refresh) {
-						e.sellerRefreshes.Delete(refreshKey)
-					}
-				}
-			}
+			e.dispatchCachedEnrichment(job, info, status, "memory")
+			return
 		}
-		cancel()
-		if e.enrichmentMetrics != nil {
-			if job.cachedInfo == nil {
-				e.enrichmentMetrics.recordCacheResult(sellerCacheMiss, "", job.monitor.Region, job.proxySource)
+		select {
+		case e.enrichmentCacheJobs <- job:
+		case <-job.ctx.Done():
+		}
+		return
+	}
+	e.dispatchEnrichment(job)
+}
+
+func (e *Engine) enrichmentCacheWorker() {
+	defer e.jobsWG.Done()
+	for {
+		select {
+		case <-e.jobsCtx.Done():
+			return
+		case job := <-e.enrichmentCacheJobs:
+			e.prepareEnrichment(job)
+		}
+	}
+}
+
+func (e *Engine) prepareEnrichment(job enrichmentJob) {
+	cacheCtx, cancel := context.WithTimeout(job.ctx, 90*time.Millisecond)
+	freshTTL, staleTTL := job.enricher.cacheTTLs()
+	info, status, source := lookupCachedSellerInfo(
+		cacheCtx, e.db, job.enricher.domain, job.vintedItem.User.ID, freshTTL, staleTTL,
+	)
+	cancel()
+	if status != sellerCacheMiss && isSellerInfoComplete(info) {
+		e.dispatchCachedEnrichment(job, info, status, source)
+		return
+	}
+	if e.enrichmentMetrics != nil {
+		e.enrichmentMetrics.recordCacheResult(sellerCacheMiss, "", job.monitor.Region, job.proxySource)
+	}
+	e.dispatchEnrichment(job)
+}
+
+func (e *Engine) dispatchCachedEnrichment(job enrichmentJob, info SellerInfo, status sellerCacheStatus, source string) {
+	job.cachedInfo = &info
+	if e.enrichmentMetrics != nil {
+		e.enrichmentMetrics.recordCacheResult(status, source, job.monitor.Region, job.proxySource)
+	}
+	if status == sellerCacheStale {
+		refreshKey := sellerCacheKey(job.enricher.domain, job.vintedItem.User.ID)
+		if _, loaded := e.sellerRefreshes.LoadOrStore(refreshKey, struct{}{}); !loaded {
+			if e.enrichmentMetrics != nil {
+				e.enrichmentMetrics.recordRefresh()
+			}
+			refresh := job
+			refresh.cachedInfo = nil
+			refresh.alertAfterEnrich = false
+			refresh.publishUpdate = false
+			refresh.requireSellerMatch = false
+			refresh.backgroundOnly = true
+			refresh.refreshOnly = true
+			refresh.refreshKey = refreshKey
+			refresh.readyAt = time.Time{}
+			refresh.enqueuedAt = time.Now()
+			if !e.enrichmentScheduler.Submit(refresh.ctx, refresh) {
+				e.sellerRefreshes.Delete(refreshKey)
 			}
 		}
 	}
+	e.dispatchEnrichment(job)
+}
+
+func (e *Engine) dispatchEnrichment(job enrichmentJob) {
 	if job.cachedInfo != nil {
-		e.armNormalAlertDeadline(&job)
 		select {
 		case e.enrichmentFastJobs <- job:
 		case <-job.ctx.Done():
 		}
 		return
 	}
-	e.armNormalAlertDeadline(&job)
 	e.enrichmentScheduler.Submit(job.ctx, job)
 }
 
