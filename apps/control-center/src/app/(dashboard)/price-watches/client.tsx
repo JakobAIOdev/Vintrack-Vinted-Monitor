@@ -364,7 +364,7 @@ function SettingsFields({
                     <p className="text-muted-foreground mt-1 text-xs">
                         {hasTelegramConnection
                             ? "Send the alert to your connected chat."
-                            : "Connect Telegram from Account first."}
+                            : "Connect Telegram in Dashboard settings (gear icon) first."}
                     </p>
                 </div>
                 <Switch

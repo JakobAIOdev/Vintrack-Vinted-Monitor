@@ -554,12 +554,12 @@ export function DashboardClient({
     }, []);
 
     useEffect(() => {
-        if (!isWebhookOpen) return;
+        if (!isWebhookOpen && !isSettingsOpen) return;
         fetchTelegramConnection();
-    }, [fetchTelegramConnection, isWebhookOpen]);
+    }, [fetchTelegramConnection, isSettingsOpen, isWebhookOpen]);
 
     useEffect(() => {
-        if (!isWebhookOpen || !telegramConnectCode) return;
+        if ((!isWebhookOpen && !isSettingsOpen) || !telegramConnectCode) return;
         let checking = false;
         const checkCode = async () => {
             if (checking) return;
@@ -582,7 +582,7 @@ export function DashboardClient({
                 if (status.used) {
                     setTelegramConnectCode(null);
                     await fetchTelegramConnection();
-                    toast.success("Telegram reconnected successfully");
+                    toast.success("Telegram connected successfully");
                 } else if (status.expired) {
                     setTelegramConnectCode(null);
                     toast.error("Telegram connect code expired");
@@ -594,7 +594,12 @@ export function DashboardClient({
         void checkCode();
         const interval = window.setInterval(checkCode, 2_000);
         return () => window.clearInterval(interval);
-    }, [fetchTelegramConnection, isWebhookOpen, telegramConnectCode]);
+    }, [
+        fetchTelegramConnection,
+        isSettingsOpen,
+        isWebhookOpen,
+        telegramConnectCode,
+    ]);
 
     const openWebhookDialog = (monitor: Monitor) => {
         setSelectedMonitor(monitor);
@@ -1099,6 +1104,113 @@ export function DashboardClient({
             setIsUpdatingWebhookStatus(false);
         }
     };
+
+    const telegramConnectionPanel = (
+        <div className="border-border/80 bg-muted/25 grid gap-3 rounded-lg border p-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="space-y-1">
+                    <Label className="text-sm">Telegram</Label>
+                    {telegramConnection?.connected ? (
+                        <p className="text-muted-foreground flex items-center gap-1.5 text-[12px]">
+                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                            Connected to{" "}
+                            {telegramConnection.connection?.chat_title ||
+                                "Telegram"}
+                        </p>
+                    ) : (
+                        <p className="text-muted-foreground text-[12px]">
+                            Connect your Telegram once, then enable it per monitor.
+                        </p>
+                    )}
+                </div>
+                {telegramConnection?.connected ? (
+                    <div className="flex shrink-0 gap-2">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={handleTestTelegram}
+                            disabled={isTestingTelegram}
+                            className="gap-2"
+                        >
+                            <MessageCircle className="h-4 w-4" />
+                            {isTestingTelegram ? "Testing..." : "Test"}
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={handleCreateTelegramCode}
+                            disabled={isCreatingTelegramCode}
+                            className="gap-2"
+                        >
+                            <RefreshCw className="h-4 w-4" />
+                            {isCreatingTelegramCode ? "Creating..." : "Reconnect"}
+                        </Button>
+                    </div>
+                ) : (
+                    <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handleCreateTelegramCode}
+                        disabled={isCreatingTelegramCode}
+                        className="shrink-0 gap-2"
+                    >
+                        <MessageCircle className="h-4 w-4" />
+                        {isCreatingTelegramCode
+                            ? "Creating..."
+                            : "Connect Telegram"}
+                    </Button>
+                )}
+            </div>
+
+            {telegramConnectCode && (
+                <div className="border-border/80 bg-background rounded-md border p-3 text-[12px]">
+                    <p className="text-foreground font-medium">
+                        Send this command to{" "}
+                        {telegramConnectCode.botUsername ? (
+                            <span>@{telegramConnectCode.botUsername}</span>
+                        ) : (
+                            "the Vintrack bot"
+                        )}
+                        :
+                    </p>
+                    <div className="mt-2 flex items-center gap-2">
+                        <code className="bg-muted text-foreground flex-1 rounded-md px-2 py-1.5">
+                            /connect {telegramConnectCode.code}
+                        </code>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8 shrink-0"
+                            onClick={handleCopyTelegramCode}
+                            title="Copy command"
+                        >
+                            <Copy className="h-3.5 w-3.5" />
+                        </Button>
+                        {telegramConnectCode.botLink && (
+                            <a
+                                href={telegramConnectCode.botLink}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="border-input bg-background text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors"
+                                title="Open Telegram"
+                            >
+                                <ExternalLink className="h-3.5 w-3.5" />
+                            </a>
+                        )}
+                    </div>
+                    <p className="text-muted-foreground mt-2">
+                        Use the open button to jump directly to the bot. Sending the
+                        command will
+                        {telegramConnection?.connected
+                            ? " replace the current Telegram destination."
+                            : " connect Telegram."}{" "}
+                        The dashboard detects it automatically.
+                    </p>
+                </div>
+            )}
+        </div>
+    );
 
     const activeCount = monitors.filter((m) => m.status === "active").length;
     const pausedCount = monitors.filter((m) => m.status !== "active").length;
@@ -2186,15 +2298,18 @@ export function DashboardClient({
             />
 
             <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
-                <DialogContent className="sm:max-w-2xl">
+                <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
                     <DialogHeader>
                         <DialogTitle>Dashboard settings</DialogTitle>
                         <DialogDescription>
-                            Adjust global monitor behavior and seller filters.
+                            Connect Telegram and adjust global monitor behavior
+                            and seller filters.
                         </DialogDescription>
                     </DialogHeader>
 
                     <div className="space-y-4 py-4">
+                        {telegramConnectionPanel}
+
                         <div className="border-border/80 bg-muted/30 flex items-center justify-between gap-4 rounded-lg border p-3">
                             <div className="space-y-0.5">
                                 <div className="flex items-center gap-2">
@@ -2569,122 +2684,7 @@ export function DashboardClient({
                             </div>
                         )}
 
-                        <div className="border-border/80 bg-muted/25 grid gap-3 rounded-lg border p-3">
-                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                <div className="space-y-1">
-                                    <Label className="text-sm">Telegram</Label>
-                                    {telegramConnection?.connected ? (
-                                        <p className="text-muted-foreground flex items-center gap-1.5 text-[12px]">
-                                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-                                            Connected to{" "}
-                                            {telegramConnection.connection
-                                                ?.chat_title || "Telegram"}
-                                        </p>
-                                    ) : (
-                                        <p className="text-muted-foreground text-[12px]">
-                                            Connect your Telegram once, then
-                                            enable it per monitor.
-                                        </p>
-                                    )}
-                                </div>
-                                {telegramConnection?.connected ? (
-                                    <div className="flex shrink-0 gap-2">
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            onClick={handleTestTelegram}
-                                            disabled={isTestingTelegram}
-                                            className="gap-2"
-                                        >
-                                            <MessageCircle className="h-4 w-4" />
-                                            {isTestingTelegram
-                                                ? "Testing..."
-                                                : "Test"}
-                                        </Button>
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            onClick={handleCreateTelegramCode}
-                                            disabled={isCreatingTelegramCode}
-                                            className="gap-2"
-                                        >
-                                            <RefreshCw className="h-4 w-4" />
-                                            {isCreatingTelegramCode
-                                                ? "Creating..."
-                                                : "Reconnect"}
-                                        </Button>
-                                    </div>
-                                ) : (
-                                    <Button
-                                        type="button"
-                                        variant="outline"
-                                        onClick={handleCreateTelegramCode}
-                                        disabled={isCreatingTelegramCode}
-                                        className="shrink-0 gap-2"
-                                    >
-                                        <MessageCircle className="h-4 w-4" />
-                                        {isCreatingTelegramCode
-                                            ? "Creating..."
-                                            : "Connect Telegram"}
-                                    </Button>
-                                )}
-                            </div>
-
-                            {telegramConnectCode && (
-                                <div className="border-border/80 bg-background rounded-md border p-3 text-[12px]">
-                                    <p className="text-foreground font-medium">
-                                        Send this command to{" "}
-                                        {telegramConnectCode.botUsername ? (
-                                            <span>
-                                                @
-                                                {
-                                                    telegramConnectCode.botUsername
-                                                }
-                                            </span>
-                                        ) : (
-                                            "the Vintrack bot"
-                                        )}
-                                        :
-                                    </p>
-                                    <div className="mt-2 flex items-center gap-2">
-                                        <code className="bg-muted text-foreground flex-1 rounded-md px-2 py-1.5">
-                                            /connect {telegramConnectCode.code}
-                                        </code>
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            size="icon"
-                                            className="h-8 w-8 shrink-0"
-                                            onClick={handleCopyTelegramCode}
-                                            title="Copy command"
-                                        >
-                                            <Copy className="h-3.5 w-3.5" />
-                                        </Button>
-                                        {telegramConnectCode.botLink && (
-                                            <a
-                                                href={
-                                                    telegramConnectCode.botLink
-                                                }
-                                                target="_blank"
-                                                rel="noreferrer"
-                                                className="border-input bg-background text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors"
-                                                title="Open Telegram"
-                                            >
-                                                <ExternalLink className="h-3.5 w-3.5" />
-                                            </a>
-                                        )}
-                                    </div>
-                                    <p className="text-muted-foreground mt-2">
-                                        Use the open button to jump directly to
-                                        the bot. Sending the command will
-                                        {telegramConnection?.connected
-                                            ? " replace the current Telegram destination."
-                                            : " connect Telegram."}{" "}
-                                        The dashboard detects it automatically.
-                                    </p>
-                                </div>
-                            )}
-                        </div>
+                        {telegramConnectionPanel}
 
                         {telegramConnection?.connected && (
                             <div className="border-border/80 bg-muted/45 flex items-center justify-between space-x-2 rounded-lg border p-3">

@@ -1083,7 +1083,7 @@ export default function EditMonitorPage() {
                                         <p className="text-muted-foreground text-[12px]">
                                             {hasTelegramConnection
                                                 ? "Send alerts for this monitor to your connected Telegram chat."
-                                                : "Connect Telegram from the dashboard notification settings first."}
+                                                : "Connect Telegram in Dashboard settings (gear icon) first."}
                                         </p>
                                     </div>
                                     <Switch
