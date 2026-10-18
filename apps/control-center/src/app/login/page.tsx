@@ -172,10 +172,11 @@ export default async function LoginPage({
                                     role="alert"
                                     className="rounded-xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-700 dark:text-red-300"
                                 >
-                                    {error === "OAuthAccountNotLinked" ||
-                                    error === "AccessDenied"
-                                        ? "That GitHub account cannot be used to sign in. Sign in with your usual provider below, then connect GitHub from Account. Accounts are never merged by email automatically."
-                                        : "Authentication could not be completed. Please try again or use your existing login provider."}
+                                    {error === "AccessDenied"
+                                        ? "This account is not allowed to access this instance. Contact the instance administrator."
+                                        : error === "OAuthAccountNotLinked"
+                                          ? "That GitHub account cannot be used to sign in. Sign in with your usual provider below, then connect GitHub from Account. Accounts are never merged by email automatically."
+                                          : "Authentication could not be completed. Please try again or use your existing login provider."}
                                 </div>
                             ) : null}
                             <p className="text-muted-foreground text-sm leading-7">

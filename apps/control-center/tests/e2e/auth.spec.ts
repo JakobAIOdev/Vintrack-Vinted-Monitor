@@ -1,6 +1,21 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("auth boundaries", () => {
+    test("denied logins explain instance access restrictions", async ({
+        page,
+    }) => {
+        await page.goto("/login?error=AccessDenied");
+
+        await expect(
+            page.getByRole("alert").filter({ hasText: "This account" }),
+        ).toHaveText(
+            "This account is not allowed to access this instance. Contact the instance administrator.",
+        );
+        await expect(
+            page.getByRole("button", { name: /Continue with Discord/ }),
+        ).toBeVisible();
+    });
+
     test("protected dashboard routes redirect unauthenticated users", async ({
         page,
     }) => {
