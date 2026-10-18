@@ -45,6 +45,32 @@ func TestAccountValidationAcceptsProtectedAccessAndMatchingProfile(t *testing.T)
 	}
 }
 
+func TestAccountValidationAcceptsNumericProfileReputation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		body   string
+		rating float64
+	}{
+		{"wrapped decimal", `{"user":{"id":42,"login":"synthetic-buyer","feedback_reputation":0.97}}`, 0.97},
+		{"wrapped zero", `{"user":{"id":42,"login":"synthetic-buyer","feedback_reputation":0}}`, 0},
+		{"direct decimal", `{"id":42,"login":"synthetic-buyer","feedback_reputation":0.97}`, 0.97},
+		{"direct integer", `{"id":42,"login":"synthetic-buyer","feedback_reputation":1}`, 1},
+		{"wrapped null", `{"user":{"id":42,"login":"synthetic-buyer","feedback_reputation":null}}`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, transport := testClient(fakeHTTPResult{status: 200}, fakeHTTPResult{status: 200, body: `{"conversations":[],"pagination":{}}`}, fakeHTTPResult{status: 200, body: tc.body})
+			client.session.AccessToken = validationToken()
+			info, err := client.GetAccountInfo()
+			if err != nil {
+				t.Fatalf("valid numeric profile rejected: %v", err)
+			}
+			if info.ID != 42 || info.Login != "synthetic-buyer" || info.GivenRating != tc.rating || len(transport.requests) != 3 {
+				t.Fatal("unexpected validated profile or request count")
+			}
+		})
+	}
+}
+
 func TestAccountValidationDoesNotUseClaimsAfterProfileFailure(t *testing.T) {
 	client, transport := testClient(fakeHTTPResult{status: 200}, fakeHTTPResult{status: 200, body: `{"conversations":[],"pagination":{}}`}, fakeHTTPResult{status: 500})
 	client.session.AccessToken = validationToken()

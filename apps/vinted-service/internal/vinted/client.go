@@ -383,12 +383,12 @@ func (c *Client) GetAccessToken() string {
 }
 
 type AccountInfo struct {
-	ID          int64  `json:"id"`
-	Login       string `json:"login"`
-	PhotoURL    string `json:"photo_url"`
-	ItemCount   int    `json:"item_count"`
-	GivenRating string `json:"feedback_reputation"`
-	CountryCode string `json:"country_title"`
+	ID          int64   `json:"id"`
+	Login       string  `json:"login"`
+	PhotoURL    string  `json:"photo_url"`
+	ItemCount   int     `json:"item_count"`
+	GivenRating float64 `json:"feedback_reputation"`
+	CountryCode string  `json:"country_title"`
 }
 
 type SellerInfo struct {
