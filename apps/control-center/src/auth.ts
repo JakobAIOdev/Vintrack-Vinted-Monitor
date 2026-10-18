@@ -22,6 +22,11 @@ import {
 import { prepareGithubAccountLink } from "@/lib/github-account-linking.server";
 import { reconcileUserFreeProxyMonitorLimit } from "@/lib/free-proxy-limit-reconciliation.server";
 import { assertControlCenterProductionConfig } from "@/lib/deployment-config.server";
+import {
+    isInstanceAccessRestricted,
+    isInstanceAccountAllowed,
+} from "@/lib/auth-access";
+import { isInstanceUserAllowed } from "@/lib/auth-access.server";
 
 assertControlCenterProductionConfig();
 
@@ -84,11 +89,18 @@ async function signedInUserId() {
         select: { userId: true, expires: true },
     });
     if (!session || session.expires.getTime() <= Date.now()) return null;
+    if (!(await isInstanceUserAllowed(session.userId))) return null;
     return session.userId;
 }
 
 const adapter: Adapter = {
     ...prismaAdapter,
+    async getSessionAndUser(sessionToken) {
+        const result = await prismaAdapter.getSessionAndUser?.(sessionToken);
+        if (!result || !(await isInstanceUserAllowed(result.user.id)))
+            return null;
+        return result;
+    },
     linkAccount(account) {
         if (!prismaAdapter.linkAccount) return;
         if (account.provider !== "github") {
@@ -118,12 +130,10 @@ const authResult = NextAuth({
     },
     callbacks: {
         async signIn({ user, account, profile }) {
-            if (
-                account?.provider !== "github" ||
-                !/^\d+$/.test(account.providerAccountId)
-            ) {
-                return true;
+            if (account?.provider !== "github") {
+                return isInstanceAccountAllowed(account);
             }
+            if (!/^\d+$/.test(account.providerAccountId)) return false;
             const githubId = BigInt(account.providerAccountId);
             // GitHub is a reward identity, not a sign-in method. Without a
             // member already signed in, Auth.js would create a second, empty
@@ -137,7 +147,7 @@ const authResult = NextAuth({
                     "[github-rewards] could not resolve the signed-in member",
                     error,
                 );
-                return true;
+                return false;
             }
             if (!memberId) return githubLinkErrorUrl("session_missing");
             const preparation = await prepareGithubAccountLink(
@@ -238,7 +248,7 @@ const authResult = NextAuth({
 export const { handlers, signIn, signOut } = authResult;
 
 async function getAuthSession(): Promise<Session | null> {
-    if (process.env.E2E_TEST_MODE === "true") {
+    if (process.env.E2E_TEST_MODE === "true" && !isInstanceAccessRestricted()) {
         const userId = process.env.E2E_TEST_USER_ID ?? "e2e-user";
         return {
             user: {

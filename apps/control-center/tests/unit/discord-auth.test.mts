@@ -6,6 +6,7 @@ import ts from "typescript";
 import Discord from "next-auth/providers/discord";
 import { validateAuthResponse, skipStateCheck } from "oauth4webapi";
 import type { NextAuthConfig } from "next-auth";
+import * as authAccess from "../../src/lib/auth-access.ts";
 
 function discordProvider() {
     let config: NextAuthConfig | undefined;
@@ -29,6 +30,8 @@ function discordProvider() {
         "@/lib/deployment-config.server": {
             assertControlCenterProductionConfig: () => {},
         },
+        "@/lib/auth-access": authAccess,
+        "@/lib/auth-access.server": {},
     };
     const output = ts.transpileModule(
         readFileSync(new URL("../../src/auth.ts", import.meta.url), "utf8"),

@@ -58,6 +58,40 @@ from **Account** for rewards; it is not a separate login method. New users start
 with the `free` role. Follow the [first-admin setup](getting-started.md#5-grant-your-first-account-admin-access)
 to administer a new instance.
 
+### Private instance access
+
+By default, login remains open to users of the configured provider, including
+demo installations. To restrict your instance to yourself, set your Discord
+**user ID** in the root `.env` (not your username or OAuth application ID):
+
+```env
+AUTH_ALLOWED_DISCORD_IDS=123456789012345678
+```
+
+In Discord, enable **User Settings → Advanced → Developer Mode**, then
+right-click your own profile and select **Copy User ID**. For several people,
+separate their IDs with commas. For OIDC, set `AUTH_ALLOWED_OIDC_SUBJECTS` to a
+comma-separated list of exact, case-sensitive `sub` values from your issuer.
+
+If either list is non-empty, only explicitly listed Discord or OIDC identities
+are allowed. Leaving one provider's list empty does not open that provider when
+the other list is configured. GitHub reward linking cannot grant access.
+Existing sessions and browser-extension tokens are checked against the same
+policy; administrators have no exemption. The development/demo authentication
+bypass is also disabled while an allowlist is configured.
+
+Apply changes with:
+
+```bash
+docker compose up -d --force-recreate control-center
+```
+
+No database migration is required. To recover from an incorrect ID, edit `.env`
+on the server and recreate the container again. Clear both lists to restore the
+default login policy. These settings restrict authenticated application access;
+public pages such as the homepage and login page remain reachable. Use network
+or reverse-proxy restrictions if the entire website must be private.
+
 ### Discord OAuth
 
 ```env

@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { isInstanceUserAllowed } from "@/lib/auth-access.server";
 
 const BROWSER_LINK_TOKEN_PATTERN = /^[a-f0-9]{32}$/i;
 
@@ -63,7 +64,8 @@ export async function authenticateExtensionRequest(
         !timingSafeEqual(
             Buffer.from(link.token_hash, "hex"),
             Buffer.from(tokenHash, "hex"),
-        )
+        ) ||
+        !(await isInstanceUserAllowed(link.userId))
     ) {
         return {
             ok: false,
