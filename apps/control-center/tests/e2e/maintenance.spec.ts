@@ -547,7 +547,7 @@ test.describe("monitor maintenance", () => {
         }
     });
 
-    test("serializes a parallel Start All request against maintenance activation", async ({
+    test("preserves maintenance exemptions during a parallel Start All request", async ({
         page,
         context,
         isMobile,
@@ -596,7 +596,12 @@ test.describe("monitor maintenance", () => {
                 })
                 .toBe(true);
             expect(
-                await db.monitors.count({ where: { status: "active" } }),
+                await db.monitors.count({
+                    where: {
+                        status: "active",
+                        user: { role: { not: "admin" } },
+                    },
+                }),
             ).toBe(0);
             await dashboardPage.close();
         } finally {

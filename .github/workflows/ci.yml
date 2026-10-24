@@ -69,7 +69,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Lint OpenAPI specs
         run: npx --yes @redocly/cli@1.25.15 lint docs/openapi/vinted-service.yaml
@@ -84,10 +84,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Set up Node.js 22
+      - name: Set up Node.js 24
         uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
 
       - name: Validate manifests and runtime allowlists
         run: node apps/vintrack-browser-sync-extension/scripts/validate-extension.mjs
@@ -143,7 +143,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: apps/control-center/package-lock.json
 
@@ -228,7 +228,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: apps/control-center/package-lock.json
 

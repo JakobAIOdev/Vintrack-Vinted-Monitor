@@ -10,7 +10,7 @@
         "test:unit": "node --experimental-strip-types --test tests/unit/*.test.mts",
         "test:types": "tsc --noEmit --project tsconfig.tests.json",
         "test:e2e": "NODE_NO_WARNINGS=1 env -u FORCE_COLOR playwright test tests/e2e/public-pages.spec.ts tests/e2e/mock-assets.spec.ts tests/e2e/auth.spec.ts tests/e2e/github-rewards.spec.ts tests/e2e/checkout.spec.ts && NODE_NO_WARNINGS=1 SEO_INDEXING_ENABLED=false PLAYWRIGHT_PORT=3103 env -u FORCE_COLOR playwright test tests/e2e/seo-disabled.spec.ts --project=chromium && NODE_NO_WARNINGS=1 E2E_TEST_MODE=true PLAYWRIGHT_PORT=3104 env -u FORCE_COLOR playwright test tests/e2e/seo-authenticated.spec.ts --project=chromium",
-        "test:e2e:dashboard": "NODE_NO_WARNINGS=1 E2E_TEST_MODE=true E2E_SEED_DB=true PLAYWRIGHT_PORT=3101 env -u FORCE_COLOR playwright test tests/e2e/dashboard.spec.ts tests/e2e/proxy-validation.spec.ts tests/e2e/account-updates.spec.ts tests/e2e/account-automations.spec.ts tests/e2e/extension-companion.spec.ts tests/e2e/feed.spec.ts tests/e2e/admin.spec.ts tests/e2e/announcement.spec.ts tests/e2e/maintenance.spec.ts tests/e2e/inactive-member-policy.spec.ts tests/e2e/github-rewards.spec.ts --workers=1",
+        "test:e2e:dashboard": "node scripts/test-dashboard-e2e.mjs",
         "test:e2e:onboarding": "NODE_NO_WARNINGS=1 E2E_TEST_MODE=true E2E_SEED_DB=true E2E_ONBOARDING=true PLAYWRIGHT_PORT=3102 env -u FORCE_COLOR playwright test tests/e2e/onboarding.spec.ts --project=chromium --workers=1",
         "test:e2e:headed": "NODE_NO_WARNINGS=1 env -u FORCE_COLOR playwright test tests/e2e/public-pages.spec.ts tests/e2e/mock-assets.spec.ts tests/e2e/auth.spec.ts --headed",
         "test:e2e:ui": "NODE_NO_WARNINGS=1 env -u FORCE_COLOR playwright test tests/e2e/public-pages.spec.ts tests/e2e/mock-assets.spec.ts tests/e2e/auth.spec.ts --ui",
@@ -21,35 +21,38 @@
         "test:e2e:own-proxy": "E2E_TEST_MODE=true E2E_TEST_USER_ID=e2e-own-proxy-user PLAYWRIGHT_PORT=3105 playwright test tests/e2e/own-proxy-limit.spec.ts --project=chromium --workers=1"
     },
     "dependencies": {
-        "@auth/prisma-adapter": "^2.11.1",
-        "@prisma/client": "^5.10.2",
+        "@auth/prisma-adapter": "^2.11.3",
+        "@prisma/client": "^5.22.0",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "ioredis": "^5.9.3",
         "lucide-react": "^0.563.0",
-        "next": "16.1.6",
+        "next": "16.4.3",
         "next-auth": "^5.0.0-beta.32",
         "next-themes": "^0.4.6",
         "radix-ui": "^1.4.3",
-        "react": "19.2.3",
-        "react-dom": "19.2.3",
+        "react": "19.3.1",
+        "react-dom": "19.3.1",
         "sonner": "^2.0.7",
         "tailwind-merge": "^3.4.0"
     },
     "devDependencies": {
         "@playwright/test": "^1.61.0",
         "@tailwindcss/postcss": "^4",
-        "@types/node": "^20",
+        "@types/node": "^24",
         "@types/react": "^19",
         "@types/react-dom": "^19",
-        "eslint": "^9",
-        "eslint-config-next": "16.1.6",
+        "eslint": "^9.39.5",
+        "eslint-config-next": "16.4.3",
         "prettier": "^3.8.3",
         "prettier-plugin-tailwindcss": "^0.8.0",
-        "prisma": "^5.10.2",
-        "shadcn": "^3.8.4",
+        "prisma": "^5.22.0",
+        "shadcn": "^4.22.1",
         "tailwindcss": "^4",
         "tw-animate-css": "^1.4.0",
         "typescript": "^5"
+    },
+    "overrides": {
+        "eslint-plugin-react-hooks": "7.0.1"
     }
 }
