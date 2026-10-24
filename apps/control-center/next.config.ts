@@ -2,12 +2,16 @@ import type { NextConfig } from "next";
 import pkg from "./package.json";
 
 const parsedBuildCpus = Number.parseInt(process.env.NEXT_BUILD_CPUS ?? "", 10);
-const buildCpus = Number.isFinite(parsedBuildCpus) && parsedBuildCpus > 0
-    ? parsedBuildCpus
-    : undefined;
+const buildCpus =
+    Number.isFinite(parsedBuildCpus) && parsedBuildCpus > 0
+        ? parsedBuildCpus
+        : undefined;
 
 const nextConfig: NextConfig = {
     output: "standalone",
+    outputFileTracingIncludes: {
+        "/*": ["./data/vinted-sizes/**/groups.json"],
+    },
     distDir: process.env.NEXT_DIST_DIR ?? ".next",
     images: {
         remotePatterns: [
