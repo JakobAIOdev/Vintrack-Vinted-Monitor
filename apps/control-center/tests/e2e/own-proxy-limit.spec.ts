@@ -471,7 +471,7 @@ test.describe("own proxy quota integration", () => {
         expect(await premiumActiveCount()).toBe(13);
         await page.goto("/admin/members");
         await page
-            .getByPlaceholder("Search by name, email or role...")
+            .getByRole("textbox", { name: "Search members", exact: true })
             .filter({ visible: true })
             .fill("Own Proxy Premium Member");
         await page
