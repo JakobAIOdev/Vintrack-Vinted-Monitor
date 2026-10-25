@@ -178,7 +178,7 @@ test.describe("admin running monitors", () => {
         );
         await page.goto("/admin/members");
         const search = getAdminMain(page).getByPlaceholder(
-            "Search by name, email or role...",
+            "Search by name, email, role or Discord user ID...",
         );
         await search.fill("E2E Limit User");
         await getAdminMain(page)

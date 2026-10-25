@@ -5080,7 +5080,7 @@ export function AdminClient({
                                         setSearchQuery(event.target.value);
                                         setUserPage(1);
                                     }}
-                                    placeholder="Search by name, email or role..."
+                                    placeholder="Search by name, email, role or Discord user ID..."
                                     className="h-10 pl-9"
                                 />
                             </div>
