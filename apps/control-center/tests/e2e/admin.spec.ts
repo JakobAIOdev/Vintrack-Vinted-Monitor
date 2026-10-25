@@ -177,9 +177,10 @@ test.describe("admin running monitors", () => {
             "The shared database mutation runs once on desktop",
         );
         await page.goto("/admin/members");
-        const search = getAdminMain(page).getByPlaceholder(
-            "Search by name, email, role or Discord user ID...",
-        );
+        const search = getAdminMain(page).getByRole("textbox", {
+            name: "Search members",
+            exact: true,
+        });
         await search.fill("E2E Limit User");
         await getAdminMain(page)
             .getByRole("row", { name: /E2E Limit User/ })

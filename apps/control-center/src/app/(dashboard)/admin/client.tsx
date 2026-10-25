@@ -5080,6 +5080,7 @@ export function AdminClient({
                                         setSearchQuery(event.target.value);
                                         setUserPage(1);
                                     }}
+                                    aria-label="Search members"
                                     placeholder="Search by name, email, role or Discord user ID..."
                                     className="h-10 pl-9"
                                 />
