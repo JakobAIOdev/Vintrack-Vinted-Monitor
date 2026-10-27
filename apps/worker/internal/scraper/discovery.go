@@ -220,12 +220,12 @@ func (e *Engine) DiscoveryTask(ctx context.Context, spec DiscoverySpec) {
 				}
 				monitor := matcher.monitor
 				matchesByMonitor[monitor.ID]++
-				seenAt := time.Now()
-				e.db.RecordItemDetection(model.MonitorItemDetection{
-					MonitorID: monitor.ID, ItemID: vintedItem.ID, Source: "discovery", SeenAt: seenAt,
-				})
 				if discoveryMode == "active" {
 					e.handleDetectedItem(ctx, monitor, vintedItem, "discovery", proxySource, enricher)
+				} else {
+					e.db.RecordItemDetection(model.MonitorItemDetection{
+						MonitorID: monitor.ID, ItemID: vintedItem.ID, Source: "discovery", SeenAt: time.Now(),
+					})
 				}
 			}
 		})
@@ -257,6 +257,7 @@ type discoveryScan struct {
 	seen         map[int64]time.Time
 	previousPage map[int64]struct{}
 	initialized  bool
+	baseline     catalogBaseline
 }
 
 func (s *discoveryScan) processPages(
@@ -266,6 +267,9 @@ func (s *discoveryScan) processPages(
 	fetchPage func(int) catalogFetchResult,
 	processItem func(model.VintedItem),
 ) int {
+	if !s.initialized {
+		s.baseline.seed(pageOne)
+	}
 	itemCount := 0
 	processPage := func(items []model.VintedItem) {
 		itemCount += len(items)
@@ -273,7 +277,7 @@ func (s *discoveryScan) processPages(
 		for _, item := range items {
 			_, exists := s.seen[item.ID]
 			s.seen[item.ID] = now
-			if !exists && s.initialized {
+			if !exists && s.initialized && s.baseline.allows(item) {
 				processItem(item)
 			}
 		}
@@ -294,7 +298,7 @@ func (s *discoveryScan) processPages(
 	}
 	// Overlap checks above must retain the previous cycle's page-one IDs.
 	s.previousPage = discoveryIDSet(pageOne)
-	s.initialized = true
+	s.initialized = s.initialized || len(pageOne) > 0
 	return itemCount
 }
 
