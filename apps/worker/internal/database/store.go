@@ -506,8 +506,24 @@ func (s *Store) CacheRuntimeMetrics(ctx context.Context) map[string]any {
 	return metrics
 }
 
-func (s *Store) ClaimMonitorItem(monitorID int, itemID int64, source string) bool {
+func (s *Store) ClaimMonitorItem(ctx context.Context, monitorID int, itemID int64, source string) bool {
 	if monitorID <= 0 || itemID <= 0 {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	// Redis buckets and outbox idempotency keys expire. Persisted items are the
+	// durable history for a monitor and must be checked even when Redis works.
+	// Check before claiming so a database failure does not poison the cache.
+	var exists bool
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM items WHERE monitor_id = $1 AND id = $2)`,
+		monitorID, itemID,
+	).Scan(&exists); err != nil {
+		log.Printf("db monitor item history check failed for %d:%d: %v", monitorID, itemID, err)
+		return false
+	}
+	if exists {
 		return false
 	}
 	if s.cache != nil {
@@ -523,14 +539,14 @@ func (s *Store) ClaimMonitorItem(monitorID int, itemID int64, source string) boo
 		source = "canonical"
 	}
 	var claimedItemID int64
-	err := s.db.QueryRow(`
+	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO monitor_item_detections (
 			monitor_id, item_id, first_source, early_seen_at, canonical_seen_at, updated_at
 		)
 		SELECT
-			$1, $2, $3,
-			CASE WHEN $3 = 'discovery' THEN NOW() END,
-			CASE WHEN $3 <> 'discovery' THEN NOW() END,
+			$1, $2, $3::text,
+			CASE WHEN $3::text = 'discovery' THEN NOW() END,
+			CASE WHEN $3::text <> 'discovery' THEN NOW() END,
 			NOW()
 		WHERE NOT EXISTS (
 			SELECT 1 FROM items WHERE monitor_id = $1 AND id = $2
@@ -542,15 +558,7 @@ func (s *Store) ClaimMonitorItem(monitorID int, itemID int64, source string) boo
 	}
 	if err != nil {
 		log.Printf("db monitor item claim fallback failed for %d:%d: %v", monitorID, itemID, err)
-		var exists bool
-		if fallbackErr := s.db.QueryRow(
-			`SELECT EXISTS(SELECT 1 FROM items WHERE monitor_id = $1 AND id = $2)`,
-			monitorID,
-			itemID,
-		).Scan(&exists); fallbackErr == nil {
-			return !exists
-		}
-		return true
+		return false
 	}
 	return claimedItemID == itemID
 }
