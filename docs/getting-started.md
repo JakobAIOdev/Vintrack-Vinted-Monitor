@@ -298,6 +298,5 @@ docker compose logs --since=10m control-center-migrate control-center worker vin
 
 - [Configuration](configuration.md)
 - [Browser extension](browser-extension.md)
-- [Architecture](architecture.md)
 - [Troubleshooting](troubleshooting.md)
 - [Development](development.md)

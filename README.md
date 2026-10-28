@@ -377,8 +377,6 @@ You can test whether a proxy can reach Vinted with the
 external services and never submit reusable credentials unless you trust their
 data-handling policy.
 
-- [Worker performance and discovery](docs/worker-speed.md)
-- [Pre-index shadow experiment](docs/preindex-shadow.md)
 - [Complete proxy configuration](docs/configuration.md#proxy-sources)
 
 ### Roles and access
@@ -447,8 +445,6 @@ flowchart LR
 4. Matching listings are persisted and dispatched to enabled alert channels.
 5. The separate Vinted service handles explicitly linked account actions.
 
-[Explore components, trust boundaries, and data flow →](docs/architecture.md)
-
 ## Technology
 
 | Layer | Technology | Responsibility |
@@ -462,9 +458,6 @@ flowchart LR
 | Edge | Caddy 2 | Reverse proxy and automatic HTTPS |
 | Operations | Docker Compose | Service orchestration and migrations |
 
-Internal service contracts are documented in
-[OpenAPI](docs/openapi/README.md).
-
 ## Repository layout
 
 ```text
@@ -473,7 +466,7 @@ apps/
 ├── worker/                         Catalog monitoring and proxy maintenance
 ├── vinted-service/                 Linked-account actions
 └── vintrack-browser-sync-extension/
-docs/                               Setup, operations, API, and design notes
+docs/                               Setup, configuration, and usage guides
 requests/                           Example request payloads
 scripts/                            Initialization and validation helpers
 ```
@@ -488,11 +481,12 @@ maintained app directory.
 | [Getting Started](docs/getting-started.md) | Live demo, local setup, and production deployment |
 | [Configuration](docs/configuration.md) | Authentication, URLs, notifications, proxies, and tuning |
 | [Browser extension](docs/browser-extension.md) | Demo, localhost, and self-hosted Chrome/Firefox installation |
-| [Architecture](docs/architecture.md) | Components, data flow, and security boundaries |
+| [Account automations](docs/account-automations.md) | Set up automatic offers and messages |
+| [Oneclick checkout](docs/checkout-module.md) | Enable checkout, delivery and payment preferences |
+| [Checkout notifications](docs/checkout-notifications.md) | Configure admin Discord checkout notifications |
+| [Extension privacy](docs/browser-extension-privacy.md) | Data use, storage and deletion |
 | [Development](docs/development.md) | Local workflows, mock data, tests, and project conventions |
 | [Troubleshooting](docs/troubleshooting.md) | Logs, startup failures, auth, proxy, and migration issues |
-| [Testing](docs/testing.md) | Unit, build, and end-to-end validation |
-| [OpenAPI](docs/openapi/README.md) | Internal Vinted service contract |
 
 ## Responsible use
 
