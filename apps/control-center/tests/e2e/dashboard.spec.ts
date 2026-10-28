@@ -812,15 +812,10 @@ test.describe("dashboard monitors", () => {
     test("keeps monitor management on the main dashboard", async ({ page }) => {
         await page.goto("/dashboard");
         await expect(
-            page.getByRole("heading", { name: /Welcome back/ }),
+            page.getByRole("heading", { name: "Monitors", exact: true }),
         ).toBeVisible();
         await expect(page.getByTestId("monitor-card").first()).toBeVisible();
-        await expect(
-            page.locator("aside").getByRole("link", {
-                name: "Monitors",
-                exact: true,
-            }),
-        ).toHaveCount(0);
+        await expect(page.locator('aside a[href="/monitors"]')).toHaveCount(0);
     });
 
     test("personal brand persistence upserts, reactivates, and enforces its active limit", async () => {
@@ -1143,7 +1138,7 @@ test.describe("dashboard monitors", () => {
 
         await expect(page).toHaveTitle(/Vintrack/i);
         await expect(
-            page.getByRole("heading", { name: /Welcome back, E2E User/i }),
+            page.getByRole("heading", { name: "Monitors", exact: true }),
         ).toBeVisible();
         await expect(
             page.getByTestId("monitor-summary").getByText("1 monitor", {
@@ -1174,9 +1169,24 @@ test.describe("dashboard monitors", () => {
             "href",
             "/account?connection=github",
         );
+        const mobileMenu = page.getByRole("button", {
+            name: "Open navigation",
+            exact: true,
+        });
+        const isMobile = await mobileMenu.isVisible();
+        if (isMobile) await mobileMenu.click();
+        await page
+            .locator("summary")
+            .filter({ hasText: "Community" })
+            .filter({ visible: true })
+            .click();
         await expect(
             page.getByRole("link", { name: "Sponsor Vintrack" }),
         ).toHaveAttribute("href", "https://github.com/sponsors/JakobAIOdev");
+        if (isMobile)
+            await page
+                .getByRole("button", { name: "Close navigation", exact: true })
+                .click();
 
         const serverUpgradeBanner = page.getByRole("status").filter({
             hasText:

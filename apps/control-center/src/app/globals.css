@@ -252,3 +252,78 @@
         }
     }
 }
+
+/* Shared role colors for the dashboard and its portalled navigation/popovers. */
+:is(.dashboard-shell, .dashboard-navigation, .dashboard-popover) {
+    --background: #f3f5f8;
+    --foreground: #182131;
+    --card: #ffffff;
+    --card-foreground: #182131;
+    --muted-foreground: #53627a;
+    --primary: #17243a;
+    --primary-foreground: #ffffff;
+    --border: #d7dfe9;
+    --input: #b0bdce;
+    --ring: #315fbe;
+    --sidebar: #ffffff;
+    --sidebar-foreground: #182131;
+    --sidebar-primary: #17243a;
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-border: #d7dfe9;
+}
+
+.dark :is(.dashboard-shell, .dashboard-navigation, .dashboard-popover) {
+    --background: #111824;
+    --foreground: #ebf0f8;
+    --card: #182131;
+    --card-foreground: #ebf0f8;
+    --muted-foreground: #aebbd0;
+    --primary: #dbe7ff;
+    --primary-foreground: #17243a;
+    --border: #44516a;
+    --input: #6a7b98;
+    --ring: #a4c6ff;
+    --sidebar: #182131;
+    --sidebar-foreground: #ebf0f8;
+    --sidebar-primary: #dbe7ff;
+    --sidebar-primary-foreground: #17243a;
+    --sidebar-border: #44516a;
+}
+
+:is(.dashboard-shell, .dashboard-navigation, .dashboard-popover)
+    :where(a, button, input, summary, select):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 3px;
+}
+
+.dashboard-navigation-footer {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+@media (prefers-contrast: more) {
+    :is(.dashboard-shell, .dashboard-navigation, .dashboard-popover) {
+        --border: var(--muted-foreground);
+        --sidebar-border: var(--muted-foreground);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :is(.dashboard-shell, .dashboard-navigation, .dashboard-popover),
+    :is(.dashboard-shell, .dashboard-navigation, .dashboard-popover) * {
+        scroll-behavior: auto !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+    :is(.dashboard-shell, .dashboard-navigation, .dashboard-popover) * {
+        backdrop-filter: none !important;
+    }
+}
+
+.dashboard-header svg {
+    max-width: 20px;
+    max-height: 20px;
+}

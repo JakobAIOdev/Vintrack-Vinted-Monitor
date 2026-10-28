@@ -31,6 +31,10 @@ export async function GET(req: NextRequest) {
     const stream = new TransformStream();
     const writer = stream.writable.getWriter();
 
+    // Flush the response even when no listings arrive. EventSource only marks
+    // the connection open once the browser receives the response headers.
+    void writer.write(encoder.encode(": connected\n\n")).catch(() => {});
+
     // The worker publishes to a per-member channel, so everything arriving here
     // already belongs to this member and no ownership filtering is needed. The
     // subscription itself is shared process-wide rather than opening a Redis
@@ -84,6 +88,7 @@ export async function GET(req: NextRequest) {
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache, no-transform",
             Connection: "keep-alive",
+            "X-Accel-Buffering": "no",
         },
     });
 }

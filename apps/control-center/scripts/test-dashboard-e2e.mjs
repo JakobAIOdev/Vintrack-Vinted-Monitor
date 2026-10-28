@@ -6,6 +6,7 @@ const testFiles = [
     "account-updates.spec.ts",
     "account-automations.spec.ts",
     "extension-companion.spec.ts",
+    "control-center-ux.spec.ts",
     "feed.spec.ts",
     "admin.spec.ts",
     "announcement.spec.ts",
