@@ -233,7 +233,7 @@ export function FeaturePoliciesAdminPanel({
                                                         <Badge
                                                             key={dependency}
                                                             variant="outline"
-                                                            className="font-normal"
+                                                            className="max-w-full text-left font-normal whitespace-normal"
                                                         >
                                                             Requires{" "}
                                                             {
@@ -287,7 +287,7 @@ export function FeaturePoliciesAdminPanel({
                                                         }),
                                                     )
                                                 }
-                                                className="size-5 accent-current"
+                                                className="size-5 scroll-mt-20 scroll-mb-40 accent-current"
                                             />
                                         </label>
                                         {USER_ROLES.map((role) => (
@@ -325,7 +325,7 @@ export function FeaturePoliciesAdminPanel({
                                                             }),
                                                         )
                                                     }
-                                                    className="size-5 accent-current"
+                                                    className="size-5 scroll-mt-20 scroll-mb-40 accent-current"
                                                 />
                                             </label>
                                         ))}
@@ -342,14 +342,16 @@ export function FeaturePoliciesAdminPanel({
                 </div>
             ) : null}
 
-            <div className="border-border/70 bg-background/95 sticky bottom-3 flex items-center justify-between gap-4 rounded-xl border p-3 shadow-lg backdrop-blur">
-                <p className="text-muted-foreground text-sm">
+            <div className="border-border/70 bg-background/95 sticky bottom-3 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 shadow-sm backdrop-blur">
+                <p className="text-muted-foreground text-xs">
                     {dirty
                         ? "You have unsaved feature access changes."
                         : "Feature access is up to date."}
                 </p>
-                <div className="flex gap-2">
+                <div className="flex max-w-full flex-wrap gap-2">
                     <Button
+                        size="sm"
+                        className="h-auto min-h-8 max-w-full py-1.5 whitespace-normal"
                         variant="outline"
                         disabled={!dirty || reviewing || saving}
                         onClick={() => setDrafts(saved)}
@@ -357,6 +359,8 @@ export function FeaturePoliciesAdminPanel({
                         Discard
                     </Button>
                     <Button
+                        size="sm"
+                        className="h-auto min-h-8 max-w-full py-1.5 whitespace-normal"
                         disabled={!dirty || reviewing || saving}
                         onClick={reviewChanges}
                     >
@@ -371,7 +375,7 @@ export function FeaturePoliciesAdminPanel({
                     if (!open && !saving) setImpacts(null);
                 }}
             >
-                <DialogContent>
+                <DialogContent className="max-h-[90dvh] overflow-y-auto">
                     <DialogHeader>
                         <DialogTitle>Apply feature policy changes?</DialogTitle>
                         <DialogDescription>

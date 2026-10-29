@@ -39,7 +39,10 @@ test.describe("Regional monitor currencies", () => {
         page,
     }) => {
         await page.goto("/monitors/new");
-        await page.getByText("Filters", { exact: true }).click();
+        await page
+            .locator("summary")
+            .filter({ has: page.getByText("Filters", { exact: true }) })
+            .click();
 
         const priceField = page.getByTestId("price-filter-field");
         const minPrice = page.locator('input[name="price_min"]');
@@ -1179,7 +1182,10 @@ test.describe("dashboard monitors", () => {
         });
 
         await page.goto("/monitors/new");
-        await page.getByText("Filters", { exact: true }).click();
+        await page
+            .locator("summary")
+            .filter({ has: page.getByText("Filters", { exact: true }) })
+            .click();
         await page.getByLabel("Search brand").fill("Under Native");
         await page.getByTestId("add-verified-brand").click();
         await expect(page.getByText("How to find it:")).toBeVisible();
@@ -1392,7 +1398,10 @@ test.describe("dashboard monitors", () => {
             "inactive",
         );
 
-        await page.getByText("Filters", { exact: true }).click();
+        await page
+            .locator("summary")
+            .filter({ has: page.getByText("Filters", { exact: true }) })
+            .click();
         const editPriceField = page.getByTestId("price-filter-field");
         await expect(editPriceField).toHaveAttribute("data-state", "active");
         await expect(

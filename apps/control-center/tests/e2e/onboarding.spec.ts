@@ -231,7 +231,10 @@ test.describe("first monitor onboarding", () => {
 
         await page.getByRole("link", { name: "Edit" }).click();
         await expect(page).toHaveURL(/\/monitors\/\d+\/edit$/);
-        await page.getByText("Filters", { exact: true }).click();
+        await page
+            .locator("summary")
+            .filter({ has: page.getByText("Filters", { exact: true }) })
+            .click();
         const editSizeField = page.getByTestId("size-filter-field");
         await expect(editSizeField.getByText("10/100 selected")).toBeVisible();
         await expect(
@@ -344,12 +347,16 @@ test.describe("first monitor onboarding", () => {
             antiKeywordsField.getByText("5 anti keywords", { exact: true }),
         ).toBeVisible();
 
-        await page.getByText("Filters", { exact: true }).click();
+        await page
+            .locator("summary")
+            .filter({ has: page.getByText("Filters", { exact: true }) })
+            .click();
         await expect(page.getByText("6 active", { exact: true })).toBeVisible();
 
-        await expect(
-            page.getByTestId("location-filter-field"),
-        ).toHaveAttribute("data-state", "inactive");
+        await expect(page.getByTestId("location-filter-field")).toHaveAttribute(
+            "data-state",
+            "inactive",
+        );
 
         const activeFilterExpectations = [
             ["category-filter-field", "2 categories"],
@@ -550,7 +557,11 @@ test.describe("first monitor onboarding", () => {
         await expect(
             db.monitors.findUniqueOrThrow({
                 where: { id: monitorId },
-                select: { region: true, proxy_source: true, vinted_extra_params: true },
+                select: {
+                    region: true,
+                    proxy_source: true,
+                    vinted_extra_params: true,
+                },
             }),
         ).resolves.toEqual({
             region: "fr",
@@ -576,9 +587,9 @@ test.describe("first monitor onboarding", () => {
             (input as HTMLInputElement).form?.requestSubmit();
         });
 
-        await expect(
-            page.getByText("Choose no more than 100 sizes per monitor."),
-        ).toBeVisible();
+        await expect(page.locator("form").getByRole("alert")).toHaveText(
+            "Choose no more than 100 sizes per monitor.",
+        );
         await expect(page).toHaveURL(/\/monitors\/new$/);
     });
 });

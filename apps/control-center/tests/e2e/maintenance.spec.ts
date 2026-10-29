@@ -169,11 +169,9 @@ test.describe("monitor maintenance", () => {
             });
 
             await page.getByRole("button", { name: "Create Monitor" }).click();
-            await expect(
-                page.getByText(
-                    "Monitor creation is paused while Vintrack is undergoing maintenance.",
-                ),
-            ).toBeVisible();
+            await expect(page.locator("form").getByRole("alert")).toHaveText(
+                "Monitor creation is paused while Vintrack is undergoing maintenance.",
+            );
             expect(
                 await db.monitors.count({ where: { name: monitorName } }),
             ).toBe(0);
@@ -698,9 +696,7 @@ test.describe("monitor maintenance", () => {
                     select: { role: true },
                 });
                 const expectedStatus =
-                    e2eUser.role === "admin"
-                        ? "active"
-                        : "maintenance_paused";
+                    e2eUser.role === "admin" ? "active" : "maintenance_paused";
                 expect(created[0].status).toBe(expectedStatus);
             }
             await createPage.close();

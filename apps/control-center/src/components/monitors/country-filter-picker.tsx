@@ -27,15 +27,18 @@ export function CountryFilterPicker({
                     <button
                         type="button"
                         key={region.code}
-                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                        aria-pressed={isSelected}
+                        className={`focus-visible:ring-ring inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none ${
                             isSelected
                                 ? "bg-primary text-primary-foreground border-primary"
                                 : "bg-background text-muted-foreground border-input hover:bg-muted"
                         }`}
                         onClick={() => toggleRegion(region.code)}
                     >
-                        <span>{region.flag}</span>
-                        {region.label}
+                        <span className="shrink-0">{region.flag}</span>
+                        <span className="min-w-0 break-words">
+                            {region.label}
+                        </span>
                     </button>
                 );
             })}

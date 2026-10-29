@@ -87,32 +87,37 @@ export function MonitorPresetPicker({
                         className={cn(
                             "border-border/70 bg-card hover:border-foreground/25 focus-visible:ring-ring relative overflow-hidden border text-left transition-[border-color,box-shadow,transform] outline-none focus-visible:ring-2 focus-visible:ring-offset-2",
                             compact
-                                ? "min-h-24 rounded-lg p-3"
+                                ? "min-w-0 rounded-md px-2.5 py-2"
                                 : "min-h-44 rounded-xl p-5 hover:-translate-y-0.5",
-                            isSelected && accent.selected,
+                            isSelected &&
+                                (compact
+                                    ? "border-primary ring-primary/15 ring-1"
+                                    : accent.selected),
                         )}
                     >
-                        <div
-                            className={cn(
-                                "pointer-events-none absolute inset-0 bg-gradient-to-br opacity-80",
-                                accent.shell,
-                            )}
-                        />
+                        {!compact && (
+                            <div
+                                className={cn(
+                                    "pointer-events-none absolute inset-0 bg-gradient-to-br opacity-80",
+                                    accent.shell,
+                                )}
+                            />
+                        )}
                         {compact ? (
-                            <div className="relative flex h-full items-start gap-3">
+                            <div className="relative flex h-full items-start gap-2">
                                 <span
                                     className={cn(
-                                        "flex size-8 shrink-0 items-center justify-center rounded-md",
+                                        "flex size-7 shrink-0 items-center justify-center rounded-md",
                                         accent.icon,
                                     )}
                                 >
                                     <Icon className="size-4" />
                                 </span>
                                 <span className="min-w-0 flex-1">
-                                    <span className="block text-sm leading-5 font-semibold">
+                                    <span className="block text-xs leading-5 font-semibold">
                                         {preset.name}
                                     </span>
-                                    <span className="text-muted-foreground mt-1 block text-[11px] leading-4">
+                                    <span className="text-muted-foreground mt-0.5 block text-[11px] leading-4">
                                         {preset.description}
                                     </span>
                                 </span>

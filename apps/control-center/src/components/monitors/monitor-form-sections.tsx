@@ -53,6 +53,8 @@ export function getFreeProxyRegionHealth(
 }
 
 export function FormSection({
+    id,
+    compact = false,
     title,
     description,
     defaultOpen = true,
@@ -60,6 +62,8 @@ export function FormSection({
     summary,
     icon: Icon,
 }: {
+    id?: string;
+    compact?: boolean;
     title: string;
     description?: string;
     defaultOpen?: boolean;
@@ -71,14 +75,25 @@ export function FormSection({
 
     return (
         <details
-            className="group border-border/70 bg-background rounded-lg border"
+            id={id}
+            className="group border-border/70 bg-background min-w-0 scroll-mt-20 rounded-lg border [overflow-wrap:anywhere]"
             open={isOpen}
             onToggle={(event) => setIsOpen(event.currentTarget.open)}
         >
-            <summary className="hover:bg-muted/40 flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-4 py-3.5 transition-colors [&::-webkit-details-marker]:hidden">
+            <summary
+                className={cn(
+                    "hover:bg-muted/40 focus-visible:ring-ring flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg transition-colors focus-visible:ring-2 focus-visible:outline-none [&::-webkit-details-marker]:hidden",
+                    compact ? "px-3 py-2.5" : "px-4 py-3.5",
+                )}
+            >
                 <span className="flex min-w-0 items-start gap-3">
                     {Icon && (
-                        <span className="border-border/70 bg-muted/40 mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border">
+                        <span
+                            className={cn(
+                                "border-border/70 bg-muted/40 mt-0.5 flex shrink-0 items-center justify-center rounded-md border",
+                                compact ? "hidden size-7 sm:flex" : "size-8",
+                            )}
+                        >
                             <Icon className="text-muted-foreground h-4 w-4" />
                         </span>
                     )}
@@ -87,7 +102,14 @@ export function FormSection({
                             {title}
                         </span>
                         {description && (
-                            <span className="text-muted-foreground mt-0.5 block text-xs">
+                            <span
+                                className={cn(
+                                    "text-muted-foreground mt-0.5 text-xs",
+                                    compact
+                                        ? "hidden group-open:block sm:block"
+                                        : "block",
+                                )}
+                            >
                                 {description}
                             </span>
                         )}
@@ -102,7 +124,12 @@ export function FormSection({
                     <ChevronDown className="text-muted-foreground h-4 w-4 transition-transform group-open:rotate-180" />
                 </span>
             </summary>
-            <div className="border-border/60 space-y-5 border-t px-4 py-4">
+            <div
+                className={cn(
+                    "border-border/60 border-t",
+                    compact ? "space-y-4 p-3" : "space-y-5 px-4 py-4",
+                )}
+            >
                 {children}
             </div>
         </details>
@@ -110,10 +137,12 @@ export function FormSection({
 }
 
 export function RegionPoolStatus({
+    compact = false,
     freeProxy,
     selectedRegion,
     onSelectRegion,
 }: {
+    compact?: boolean;
     freeProxy: FreeProxyOption;
     selectedRegion: string;
     onSelectRegion?: (region: string) => void;
@@ -136,25 +165,30 @@ export function RegionPoolStatus({
     return (
         <div
             className={cn(
-                "rounded-lg border p-4",
-                isHealthy
-                    ? "border-emerald-500/25 bg-emerald-500/5"
-                    : "border-amber-500/25 bg-amber-500/5",
+                compact
+                    ? "min-w-0 [overflow-wrap:anywhere]"
+                    : "rounded-lg border p-4",
+                !compact &&
+                    (isHealthy
+                        ? "border-emerald-500/25 bg-emerald-500/5"
+                        : "border-amber-500/25 bg-amber-500/5"),
             )}
         >
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex min-w-0 items-start gap-3">
-                    <div
-                        className={cn(
-                            "mt-0.5 rounded-lg p-2",
-                            isHealthy
-                                ? "bg-emerald-500/10 text-emerald-600"
-                                : "bg-amber-500/10 text-amber-600",
-                        )}
-                    >
-                        <Activity className="h-4 w-4" />
-                    </div>
-                    <div>
+                    {!compact && (
+                        <div
+                            className={cn(
+                                "mt-0.5 rounded-lg p-2",
+                                isHealthy
+                                    ? "bg-emerald-500/10 text-emerald-600"
+                                    : "bg-amber-500/10 text-amber-600",
+                            )}
+                        >
+                            <Activity className="h-4 w-4" />
+                        </div>
+                    )}
+                    <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                             <p className="text-sm font-semibold">
                                 Free Proxy Pool · {selectedRegion.toUpperCase()}
@@ -166,8 +200,8 @@ export function RegionPoolStatus({
                                 {isHealthy
                                     ? "Ready"
                                     : freeProxy.enabled
-                                        ? "Recovering"
-                                        : "Disabled"}
+                                      ? "Recovering"
+                                      : "Disabled"}
                             </Badge>
                             {freeProxy.usage ? (
                                 <Badge

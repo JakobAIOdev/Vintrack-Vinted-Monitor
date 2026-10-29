@@ -6,7 +6,11 @@ function LoadingBlock({ className = "" }: { className?: string }) {
 
 export default function AdminLoading() {
     return (
-        <div className="mx-auto w-full max-w-[1680px] space-y-4 px-4 py-5 sm:px-6 lg:px-8">
+        <div
+            aria-label="Loading admin panel"
+            role="status"
+            className="min-w-0 space-y-5"
+        >
             <div className="flex items-center justify-between gap-4">
                 <div className="space-y-2">
                     <LoadingBlock className="h-5 w-36" />
@@ -15,9 +19,10 @@ export default function AdminLoading() {
                 <LoadingBlock className="h-7 w-32" />
             </div>
 
-            <div className="border-border/60 flex gap-1 overflow-hidden rounded-lg border p-1">
-                {Array.from({ length: 6 }).map((_, index) => (
-                    <LoadingBlock key={index} className="h-9 min-w-24 flex-1" />
+            <LoadingBlock className="h-8 w-full md:hidden" />
+            <div className="border-border/70 hidden flex-wrap gap-0.5 rounded-md border p-0.5 md:flex">
+                {Array.from({ length: 7 }).map((_, index) => (
+                    <LoadingBlock key={index} className="h-7 min-w-16 flex-1" />
                 ))}
             </div>
 
@@ -34,8 +39,8 @@ export default function AdminLoading() {
                 ))}
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-                <div className="border-border/60 space-y-5 rounded-lg border p-5">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+                <div className="border-border/60 min-w-0 space-y-4 rounded-lg border p-4">
                     <div className="space-y-2">
                         <LoadingBlock className="h-4 w-32" />
                         <LoadingBlock className="h-3 w-56" />
@@ -47,7 +52,7 @@ export default function AdminLoading() {
                     </div>
                     <LoadingBlock className="h-32" />
                 </div>
-                <div className="border-border/60 space-y-4 rounded-lg border p-5">
+                <div className="border-border/60 min-w-0 space-y-4 rounded-lg border p-4">
                     <LoadingBlock className="h-4 w-28" />
                     {Array.from({ length: 4 }).map((_, index) => (
                         <LoadingBlock key={index} className="h-12" />

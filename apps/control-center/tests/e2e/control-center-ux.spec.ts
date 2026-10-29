@@ -60,6 +60,210 @@ async function openMonitors(page: Page) {
     ).toBeVisible();
 }
 
+test("opens monitor sections from shortcuts and reveals invalid required fields", async ({
+    page,
+}) => {
+    await page.goto("/monitors/new");
+    const create = page.getByRole("button", {
+        name: "Create Monitor",
+        exact: true,
+    });
+    await expect(create).toBeEnabled();
+    const shortcuts = page.getByRole("navigation", {
+        name: "Monitor setup sections",
+    });
+    await shortcuts.getByRole("link", { name: "Filters", exact: true }).click();
+    await expect(page.locator("#monitor-filters")).toHaveAttribute("open", "");
+    await expect(page.locator("#monitor-filters > summary")).toBeFocused();
+    await shortcuts.getByRole("link", { name: "Preview", exact: true }).click();
+    await expect(
+        page.getByRole("button", { name: "Copy preview URL" }),
+    ).toBeVisible();
+    await page.locator("#monitor-basics > summary").click();
+    await expect(page.locator("#monitor-basics")).not.toHaveAttribute(
+        "open",
+        "",
+    );
+    await create.click();
+    await expect(page.locator("#monitor-basics")).toHaveAttribute("open", "");
+    await expect(
+        page.getByLabel("Monitor Name", { exact: true }),
+    ).toBeFocused();
+});
+
+test("recovers proxy settings without losing a new monitor draft", async ({
+    page,
+}) => {
+    await page.route("**/api/proxy-groups", (route) =>
+        route.fulfill({ status: 503, json: { error: "Unavailable" } }),
+    );
+    await page.goto("/monitors/new");
+    await page
+        .getByLabel("Monitor Name", { exact: true })
+        .fill("My saved draft");
+    await expect(
+        page
+            .getByRole("alert")
+            .filter({ hasText: "Proxy settings couldn’t be loaded" }),
+    ).toBeVisible();
+    const create = page.getByRole("button", {
+        name: "Create Monitor",
+        exact: true,
+    });
+    await expect(create).toBeDisabled();
+    await page.unroute("**/api/proxy-groups");
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(create).toBeEnabled();
+    await expect(page.getByLabel("Monitor Name", { exact: true })).toHaveValue(
+        "My saved draft",
+    );
+});
+
+test("shows monitor creation progress and preserves a draft after a failed submission", async ({
+    page,
+}) => {
+    let submissions = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    await page.route("**/monitors/new", async (route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        submissions++;
+        await gate;
+        await route.fulfill({
+            status: 503,
+            contentType: "text/plain",
+            body: "Synthetic service unavailable",
+        });
+    });
+    await page.goto("/monitors/new");
+    const name = page.getByLabel("Monitor Name", { exact: true });
+    await name.fill("Keep this monitor draft");
+    await page.locator('input[name="query_delay_ms"]').fill("2000");
+    const create = page.getByRole("button", {
+        name: "Create Monitor",
+        exact: true,
+    });
+    await expect(create).toBeEnabled();
+    await create.click();
+    await expect(
+        page.getByRole("button", { name: "Creating…", exact: true }),
+    ).toBeDisabled();
+    await name.press("Enter");
+    release();
+    await expect(page.locator("form").getByRole("alert")).toBeVisible();
+    await expect(create).toBeEnabled();
+    await expect(name).toHaveValue("Keep this monitor draft");
+    await expect(page.locator('input[name="query_delay_ms"]')).toHaveValue(
+        "2000",
+    );
+    expect(submissions).toBe(1);
+});
+
+test("offers admin navigation links and clears member search with focus restored", async ({
+    page,
+    isMobile,
+}) => {
+    await page.goto("/admin/members");
+    const search = page.getByRole("searchbox", {
+        name: "Search members",
+        exact: true,
+    });
+    await search.fill("member-that-does-not-exist");
+    await expect(
+        page.getByText("0 matching users", { exact: true }),
+    ).toBeVisible();
+    await page
+        .getByRole("button", { name: "Clear member search", exact: true })
+        .click();
+    await expect(search).toHaveValue("");
+    await expect(search).toBeFocused();
+    if (isMobile) {
+        await page
+            .getByRole("combobox", { name: "Admin section" })
+            .selectOption("operations");
+    } else {
+        const navigation = page.getByRole("navigation", {
+            name: "Admin sections",
+        });
+        await expect(
+            navigation.getByRole("link", { name: "Members", exact: true }),
+        ).toHaveAttribute("aria-current", "page");
+        const operations = navigation.getByRole("link", {
+            name: "Operations",
+            exact: true,
+        });
+        await expect(operations).toHaveAttribute("href", "/admin/operations");
+        await operations.focus();
+        await page.keyboard.press("Enter");
+    }
+    await expect(page).toHaveURL(/\/admin\/operations$/);
+    await page
+        .getByRole("group", { name: "Admin views" })
+        .getByRole("button", { name: "Logs", exact: true })
+        .click();
+    await expect(
+        page
+            .getByRole("group", { name: "Admin views" })
+            .getByRole("button", { name: "Logs", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await page.goBack();
+    await expect(page).toHaveURL(/\/admin\/members$/);
+});
+
+test("keeps new monitor and admin overview within a narrow viewport with enlarged text", async ({
+    page,
+}) => {
+    await page.setViewportSize({ width: 320, height: 844 });
+    for (const path of [
+        "/monitors/new",
+        "/admin/overview",
+        "/admin/operations",
+        "/admin/features",
+    ]) {
+        await page.goto(path);
+        await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+        if (path === "/monitors/new") {
+            await expect(
+                page.getByRole("button", {
+                    name: "Create Monitor",
+                    exact: true,
+                }),
+            ).toBeEnabled();
+        } else if (path === "/admin/overview") {
+            await expect(
+                page.getByText("Loading overview...", { exact: true }),
+            ).toBeHidden();
+        }
+        for (const dark of [false, true]) {
+            await page.evaluate((dark) => {
+                document.documentElement.style.fontSize = "200%";
+                document.documentElement.classList.toggle("dark", dark);
+            }, dark);
+            await expect
+                .poll(
+                    () =>
+                        page.evaluate(
+                            () =>
+                                document.documentElement.scrollWidth <=
+                                innerWidth,
+                        ),
+                    { message: `No horizontal overflow on ${path}` },
+                )
+                .toBe(true);
+            if (path === "/admin/features") {
+                const dependency = page
+                    .getByText("Requires Vinted Account", { exact: true })
+                    .first();
+                const bounds = await dependency.boundingBox();
+                expect(bounds).not.toBeNull();
+                expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+            }
+        }
+    }
+});
+
 test("keeps account navigation compact and browser status readable in both themes", async ({
     page,
 }) => {

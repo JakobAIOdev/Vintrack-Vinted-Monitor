@@ -10,8 +10,10 @@ import {
 import { CheckCircle2, Link2, WandSparkles, X } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
 type VintedUrlImporterProps = {
+    compact?: boolean;
     idPrefix: string;
     extraParams: string;
     onImport: (value: VintedSearchImport) => void;
@@ -19,6 +21,7 @@ type VintedUrlImporterProps = {
 };
 
 export function VintedUrlImporter({
+    compact = false,
     idPrefix,
     extraParams,
     onImport,
@@ -92,11 +95,21 @@ export function VintedUrlImporter({
 
     return (
         <div
-            className="border-primary/20 from-primary/5 via-background to-background rounded-xl border bg-linear-to-br p-4"
+            className={cn(
+                "rounded-lg border",
+                compact
+                    ? "border-border/70 bg-card p-3"
+                    : "border-primary/20 from-primary/5 via-background to-background bg-linear-to-br p-4",
+            )}
             data-testid="vinted-url-importer"
         >
             <div className="flex items-start gap-3">
-                <span className="bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-lg">
+                <span
+                    className={cn(
+                        "bg-primary/10 text-primary flex shrink-0 items-center justify-center rounded-md",
+                        compact ? "size-7" : "size-9",
+                    )}
+                >
                     <Link2 className="size-4" />
                 </span>
                 <div className="min-w-0 flex-1">
@@ -107,10 +120,17 @@ export function VintedUrlImporter({
                         Import Vinted search
                     </Label>
                     <p className="text-muted-foreground mt-0.5 text-[12px] leading-5">
-                        Paste a Vinted catalog URL to replace the region,
-                        search, price, category, brand, color, condition, size,
-                        and platform filters below. Additional safe Vinted
-                        filters are retained automatically.
+                        {compact ? (
+                            "Import your Vinted catalog filters, then adjust them below."
+                        ) : (
+                            <>
+                                Paste a Vinted catalog URL to replace the
+                                region, search, price, category, brand, color,
+                                condition, size, and platform filters below.
+                                Additional safe Vinted filters are retained
+                                automatically.
+                            </>
+                        )}
                     </p>
                 </div>
             </div>
@@ -132,9 +152,10 @@ export function VintedUrlImporter({
                     placeholder="https://www.vinted.de/catalog?..."
                     aria-invalid={Boolean(error)}
                     aria-describedby={`${inputId}-help`}
-                    className="min-w-0 flex-1"
+                    className={cn("min-w-0 flex-1", compact && "h-8")}
                 />
                 <Button
+                    size={compact ? "sm" : "default"}
                     type="button"
                     onClick={importUrl}
                     disabled={!url.trim()}
