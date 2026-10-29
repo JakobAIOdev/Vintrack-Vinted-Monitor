@@ -68,6 +68,7 @@ import {
     ExternalLink,
     Network,
     Plus,
+    LoaderCircle,
     Send,
     Settings2,
     Sparkles,
@@ -81,6 +82,7 @@ import {
     useState,
     useEffect,
     useCallback,
+    useRef,
     type FocusEvent,
     type FormEvent,
 } from "react";
@@ -140,6 +142,11 @@ export default function NewMonitorPage() {
     const [telegramEnabled, setTelegramEnabled] = useState(false);
     const [isTestingWebhook, setIsTestingWebhook] = useState(false);
     const [loading, setLoading] = useState(true);
+    const [settingsLoadFailed, setSettingsLoadFailed] = useState(false);
+    const [loadAttempt, setLoadAttempt] = useState(0);
+    const [isCreating, setIsCreating] = useState(false);
+    const [createError, setCreateError] = useState("");
+    const creatingRef = useRef(false);
 
     const handlePresetSelect = (preset: MonitorPreset) => {
         setSelectedPreset(preset.key);
@@ -294,6 +301,10 @@ export default function NewMonitorPage() {
     };
 
     const handleCreate = async (formData: FormData) => {
+        if (creatingRef.current) return;
+        creatingRef.current = true;
+        setIsCreating(true);
+        setCreateError("");
         const createPromise = createMonitor(formData).then((result) => {
             if (!result.ok) throw new Error(result.message);
             return result;
@@ -321,8 +332,14 @@ export default function NewMonitorPage() {
             const result = await createPromise;
             router.push(result.redirectTo);
             router.refresh();
-        } catch {
-            // Expected validation errors are shown by the toast.
+        } catch (error) {
+            creatingRef.current = false;
+            setIsCreating(false);
+            setCreateError(
+                error instanceof Error
+                    ? error.message
+                    : "Monitor could not be created. Review your settings and try again.",
+            );
         }
     };
 
@@ -352,11 +369,18 @@ export default function NewMonitorPage() {
     );
 
     useEffect(() => {
+        let cancelled = false;
         Promise.all([
-            fetch("/api/proxy-groups").then((res) => res.json()),
-            fetch("/api/telegram/connection").then((res) => res.json()),
+            fetch("/api/proxy-groups").then((res) => {
+                if (!res.ok) throw new Error("Proxy settings unavailable");
+                return res.json();
+            }),
+            fetch("/api/telegram/connection")
+                .then((res) => res.json())
+                .catch(() => ({ connected: false })),
         ])
             .then(([proxyData, telegramData]) => {
+                if (cancelled) return;
                 const groups = proxyData.groups || [];
                 const role = proxyData.role || "free";
                 const freeProxyOption = proxyData.freeProxy || {
@@ -381,9 +405,18 @@ export default function NewMonitorPage() {
                 setHasTelegramConnection(Boolean(telegramData.connected));
                 setTelegramEnabled(Boolean(telegramData.connected));
                 setLoading(false);
+                setSettingsLoadFailed(false);
             })
-            .catch(() => setLoading(false));
-    }, []);
+            .catch(() => {
+                if (!cancelled) {
+                    setLoading(false);
+                    setSettingsLoadFailed(true);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [loadAttempt]);
 
     const hasVideoGamePlatformContext =
         hasVideoGamePlatformCatalog(selectedCategories);
@@ -448,32 +481,28 @@ export default function NewMonitorPage() {
 
     if (maintenance.enabled) {
         return (
-            <div className="mx-auto max-w-4xl space-y-6">
+            <div className="mx-auto max-w-4xl space-y-4">
                 <div className="flex items-center gap-3">
-                    <Link href="/dashboard">
-                        <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-8 w-8"
-                        >
-                            <ArrowLeft className="h-4 w-4" />
-                        </Button>
-                    </Link>
+                    <Button asChild variant="outline" size="icon-sm">
+                        <Link href="/dashboard" aria-label="Back to monitors">
+                            <ArrowLeft aria-hidden="true" className="size-4" />
+                        </Link>
+                    </Button>
                     <div>
                         <h1 className="text-2xl font-bold tracking-tight">
                             Create Monitor
                         </h1>
                         <p className="text-muted-foreground mt-0.5 text-sm">
-                            Set up a new Vinted scraper.
+                            Choose your Vinted search, filters and item alerts.
                         </p>
                     </div>
                 </div>
 
                 <Card
-                    className="border-red-500/25 bg-red-500/5"
+                    className="border-red-500/25 bg-red-500/5 py-0"
                     data-testid="monitor-creation-maintenance"
                 >
-                    <CardContent className="flex flex-col items-start gap-5 p-6 sm:flex-row sm:items-center sm:justify-between">
+                    <CardContent className="flex flex-col items-start gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
                         <div className="flex items-start gap-4">
                             <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-red-500 text-white">
                                 <Wrench className="size-5" />
@@ -499,26 +528,101 @@ export default function NewMonitorPage() {
     }
 
     return (
-        <div className="mx-auto max-w-4xl space-y-6">
+        <div className="mx-auto max-w-4xl space-y-4">
             <div className="flex items-center gap-3">
-                <Link href="/dashboard">
-                    <Button variant="outline" size="icon" className="h-8 w-8">
-                        <ArrowLeft className="h-4 w-4" />
-                    </Button>
-                </Link>
+                <Button asChild variant="outline" size="icon-sm">
+                    <Link href="/dashboard" aria-label="Back to monitors">
+                        <ArrowLeft aria-hidden="true" className="size-4" />
+                    </Link>
+                </Button>
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">
                         Create Monitor
                     </h1>
                     <p className="text-muted-foreground mt-0.5 text-sm">
-                        Set up a new Vinted scraper.
+                        Choose your Vinted search, filters and item alerts.
                     </p>
                 </div>
             </div>
 
-            <Card className="border-input/60">
-                <CardContent className="p-6">
-                    <form action={handleCreate} className="space-y-6">
+            <nav
+                aria-label="Monitor setup sections"
+                className="flex flex-wrap gap-1"
+            >
+                {[
+                    "Basics",
+                    "Filters",
+                    "Notifications",
+                    "Proxy Source",
+                    "Preview",
+                ].map((title) => {
+                    const id = `monitor-${title.toLowerCase().replaceAll(" ", "-")}`;
+                    return (
+                        <a
+                            key={id}
+                            href={`#${id}`}
+                            className="border-border/70 bg-card text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-ring inline-flex min-h-7 items-center rounded-md border px-2.5 py-1 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none"
+                            onClick={(event) => {
+                                event.preventDefault();
+                                const section = document.getElementById(id);
+                                if (section instanceof HTMLDetailsElement)
+                                    section.open = true;
+                                section?.scrollIntoView({
+                                    block: "start",
+                                    behavior: "instant",
+                                });
+                                section
+                                    ?.querySelector("summary")
+                                    ?.focus({ preventScroll: true });
+                            }}
+                        >
+                            {title}
+                        </a>
+                    );
+                })}
+            </nav>
+
+            {settingsLoadFailed && (
+                <div
+                    role="alert"
+                    className="border-destructive/25 bg-destructive/5 flex flex-wrap items-center gap-3 rounded-lg border px-3 py-2 text-sm"
+                >
+                    <p className="min-w-0 flex-1">
+                        Proxy settings couldn’t be loaded. Try again before
+                        creating a monitor.
+                    </p>
+                    <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={loading}
+                        onClick={() => {
+                            setLoading(true);
+                            setLoadAttempt((attempt) => attempt + 1);
+                        }}
+                    >
+                        {loading ? "Retrying…" : "Retry"}
+                    </Button>
+                </div>
+            )}
+
+            <Card className="border-input/60 py-0">
+                <CardContent className="p-3 sm:p-4">
+                    <form
+                        onSubmit={(event) => {
+                            event.preventDefault();
+                            void handleCreate(
+                                new FormData(event.currentTarget),
+                            );
+                        }}
+                        className="space-y-4"
+                        aria-busy={isCreating}
+                        onInvalidCapture={(event) => {
+                            const field = event.target as HTMLInputElement;
+                            const section = field.closest("details");
+                            if (section) section.open = true;
+                        }}
+                    >
                         <input
                             type="hidden"
                             name="preset_key"
@@ -580,6 +684,7 @@ export default function NewMonitorPage() {
                             </div>
                         </details>
                         <VintedUrlImporter
+                            compact
                             idPrefix="new-monitor"
                             extraParams={vintedExtraParams}
                             onImport={handleVintedUrlImport}
@@ -591,6 +696,8 @@ export default function NewMonitorPage() {
                             value={vintedExtraParams}
                         />
                         <FormSection
+                            compact
+                            id="monitor-basics"
                             title="Basics"
                             description="Name, keywords, polling delay, and target Vinted region."
                             icon={Settings2}
@@ -777,6 +884,8 @@ export default function NewMonitorPage() {
                         </FormSection>
 
                         <FormSection
+                            compact
+                            id="monitor-filters"
                             title="Filters"
                             description="Optional item filters for narrowing the catalog results."
                             defaultOpen={false}
@@ -1102,9 +1211,11 @@ export default function NewMonitorPage() {
                             </ActiveFilterField>
                         </FormSection>
 
-                        <QuietHoursSection />
+                        <QuietHoursSection compact />
 
                         <FormSection
+                            compact
+                            id="monitor-notifications"
                             title="Notifications"
                             description="Choose where new item alerts should be sent."
                             defaultOpen={false}
@@ -1180,13 +1291,18 @@ export default function NewMonitorPage() {
                         </FormSection>
 
                         <FormSection
+                            compact
+                            id="monitor-proxy-source"
                             title="Proxy Source"
                             description="Select the connection pool used for Vinted checks."
                             icon={Network}
                             summary={selectedProxySummary}
                         >
                             <div className="space-y-2">
-                                <Label className="text-[13px]">
+                                <Label
+                                    htmlFor="proxy_group_id"
+                                    className="text-[13px]"
+                                >
                                     Proxy Source
                                 </Label>
                                 {loading ? (
@@ -1199,11 +1315,13 @@ export default function NewMonitorPage() {
                                             />
                                         )}
                                         <RegionPoolStatus
+                                            compact
                                             freeProxy={freeProxy}
                                             selectedRegion={selectedRegion}
                                             onSelectRegion={setSelectedRegion}
                                         />
                                         <select
+                                            id="proxy_group_id"
                                             name="proxy_group_id"
                                             value={selectedProxyGroup}
                                             onChange={(e) =>
@@ -1211,7 +1329,7 @@ export default function NewMonitorPage() {
                                                     e.target.value,
                                                 )
                                             }
-                                            className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-[13px] focus:ring-2 focus:ring-slate-900 focus:ring-offset-1 focus:outline-none"
+                                            className="border-input bg-background text-foreground focus-visible:ring-ring h-8 w-full min-w-0 rounded-md border px-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
                                             required={userRole === "free"}
                                         >
                                             {userRole === "free" && (
@@ -1301,6 +1419,8 @@ export default function NewMonitorPage() {
                         </FormSection>
 
                         <FormSection
+                            compact
+                            id="monitor-preview"
                             title="Preview"
                             description="Generated Vinted catalog URL for the current setup."
                             defaultOpen={false}
@@ -1362,18 +1482,41 @@ export default function NewMonitorPage() {
                             </div>
                         </FormSection>
 
-                        <div className="pt-2">
+                        <div className="space-y-3 border-t pt-4">
+                            {createError && (
+                                <p
+                                    role="alert"
+                                    className="text-destructive text-sm"
+                                >
+                                    {createError}
+                                </p>
+                            )}
                             <Button
+                                size="sm"
                                 type="submit"
                                 className="w-full gap-1.5"
                                 disabled={
+                                    isCreating ||
+                                    loading ||
+                                    settingsLoadFailed ||
                                     (userRole === "free" &&
                                         !selectedProxyGroup) ||
                                     (selectedProxyGroup === "free" &&
                                         !isFreeProxyAvailableForRegion)
                                 }
                             >
-                                <Plus className="h-4 w-4" /> Create Monitor
+                                {isCreating ? (
+                                    <LoaderCircle
+                                        aria-hidden="true"
+                                        className="size-3.5 animate-spin"
+                                    />
+                                ) : (
+                                    <Plus
+                                        aria-hidden="true"
+                                        className="size-3.5"
+                                    />
+                                )}{" "}
+                                {isCreating ? "Creating…" : "Create Monitor"}
                             </Button>
                         </div>
                     </form>

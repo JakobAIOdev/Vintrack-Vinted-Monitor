@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { MonitorStreamProvider } from "@/components/monitors/monitor-stream-context";
@@ -39,6 +39,7 @@ export function DashboardShell({
     features,
 }: DashboardShellProps) {
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const closeSidebar = useCallback(() => setSidebarOpen(false), []);
     const inactivitySummary = [
         inactivityPausedCount > 0
             ? `${inactivityPausedCount} monitor${inactivityPausedCount === 1 ? "" : "s"}`
@@ -56,24 +57,30 @@ export function DashboardShell({
         <MonitorMaintenanceProvider initialMaintenance={maintenance}>
             <MonitorStreamProvider>
                 <DashboardActivity />
-                <div className="flex min-h-screen bg-transparent">
-                    {sidebarOpen && (
-                        <div
-                            className="fixed inset-0 z-40 bg-slate-950/45 backdrop-blur-sm lg:hidden"
-                            onClick={() => setSidebarOpen(false)}
-                        />
-                    )}
-
+                <div className="dashboard-shell flex min-h-screen bg-transparent">
+                    <a
+                        href="#dashboard-content"
+                        className="bg-primary text-primary-foreground fixed top-3 left-3 z-[60] -translate-y-24 rounded-lg px-4 py-3 text-sm font-medium focus:translate-y-0"
+                    >
+                        Skip to content
+                    </a>
                     <Sidebar
                         user={user}
                         isOpen={sidebarOpen}
-                        onClose={() => setSidebarOpen(false)}
+                        onClose={closeSidebar}
                         features={features}
                     />
 
                     <div className="flex min-w-0 flex-1 flex-col lg:ml-60">
-                        <Header onMenuClick={() => setSidebarOpen(true)} />
-                        <main className="flex-1 overflow-y-auto p-4 md:p-6">
+                        <Header
+                            onMenuClick={() => setSidebarOpen(true)}
+                            menuOpen={sidebarOpen}
+                        />
+                        <main
+                            id="dashboard-content"
+                            tabIndex={-1}
+                            className="min-w-0 flex-1 p-4 outline-none md:p-6"
+                        >
                             <div className="mx-auto max-w-[88rem]">
                                 <MemberAnnouncementHost
                                     initialAnnouncement={announcement}

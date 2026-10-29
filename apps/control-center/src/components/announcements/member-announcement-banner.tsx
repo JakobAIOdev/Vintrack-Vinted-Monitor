@@ -152,7 +152,7 @@ export function MemberAnnouncementBanner({
         : null;
     const CtaIcon = ctaIcon;
     const ctaClassName = cn(
-        "inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold shadow-sm transition-colors",
+        "inline-flex h-8 min-w-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold shadow-sm transition-colors [overflow-wrap:anywhere]",
         styles.button,
     );
     const ctaContent = announcement.cta ? (
@@ -192,7 +192,7 @@ export function MemberAnnouncementBanner({
             </div>
 
             {(announcement.cta || announcement.dismissible) && (
-                <div className="flex shrink-0 items-start gap-2 pl-11 sm:pl-0">
+                <div className="flex min-w-0 flex-wrap items-center gap-2 sm:shrink-0">
                     {announcement.cta ? (
                         announcement.cta.url.startsWith("/") ? (
                             <Link
@@ -226,7 +226,7 @@ export function MemberAnnouncementBanner({
                         <button
                             type="button"
                             onClick={dismiss}
-                            className="text-slate-500 transition-colors hover:text-slate-950 dark:text-slate-400 dark:hover:text-white"
+                            className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-black/5 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white"
                             aria-label={
                                 announcement.revision ===
                                 DEFAULT_MEMBER_ANNOUNCEMENT.revision

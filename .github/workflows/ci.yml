@@ -43,7 +43,7 @@ jobs:
               - 'apps/control-center/**'
               - '.github/workflows/ci.yml'
             openapi:
-              - 'docs/openapi/**'
+              - 'apps/vinted-service/openapi.yaml'
               - '.github/workflows/ci.yml'
             extension:
               - 'apps/vintrack-browser-sync-extension/**'
@@ -72,7 +72,7 @@ jobs:
           node-version: 24
 
       - name: Lint OpenAPI specs
-        run: npx --yes @redocly/cli@1.25.15 lint docs/openapi/vinted-service.yaml
+        run: npx --yes @redocly/cli@1.25.15 lint apps/vinted-service/openapi.yaml
 
   browser-extension:
     name: Browser Extension

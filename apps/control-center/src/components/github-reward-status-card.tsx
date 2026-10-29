@@ -202,14 +202,23 @@ export function GithubRewardStatusCard({
                 </span>
             ) : !githubReady ? (
                 <form action={connectGithubAccount} onSubmit={trackCta}>
-                    <Button type="submit" disabled={pending} className="w-full">
+                    <Button
+                        type="submit"
+                        size={placement === "account" ? "sm" : "default"}
+                        disabled={pending}
+                        className="w-full"
+                    >
                         <Github className="h-4 w-4" />
                         Connect GitHub
                     </Button>
                 </form>
             ) : !status.starred ? (
                 <>
-                    <Button asChild onClick={trackCta}>
+                    <Button
+                        asChild
+                        size={placement === "account" ? "sm" : "default"}
+                        onClick={trackCta}
+                    >
                         <a
                             href={repositoryUrl}
                             target="_blank"
@@ -223,6 +232,7 @@ export function GithubRewardStatusCard({
                     <Button
                         type="button"
                         variant="outline"
+                        size={placement === "account" ? "sm" : "default"}
                         className="w-full"
                         disabled={pending}
                         onClick={recheck}
@@ -234,7 +244,11 @@ export function GithubRewardStatusCard({
                     </Button>
                 </>
             ) : !status.donated ? (
-                <Button asChild onClick={trackCta}>
+                <Button
+                    asChild
+                    size={placement === "account" ? "sm" : "default"}
+                    onClick={trackCta}
+                >
                     <a href={sponsorsUrl} target="_blank" rel="noreferrer">
                         <Heart className="h-4 w-4" />
                         Support Vintrack
@@ -304,10 +318,9 @@ export function GithubRewardStatusCard({
                 className="border-border/70 overflow-hidden py-0 shadow-sm"
                 data-testid="github-reward-status"
             >
-                <div className="relative overflow-hidden border-b bg-[linear-gradient(145deg,var(--card),color-mix(in_oklab,var(--muted)_72%,var(--card)))] p-5">
-                    <div className="bg-foreground/5 absolute -top-16 -right-16 h-44 w-44 rounded-full blur-2xl" />
+                <div className="border-border/70 bg-card border-b p-4">
                     <div className="relative">
-                        <div className="flex items-start justify-between gap-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
                             <div className="flex items-center gap-3">
                                 <div className="bg-foreground text-background flex h-9 w-9 items-center justify-center rounded-lg shadow-sm">
                                     <Github className="h-4.5 w-4.5" />
@@ -331,12 +344,12 @@ export function GithubRewardStatusCard({
                             </Badge>
                         </div>
 
-                        <div className="mt-6 flex items-end justify-between gap-4">
+                        <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
                             <div>
                                 <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
                                     Free Pool usage
                                 </p>
-                                <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">
+                                <p className="mt-1 text-xl font-semibold tracking-tight tabular-nums">
                                     {usageLabel}
                                 </p>
                             </div>
@@ -372,7 +385,7 @@ export function GithubRewardStatusCard({
                     </div>
                 </div>
 
-                <CardContent className="space-y-4 p-5">
+                <CardContent className="space-y-4 p-4">
                     {showUpgradeConfirmation ? (
                         <div className="flex gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-3.5 text-sm">
                             <CircleCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
@@ -444,7 +457,7 @@ export function GithubRewardStatusCard({
                     </div>
 
                     <div className="border-border/60 bg-muted/25 rounded-lg border p-3">
-                        <div className="flex items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
                             <div className="min-w-0">
                                 <p className="text-muted-foreground text-[10px] font-medium tracking-wide uppercase">
                                     Connected identity
@@ -478,7 +491,7 @@ export function GithubRewardStatusCard({
                     {actions}
 
                     {status.githubConnected ? (
-                        <div className="border-border/60 flex items-center justify-between gap-3 border-t pt-3.5">
+                        <div className="border-border/60 flex flex-wrap items-center justify-between gap-3 border-t pt-3">
                             <p className="text-muted-foreground text-xs leading-5">
                                 Your GitHub identity stays tied to this account:
                                 rewards you already earned remain active and

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
+import { Dialog } from "radix-ui";
 import {
     LayoutDashboard,
     PlusCircle,
@@ -119,6 +120,22 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
             .catch(() => {});
     }, [onAccount, unseenAccountUpdates, router]);
 
+    useEffect(() => {
+        const media = window.matchMedia("(min-width: 1024px)");
+        const closeOnDesktop = () => {
+            if (media.matches) onClose?.();
+        };
+        media.addEventListener("change", closeOnDesktop);
+        return () => media.removeEventListener("change", closeOnDesktop);
+    }, [onClose]);
+
+    const isNavActive = (href: string) =>
+        href === "/dashboard"
+            ? pathname === "/dashboard" ||
+              pathname === "/monitors" ||
+              pathname.startsWith("/monitors/")
+            : pathname === href || pathname.startsWith(href + "/");
+
     const initials = user?.name
         ? user.name
               .split(" ")
@@ -128,13 +145,8 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
               .slice(0, 2)
         : "?";
 
-    return (
-        <aside
-            className={cn(
-                "border-sidebar-border/80 bg-sidebar/95 text-sidebar-foreground fixed top-0 bottom-0 left-0 z-50 flex h-full w-60 flex-col border-r backdrop-blur-xl transition-transform duration-300 lg:translate-x-0",
-                isOpen ? "translate-x-0" : "-translate-x-full",
-            )}
-        >
+    const navigation = (
+        <>
             <div className="border-sidebar-border/80 flex h-14 items-center justify-between border-b px-5">
                 <Link href="/dashboard" className="flex items-center gap-2">
                     <div className="bg-sidebar-primary text-sidebar-primary-foreground flex h-7 w-7 items-center justify-center rounded-lg shadow-sm">
@@ -148,14 +160,19 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                 </Link>
                 <button
                     onClick={onClose}
-                    className="text-sidebar-foreground/55 hover:text-sidebar-foreground p-1 transition-colors lg:hidden"
+                    type="button"
+                    aria-label="Close navigation"
+                    className="text-muted-foreground hover:text-sidebar-foreground flex size-7 items-center justify-center rounded-md transition-colors lg:hidden"
                 >
                     <X className="h-5 w-5" />
                 </button>
             </div>
 
-            <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
-                <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
+            <nav
+                aria-label="Main navigation"
+                className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3 py-3"
+            >
+                <p className="text-muted-foreground mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
                     Track
                 </p>
 
@@ -165,19 +182,18 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                             !item.feature || features[item.feature].allowed,
                     )
                     .map((item) => {
-                        const isActive =
-                            pathname === item.href ||
-                            pathname.startsWith(item.href + "/");
+                        const isActive = isNavActive(item.href);
                         return (
                             <Link
                                 key={item.href}
                                 href={item.href}
+                                aria-current={isActive ? "page" : undefined}
                                 onClick={onClose}
                                 className={cn(
                                     "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                     isActive
                                         ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
-                                        : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                                        : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                                 )}
                             >
                                 <item.icon
@@ -185,7 +201,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                         "h-4 w-4",
                                         isActive
                                             ? "text-sidebar-primary-foreground"
-                                            : "text-sidebar-foreground/45",
+                                            : "text-muted-foreground",
                                     )}
                                 />
                                 {item.label}
@@ -196,13 +212,16 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                 {features.proxy_groups.allowed ? (
                     <Link
                         href="/proxies"
+                        aria-current={
+                            isNavActive("/proxies") ? "page" : undefined
+                        }
                         onClick={onClose}
                         className={cn(
                             "mt-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                             pathname === "/proxies" ||
                                 pathname.startsWith("/proxies/")
                                 ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
-                                : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                                : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                         )}
                     >
                         <Globe className="h-4 w-4" />
@@ -213,15 +232,15 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                 <div className="py-3">
                     <CreateMonitorLink
                         onClick={onClose}
-                        className="border-sidebar-border/80 text-sidebar-foreground/68 hover:border-sidebar-foreground/20 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground flex items-center gap-2.5 rounded-lg border border-dashed px-3 py-2 text-[13px] font-medium transition-colors"
+                        className="border-sidebar-border/80 text-muted-foreground hover:border-sidebar-foreground/20 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground flex items-center gap-2.5 rounded-lg border border-dashed px-3 py-2 text-[13px] font-medium transition-colors"
                     >
-                        <PlusCircle className="text-sidebar-foreground/45 h-4 w-4" />
+                        <PlusCircle className="text-muted-foreground h-4 w-4" />
                         New Monitor
                     </CreateMonitorLink>
                 </div>
 
                 <div className="border-sidebar-border/60 border-t pt-3">
-                    <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
+                    <p className="text-muted-foreground mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
                         Account
                     </p>
                     {accountNavItems
@@ -230,19 +249,18 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                 !item.feature || features[item.feature].allowed,
                         )
                         .map((item) => {
-                            const isActive =
-                                pathname === item.href ||
-                                pathname.startsWith(item.href + "/");
+                            const isActive = isNavActive(item.href);
                             return (
                                 <Link
                                     key={item.href}
                                     href={item.href}
+                                    aria-current={isActive ? "page" : undefined}
                                     onClick={onClose}
                                     className={cn(
                                         "mb-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                         isActive
                                             ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
-                                            : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                                            : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                                     )}
                                 >
                                     <item.icon
@@ -250,7 +268,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                             "h-4 w-4",
                                             isActive
                                                 ? "text-sidebar-primary-foreground"
-                                                : "text-sidebar-foreground/45",
+                                                : "text-muted-foreground",
                                         )}
                                     />
                                     {item.label}
@@ -266,7 +284,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                 </div>
 
                 <div className="border-sidebar-border/60 mt-3 border-t pt-3">
-                    <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
+                    <p className="text-muted-foreground mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
                         Tools
                     </p>
                     <div className="space-y-0.5">
@@ -277,19 +295,20 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                     features[item.feature].allowed,
                             )
                             .map((item) => {
-                                const isActive =
-                                    pathname === item.href ||
-                                    pathname.startsWith(item.href + "/");
+                                const isActive = isNavActive(item.href);
                                 return (
                                     <Link
                                         key={item.href}
                                         href={item.href}
+                                        aria-current={
+                                            isActive ? "page" : undefined
+                                        }
                                         onClick={onClose}
                                         className={cn(
                                             "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                             isActive
                                                 ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
-                                                : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                                                : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                                         )}
                                     >
                                         <item.icon className="h-4 w-4 opacity-60" />
@@ -308,23 +327,22 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
 
                 {user?.role === "admin" && (
                     <div className="pt-3">
-                        <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
+                        <p className="text-muted-foreground mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
                             Admin
                         </p>
                         {adminNavItems.map((item) => {
-                            const isActive =
-                                pathname === item.href ||
-                                pathname.startsWith(item.href + "/");
+                            const isActive = isNavActive(item.href);
                             return (
                                 <Link
                                     key={item.href}
                                     href={item.href}
+                                    aria-current={isActive ? "page" : undefined}
                                     onClick={onClose}
                                     className={cn(
                                         "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                         isActive
                                             ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
-                                            : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                                            : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                                     )}
                                 >
                                     <item.icon
@@ -332,7 +350,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                             "h-4 w-4",
                                             isActive
                                                 ? "text-sidebar-primary-foreground"
-                                                : "text-sidebar-foreground/45",
+                                                : "text-muted-foreground",
                                         )}
                                     />
                                     {item.label}
@@ -343,7 +361,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                 )}
 
                 <div className="border-sidebar-border/60 mt-3 border-t pt-3">
-                    <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
+                    <p className="text-muted-foreground mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
                         Community
                     </p>
                     <div className="space-y-0.5">
@@ -378,7 +396,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                 </div>
             </nav>
 
-            <div className="border-sidebar-border/80 border-t p-3">
+            <div className="dashboard-navigation-footer border-sidebar-border/80 border-t p-3">
                 <ThemeToggle className="mb-3" />
                 <div className="flex items-center gap-2.5 px-2 py-1.5">
                     {user?.image ? (
@@ -411,18 +429,60 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                     </div>
                     <Link
                         href="/logout"
-                        className="text-sidebar-foreground/45 hover:text-sidebar-foreground p-1 transition-colors"
+                        className="text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground flex size-9 items-center justify-center rounded-lg transition-colors"
+                        aria-label="Sign out"
                         title="Sign out"
                     >
                         <LogOut className="h-3.5 w-3.5" />
                     </Link>
                 </div>
                 <div className="mt-2 flex justify-center px-2">
-                    <p className="text-sidebar-foreground/40 text-[10px] font-medium">
+                    <p className="text-muted-foreground text-[10px] font-medium">
                         Vintrack v{process.env.NEXT_PUBLIC_APP_VERSION}
                     </p>
                 </div>
             </div>
-        </aside>
+        </>
+    );
+
+    return (
+        <>
+            <aside
+                aria-label="Vintrack navigation"
+                className="dashboard-navigation border-sidebar-border/80 bg-sidebar/95 text-sidebar-foreground fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r backdrop-blur-xl lg:flex"
+            >
+                {navigation}
+            </aside>
+            <Dialog.Root
+                open={Boolean(isOpen)}
+                onOpenChange={(open) => {
+                    if (!open) onClose?.();
+                }}
+            >
+                <Dialog.Portal>
+                    <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-950/45 lg:hidden" />
+                    <Dialog.Content
+                        id="mobile-navigation"
+                        onCloseAutoFocus={(event) => {
+                            event.preventDefault();
+                            document
+                                .querySelector<HTMLButtonElement>(
+                                    '[aria-controls="mobile-navigation"]',
+                                )
+                                ?.focus();
+                        }}
+                        className="dashboard-navigation border-sidebar-border/80 bg-sidebar/95 text-sidebar-foreground fixed inset-y-0 left-0 z-50 flex w-[min(20rem,calc(100vw-2rem))] flex-col border-r shadow-xl backdrop-blur-xl outline-none lg:hidden"
+                    >
+                        <Dialog.Title className="sr-only">
+                            Vintrack navigation
+                        </Dialog.Title>
+                        <Dialog.Description className="sr-only">
+                            Navigate your monitors, finds and account.
+                        </Dialog.Description>
+                        {navigation}
+                    </Dialog.Content>
+                </Dialog.Portal>
+            </Dialog.Root>
+        </>
     );
 }

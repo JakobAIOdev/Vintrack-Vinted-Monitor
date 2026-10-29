@@ -40,6 +40,7 @@ import {
     ListChecks,
     Loader2,
     RefreshCw,
+    X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -332,6 +333,10 @@ export function DashboardClient({
         useState<TelegramConnectCode | null>(null);
     const [monitors, setMonitors] = useState<Monitor[]>(initialMonitors);
     const [selectedMonitorIds, setSelectedMonitorIds] = useState<number[]>([]);
+    const [monitorSearch, setMonitorSearch] = useState("");
+    const [monitorScope, setMonitorScope] = useState<
+        "all" | "active" | "paused"
+    >("all");
     const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
     const [isBulkSaving, setIsBulkSaving] = useState(false);
     const [bulkDiscordMode, setBulkDiscordMode] =
@@ -621,12 +626,44 @@ export function DashboardClient({
         });
     }, [monitors]);
 
+    const visibleMonitors = useMemo(() => {
+        const searchTerms = monitorSearch
+            .trim()
+            .toLocaleLowerCase()
+            .split(/\s+/)
+            .filter(Boolean);
+        return sortedMonitors.filter((monitor) => {
+            if (monitorScope === "active" && monitor.status !== "active")
+                return false;
+            if (monitorScope === "paused" && monitor.status === "active")
+                return false;
+            const searchable = [
+                monitor.name,
+                monitor.query,
+                monitor.region,
+                getRegionLabel(monitor.region),
+            ]
+                .join(" ")
+                .toLocaleLowerCase();
+            return searchTerms.every((term) => searchable.includes(term));
+        });
+    }, [sortedMonitors, monitorSearch, monitorScope]);
+    const visibleMonitorIds = new Set(
+        visibleMonitors.map((monitor) => monitor.id),
+    );
+    const hiddenSelectedCount = selectedMonitorIds.filter(
+        (id) => !visibleMonitorIds.has(id),
+    ).length;
+
     const selectedMonitorIdSet = useMemo(
         () => new Set(selectedMonitorIds),
         [selectedMonitorIds],
     );
     const allMonitorsSelected =
-        monitors.length > 0 && selectedMonitorIds.length === monitors.length;
+        visibleMonitors.length > 0 &&
+        visibleMonitors.every((monitor) =>
+            selectedMonitorIdSet.has(monitor.id),
+        );
     const hasBulkChanges =
         bulkNotificationsMode !== "unchanged" ||
         bulkDiscordMode !== "unchanged" ||
@@ -643,8 +680,15 @@ export function DashboardClient({
     };
 
     const toggleAllMonitorSelection = () => {
-        setSelectedMonitorIds(
-            allMonitorsSelected ? [] : monitors.map((monitor) => monitor.id),
+        setSelectedMonitorIds((current) =>
+            allMonitorsSelected
+                ? current.filter((id) => !visibleMonitorIds.has(id))
+                : [
+                      ...new Set([
+                          ...current,
+                          ...visibleMonitors.map((monitor) => monitor.id),
+                      ]),
+                  ],
         );
     };
 
@@ -1119,7 +1163,8 @@ export function DashboardClient({
                         </p>
                     ) : (
                         <p className="text-muted-foreground text-[12px]">
-                            Connect your Telegram once, then enable it per monitor.
+                            Connect your Telegram once, then enable it per
+                            monitor.
                         </p>
                     )}
                 </div>
@@ -1143,7 +1188,9 @@ export function DashboardClient({
                             className="gap-2"
                         >
                             <RefreshCw className="h-4 w-4" />
-                            {isCreatingTelegramCode ? "Creating..." : "Reconnect"}
+                            {isCreatingTelegramCode
+                                ? "Creating..."
+                                : "Reconnect"}
                         </Button>
                     </div>
                 ) : (
@@ -1200,8 +1247,8 @@ export function DashboardClient({
                         )}
                     </div>
                     <p className="text-muted-foreground mt-2">
-                        Use the open button to jump directly to the bot. Sending the
-                        command will
+                        Use the open button to jump directly to the bot. Sending
+                        the command will
                         {telegramConnection?.connected
                             ? " replace the current Telegram destination."
                             : " connect Telegram."}{" "}
@@ -1217,7 +1264,7 @@ export function DashboardClient({
     const totalItems = monitors.reduce((sum, m) => sum + m._count.items, 0);
 
     return (
-        <div className="space-y-8">
+        <div className="space-y-4">
             {quickStartEligible && (
                 <FirstMonitorQuickStart
                     open={isQuickStartOpen}
@@ -1237,7 +1284,7 @@ export function DashboardClient({
                     </p>
                 </div>
 
-                <div className="flex w-full items-center gap-2 sm:w-auto">
+                <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
                     {pausedCount > 0 && !maintenanceEnabled && (
                         <Button
                             variant="outline"
@@ -1330,7 +1377,7 @@ export function DashboardClient({
                     <Link
                         href="/account?connection=github"
                         className={cn(
-                            "text-muted-foreground group hover:text-foreground flex items-center gap-1.5 text-sm transition-colors",
+                            "text-muted-foreground group hover:text-foreground flex min-w-0 flex-wrap items-center gap-1.5 text-sm transition-colors",
                             freePoolUsage.limitReached &&
                                 "font-medium text-amber-700 dark:text-amber-300",
                         )}
@@ -1349,56 +1396,140 @@ export function DashboardClient({
                         <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
                     </Link>
                 ) : null}
-                {monitors.length > 0 && (
-                    <div className="border-border/70 flex w-full items-center gap-2 border-t pt-3 lg:ml-auto lg:w-auto lg:border-t-0 lg:border-l lg:pt-0 lg:pl-4">
-                        <Checkbox
-                            checked={allMonitorsSelected}
-                            onCheckedChange={toggleAllMonitorSelection}
-                            aria-label="Select all monitors"
-                        />
-                        <div className="mr-auto min-w-24 lg:mr-1">
-                            <p className="text-xs font-semibold">
-                                {selectedMonitorIds.length > 0
-                                    ? `${selectedMonitorIds.length} selected`
-                                    : "Your monitors"}
-                            </p>
-                            <p className="text-muted-foreground text-[10px]">
-                                {selectedMonitorIds.length > 0
-                                    ? "Ready to edit"
-                                    : `${monitors.length} total`}
-                            </p>
+            </div>
+
+            {monitors.length > 0 && (
+                <section aria-label="Find monitors" className="space-y-2">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="relative w-full min-w-0 sm:max-w-sm sm:flex-1">
+                            <Search
+                                aria-hidden="true"
+                                className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2"
+                            />
+                            <Input
+                                type="search"
+                                aria-label="Search monitors"
+                                placeholder="Search monitors"
+                                value={monitorSearch}
+                                onChange={(event) =>
+                                    setMonitorSearch(event.target.value)
+                                }
+                                className="bg-card h-8 pr-8 pl-8 text-sm shadow-none [&::-webkit-search-cancel-button]:appearance-none"
+                            />
+                            {monitorSearch && (
+                                <button
+                                    type="button"
+                                    aria-label="Clear monitor search"
+                                    onClick={() => setMonitorSearch("")}
+                                    className="text-muted-foreground hover:bg-accent hover:text-foreground absolute top-0 right-0 flex size-8 items-center justify-center rounded-r-md"
+                                >
+                                    <X aria-hidden="true" className="size-4" />
+                                </button>
+                            )}
                         </div>
-                        {selectedMonitorIds.length > 0 && (
+                        <div
+                            role="group"
+                            aria-label="Filter monitors by status"
+                            className="border-border/70 bg-card flex flex-wrap gap-0.5 self-start rounded-md border p-0.5 sm:shrink-0"
+                        >
+                            {(
+                                [
+                                    ["all", "All", monitors.length],
+                                    ["active", "Active", activeCount],
+                                    ["paused", "Paused", pausedCount],
+                                ] as const
+                            ).map(([scope, label, count]) => (
+                                <button
+                                    key={scope}
+                                    type="button"
+                                    aria-pressed={monitorScope === scope}
+                                    onClick={() => setMonitorScope(scope)}
+                                    className={cn(
+                                        "flex min-h-8 flex-1 items-center justify-center gap-1.5 rounded px-3 py-1 text-[13px] font-medium transition-colors",
+                                        monitorScope === scope
+                                            ? "bg-primary text-primary-foreground"
+                                            : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                                    )}
+                                >
+                                    {label}
+                                    <span className="text-xs tabular-nums">
+                                        {count}
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    {monitors.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                            <Checkbox
+                                checked={
+                                    allMonitorsSelected
+                                        ? true
+                                        : visibleMonitors.some((monitor) =>
+                                                selectedMonitorIdSet.has(
+                                                    monitor.id,
+                                                ),
+                                            )
+                                          ? "indeterminate"
+                                          : false
+                                }
+                                disabled={visibleMonitors.length === 0}
+                                onCheckedChange={toggleAllMonitorSelection}
+                                aria-label="Select visible monitors"
+                            />
+                            <div className="mr-auto">
+                                <p className="text-xs font-semibold">
+                                    {selectedMonitorIds.length > 0
+                                        ? `${selectedMonitorIds.length} selected`
+                                        : "Select visible"}
+                                </p>
+                                {hiddenSelectedCount > 0 && (
+                                    <p className="text-muted-foreground text-xs">
+                                        {hiddenSelectedCount} selected outside
+                                        this view
+                                    </p>
+                                )}
+                            </div>
+                            <p
+                                role="status"
+                                className="text-muted-foreground text-xs"
+                                data-testid="monitor-result-count"
+                            >
+                                Showing {visibleMonitors.length} of{" "}
+                                {monitors.length} monitors
+                            </p>
+                            {selectedMonitorIds.length > 0 && (
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setSelectedMonitorIds([])}
+                                    className="text-muted-foreground h-7 px-2 text-xs"
+                                >
+                                    Clear
+                                </Button>
+                            )}
                             <Button
                                 type="button"
-                                variant="ghost"
                                 size="sm"
-                                onClick={() => setSelectedMonitorIds([])}
-                                className="text-muted-foreground h-8 text-xs"
+                                variant={
+                                    selectedMonitorIds.length > 0
+                                        ? "default"
+                                        : "outline"
+                                }
+                                disabled={selectedMonitorIds.length === 0}
+                                onClick={openBulkEditDialog}
+                                className="h-7 gap-1.5 px-2 text-xs"
                             >
-                                Clear
+                                <ListChecks className="size-3.5" />
+                                {selectedMonitorIds.length > 0
+                                    ? "Edit selected"
+                                    : "Bulk edit"}
                             </Button>
-                        )}
-                        <Button
-                            type="button"
-                            size="sm"
-                            variant={
-                                selectedMonitorIds.length > 0
-                                    ? "default"
-                                    : "outline"
-                            }
-                            disabled={selectedMonitorIds.length === 0}
-                            onClick={openBulkEditDialog}
-                            className="h-8 gap-1.5 text-xs"
-                        >
-                            <ListChecks className="size-3.5" />
-                            {selectedMonitorIds.length > 0
-                                ? "Edit selected"
-                                : "Bulk edit"}
-                        </Button>
-                    </div>
-                )}
-            </div>
+                        </div>
+                    )}
+                </section>
+            )}
 
             {monitors.length === 0 ? (
                 <div className="border-border/80 bg-card/60 flex flex-col items-center justify-center rounded-lg border border-dashed py-20">
@@ -1447,10 +1578,34 @@ export function DashboardClient({
                         </Button>
                     </div>
                 </div>
+            ) : visibleMonitors.length === 0 ? (
+                <div className="border-border bg-card flex flex-col items-center rounded-xl border px-6 py-12 text-center">
+                    <Search
+                        aria-hidden="true"
+                        className="text-muted-foreground mb-3 size-6"
+                    />
+                    <h2 className="text-base font-semibold">
+                        No matching monitors
+                    </h2>
+                    <p className="text-muted-foreground mt-1 max-w-sm text-sm">
+                        Try another name or search term, or change the status
+                        filter.
+                    </p>
+                    <Button
+                        variant="outline"
+                        className="mt-4"
+                        onClick={() => {
+                            setMonitorSearch("");
+                            setMonitorScope("all");
+                        }}
+                    >
+                        Clear search and filters
+                    </Button>
+                </div>
             ) : (
                 <div className="space-y-4">
                     <div className="grid auto-rows-fr grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
-                        {sortedMonitors.map((m) => (
+                        {visibleMonitors.map((m) => (
                             <Card
                                 key={m.id}
                                 data-testid="monitor-card"
@@ -1780,7 +1935,7 @@ export function DashboardClient({
                                         </div>
                                     </div>
 
-                                    <div className="border-border/60 bg-muted/10 flex items-center gap-2 border-t px-3 py-2.5">
+                                    <div className="border-border/60 bg-muted/10 flex flex-wrap items-center gap-2 border-t px-3 py-2.5">
                                         <Button
                                             variant="ghost"
                                             size="sm"
@@ -1818,16 +1973,17 @@ export function DashboardClient({
                                             )}
                                         </Button>
                                         <div className="flex-1" />
-                                        <Link href={`/monitors/${m.id}`}>
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                className="text-muted-foreground hover:text-foreground h-8 gap-1 px-3 text-xs font-medium"
-                                            >
+                                        <Button
+                                            asChild
+                                            variant="ghost"
+                                            size="sm"
+                                            className="text-muted-foreground hover:text-foreground h-auto min-h-8 gap-1 px-3 text-xs font-medium"
+                                        >
+                                            <Link href={`/monitors/${m.id}`}>
                                                 View monitor
                                                 <ArrowRight className="h-3 w-3" />
-                                            </Button>
-                                        </Link>
+                                            </Link>
+                                        </Button>
                                     </div>
                                 </CardContent>
                             </Card>

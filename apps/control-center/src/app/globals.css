@@ -252,3 +252,36 @@
         }
     }
 }
+
+:is(.dashboard-shell, .dashboard-navigation, .dashboard-popover)
+    :where(a, button, input, summary, select):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 3px;
+}
+
+.dashboard-navigation-footer {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+@media (prefers-contrast: more) {
+    :is(.dashboard-shell, .dashboard-navigation, .dashboard-popover) {
+        --border: var(--muted-foreground);
+        --sidebar-border: var(--muted-foreground);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :is(.dashboard-shell, .dashboard-navigation, .dashboard-popover),
+    :is(.dashboard-shell, .dashboard-navigation, .dashboard-popover) * {
+        scroll-behavior: auto !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+    :is(.dashboard-shell, .dashboard-navigation, .dashboard-popover) * {
+        backdrop-filter: none !important;
+    }
+}

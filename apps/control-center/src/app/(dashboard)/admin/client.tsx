@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CompactSearch } from "@/components/compact-search";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -755,13 +756,13 @@ function OverviewMetric({
     iconClassName: string;
 }) {
     return (
-        <div className="bg-card min-w-0 px-4 py-4 sm:px-5">
+        <div className="bg-card min-w-0 px-4 py-3">
             <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                     <p className="text-muted-foreground text-[11px] font-medium uppercase">
                         {label}
                     </p>
-                    <p className="mt-1 text-2xl font-semibold tabular-nums">
+                    <p className="mt-1 text-xl font-semibold tabular-nums">
                         {value}
                     </p>
                 </div>
@@ -771,7 +772,7 @@ function OverviewMetric({
                     <Icon className="h-4 w-4" />
                 </span>
             </div>
-            <p className="text-muted-foreground mt-2 truncate text-[11px]">
+            <p className="text-muted-foreground mt-1 text-[11px] leading-4">
                 {detail}
             </p>
         </div>
@@ -839,17 +840,14 @@ function MemberMetricCard({
               : "bg-rose-500/10 text-rose-600 dark:text-rose-400";
 
     return (
-        <div className="border-border/60 bg-card relative overflow-hidden rounded-xl border p-5 shadow-sm">
-            <div
-                className={`pointer-events-none absolute -top-12 -right-12 h-28 w-28 rounded-full blur-2xl ${styles.glow}`}
-            />
+        <div className="border-border/60 bg-card relative min-w-0 overflow-hidden rounded-xl border p-4 shadow-sm">
             <div className="relative">
                 <div className="flex items-start justify-between gap-3">
                     <div>
                         <p className="text-muted-foreground text-[11px] font-semibold tracking-wide uppercase">
                             {label}
                         </p>
-                        <p className="mt-2 text-3xl font-semibold tracking-tight tabular-nums">
+                        <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">
                             {value}
                         </p>
                     </div>
@@ -1272,7 +1270,7 @@ export function AdminClient({
         normalizeTab(initialTab),
     );
     const [isNavigationReady, setIsNavigationReady] = useState(false);
-    const activeTabButtonRef = useRef<HTMLButtonElement | null>(null);
+    const activeTabButtonRef = useRef<HTMLAnchorElement | null>(null);
     const [selected, setSelected] = useState<UserRow | null>(null);
     const [loadingUserDetailsId, setLoadingUserDetailsId] = useState<
         string | null
@@ -1741,7 +1739,7 @@ export function AdminClient({
 
     useEffect(() => {
         activeTabButtonRef.current?.scrollIntoView({
-            behavior: "smooth",
+            behavior: "instant",
             block: "nearest",
             inline: "center",
         });
@@ -1801,7 +1799,6 @@ export function AdminClient({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [searchQuery, userPage, usersPerPage, activeTab]);
 
-    const normalizedQuery = searchQuery.trim().toLowerCase();
     const totalUserPages = userPagination.totalPages;
     const currentUserPage = Math.min(userPagination.page, totalUserPages);
     const userPageStart = (currentUserPage - 1) * usersPerPage;
@@ -3078,7 +3075,6 @@ export function AdminClient({
     const activePrimaryDefinition =
         ADMIN_PRIMARY_TABS.find((tab) => tab.sections.includes(activeTab)) ??
         ADMIN_PRIMARY_TABS[0];
-    const ActiveTabIcon = activePrimaryDefinition.icon;
     const maintenanceStatusLabel =
         monitorMaintenanceState.status === "active"
             ? "Maintenance active"
@@ -3120,69 +3116,70 @@ export function AdminClient({
         : 0;
 
     return (
-        <div className="space-y-5">
-            <div className="border-border/60 flex flex-col gap-4 border-b pb-4 lg:flex-row lg:items-end lg:justify-between">
-                <div className="flex items-start gap-3">
-                    <div className="border-border/70 bg-muted/40 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border">
-                        <ActiveTabIcon className="text-muted-foreground h-5 w-5" />
-                    </div>
+        <div className="min-w-0 space-y-5 [overflow-wrap:anywhere] [&_.flex>div]:min-w-0 [&_.grid>div]:min-w-0 [&_select]:max-w-full [&_select]:min-w-0 [&_table]:[overflow-wrap:normal]">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                <div>
                     <div>
-                        <h1 className="text-2xl font-bold">Admin Panel</h1>
+                        <h1 className="text-2xl font-semibold tracking-tight">
+                            Admin Panel
+                        </h1>
                         <p className="text-muted-foreground mt-1 text-sm">
                             {activePrimaryDefinition.description}
                         </p>
                     </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
-                    <div className="flex items-center gap-2">
-                        <span
-                            className={`h-2 w-2 rounded-full ${
-                                areUserMetricsPending
-                                    ? "bg-muted-foreground"
+                {activeTab === "overview" && (
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
+                        <div className="flex items-center gap-2">
+                            <span
+                                className={`h-2 w-2 rounded-full ${
+                                    areUserMetricsPending
+                                        ? "bg-muted-foreground"
+                                        : hasOperationalIssues
+                                          ? "bg-amber-500"
+                                          : "bg-emerald-500"
+                                }`}
+                            />
+                            <span className="font-medium">
+                                {areUserMetricsPending
+                                    ? "Loading"
                                     : hasOperationalIssues
-                                      ? "bg-amber-500"
-                                      : "bg-emerald-500"
-                            }`}
-                        />
-                        <span className="font-medium">
-                            {areUserMetricsPending
-                                ? "Loading"
-                                : hasOperationalIssues
-                                  ? "Needs attention"
-                                  : "Operational"}
+                                      ? "Needs attention"
+                                      : "Operational"}
+                            </span>
+                        </div>
+                        {usersLoadFailed ? (
+                            <button
+                                type="button"
+                                className="text-amber-600 hover:underline dark:text-amber-400"
+                                onClick={() => void loadAdminUsers()}
+                                disabled={isLoadingUsers}
+                            >
+                                Retry members
+                            </button>
+                        ) : userMetricsLoadFailed ? (
+                            <button
+                                type="button"
+                                className="text-amber-600 hover:underline dark:text-amber-400"
+                                onClick={() => loadOverview(true)}
+                                disabled={isLoadingUserMetrics}
+                            >
+                                Retry member metrics
+                            </button>
+                        ) : (
+                            <span className="text-muted-foreground">
+                                {userMetricsLoaded
+                                    ? `${runningMonitors} running monitors`
+                                    : "Loading overview..."}
+                            </span>
+                        )}
+                        <span className="text-muted-foreground">
+                            {proxyRegionMetricsLoaded
+                                ? `${readyFreeProxyRegionCount} proxy regions ready`
+                                : "Loading proxy regions..."}
                         </span>
                     </div>
-                    {usersLoadFailed ? (
-                        <button
-                            type="button"
-                            className="text-amber-600 hover:underline dark:text-amber-400"
-                            onClick={() => void loadAdminUsers()}
-                            disabled={isLoadingUsers}
-                        >
-                            Retry members
-                        </button>
-                    ) : userMetricsLoadFailed ? (
-                        <button
-                            type="button"
-                            className="text-amber-600 hover:underline dark:text-amber-400"
-                            onClick={() => loadOverview(true)}
-                            disabled={isLoadingUserMetrics}
-                        >
-                            Retry member metrics
-                        </button>
-                    ) : (
-                        <span className="text-muted-foreground">
-                            {userMetricsLoaded
-                                ? `${runningMonitors} running monitors`
-                                : "Loading overview..."}
-                        </span>
-                    )}
-                    <span className="text-muted-foreground">
-                        {proxyRegionMetricsLoaded
-                            ? `${readyFreeProxyRegionCount} proxy regions ready`
-                            : "Loading proxy regions..."}
-                    </span>
-                </div>
+                )}
             </div>
 
             <select
@@ -3194,7 +3191,7 @@ export function AdminClient({
                         event.target.value as AdminPrimaryTab["value"],
                     )
                 }
-                className="border-input bg-background h-10 w-full rounded-lg border px-3 text-sm md:hidden"
+                className="border-input bg-card focus-visible:ring-ring h-8 w-full min-w-0 rounded-md border px-2 text-sm focus-visible:ring-2 focus-visible:outline-none md:hidden"
             >
                 {ADMIN_PRIMARY_TABS.map((tab) => (
                     <option key={tab.value} value={tab.value}>
@@ -3203,38 +3200,39 @@ export function AdminClient({
                 ))}
             </select>
 
-            <div
-                role="tablist"
+            <nav
                 aria-label="Admin sections"
-                className="border-border/60 bg-card hidden gap-1 overflow-x-auto rounded-xl border p-1 md:flex"
+                className="border-border/70 bg-card hidden flex-wrap gap-0.5 rounded-md border p-0.5 md:flex"
             >
                 {ADMIN_PRIMARY_TABS.map((tab) => {
                     const Icon = tab.icon;
                     const isActive =
                         activePrimaryDefinition.value === tab.value;
                     return (
-                        <button
+                        <a
                             key={tab.value}
                             ref={isActive ? activeTabButtonRef : undefined}
-                            type="button"
-                            role="tab"
-                            aria-selected={isActive}
-                            className={`flex h-9 min-w-max flex-1 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium transition-colors ${
+                            href={tab.route}
+                            aria-current={isActive ? "page" : undefined}
+                            className={`focus-visible:ring-ring flex min-h-8 items-center justify-center gap-1.5 rounded px-3 py-1 text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none ${
                                 isActive
                                     ? "bg-primary text-primary-foreground"
                                     : "text-muted-foreground hover:bg-muted hover:text-foreground"
                             }`}
-                            onClick={() => switchPrimaryTab(tab.value)}
                         >
-                            <Icon className="h-4 w-4" />
+                            <Icon aria-hidden="true" className="size-3.5" />
                             {tab.label}
-                        </button>
+                        </a>
                     );
                 })}
-            </div>
+            </nav>
 
             {activePrimaryDefinition.sections.length > 1 ? (
-                <div className="flex flex-wrap gap-2">
+                <div
+                    role="group"
+                    aria-label="Admin views"
+                    className="border-border/70 bg-card flex w-fit max-w-full flex-wrap gap-0.5 rounded-md border p-0.5"
+                >
                     {activePrimaryDefinition.sections.map((section) => {
                         const definition = ADMIN_TABS.find(
                             (tab) => tab.value === section,
@@ -3244,10 +3242,10 @@ export function AdminClient({
                                 key={section}
                                 type="button"
                                 size="sm"
+                                aria-pressed={activeTab === section}
+                                className="h-auto min-h-8 px-3 py-1 text-[13px]"
                                 variant={
-                                    activeTab === section
-                                        ? "default"
-                                        : "outline"
+                                    activeTab === section ? "default" : "ghost"
                                 }
                                 onClick={() => switchTab(section)}
                             >
@@ -3298,7 +3296,7 @@ export function AdminClient({
                                                     ? "destructive"
                                                     : "secondary"
                                             }
-                                            className="rounded-md text-[10px] uppercase"
+                                            className="max-w-full rounded-md text-[10px] whitespace-normal uppercase"
                                         >
                                             {maintenanceStatusLabel}
                                         </Badge>
@@ -3319,6 +3317,7 @@ export function AdminClient({
                                             type="button"
                                             size="sm"
                                             variant="outline"
+                                            className="h-auto min-h-8 max-w-full whitespace-normal py-1.5"
                                             onClick={() =>
                                                 openMaintenanceDialog("update")
                                             }
@@ -3328,6 +3327,7 @@ export function AdminClient({
                                         <Button
                                             type="button"
                                             size="sm"
+                                            className="h-auto min-h-8 max-w-full whitespace-normal py-1.5"
                                             onClick={() =>
                                                 openMaintenanceDialog("disable")
                                             }
@@ -3340,6 +3340,7 @@ export function AdminClient({
                                         type="button"
                                         size="sm"
                                         variant="destructive"
+                                        className="h-auto min-h-8 max-w-full whitespace-normal py-1.5"
                                         onClick={() =>
                                             openMaintenanceDialog("enable")
                                         }
@@ -3349,7 +3350,7 @@ export function AdminClient({
                                 )}
                             </div>
                         </div>
-                        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
                             <div className="border-border/60 bg-background/50 rounded-lg border px-3 py-2.5">
                                 <p className="text-muted-foreground text-[10px] uppercase">
                                     Active monitors
@@ -3520,9 +3521,9 @@ export function AdminClient({
                             iconClassName="bg-amber-500/10 text-amber-600"
                         />
                     </div>
-                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-                        <div className="border-border/60 bg-card flex h-full flex-col rounded-lg border p-5">
-                            <div className="mb-4 flex items-center justify-between">
+                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+                        <div className="border-border/60 bg-card flex h-full min-w-0 flex-col rounded-lg border p-4">
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                                 <div>
                                     <p className="text-foreground text-sm font-semibold">
                                         Monitor Health
@@ -3548,7 +3549,7 @@ export function AdminClient({
                                 </Badge>
                             </div>
 
-                            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                                 <div className="border-border/60 rounded-lg border px-4 py-3">
                                     <p className="text-muted-foreground text-[11px] font-medium tracking-widest uppercase">
                                         Total monitors
@@ -3587,7 +3588,7 @@ export function AdminClient({
                                 </div>
                             </div>
 
-                            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
                                 <div className="bg-muted/30 rounded-lg px-4 py-3">
                                     <p className="text-muted-foreground text-xs">
                                         Successful checks
@@ -3793,7 +3794,7 @@ export function AdminClient({
                                 <p className="text-muted-foreground text-xs">
                                     New members · 7 days
                                 </p>
-                                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                <p className="mt-1 text-xl font-semibold tabular-nums">
                                     {overviewState?.memberSnapshot
                                         .newMembers7d ?? "—"}
                                 </p>
@@ -3808,7 +3809,7 @@ export function AdminClient({
                                 <p className="text-muted-foreground text-xs">
                                     New members · 30 days
                                 </p>
-                                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                <p className="mt-1 text-xl font-semibold tabular-nums">
                                     {overviewState?.memberSnapshot
                                         .newMembers30d ?? "—"}
                                 </p>
@@ -3823,7 +3824,7 @@ export function AdminClient({
                                 <p className="text-muted-foreground text-xs">
                                     Activation rate
                                 </p>
-                                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                <p className="mt-1 text-xl font-semibold tabular-nums">
                                     {overviewState
                                         ? `${overviewState.memberSnapshot.activationRate}%`
                                         : "—"}
@@ -3838,7 +3839,7 @@ export function AdminClient({
                                 <p className="text-muted-foreground text-xs">
                                     Demo conversion
                                 </p>
-                                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                <p className="mt-1 text-xl font-semibold tabular-nums">
                                     {overviewState
                                         ? `${overviewState.memberSnapshot.demoConversionRate}%`
                                         : "—"}
@@ -3852,7 +3853,7 @@ export function AdminClient({
                         </div>
                     </div>
 
-                    <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                         <div className="border-border/60 bg-card overflow-hidden rounded-lg border">
                             <div className="border-border/60 border-b px-5 py-4">
                                 <p className="text-foreground text-sm font-semibold">
@@ -3970,7 +3971,7 @@ export function AdminClient({
                         </div>
                     ) : memberInsights ? (
                         <>
-                            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                                 <MemberMetricCard
                                     label="Total members"
                                     value={memberInsights.summary.totalMembers}
@@ -4094,7 +4095,7 @@ export function AdminClient({
                                 </div>
                             </div>
 
-                            <div className="grid gap-4 lg:grid-cols-5">
+                            <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
                                 <div className="border-border/60 bg-card rounded-xl border p-5 shadow-sm sm:p-6 lg:col-span-3">
                                     <div className="mb-5 flex items-start justify-between gap-4">
                                         <div>
@@ -4326,7 +4327,7 @@ export function AdminClient({
                                                 <p className="text-muted-foreground text-[10px] font-medium uppercase">
                                                     Activated members
                                                 </p>
-                                                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                                <p className="mt-1 text-xl font-semibold tabular-nums">
                                                     {
                                                         memberInsights.summary
                                                             .usersWithMonitors
@@ -4464,6 +4465,7 @@ export function AdminClient({
                             <Button
                                 type="button"
                                 variant="outline"
+                                className="h-auto min-h-9 max-w-full whitespace-normal"
                                 onClick={() => switchTab("price_watch")}
                             >
                                 Open Price Watch Operations
@@ -4492,7 +4494,7 @@ export function AdminClient({
                                                     ? "default"
                                                     : "secondary"
                                             }
-                                            className="rounded-md text-[10px] uppercase"
+                                            className="max-w-full rounded-md text-[10px] whitespace-normal uppercase"
                                         >
                                             {inactivePolicyState.policy.enabled
                                                 ? inactivePolicyState.status ===
@@ -4527,12 +4529,12 @@ export function AdminClient({
                             </label>
                         </div>
 
-                        <div className="mt-5 grid gap-4 xl:grid-cols-[1fr_1fr_1.2fr]">
+                        <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1fr_1.2fr]">
                             <div>
                                 <Label className="text-xs">
                                     Inactive after
                                 </Label>
-                                <div className="mt-2 grid grid-cols-[1fr_1.2fr] gap-2">
+                                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
                                     <Input
                                         type="number"
                                         min={1}
@@ -4585,7 +4587,7 @@ export function AdminClient({
                                     </option>
                                     <option value="all">All monitors</option>
                                 </select>
-                                <label className="border-input bg-background mt-2 flex h-9 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm">
+                                <label className="border-input bg-background mt-2 flex min-h-9 cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm">
                                     <input
                                         type="checkbox"
                                         checked={
@@ -4606,12 +4608,12 @@ export function AdminClient({
                             </div>
                             <div>
                                 <Label className="text-xs">Member roles</Label>
-                                <div className="mt-2 flex h-9 gap-2">
+                                <div className="mt-2 flex flex-wrap gap-2">
                                     {(["free", "premium"] as const).map(
                                         (role) => (
                                             <label
                                                 key={role}
-                                                className="border-input bg-background flex flex-1 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm capitalize"
+                                                className="border-input bg-background flex min-h-9 flex-1 basis-28 cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm capitalize"
                                             >
                                                 <input
                                                     type="checkbox"
@@ -4685,10 +4687,11 @@ export function AdminClient({
                                         : "No worker confirmation"}
                                 </p>
                             </div>
-                            <div className="flex gap-2">
+                            <div className="flex flex-wrap gap-2">
                                 <Button
                                     type="button"
                                     size="sm"
+                                    className="h-auto min-h-8 max-w-full whitespace-normal py-1.5"
                                     variant="outline"
                                     onClick={refreshInactivePolicyPreview}
                                 >
@@ -4698,6 +4701,7 @@ export function AdminClient({
                                     type="button"
                                     size="sm"
                                     disabled={isSavingInactivePolicy}
+                                    className="h-auto min-h-8 max-w-full whitespace-normal py-1.5"
                                     onClick={handleSaveInactivePolicy}
                                 >
                                     {isSavingInactivePolicy
@@ -4728,38 +4732,19 @@ export function AdminClient({
                                 </p>
                             </div>
                             <div className="flex w-full flex-col gap-2 sm:flex-row lg:max-w-xl">
-                                <div className="relative flex-1">
-                                    <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
-                                    <Input
-                                        value={monitorSearchQuery}
-                                        onChange={(event) => {
-                                            setMonitorSearchQuery(
-                                                event.target.value,
-                                            );
-                                            setCollapsedMonitorSearchUserIds(
-                                                new Set(),
-                                            );
-                                        }}
-                                        placeholder="Search members, monitors, queries or regions..."
-                                        aria-label="Search running monitors"
-                                        className="h-10 pl-9"
-                                    />
-                                </div>
-                                {normalizedMonitorQuery ? (
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-10 self-start px-3 text-xs sm:self-auto"
-                                        onClick={() => {
-                                            setMonitorSearchQuery("");
-                                            setCollapsedMonitorSearchUserIds(
-                                                new Set(),
-                                            );
-                                        }}
-                                    >
-                                        Clear search
-                                    </Button>
-                                ) : null}
+                                <CompactSearch
+                                    value={monitorSearchQuery}
+                                    onChange={(value) => {
+                                        setMonitorSearchQuery(value);
+                                        setCollapsedMonitorSearchUserIds(
+                                            new Set(),
+                                        );
+                                    }}
+                                    label="Search running monitors"
+                                    placeholder="Search members, monitors or regions"
+                                    clearLabel="Clear running monitor search"
+                                    className="flex-1"
+                                />
                             </div>
                         </div>
 
@@ -4819,14 +4804,14 @@ export function AdminClient({
                                                     data-testid="active-monitor-member-toggle"
                                                     aria-expanded={isExpanded}
                                                     aria-controls={contentId}
-                                                    className="bg-muted/20 hover:bg-muted/40 flex w-full items-center justify-between gap-4 px-5 py-3 text-left transition-colors"
+                                                    className="bg-muted/20 hover:bg-muted/40 flex w-full flex-wrap items-center justify-between gap-4 px-5 py-3 text-left transition-colors"
                                                     onClick={() =>
                                                         toggleMonitorMember(
                                                             user.id,
                                                         )
                                                     }
                                                 >
-                                                    <span className="flex min-w-0 items-center gap-3">
+                                                    <span className="flex min-w-0 flex-1 basis-48 items-center gap-3">
                                                         {user.image ? (
                                                             <img
                                                                 src={user.image}
@@ -4917,7 +4902,7 @@ export function AdminClient({
                                                                             monitor.id
                                                                         }
                                                                         data-testid="active-monitor-row"
-                                                                        className="grid gap-3 px-5 py-4 md:grid-cols-2 lg:grid-cols-[minmax(220px,1.4fr)_minmax(170px,1fr)_minmax(190px,1fr)_auto] lg:items-center"
+                                                                        className="grid grid-cols-1 gap-3 px-5 py-4 md:grid-cols-2 lg:grid-cols-[minmax(220px,1.4fr)_minmax(170px,1fr)_minmax(190px,1fr)_auto] lg:items-center"
                                                                     >
                                                                         <div className="min-w-0">
                                                                             <div className="flex items-center gap-2">
@@ -5062,7 +5047,7 @@ export function AdminClient({
 
             {activeTab === "users" ? (
                 <div className="border-border/60 bg-card overflow-hidden rounded-lg border">
-                    <div className="border-border/60 flex flex-col gap-3 border-b px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="border-border/60 flex min-w-0 flex-col gap-3 border-b px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
                         <div>
                             <p className="text-foreground text-sm font-semibold">
                                 Members
@@ -5072,33 +5057,21 @@ export function AdminClient({
                             </p>
                         </div>
                         <div className="flex w-full flex-col gap-2 sm:flex-row lg:max-w-xl">
-                            <div className="relative flex-1">
-                                <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
-                                <Input
-                                    value={searchQuery}
-                                    onChange={(event) => {
-                                        setSearchQuery(event.target.value);
-                                        setUserPage(1);
-                                    }}
-                                    aria-label="Search members"
-                                    placeholder="Search by name, email, role or Discord user ID..."
-                                    className="h-10 pl-9"
-                                />
-                            </div>
-                            {normalizedQuery ? (
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-10 self-start px-3 text-xs sm:self-auto"
-                                    onClick={() => setSearchQuery("")}
-                                >
-                                    Clear search
-                                </Button>
-                            ) : null}
+                            <CompactSearch
+                                value={searchQuery}
+                                onChange={(value) => {
+                                    setSearchQuery(value);
+                                    setUserPage(1);
+                                }}
+                                label="Search members"
+                                placeholder="Search name, email, role or Discord ID"
+                                clearLabel="Clear member search"
+                                className="flex-1"
+                            />
                         </div>
                     </div>
                     <div className="overflow-x-auto">
-                        <table className="w-full">
+                        <table className="w-full min-w-[52rem] [&_th]:whitespace-nowrap">
                             <thead className="bg-muted/30">
                                 <tr className="border-border border-b">
                                     <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
@@ -5139,7 +5112,7 @@ export function AdminClient({
                                                 openUserDetails(user)
                                             }
                                         >
-                                            <td className="px-5 py-3.5">
+                                            <td className="px-4 py-2.5">
                                                 <div className="flex items-center gap-3">
                                                     {user.image ? (
                                                         <img
@@ -5164,10 +5137,10 @@ export function AdminClient({
                                                     </div>
                                                 </div>
                                             </td>
-                                            <td className="px-5 py-3.5">
+                                            <td className="px-4 py-2.5">
                                                 {getRoleBadge(user.role)}
                                             </td>
-                                            <td className="px-5 py-3.5 text-center">
+                                            <td className="px-4 py-2.5 text-center">
                                                 <div className="flex flex-col items-center gap-1">
                                                     <span className="text-foreground text-sm font-medium tabular-nums">
                                                         {user.metrics.checks24h}
@@ -5181,7 +5154,7 @@ export function AdminClient({
                                                     </span>
                                                 </div>
                                             </td>
-                                            <td className="px-5 py-3.5 text-center">
+                                            <td className="px-4 py-2.5 text-center">
                                                 <div className="flex flex-col items-center gap-1">
                                                     <span className="text-foreground inline-flex items-center gap-1 text-sm">
                                                         <Monitor className="text-muted-foreground h-3.5 w-3.5" />
@@ -5196,7 +5169,7 @@ export function AdminClient({
                                                     </span>
                                                 </div>
                                             </td>
-                                            <td className="px-5 py-3.5 text-center">
+                                            <td className="px-4 py-2.5 text-center">
                                                 <div className="flex flex-col items-center gap-1">
                                                     <span className="text-foreground inline-flex items-center gap-1 text-sm">
                                                         <Activity className="text-muted-foreground h-3.5 w-3.5" />
@@ -5225,7 +5198,7 @@ export function AdminClient({
                                                     </span>
                                                 </div>
                                             </td>
-                                            <td className="px-5 py-3.5 text-center">
+                                            <td className="px-4 py-2.5 text-center">
                                                 <div className="flex flex-col items-center gap-1">
                                                     <span className="text-foreground text-sm">
                                                         {formatLimit(
@@ -5237,13 +5210,13 @@ export function AdminClient({
                                                     </span>
                                                 </div>
                                             </td>
-                                            <td className="px-5 py-3.5 text-center">
+                                            <td className="px-4 py-2.5 text-center">
                                                 <span className="text-foreground inline-flex items-center gap-1 text-sm">
                                                     <Globe className="text-muted-foreground h-3.5 w-3.5" />
                                                     {user._count.proxy_groups}
                                                 </span>
                                             </td>
-                                            <td className="px-5 py-3.5 text-right">
+                                            <td className="px-4 py-2.5 text-right">
                                                 <div className="flex items-center justify-end gap-2">
                                                     {user.id ===
                                                     currentUserId ? (
@@ -5498,7 +5471,7 @@ export function AdminClient({
                                     className="h-5 w-5 accent-current"
                                 />
                             </label>
-                            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                                 <div className="space-y-2">
                                     <Label htmlFor="shared-minimum">
                                         Shared minimum
@@ -5637,7 +5610,7 @@ export function AdminClient({
                         </CardContent>
                     </Card>
 
-                    <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                         <Card className="py-0">
                             <CardHeader className="border-b p-5">
                                 <CardTitle className="text-base">
@@ -5731,7 +5704,7 @@ export function AdminClient({
 
             {activeTab === "roles" ? (
                 <>
-                    <div className="grid gap-4 md:grid-cols-3">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                         {ROLES.map((role) => {
                             const count =
                                 role.value === "free"
@@ -5779,7 +5752,7 @@ export function AdminClient({
                                 Lower limits pause newest excess watches.
                             </p>
                         </div>
-                        <div className="grid gap-3 lg:grid-cols-4">
+                        <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
                             <div className="space-y-2">
                                 <Label htmlFor="roles-global-price-watch-limit">
                                     Global default
@@ -5870,7 +5843,7 @@ export function AdminClient({
                             </div>
                         </div>
 
-                        <div className="grid gap-3 lg:grid-cols-4">
+                        <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
                             <div className="space-y-2">
                                 <Label htmlFor="global-monitor-limit">
                                     Global default
@@ -5968,7 +5941,7 @@ export function AdminClient({
                             </div>
                         </div>
 
-                        <div className="grid gap-3 lg:grid-cols-4">
+                        <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
                             <div className="space-y-2">
                                 <Label htmlFor="global-free-proxy-monitor-limit">
                                     Global default
@@ -6107,7 +6080,7 @@ export function AdminClient({
                     </div>
                     {operationsSummary ? (
                         <>
-                            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                                 {[
                                     {
                                         label: "Delivered (24h)",
@@ -6411,7 +6384,7 @@ export function AdminClient({
                                     <tbody className="divide-border/50 divide-y">
                                         {visibleAdminLogs.map((log) => (
                                             <tr key={log.id}>
-                                                <td className="px-5 py-3.5">
+                                                <td className="px-4 py-2.5">
                                                     <div className="space-y-1">
                                                         <div className="flex flex-wrap items-center gap-2">
                                                             <Badge
@@ -6437,7 +6410,7 @@ export function AdminClient({
                                                 <td className="text-muted-foreground px-5 py-3.5 text-sm">
                                                     {log.actor ?? "-"}
                                                 </td>
-                                                <td className="px-5 py-3.5">
+                                                <td className="px-4 py-2.5">
                                                     <Badge
                                                         variant="outline"
                                                         className={
@@ -6533,7 +6506,7 @@ export function AdminClient({
 
                         <div className="mt-5 flex flex-col gap-6">
                             <div className="space-y-5">
-                                <div className="grid gap-3 sm:grid-cols-2">
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                                     <label className="border-border/60 flex items-start gap-3 rounded-lg border px-4 py-3">
                                         <input
                                             type="checkbox"
@@ -6591,7 +6564,7 @@ export function AdminClient({
                                     </label>
                                 </div>
 
-                                <div className="grid gap-4 sm:grid-cols-[180px_minmax(0,1fr)]">
+                                <div className="grid grid-cols-1 gap-4 sm:grid-cols-[180px_minmax(0,1fr)]">
                                     <div className="space-y-2">
                                         <Label htmlFor="announcement-variant">
                                             Variant
@@ -6775,7 +6748,7 @@ export function AdminClient({
                                     ) : null}
                                 </div>
 
-                                <div className="grid gap-4 lg:grid-cols-2">
+                                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                                     <fieldset className="border-border/60 rounded-lg border p-4">
                                         <legend className="px-1 text-sm font-medium">
                                             Audience
@@ -6950,7 +6923,7 @@ export function AdminClient({
                                     <legend className="px-1 text-sm font-medium">
                                         Optional schedule
                                     </legend>
-                                    <div className="grid gap-3 sm:grid-cols-2">
+                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                                         <div className="space-y-2">
                                             <Label htmlFor="announcement-starts-at">
                                                 Starts at
@@ -7028,7 +7001,7 @@ export function AdminClient({
                                     announcement={memberAnnouncement}
                                     preview
                                 />
-                                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                                <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
                                     <div className="border-border/60 bg-background/60 rounded-lg border px-3.5 py-3 text-xs">
                                         <p className="font-medium">
                                             Delivery summary
@@ -7086,7 +7059,7 @@ export function AdminClient({
                                 {configDiagnostics.status}
                             </Badge>
                         </div>
-                        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
                             <div className="bg-muted/30 rounded-lg p-3 text-xs">
                                 <p className="text-muted-foreground uppercase">
                                     Origin source
@@ -7318,7 +7291,7 @@ export function AdminClient({
                             </Badge>
                         </div>
 
-                        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
                             {[
                                 ["Active", freeProxyState.counts.active],
                                 ["Pending", freeProxyState.counts.pending],
@@ -7410,7 +7383,7 @@ export function AdminClient({
                                 <Settings2 className="text-muted-foreground size-4" />
                             </summary>
                             <div className="border-border/60 border-t p-4">
-                                <div className="grid gap-3 sm:grid-cols-2">
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                                     <label className="border-border/60 flex items-start gap-3 rounded-lg border px-4 py-3">
                                         <input
                                             type="checkbox"
@@ -7459,7 +7432,7 @@ export function AdminClient({
                                     </label>
                                 </div>
 
-                                <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(420px,0.9fr)]">
+                                <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(420px,0.9fr)]">
                                     <div className="rounded-lg border p-4">
                                         <div className="mb-4">
                                             <p className="text-sm font-semibold">
@@ -7472,7 +7445,7 @@ export function AdminClient({
                                                 region.
                                             </p>
                                         </div>
-                                        <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
+                                        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
                                             <div className="space-y-2">
                                                 <Label htmlFor="free-proxy-source">
                                                     Source
@@ -7556,7 +7529,10 @@ export function AdminClient({
                                                     </span>
                                                 </div>
                                                 <p className="text-muted-foreground text-[11px]">
-                                                    Monitors in disabled regions stay active and wait safely until the region is enabled again.
+                                                    Monitors in disabled regions
+                                                    stay active and wait safely
+                                                    until the region is enabled
+                                                    again.
                                                 </p>
                                                 <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
                                                     {REGIONS.map((region) => {
@@ -7662,7 +7638,7 @@ export function AdminClient({
                                                 rotation.
                                             </p>
                                         </div>
-                                        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
                                             <div className="space-y-2">
                                                 <Label htmlFor="free-proxy-failures">
                                                     Failures
@@ -7831,7 +7807,7 @@ export function AdminClient({
                                             Emergency recovery
                                         </label>
                                     </div>
-                                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
                                         {[
                                             {
                                                 id: "free-proxy-active-window",
@@ -8122,7 +8098,7 @@ export function AdminClient({
                                                         {status}
                                                     </Badge>
                                                 </div>
-                                                <div className="grid gap-2 sm:grid-cols-2">
+                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                                                     <div>
                                                         <div className="mb-1 flex justify-between text-[11px]">
                                                             <span>Usable</span>
@@ -8473,7 +8449,7 @@ export function AdminClient({
                                     </p>
                                 </div>
                             ) : null}
-                            <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-6">
                                 {[
                                     ["Ready", selectedFreeProxyHealth.active],
                                     [
@@ -8532,7 +8508,7 @@ export function AdminClient({
                                 {selectedFreeProxySources.map((diagnostic) => (
                                     <div
                                         key={`${diagnostic.source}:${diagnostic.protocol}`}
-                                        className="grid gap-2 px-4 py-3 text-xs md:grid-cols-[minmax(140px,1fr)_70px_100px_150px_minmax(160px,1fr)] md:items-center"
+                                        className="grid grid-cols-1 gap-2 px-4 py-3 text-xs md:grid-cols-[minmax(140px,1fr)_70px_100px_150px_minmax(160px,1fr)] md:items-center"
                                     >
                                         <span className="font-medium">
                                             {diagnostic.source}
@@ -8697,7 +8673,7 @@ export function AdminClient({
                         </DialogDescription>
                     </DialogHeader>
 
-                    <div className="grid gap-2 py-4">
+                    <div className="grid grid-cols-1 gap-2 py-4">
                         {ROLES.map((role) => (
                             <button
                                 key={role.value}
@@ -8878,7 +8854,7 @@ export function AdminClient({
                             </div>
 
                             <div className="border-border/60 bg-card rounded-lg border px-4 py-4 sm:px-5">
-                                <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(260px,320px)] md:items-center">
+                                <div className="grid grid-cols-1 gap-5 md:grid-cols-[minmax(0,1fr)_minmax(260px,320px)] md:items-center">
                                     <div className="min-w-0 space-y-3">
                                         <div>
                                             <p className="text-foreground text-sm font-semibold">
@@ -8958,7 +8934,7 @@ export function AdminClient({
                             </div>
 
                             <div className="border-border/60 bg-card rounded-lg border px-4 py-4 sm:px-5">
-                                <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(260px,320px)] md:items-center">
+                                <div className="grid grid-cols-1 gap-5 md:grid-cols-[minmax(0,1fr)_minmax(260px,320px)] md:items-center">
                                     <div className="min-w-0 space-y-3">
                                         <div>
                                             <p className="text-foreground text-sm font-semibold">
@@ -9049,7 +9025,7 @@ export function AdminClient({
                             </div>
 
                             <div className="border-border/60 bg-card rounded-lg border px-4 py-4 sm:px-5">
-                                <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(260px,320px)] md:items-center">
+                                <div className="grid grid-cols-1 gap-5 md:grid-cols-[minmax(0,1fr)_minmax(260px,320px)] md:items-center">
                                     <div>
                                         <p className="text-foreground text-sm font-semibold">
                                             Active Price Watch Limit
@@ -9104,7 +9080,7 @@ export function AdminClient({
                                 </div>
                             </div>
 
-                            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                                 <Card className="py-0">
                                     <CardHeader className="pt-3 pb-2">
                                         <CardDescription>

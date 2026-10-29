@@ -1,20 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
     Bell,
     ChevronRight,
-    ExternalLink,
     Github,
-    Loader2,
-    Menu,
     Star,
+    ExternalLink,
+    Menu,
     Volume1,
     Volume2,
     VolumeX,
+    X,
+    RefreshCw,
 } from "lucide-react";
+import { Popover } from "radix-ui";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useVintedAccount } from "@/components/account-provider";
 import { useMonitorStreamContext } from "@/components/monitors/monitor-stream-context";
@@ -36,7 +38,7 @@ function formatNotificationTime(value?: string) {
         return value;
     }
 
-    return new Intl.DateTimeFormat("de-DE", {
+    return new Intl.DateTimeFormat(undefined, {
         day: "2-digit",
         month: "2-digit",
         hour: "2-digit",
@@ -91,7 +93,6 @@ function NotificationBell() {
     const [notifications, setNotifications] = useState<NotificationEntry[]>([]);
     const [hasLoaded, setHasLoaded] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
-    const rootRef = useRef<HTMLDivElement | null>(null);
 
     const unreadCount = useMemo(
         () => notifications.filter((entry) => entry.is_read === false).length,
@@ -184,78 +185,82 @@ function NotificationBell() {
         }
     }, [linked, loading]);
 
-    useEffect(() => {
-        if (!open) {
-            return;
-        }
-
-        const handlePointerDown = (event: MouseEvent) => {
-            if (!rootRef.current?.contains(event.target as Node)) {
-                setOpen(false);
-            }
-        };
-
-        document.addEventListener("mousedown", handlePointerDown);
-        return () =>
-            document.removeEventListener("mousedown", handlePointerDown);
-    }, [open]);
-
     if (loading || !linked) {
         return null;
     }
 
     return (
-        <div ref={rootRef} className="relative">
-            <button
-                type="button"
-                onClick={() => {
-                    const nextOpen = !open;
-                    setOpen(nextOpen);
-                    if (nextOpen && !hasLoaded) {
-                        void fetchNotifications();
-                    }
-                }}
-                className="border-border/80 bg-background/70 text-foreground hover:border-border hover:bg-accent hover:text-accent-foreground relative inline-flex h-8 w-8 items-center justify-center rounded-lg border shadow-sm transition-colors"
-                aria-label="Open Vinted notifications"
-            >
-                <Bell className="h-4 w-4" />
-                {unreadCount > 0 && (
-                    <span className="absolute -top-1 -right-1 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1.5 text-[10px] leading-5 font-semibold text-white shadow-sm">
-                        {unreadCount > 9 ? "9+" : unreadCount}
-                    </span>
-                )}
-            </button>
-
-            {open && (
-                <div className="border-border/70 bg-background/96 absolute top-11 right-0 z-50 w-88 overflow-hidden rounded-2xl border shadow-[0_20px_60px_rgba(15,23,42,0.18)] backdrop-blur-xl">
+        <Popover.Root open={open} onOpenChange={setOpen}>
+            <Popover.Trigger asChild>
+                <button
+                    type="button"
+                    onClick={() => {
+                        if (!open && !hasLoaded) {
+                            void fetchNotifications();
+                        }
+                    }}
+                    className="border-border/80 bg-background/70 text-foreground hover:border-border hover:bg-accent hover:text-accent-foreground relative inline-flex h-8 w-8 items-center justify-center rounded-lg border shadow-sm transition-colors"
+                    aria-label="Open Vinted notifications"
+                >
+                    <Bell className="h-4 w-4" />
+                    {unreadCount > 0 && (
+                        <span className="absolute -top-1 -right-1 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1.5 text-[10px] leading-5 font-semibold text-white shadow-sm">
+                            {unreadCount > 9 ? "9+" : unreadCount}
+                        </span>
+                    )}
+                </button>
+            </Popover.Trigger>
+            <Popover.Portal>
+                <Popover.Content
+                    align="end"
+                    sideOffset={8}
+                    collisionPadding={12}
+                    aria-label="Vinted notifications"
+                    className="dashboard-popover border-border/70 bg-background/96 text-foreground z-50 w-[min(22rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border shadow-[0_20px_60px_rgba(15,23,42,0.18)] backdrop-blur-xl outline-none"
+                >
                     <div className="border-border/60 flex items-center justify-between border-b px-4 py-3">
                         <div>
                             <p className="text-foreground text-sm font-semibold">
                                 Vinted Notifications
                             </p>
                             <p className="text-muted-foreground text-xs">
-                                Your 5 most recent Notifications
+                                Your 5 most recent notifications
                             </p>
                         </div>
-                        <button
-                            type="button"
-                            onClick={() => void fetchNotifications()}
-                            disabled={isLoading}
-                            className="text-muted-foreground hover:bg-accent hover:text-accent-foreground inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:opacity-60"
-                            aria-label="Refresh notifications"
-                        >
-                            <Loader2
-                                className={cn(
-                                    "h-4 w-4",
-                                    isLoading && "animate-spin",
-                                )}
-                            />
-                        </button>
+                        <div className="flex items-center gap-1">
+                            <button
+                                type="button"
+                                onClick={() => void fetchNotifications()}
+                                disabled={isLoading}
+                                className="text-muted-foreground hover:bg-accent hover:text-accent-foreground inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:opacity-60"
+                                aria-label="Refresh notifications"
+                            >
+                                <RefreshCw
+                                    className={cn(
+                                        "h-4 w-4",
+                                        isLoading &&
+                                            "animate-spin motion-reduce:animate-none",
+                                    )}
+                                />
+                            </button>
+                            <Popover.Close
+                                aria-label="Close notifications"
+                                className="text-muted-foreground hover:bg-accent hover:text-foreground flex size-9 items-center justify-center rounded-lg"
+                            >
+                                <X className="size-4" />
+                            </Popover.Close>
+                        </div>
                     </div>
 
-                    <div className="max-h-104 overflow-y-auto p-2">
+                    <div
+                        className="max-h-[min(26rem,var(--radix-popover-content-available-height))] overflow-y-auto p-2"
+                        aria-busy={isLoading}
+                    >
                         {isLoading && notifications.length === 0 ? (
-                            <div className="space-y-2 p-2">
+                            <div className="space-y-2 p-2" role="status">
+                                <span className="sr-only">
+                                    Loading notifications
+                                </span>
                                 {Array.from({ length: 4 }).map((_, index) => (
                                     <div
                                         key={index}
@@ -280,6 +285,13 @@ function NotificationBell() {
                                 >
                                     Open account settings
                                 </Link>
+                                <button
+                                    type="button"
+                                    onClick={() => void fetchNotifications()}
+                                    className="text-foreground hover:bg-accent mt-3 min-h-11 rounded-lg border px-4 text-sm font-medium"
+                                >
+                                    Try again
+                                </button>
                             </div>
                         ) : notifications.length > 0 ? (
                             notifications.map((notification) => (
@@ -306,7 +318,7 @@ function NotificationBell() {
                                                 src={
                                                     notification.small_photo_url
                                                 }
-                                                alt="Notification"
+                                                alt=""
                                                 className="h-full w-full object-cover"
                                             />
                                         ) : (
@@ -318,15 +330,17 @@ function NotificationBell() {
 
                                     <div className="min-w-0 flex-1">
                                         <div className="flex items-start justify-between gap-3">
-                                            <p className="text-foreground max-h-15 overflow-hidden text-sm leading-5">
+                                            <p className="text-foreground text-sm leading-5 [overflow-wrap:anywhere]">
                                                 {notification.body ||
-                                                    "Neue Vinted-Benachrichtigung"}
+                                                    "Vinted notification"}
                                             </p>
                                             <ExternalLink className="text-muted-foreground mt-0.5 h-3.5 w-3.5 shrink-0" />
                                         </div>
                                         <div className="mt-2 flex items-center gap-2">
                                             {notification.is_read === false && (
-                                                <span className="inline-flex h-2 w-2 rounded-full bg-sky-500" />
+                                                <span className="text-foreground text-[11px] font-semibold">
+                                                    Unread
+                                                </span>
                                             )}
                                             <span className="text-muted-foreground text-[11px]">
                                                 {formatNotificationTime(
@@ -343,86 +357,118 @@ function NotificationBell() {
                                     <Bell className="h-5 w-5" />
                                 </div>
                                 <p className="text-foreground text-sm font-medium">
-                                    No Notifications found
+                                    No notifications yet
                                 </p>
                                 <p className="text-muted-foreground mt-1 text-xs">
-                                    As soon as you get a Notification it will be
-                                    displayed here.
+                                    New Vinted notifications will appear here.
                                 </p>
                             </div>
                         )}
                     </div>
-                </div>
-            )}
-        </div>
+                </Popover.Content>
+            </Popover.Portal>
+        </Popover.Root>
     );
 }
 
 interface HeaderProps {
     onMenuClick?: () => void;
+    menuOpen?: boolean;
 }
 
-export function Header({ onMenuClick }: HeaderProps) {
+export function Header({ onMenuClick, menuOpen = false }: HeaderProps) {
     const pathname = usePathname();
-    const { soundEnabled, soundReady, toggleSound } = useMonitorStreamContext();
-
-    const getBreadcrumbs = (): { label: string; isCurrent: boolean }[] => {
-        if (pathname === "/dashboard")
-            return [{ label: "Dashboard", isCurrent: true }];
-        if (pathname === "/monitors")
-            return [{ label: "Monitors", isCurrent: true }];
-        if (pathname === "/price-watches")
-            return [{ label: "Price Watch", isCurrent: true }];
-        if (pathname === "/proxies")
-            return [{ label: "Proxy Groups", isCurrent: true }];
-        if (pathname === "/feed")
-            return [{ label: "Live Feed", isCurrent: true }];
-        if (pathname === "/monitors/new")
-            return [
-                { label: "Monitors", isCurrent: false },
-                { label: "Create", isCurrent: true },
-            ];
-        if (pathname.includes("/monitors/"))
-            return [
-                { label: "Monitors", isCurrent: false },
-                { label: "Details", isCurrent: true },
-            ];
-        return [{ label: "Vintrack", isCurrent: true }];
+    const { soundEnabled, soundReady, toggleSound, connectionStatus } =
+        useMonitorStreamContext();
+    const pages: Record<string, string> = {
+        "/dashboard": "Dashboard",
+        "/monitors": "Monitors",
+        "/price-watches": "Price Watch",
+        "/proxies": "Proxy Groups",
+        "/feed": "Live Feed",
+        "/account": "Account",
+        "/your-listings": "Your Listings",
+        "/liked": "Liked Items",
+        "/chats": "Chats",
+        "/guide": "Guide",
+        "/checkout-links": "Checkout Links",
+        "/admin": "Admin Panel",
+        "/oneclick-buy-test": "Checkout Test",
     };
-
-    const breadcrumbs = getBreadcrumbs();
+    const crumbs: { label: string; href?: string }[] = [];
+    if (pathname.startsWith("/monitors/")) {
+        crumbs.push({ label: "Monitors", href: "/dashboard" });
+        if (pathname === "/monitors/new") crumbs.push({ label: "New Monitor" });
+        else if (pathname.endsWith("/edit")) {
+            crumbs.push(
+                { label: "Details", href: pathname.replace(/\/edit$/, "") },
+                { label: "Edit Monitor" },
+            );
+        } else crumbs.push({ label: "Monitor Details" });
+    } else if (pathname.startsWith("/admin/")) {
+        crumbs.push(
+            { label: "Admin Panel", href: "/admin" },
+            {
+                label:
+                    pathname.split("/").pop()?.replaceAll("-", " ") || "Admin",
+            },
+        );
+    } else crumbs.push({ label: pages[pathname] || "Vintrack" });
+    const connectionLabel =
+        connectionStatus === "live"
+            ? "Live updates"
+            : connectionStatus === "reconnecting"
+              ? "Reconnecting"
+              : "Connecting";
 
     return (
         <header className="border-border/70 bg-background/72 sticky top-0 z-40 flex h-12 items-center justify-between border-b px-4 backdrop-blur-xl md:px-6">
-            <div className="flex items-center gap-3">
+            <div className="flex min-w-0 items-center gap-3">
                 <button
+                    type="button"
                     onClick={onMenuClick}
+                    aria-label="Open navigation"
+                    aria-controls="mobile-navigation"
+                    aria-expanded={menuOpen}
                     className="text-muted-foreground hover:bg-accent hover:text-accent-foreground -ml-1.5 rounded-md p-1.5 transition-colors lg:hidden"
                 >
                     <Menu className="h-5 w-5" />
                 </button>
-
-                <nav className="hidden items-center gap-1 text-sm sm:flex">
-                    {breadcrumbs.map((crumb, i) => (
-                        <span key={i} className="flex items-center gap-1">
-                            {i > 0 && (
-                                <ChevronRight className="text-muted-foreground/50 h-3.5 w-3.5" />
+                <nav
+                    aria-label="Breadcrumb"
+                    className="hidden min-w-0 items-center gap-1 text-sm sm:flex"
+                >
+                    {crumbs.map((crumb, index) => (
+                        <span
+                            key={crumb.label}
+                            className="flex min-w-0 items-center gap-1"
+                        >
+                            {index > 0 && (
+                                <ChevronRight
+                                    aria-hidden="true"
+                                    className="text-muted-foreground/50 h-3.5 w-3.5 shrink-0"
+                                />
                             )}
-                            <span
-                                className={
-                                    crumb.isCurrent
-                                        ? "text-foreground font-medium"
-                                        : "text-muted-foreground"
-                                }
-                            >
-                                {crumb.label}
-                            </span>
+                            {crumb.href ? (
+                                <Link
+                                    href={crumb.href}
+                                    className="text-muted-foreground hover:text-foreground hover:underline"
+                                >
+                                    {crumb.label}
+                                </Link>
+                            ) : (
+                                <span
+                                    aria-current="page"
+                                    className="text-foreground truncate font-medium"
+                                >
+                                    {crumb.label}
+                                </span>
+                            )}
                         </span>
                     ))}
                 </nav>
             </div>
-
-            <div className="flex items-center gap-3 md:gap-4">
+            <div className="flex shrink-0 items-center gap-3 md:gap-4">
                 <button
                     type="button"
                     onClick={() => void toggleSound()}
@@ -472,13 +518,26 @@ export function Header({ onMenuClick }: HeaderProps) {
                     <span className="hidden md:inline">Star on GitHub</span>
                     <Star className="h-3.5 w-3.5" />
                 </a>
-                <div className="text-muted-foreground flex items-center gap-1.5 text-[11px]">
-                    <span className="relative flex h-2 w-2">
-                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                        <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                <span
+                    role="status"
+                    aria-label={connectionLabel}
+                    className="text-muted-foreground flex items-center gap-1.5 text-[11px]"
+                >
+                    <span
+                        aria-hidden="true"
+                        className={cn(
+                            "h-2 w-2 rounded-full",
+                            connectionStatus === "live"
+                                ? "bg-emerald-500"
+                                : "bg-amber-500",
+                        )}
+                    />
+                    <span className="hidden xl:inline">
+                        {connectionStatus === "live"
+                            ? "Connected"
+                            : connectionLabel}
                     </span>
-                    <span className="xs:inline hidden">Connected</span>
-                </div>
+                </span>
             </div>
         </header>
     );

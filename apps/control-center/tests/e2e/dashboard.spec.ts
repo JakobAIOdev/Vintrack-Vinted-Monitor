@@ -39,7 +39,10 @@ test.describe("Regional monitor currencies", () => {
         page,
     }) => {
         await page.goto("/monitors/new");
-        await page.getByText("Filters", { exact: true }).click();
+        await page
+            .locator("summary")
+            .filter({ has: page.getByText("Filters", { exact: true }) })
+            .click();
 
         const priceField = page.getByTestId("price-filter-field");
         const minPrice = page.locator('input[name="price_min"]');
@@ -247,6 +250,126 @@ test.describe("Price Watch", () => {
         ).toBeVisible();
         await expect(page.getByLabel("Vinted item URL")).toHaveValue(itemUrl);
         await expect(page).toHaveURL(/\/price-watches$/);
+    });
+
+    test("combines watch search and status filters with empty-state recovery", async ({
+        page,
+    }) => {
+        const itemIds = [8999999911n, 8999999912n];
+        await db.price_watch_targets.deleteMany({
+            where: { item_id: { in: itemIds }, region: "de" },
+        });
+        try {
+            for (const [index, itemId] of itemIds.entries()) {
+                const target = await db.price_watch_targets.create({
+                    data: {
+                        region: "de",
+                        item_id: itemId,
+                        canonical_url: `https://www.vinted.de/items/${itemId}`,
+                        title:
+                            index === 0
+                                ? "Nike watch fixture"
+                                : "Carhartt watch fixture",
+                        image_url: `/mock-images/vinted-${index + 1}.svg`,
+                    },
+                });
+                const schedule = await db.price_watch_schedules.create({
+                    data: {
+                        target_id: target.id,
+                        transport_key: "shared",
+                        transport_kind: "shared",
+                    },
+                });
+                await db.price_watches.create({
+                    data: {
+                        user_id: "e2e-user",
+                        target_id: target.id,
+                        schedule_id: schedule.id,
+                        status: index === 0 ? "active" : "paused",
+                        armed_at: new Date(),
+                    },
+                });
+            }
+            await page.goto("/price-watches");
+            const search = page.getByRole("searchbox", {
+                name: "Search watched items",
+            });
+            const filters = page.getByRole("group", {
+                name: "Filter watches by status",
+            });
+            await search.fill("carhartt");
+            await expect(
+                page.getByRole("link", {
+                    name: "Carhartt watch fixture",
+                    exact: true,
+                }),
+            ).toBeVisible();
+            await expect(
+                page.getByRole("link", {
+                    name: "Nike watch fixture",
+                    exact: true,
+                }),
+            ).toBeHidden();
+            await filters.getByRole("button", { name: /^active$/i }).click();
+            await expect(
+                filters.getByRole("button", { name: /^active$/i }),
+            ).toHaveAttribute("aria-pressed", "true");
+            await expect(
+                page.getByText("No watches match these filters."),
+            ).toBeVisible();
+            await page
+                .getByRole("button", { name: "Clear search and filters" })
+                .click();
+            await expect(search).toHaveValue("");
+            await expect(
+                filters.getByRole("button", { name: /^all$/i }),
+            ).toHaveAttribute("aria-pressed", "true");
+            await expect(
+                page.getByRole("link", {
+                    name: "Nike watch fixture",
+                    exact: true,
+                }),
+            ).toBeVisible();
+            await expect(
+                page.getByRole("link", {
+                    name: "Carhartt watch fixture",
+                    exact: true,
+                }),
+            ).toBeVisible();
+            await search.fill("Nike");
+            await page
+                .getByRole("button", { name: "Clear watch search" })
+                .click();
+            await expect(search).toBeFocused();
+            await page.setViewportSize({ width: 320, height: 844 });
+            for (const dark of [false, true]) {
+                await page.evaluate((dark) => {
+                    document.documentElement.style.fontSize = "200%";
+                    document.documentElement.classList.toggle("dark", dark);
+                }, dark);
+                await expect
+                    .poll(() =>
+                        page.evaluate(
+                            () =>
+                                document.documentElement.scrollWidth <=
+                                window.innerWidth,
+                        ),
+                    )
+                    .toBe(true);
+                for (const action of await page
+                    .getByRole("button", { name: "Price Watch actions" })
+                    .all()) {
+                    const bounds = await action.boundingBox();
+                    expect(bounds).not.toBeNull();
+                    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+                    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+                }
+            }
+        } finally {
+            await db.price_watch_targets.deleteMany({
+                where: { item_id: { in: itemIds }, region: "de" },
+            });
+        }
     });
 
     test("creates, pauses, resumes, edits, and deletes an individual watch", async ({
@@ -815,12 +938,7 @@ test.describe("dashboard monitors", () => {
             page.getByRole("heading", { name: /Welcome back/ }),
         ).toBeVisible();
         await expect(page.getByTestId("monitor-card").first()).toBeVisible();
-        await expect(
-            page.locator("aside").getByRole("link", {
-                name: "Monitors",
-                exact: true,
-            }),
-        ).toHaveCount(0);
+        await expect(page.locator('aside a[href="/monitors"]')).toHaveCount(0);
     });
 
     test("personal brand persistence upserts, reactivates, and enforces its active limit", async () => {
@@ -1064,7 +1182,10 @@ test.describe("dashboard monitors", () => {
         });
 
         await page.goto("/monitors/new");
-        await page.getByText("Filters", { exact: true }).click();
+        await page
+            .locator("summary")
+            .filter({ has: page.getByText("Filters", { exact: true }) })
+            .click();
         await page.getByLabel("Search brand").fill("Under Native");
         await page.getByTestId("add-verified-brand").click();
         await expect(page.getByText("How to find it:")).toBeVisible();
@@ -1143,7 +1264,7 @@ test.describe("dashboard monitors", () => {
 
         await expect(page).toHaveTitle(/Vintrack/i);
         await expect(
-            page.getByRole("heading", { name: /Welcome back, E2E User/i }),
+            page.getByRole("heading", { name: /Welcome back/ }),
         ).toBeVisible();
         await expect(
             page.getByTestId("monitor-summary").getByText("1 monitor", {
@@ -1174,9 +1295,19 @@ test.describe("dashboard monitors", () => {
             "href",
             "/account?connection=github",
         );
+        const mobileMenu = page.getByRole("button", {
+            name: "Open navigation",
+            exact: true,
+        });
+        const isMobile = await mobileMenu.isVisible();
+        if (isMobile) await mobileMenu.click();
         await expect(
             page.getByRole("link", { name: "Sponsor Vintrack" }),
         ).toHaveAttribute("href", "https://github.com/sponsors/JakobAIOdev");
+        if (isMobile)
+            await page
+                .getByRole("button", { name: "Close navigation", exact: true })
+                .click();
 
         const serverUpgradeBanner = page.getByRole("status").filter({
             hasText:
@@ -1267,7 +1398,10 @@ test.describe("dashboard monitors", () => {
             "inactive",
         );
 
-        await page.getByText("Filters", { exact: true }).click();
+        await page
+            .locator("summary")
+            .filter({ has: page.getByText("Filters", { exact: true }) })
+            .click();
         const editPriceField = page.getByTestId("price-filter-field");
         await expect(editPriceField).toHaveAttribute("data-state", "active");
         await expect(

@@ -6,7 +6,7 @@ import { AccountClient } from "./client";
 import { getAccountStatus } from "@/actions/account";
 import { getMemberGithubRewardStatus } from "@/lib/github-rewards.server";
 import { GithubRewardStatusCard } from "@/components/github-reward-status-card";
-import { CircleUserRound, Github, ShoppingBag } from "lucide-react";
+import { Github, ShoppingBag } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CheckoutFeatureShortcut } from "@/components/account/checkout-feature-shortcut";
 import { checkoutFeatureDiscoverable } from "@/lib/account-updates";
@@ -53,7 +53,7 @@ export default async function AccountPage({
             ? "github"
             : "vinted";
     const latestExtensionVersion =
-        process.env.BROWSER_EXTENSION_LATEST_VERSION?.trim() || "0.4.1";
+        process.env.BROWSER_EXTENSION_LATEST_VERSION?.trim() || "0.4.2";
     const minimumExtensionVersion =
         process.env.BROWSER_EXTENSION_MIN_VERSION?.trim() || "0.2.1";
     const firefoxExtensionUrl =
@@ -61,19 +61,13 @@ export default async function AccountPage({
         "https://addons.mozilla.org/firefox/addon/vintrack-browser-sync/";
 
     return (
-        <div className="mx-auto max-w-[1440px] space-y-5">
-            <header className="border-border/60 flex items-start gap-3 border-b pb-5">
-                <div className="border-border/70 bg-muted/40 mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border">
-                    <CircleUserRound className="h-5 w-5" />
-                </div>
+        <div className="mx-auto max-w-5xl space-y-5">
+            <header>
                 <div>
-                    <p className="text-muted-foreground text-xs font-medium tracking-[0.18em] uppercase">
-                        Settings
-                    </p>
-                    <h1 className="mt-0.5 text-2xl font-semibold tracking-tight sm:text-3xl">
+                    <h1 className="text-2xl font-semibold tracking-tight">
                         Account &amp; connections
                     </h1>
-                    <p className="text-muted-foreground mt-1 max-w-2xl text-sm leading-6">
+                    <p className="text-muted-foreground mt-1 max-w-2xl text-sm">
                         Manage login providers, rewards, and the Vinted session
                         used by member tools.
                     </p>
@@ -85,13 +79,12 @@ export default async function AccountPage({
 
             <nav
                 aria-label="Account connections"
-                className="grid gap-3 sm:grid-cols-2"
+                className="border-border/70 bg-card flex w-fit max-w-full flex-wrap gap-0.5 rounded-md border p-0.5"
             >
                 {[
                     {
                         id: "github",
                         label: "GitHub Rewards",
-                        description: "Identity, stars and Free Pool rewards",
                         status: githubRewards.githubConnected
                             ? "Connected"
                             : "Not connected",
@@ -100,7 +93,6 @@ export default async function AccountPage({
                     {
                         id: "vinted",
                         label: "Vinted",
-                        description: "Session, browser sync and account tools",
                         status: status.linked ? "Linked" : "Not linked",
                         icon: ShoppingBag,
                     },
@@ -111,41 +103,22 @@ export default async function AccountPage({
                         <Link
                             key={connection.id}
                             href={`/account?connection=${connection.id}`}
+                            scroll={false}
                             aria-current={selected ? "page" : undefined}
                             className={cn(
-                                "group border-border/70 bg-card flex items-center gap-3 rounded-2xl border p-4 shadow-sm transition-all",
-                                "hover:border-foreground/20 hover:-translate-y-0.5 hover:shadow-md",
-                                selected &&
-                                    "border-foreground/20 bg-foreground/[0.035] ring-foreground/8 ring-1",
+                                "focus-visible:ring-ring flex min-h-9 flex-wrap items-center gap-2 rounded px-3 py-1.5 text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none",
+                                selected
+                                    ? "bg-primary text-primary-foreground"
+                                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
                             )}
                         >
-                            <span
-                                className={cn(
-                                    "bg-muted text-muted-foreground flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-colors",
-                                    selected &&
-                                        "bg-foreground text-background shadow-sm",
-                                )}
-                            >
-                                <Icon className="h-5 w-5" />
-                            </span>
-                            <span className="min-w-0 flex-1">
-                                <span className="flex items-center justify-between gap-3">
-                                    <span className="font-semibold">
-                                        {connection.label}
-                                    </span>
-                                    <span
-                                        className={cn(
-                                            "text-muted-foreground rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase",
-                                            selected &&
-                                                "border-foreground/15 text-foreground",
-                                        )}
-                                    >
-                                        {connection.status}
-                                    </span>
-                                </span>
-                                <span className="text-muted-foreground mt-1 block text-xs">
-                                    {connection.description}
-                                </span>
+                            <Icon
+                                aria-hidden="true"
+                                className="size-3.5 shrink-0"
+                            />
+                            <span>{connection.label}</span>
+                            <span className="text-[11px] font-normal">
+                                · {connection.status}
                             </span>
                         </Link>
                     );
@@ -156,14 +129,7 @@ export default async function AccountPage({
                 id={`${activeConnection}-connection`}
                 className="min-w-0 scroll-mt-20 space-y-3"
             >
-                <div className="flex items-center gap-3 px-0.5 py-0.5">
-                    <div className="border-border/70 bg-muted/40 flex h-9 w-9 items-center justify-center rounded-lg border">
-                        {activeConnection === "github" ? (
-                            <Github className="h-4 w-4" />
-                        ) : (
-                            <ShoppingBag className="h-4 w-4" />
-                        )}
-                    </div>
+                <div>
                     <div>
                         <h2 className="text-base font-semibold">
                             {activeConnection === "github"
