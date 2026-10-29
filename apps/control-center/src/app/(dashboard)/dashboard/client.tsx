@@ -1445,7 +1445,7 @@ export function DashboardClient({
                                     aria-pressed={monitorScope === scope}
                                     onClick={() => setMonitorScope(scope)}
                                     className={cn(
-                                        "flex min-h-7 flex-1 items-center justify-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                                        "flex min-h-8 flex-1 items-center justify-center gap-1.5 rounded px-3 py-1 text-[13px] font-medium transition-colors",
                                         monitorScope === scope
                                             ? "bg-primary text-primary-foreground"
                                             : "text-muted-foreground hover:bg-accent hover:text-foreground",

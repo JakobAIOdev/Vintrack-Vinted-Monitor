@@ -468,14 +468,16 @@ export function ProxiesClient({
                         </div>
 
                         {freeProxyPool.regions.length > 0 ? (
-                            <details className="group/pool bg-card">
-                                <summary className="focus-visible:ring-ring flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none [&::-webkit-details-marker]:hidden">
+                            <section
+                                aria-labelledby="pool-region-availability"
+                                className="bg-card"
+                            >
+                                <h3
+                                    id="pool-region-availability"
+                                    className="px-4 py-3 text-xs font-medium"
+                                >
                                     Region availability
-                                    <ChevronDown
-                                        aria-hidden="true"
-                                        className="size-3.5 transition-transform group-open/pool:rotate-180"
-                                    />
-                                </summary>
+                                </h3>
                                 <div className="border-border/70 border-t p-3">
                                     <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                                         {freeProxyPool.regions.map((region) => (
@@ -527,7 +529,7 @@ export function ProxiesClient({
                                         recovers.
                                     </p>
                                 </div>
-                            </details>
+                            </section>
                         ) : (
                             <div className="px-5 py-6 text-center">
                                 <p className="text-sm font-medium">
@@ -609,7 +611,7 @@ export function ProxiesClient({
                                     aria-pressed={filter === value}
                                     onClick={() => setFilter(value)}
                                     className={cn(
-                                        "focus-visible:ring-ring min-h-7 rounded px-2.5 py-1 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none",
+                                        "focus-visible:ring-ring min-h-8 rounded px-3 py-1 text-[13px] font-medium focus-visible:ring-2 focus-visible:outline-none",
                                         filter === value
                                             ? "bg-primary text-primary-foreground"
                                             : "text-muted-foreground hover:bg-accent hover:text-foreground",

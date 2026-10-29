@@ -3214,7 +3214,7 @@ export function AdminClient({
                             ref={isActive ? activeTabButtonRef : undefined}
                             href={tab.route}
                             aria-current={isActive ? "page" : undefined}
-                            className={`focus-visible:ring-ring flex min-h-7 items-center justify-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+                            className={`focus-visible:ring-ring flex min-h-8 items-center justify-center gap-1.5 rounded px-3 py-1 text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none ${
                                 isActive
                                     ? "bg-primary text-primary-foreground"
                                     : "text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -3243,7 +3243,7 @@ export function AdminClient({
                                 type="button"
                                 size="sm"
                                 aria-pressed={activeTab === section}
-                                className="h-7 px-2.5 text-xs"
+                                className="h-auto min-h-8 px-3 py-1 text-[13px]"
                                 variant={
                                     activeTab === section ? "default" : "ghost"
                                 }

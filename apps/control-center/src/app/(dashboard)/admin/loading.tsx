@@ -22,7 +22,7 @@ export default function AdminLoading() {
             <LoadingBlock className="h-8 w-full md:hidden" />
             <div className="border-border/70 hidden flex-wrap gap-0.5 rounded-md border p-0.5 md:flex">
                 {Array.from({ length: 7 }).map((_, index) => (
-                    <LoadingBlock key={index} className="h-7 min-w-16 flex-1" />
+                    <LoadingBlock key={index} className="h-8 min-w-16 flex-1" />
                 ))}
             </div>
 

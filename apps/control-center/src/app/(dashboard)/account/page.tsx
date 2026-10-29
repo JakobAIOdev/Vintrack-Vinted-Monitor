@@ -106,7 +106,7 @@ export default async function AccountPage({
                             scroll={false}
                             aria-current={selected ? "page" : undefined}
                             className={cn(
-                                "focus-visible:ring-ring flex min-h-8 flex-wrap items-center gap-2 rounded px-2.5 py-1.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none",
+                                "focus-visible:ring-ring flex min-h-9 flex-wrap items-center gap-2 rounded px-3 py-1.5 text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none",
                                 selected
                                     ? "bg-primary text-primary-foreground"
                                     : "text-muted-foreground hover:bg-accent hover:text-foreground",

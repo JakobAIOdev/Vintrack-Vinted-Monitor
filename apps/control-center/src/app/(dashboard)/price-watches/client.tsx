@@ -690,7 +690,7 @@ export function PriceWatchesClient({
                                     type="button"
                                     aria-pressed={filter === option}
                                     className={cn(
-                                        "focus-visible:ring-ring min-h-7 rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors focus-visible:ring-2 focus-visible:outline-none",
+                                        "focus-visible:ring-ring min-h-8 rounded px-3 py-1 text-[13px] font-medium capitalize transition-colors focus-visible:ring-2 focus-visible:outline-none",
                                         filter === option
                                             ? "bg-primary text-primary-foreground"
                                             : "text-muted-foreground hover:bg-accent hover:text-foreground",
