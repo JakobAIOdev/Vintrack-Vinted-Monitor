@@ -21,6 +21,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { CompactSearch } from "@/components/compact-search";
 import { Label } from "@/components/ui/label";
 import { getRegionLabel, REGIONS } from "@/lib/regions";
 import {
@@ -41,8 +42,9 @@ import {
     XCircle,
 } from "lucide-react";
 import { CreateMonitorLink } from "@/components/maintenance/create-monitor-link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
 export type ProxyGroup = {
     id: number;
@@ -137,6 +139,19 @@ function proxyCheckErrorLabel(errorCode: string | null) {
     }
 }
 
+function groupHealth(group: ProxyGroup) {
+    const check = group.proxyCheck;
+    if (check.status === "pending" || check.status === "running")
+        return "checking";
+    if (
+        check.error ||
+        check.status === "failed" ||
+        (check.status === "completed" && check.working === 0)
+    )
+        return "attention";
+    return check.status === "completed" ? "ready" : "unchecked";
+}
+
 export function ProxiesClient({
     initialGroups,
     userRole,
@@ -148,6 +163,15 @@ export function ProxiesClient({
 }) {
     const [groups, setGroups] = useState<ProxyGroup[]>(initialGroups);
     const [isCreateOpen, setIsCreateOpen] = useState(false);
+    const [search, setSearch] = useState("");
+    const [filter, setFilter] = useState<"all" | "unchecked" | "attention">(
+        "all",
+    );
+    const [deletingGroup, setDeletingGroup] = useState<ProxyGroup | null>(null);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [isCreating, setIsCreating] = useState(false);
+    const deleteTriggerRef = useRef<HTMLButtonElement | null>(null);
+    const createTriggerRef = useRef<HTMLButtonElement | null>(null);
     const [expandedId, setExpandedId] = useState<number | null>(null);
     const [editingId, setEditingId] = useState<number | null>(null);
     const [editName, setEditName] = useState("");
@@ -165,6 +189,7 @@ export function ProxiesClient({
     );
 
     const handleCreate = async (formData: FormData) => {
+        setIsCreating(true);
         try {
             await createProxyGroup(formData);
             setIsCreateOpen(false);
@@ -173,30 +198,32 @@ export function ProxiesClient({
             window.location.reload();
         } catch (error: unknown) {
             toast.error(getErrorMessage(error, "Failed to create proxy group"));
+        } finally {
+            setIsCreating(false);
         }
     };
 
     const handleDelete = async (id: number) => {
+        setIsDeleting(true);
         try {
             const result = await deleteProxyGroup(id);
             setGroups((prev) => prev.filter((g) => g.id !== id));
-            if (result.pausedMonitorCount > 0) {
-                toast.success(
-                    `Proxy group deleted. ${result.pausedMonitorCount} monitor${
-                        result.pausedMonitorCount === 1 ? "" : "s"
-                    } paused until a new proxy group is selected.`,
-                );
-            } else if (result.affectedMonitorCount > 0) {
-                toast.success(
-                    `Proxy group deleted. ${result.affectedMonitorCount} monitor${
-                        result.affectedMonitorCount === 1 ? "" : "s"
-                    } switched to server proxies.`,
-                );
-            } else {
-                toast.success("Proxy group deleted");
-            }
+            setDeletingGroup(null);
+            const monitorNotice =
+                result.pausedMonitorCount > 0
+                    ? ` ${result.pausedMonitorCount} monitor${result.pausedMonitorCount === 1 ? "" : "s"} paused until a new proxy group is selected.`
+                    : result.affectedMonitorCount > 0
+                      ? ` ${result.affectedMonitorCount} monitor${result.affectedMonitorCount === 1 ? "" : "s"} switched to server proxies.`
+                      : "";
+            const watchNotice =
+                result.affectedPriceWatchCount > 0
+                    ? ` ${result.affectedPriceWatchCount} Price Watch${result.affectedPriceWatchCount === 1 ? "" : "es"} paused and moved to shared proxies.`
+                    : "";
+            toast.success(`Proxy group deleted.${monitorNotice}${watchNotice}`);
         } catch (error: unknown) {
             toast.error(getErrorMessage(error, "Failed to delete proxy group"));
+        } finally {
+            setIsDeleting(false);
         }
     };
 
@@ -335,13 +362,24 @@ export function ProxiesClient({
         (total, region) => total + region.usable,
         0,
     );
+    const visibleGroups = groups.filter((group) => {
+        const query = search.trim().toLowerCase();
+        return (
+            (!query ||
+                `${group.name} ${group.proxyCheck.region ? getRegionLabel(group.proxyCheck.region) : ""}`
+                    .toLowerCase()
+                    .includes(query)) &&
+            (filter === "all" || groupHealth(group) === filter)
+        );
+    });
+    const hasFilters = search.trim() !== "" || filter !== "all";
 
     return (
-        <div className="mx-auto max-w-5xl space-y-6">
+        <div className="mx-auto max-w-5xl space-y-5">
             <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">
-                        Proxy Infrastructure
+                        Proxy Groups
                     </h1>
                     <p className="text-muted-foreground mt-0.5 text-sm">
                         Use the shared starter pool or manage dedicated proxy
@@ -349,6 +387,7 @@ export function ProxiesClient({
                     </p>
                 </div>
                 <Button
+                    ref={createTriggerRef}
                     onClick={() => setIsCreateOpen(true)}
                     size="sm"
                     className="w-full gap-1.5 sm:w-auto"
@@ -358,7 +397,7 @@ export function ProxiesClient({
             </div>
 
             <section className="border-border/70 overflow-hidden rounded-lg border">
-                <div className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex min-w-0 items-start gap-3">
                         <span className="bg-muted flex size-9 shrink-0 items-center justify-center rounded-md">
                             <Globe className="text-muted-foreground size-4" />
@@ -405,88 +444,90 @@ export function ProxiesClient({
 
                 {freeProxyPool.enabled ? (
                     <>
-                        <div className="border-border/70 bg-muted/20 grid border-y sm:grid-cols-3">
-                            <div className="border-border/70 px-5 py-3 sm:border-r">
-                                <p className="text-muted-foreground text-[11px] font-medium uppercase">
-                                    Ready regions
-                                </p>
-                                <p className="mt-1 text-lg font-semibold">
-                                    {readyRegionCount}
-                                    <span className="text-muted-foreground ml-1 text-xs font-normal">
-                                        of {freeProxyPool.regions.length}
-                                    </span>
-                                </p>
-                            </div>
-                            <div className="border-border/70 border-t px-5 py-3 sm:border-t-0 sm:border-r">
-                                <p className="text-muted-foreground text-[11px] font-medium uppercase">
-                                    Usable candidates
-                                </p>
-                                <p className="mt-1 text-lg font-semibold">
+                        <div className="border-border/70 bg-muted/20 flex flex-wrap items-center gap-x-5 gap-y-2 border-y px-4 py-2.5 text-xs">
+                            <span>
+                                <strong className="font-medium tabular-nums">
+                                    {readyRegionCount} of{" "}
+                                    {freeProxyPool.regions.length}
+                                </strong>{" "}
+                                regions ready
+                            </span>
+                            <span>
+                                <strong className="font-medium tabular-nums">
                                     {usableProxyCount.toLocaleString()}
-                                </p>
-                            </div>
-                            <div className="border-border/70 border-t px-5 py-3 sm:border-t-0">
-                                <p className="text-muted-foreground text-[11px] font-medium uppercase">
-                                    Pool management
-                                </p>
-                                <p className="mt-1 flex items-center gap-1.5 text-sm font-medium">
-                                    <Activity className="size-3.5 text-emerald-600" />
-                                    Automatic rotation
-                                </p>
-                            </div>
+                                </strong>{" "}
+                                usable candidates
+                            </span>
+                            <span className="text-muted-foreground inline-flex items-center gap-1.5">
+                                <Activity
+                                    aria-hidden="true"
+                                    className="size-3.5"
+                                />{" "}
+                                Automatic rotation
+                            </span>
                         </div>
 
                         {freeProxyPool.regions.length > 0 ? (
-                            <div className="bg-muted/10 p-3 sm:p-4">
-                                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                                    {freeProxyPool.regions.map((region) => (
-                                        <div
-                                            key={region.region}
-                                            className="border-border/70 bg-background flex min-w-0 items-center justify-between gap-3 rounded-md border px-3 py-2.5"
-                                        >
-                                            <div className="min-w-0">
-                                                <p className="truncate text-xs font-medium">
-                                                    {getRegionLabel(
-                                                        region.region,
-                                                    )}
-                                                </p>
-                                                <p className="text-muted-foreground mt-0.5 text-[11px]">
-                                                    {region.usable.toLocaleString()}{" "}
-                                                    usable
-                                                    {region.medianLatencyMs !==
-                                                        null && (
-                                                        <span>
-                                                            {" · "}
-                                                            {
-                                                                region.medianLatencyMs
-                                                            }{" "}
-                                                            ms
-                                                        </span>
-                                                    )}
-                                                </p>
-                                            </div>
-                                            <Badge
-                                                variant="outline"
-                                                className={
-                                                    region.healthy
-                                                        ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
-                                                        : "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400"
-                                                }
+                            <details className="group/pool bg-card">
+                                <summary className="focus-visible:ring-ring flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none [&::-webkit-details-marker]:hidden">
+                                    Region availability
+                                    <ChevronDown
+                                        aria-hidden="true"
+                                        className="size-3.5 transition-transform group-open/pool:rotate-180"
+                                    />
+                                </summary>
+                                <div className="border-border/70 border-t p-3">
+                                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                                        {freeProxyPool.regions.map((region) => (
+                                            <div
+                                                key={region.region}
+                                                className="border-border/70 bg-background flex min-w-0 items-center justify-between gap-3 rounded-md border px-3 py-2.5"
                                             >
-                                                {region.healthy
-                                                    ? "Ready"
-                                                    : "Recovering"}
-                                            </Badge>
-                                        </div>
-                                    ))}
+                                                <div className="min-w-0">
+                                                    <p className="truncate text-xs font-medium">
+                                                        {getRegionLabel(
+                                                            region.region,
+                                                        )}
+                                                    </p>
+                                                    <p className="text-muted-foreground mt-0.5 text-[11px]">
+                                                        {region.usable.toLocaleString()}{" "}
+                                                        usable
+                                                        {region.medianLatencyMs !==
+                                                            null && (
+                                                            <span>
+                                                                {" · "}
+                                                                {
+                                                                    region.medianLatencyMs
+                                                                }{" "}
+                                                                ms
+                                                            </span>
+                                                        )}
+                                                    </p>
+                                                </div>
+                                                <Badge
+                                                    variant="outline"
+                                                    className={
+                                                        region.healthy
+                                                            ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                                                            : "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                                                    }
+                                                >
+                                                    {region.healthy
+                                                        ? "Ready"
+                                                        : "Recovering"}
+                                                </Badge>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <p className="text-muted-foreground mt-3 px-1 text-[11px] leading-5">
+                                        Pool availability is live and
+                                        best-effort. Every configured region
+                                        remains selectable; monitors wait and
+                                        resume automatically while the pool
+                                        recovers.
+                                    </p>
                                 </div>
-                                <p className="text-muted-foreground mt-3 px-1 text-[11px] leading-5">
-                                    Pool availability is live and best-effort.
-                                    Every configured region remains selectable;
-                                    monitors wait and resume automatically while
-                                    the pool recovers.
-                                </p>
-                            </div>
+                            </details>
                         ) : (
                             <div className="px-5 py-6 text-center">
                                 <p className="text-sm font-medium">
@@ -510,8 +551,8 @@ export function ProxiesClient({
             </section>
 
             {(userRole === "premium" || userRole === "admin") && (
-                <Card className="border-amber-200 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10">
-                    <CardContent className="flex items-center gap-3 p-4">
+                <Card className="border-amber-200 bg-amber-50 py-0 dark:border-amber-500/20 dark:bg-amber-500/10">
+                    <CardContent className="flex items-center gap-3 px-4 py-3">
                         <Shield className="h-5 w-5 shrink-0 text-amber-600" />
                         <div>
                             <p className="text-[13px] font-medium text-amber-900 dark:text-amber-200">
@@ -526,20 +567,72 @@ export function ProxiesClient({
                 </Card>
             )}
 
-            <div className="flex items-end justify-between gap-4 pt-2">
-                <div>
-                    <h2 className="text-base font-semibold">
-                        Personal Proxy Groups
-                    </h2>
-                    <p className="text-muted-foreground mt-0.5 text-xs">
-                        Dedicated proxy lists available only to your account.
-                    </p>
+            <section aria-label="Find proxy groups" className="space-y-2">
+                <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+                    <div>
+                        <h2 className="text-base font-semibold">
+                            Personal Proxy Groups
+                        </h2>
+                        <p className="text-muted-foreground mt-0.5 text-xs">
+                            Dedicated proxy lists available only to your
+                            account.
+                        </p>
+                    </div>
+                    {(groups.length > 0 || hasFilters) && (
+                        <CompactSearch
+                            value={search}
+                            onChange={setSearch}
+                            label="Search proxy groups"
+                            clearLabel="Clear proxy search"
+                            placeholder="Search groups or regions"
+                            className="sm:max-w-xs"
+                        />
+                    )}
                 </div>
-            </div>
+                {(groups.length > 0 || hasFilters) && (
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div
+                            role="group"
+                            aria-label="Filter proxy groups by health"
+                            className="border-border/70 bg-card flex flex-wrap gap-0.5 rounded-md border p-0.5"
+                        >
+                            {(
+                                [
+                                    ["all", "All"],
+                                    ["unchecked", "Unchecked"],
+                                    ["attention", "Attention"],
+                                ] as const
+                            ).map(([value, label]) => (
+                                <button
+                                    key={value}
+                                    type="button"
+                                    aria-pressed={filter === value}
+                                    onClick={() => setFilter(value)}
+                                    className={cn(
+                                        "focus-visible:ring-ring min-h-7 rounded px-2.5 py-1 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none",
+                                        filter === value
+                                            ? "bg-primary text-primary-foreground"
+                                            : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                                    )}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                        <p
+                            role="status"
+                            className="text-muted-foreground text-xs"
+                        >
+                            Showing {visibleGroups.length} of {groups.length}{" "}
+                            groups
+                        </p>
+                    </div>
+                )}
+            </section>
 
             {groups.length === 0 ? (
-                <Card className="border-dashed">
-                    <CardContent className="p-10 text-center">
+                <Card className="border-dashed py-0">
+                    <CardContent className="px-4 py-10 text-center">
                         <Globe className="text-muted-foreground/40 mx-auto mb-3 h-10 w-10" />
                         <p className="text-muted-foreground text-[15px] font-medium">
                             No personal proxy groups yet
@@ -558,9 +651,29 @@ export function ProxiesClient({
                         </Button>
                     </CardContent>
                 </Card>
+            ) : visibleGroups.length === 0 ? (
+                <Card className="border-dashed py-0">
+                    <CardContent className="px-4 py-10 text-center text-sm">
+                        <p className="font-medium">No matching proxy groups</p>
+                        <p className="text-muted-foreground mt-1">
+                            Try another name, region or health filter.
+                        </p>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="mt-4"
+                            onClick={() => {
+                                setSearch("");
+                                setFilter("all");
+                            }}
+                        >
+                            Clear search and filters
+                        </Button>
+                    </CardContent>
+                </Card>
             ) : (
                 <div className="space-y-3">
-                    {groups.map((group) => {
+                    {visibleGroups.map((group) => {
                         const rxBytes = BigInt(group.bandwidthRxBytes);
                         const txBytes = BigInt(group.bandwidthTxBytes);
                         const totalBytes = rxBytes + txBytes;
@@ -593,35 +706,76 @@ export function ProxiesClient({
                                 : 0;
 
                         return (
-                            <Card key={group.id} className="border-input/60">
+                            <Card
+                                key={group.id}
+                                className="border-input/60 min-w-0 py-0"
+                                data-testid="proxy-group-card"
+                            >
                                 <CardContent className="p-0">
-                                    <div
-                                        className="hover:bg-muted/50 flex cursor-pointer items-center justify-between px-5 py-4 transition-colors"
-                                        onClick={() =>
-                                            setExpandedId(
+                                    <div className="flex items-center gap-1 pr-2">
+                                        <button
+                                            type="button"
+                                            aria-expanded={
                                                 expandedId === group.id
-                                                    ? null
-                                                    : group.id,
-                                            )
-                                        }
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            <Server className="text-muted-foreground h-4 w-4" />
-                                            <div>
-                                                <p className="text-foreground text-[14px] font-medium">
-                                                    {group.name}
-                                                </p>
-                                                <div className="mt-0.5 flex items-center gap-2">
-                                                    <span className="text-muted-foreground text-[12px]">
+                                            }
+                                            aria-controls={`proxy-group-${group.id}`}
+                                            aria-label={`${expandedId === group.id ? "Collapse" : "Expand"} ${group.name}`}
+                                            className="hover:bg-muted/50 focus-visible:ring-ring flex min-w-0 flex-1 items-start gap-3 rounded-lg px-4 py-3 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                                            onClick={() =>
+                                                setExpandedId(
+                                                    expandedId === group.id
+                                                        ? null
+                                                        : group.id,
+                                                )
+                                            }
+                                        >
+                                            <Server
+                                                aria-hidden="true"
+                                                className="text-muted-foreground mt-0.5 size-4 shrink-0"
+                                            />
+                                            <span className="min-w-0 flex-1">
+                                                <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                                    <span className="text-sm font-medium [overflow-wrap:anywhere] break-words">
+                                                        {group.name}
+                                                    </span>
+                                                    <span
+                                                        className={cn(
+                                                            "rounded border px-1.5 py-0.5 text-[11px]",
+                                                            groupHealth(
+                                                                group,
+                                                            ) === "ready"
+                                                                ? "border-emerald-500/25 text-emerald-700 dark:text-emerald-400"
+                                                                : groupHealth(
+                                                                        group,
+                                                                    ) ===
+                                                                    "attention"
+                                                                  ? "border-amber-500/25 text-amber-700 dark:text-amber-400"
+                                                                  : "border-border text-muted-foreground",
+                                                        )}
+                                                    >
+                                                        {groupHealth(group) ===
+                                                        "ready"
+                                                            ? `${group.proxyCheck.working} working · ${getRegionLabel(group.proxyCheck.region || "de")}`
+                                                            : groupHealth(
+                                                                    group,
+                                                                ) === "checking"
+                                                              ? "Checking…"
+                                                              : groupHealth(
+                                                                      group,
+                                                                  ) ===
+                                                                  "attention"
+                                                                ? "Needs attention"
+                                                                : "Unchecked"}
+                                                    </span>
+                                                </span>
+                                                <span className="text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                                                    <span>
                                                         {getProxyCount(
                                                             group.proxies,
                                                         )}{" "}
                                                         proxies
                                                     </span>
-                                                    <span className="text-muted-foreground/40">
-                                                        ·
-                                                    </span>
-                                                    <span className="text-muted-foreground text-[12px]">
+                                                    <span>
                                                         {group.monitorCount}{" "}
                                                         monitor
                                                         {group.monitorCount !==
@@ -629,20 +783,17 @@ export function ProxiesClient({
                                                             ? "s"
                                                             : ""}
                                                     </span>
-                                                    <span className="text-muted-foreground/40">
-                                                        ·
-                                                    </span>
-                                                    <span className="text-muted-foreground text-[12px]">
+                                                    <span>
                                                         {formatBytes(
                                                             totalBytes,
                                                         )}{" "}
                                                         traffic
                                                     </span>
-                                                </div>
+                                                </span>
                                                 {limitBytes &&
-                                                    limitBytes > BigInt(0) && (
-                                                        <div className="mt-2 w-full max-w-xs">
-                                                            <div className="text-muted-foreground mb-1 flex items-center justify-between text-[11px]">
+                                                    limitBytes > 0n && (
+                                                        <span className="mt-2 block max-w-xs">
+                                                            <span className="text-muted-foreground mb-1 flex flex-wrap justify-between gap-1 text-[11px]">
                                                                 <span>
                                                                     {formatBytes(
                                                                         totalBytes,
@@ -658,41 +809,68 @@ export function ProxiesClient({
                                                                     }
                                                                     %
                                                                 </span>
-                                                            </div>
-                                                            <div className="bg-muted h-1.5 overflow-hidden rounded-full">
-                                                                <div
-                                                                    className="bg-foreground h-full rounded-full transition-all"
+                                                            </span>
+                                                            <span
+                                                                role="progressbar"
+                                                                aria-label="Bandwidth used"
+                                                                aria-valuenow={
+                                                                    usagePercent ??
+                                                                    0
+                                                                }
+                                                                aria-valuemin={
+                                                                    0
+                                                                }
+                                                                aria-valuemax={
+                                                                    100
+                                                                }
+                                                                className="bg-muted block h-1.5 overflow-hidden rounded-full"
+                                                            >
+                                                                <span
+                                                                    className="bg-primary block h-full rounded-full"
                                                                     style={{
                                                                         width: `${usagePercent}%`,
                                                                     }}
                                                                 />
-                                                            </div>
-                                                        </div>
+                                                            </span>
+                                                        </span>
                                                     )}
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <Button
-                                                variant="ghost"
-                                                size="icon"
-                                                className="text-muted-foreground h-8 w-8 hover:text-red-500"
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleDelete(group.id);
-                                                }}
-                                            >
-                                                <Trash2 className="h-3.5 w-3.5" />
-                                            </Button>
+                                            </span>
                                             {expandedId === group.id ? (
-                                                <ChevronUp className="text-muted-foreground h-4 w-4" />
+                                                <ChevronUp
+                                                    aria-hidden="true"
+                                                    className="text-muted-foreground mt-0.5 size-4 shrink-0"
+                                                />
                                             ) : (
-                                                <ChevronDown className="text-muted-foreground h-4 w-4" />
+                                                <ChevronDown
+                                                    aria-hidden="true"
+                                                    className="text-muted-foreground mt-0.5 size-4 shrink-0"
+                                                />
                                             )}
-                                        </div>
+                                        </button>
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon-sm"
+                                            aria-label={`Delete ${group.name}`}
+                                            className="text-muted-foreground hover:text-destructive"
+                                            onClick={(event) => {
+                                                deleteTriggerRef.current =
+                                                    event.currentTarget;
+                                                setDeletingGroup(group);
+                                            }}
+                                        >
+                                            <Trash2
+                                                aria-hidden="true"
+                                                className="size-3.5"
+                                            />
+                                        </Button>
                                     </div>
 
                                     {expandedId === group.id && (
-                                        <div className="border-border space-y-3 border-t px-5 py-4">
+                                        <div
+                                            id={`proxy-group-${group.id}`}
+                                            className="border-border space-y-3 border-t p-3 sm:p-4"
+                                        >
                                             <div className="border-border bg-muted/20 space-y-3 rounded-lg border p-3">
                                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                                     <div>
@@ -723,8 +901,9 @@ export function ProxiesClient({
                                                             Vinted region.
                                                         </p>
                                                     </div>
-                                                    <div className="flex gap-2">
+                                                    <div className="flex min-w-0 flex-wrap gap-2">
                                                         <select
+                                                            aria-label={`Check region for ${group.name}`}
                                                             value={
                                                                 checkRegions[
                                                                     group.id
@@ -749,7 +928,7 @@ export function ProxiesClient({
                                                             disabled={
                                                                 checkRunning
                                                             }
-                                                            className="border-input bg-background h-8 rounded-md border px-2 text-xs"
+                                                            className="border-input bg-background focus-visible:ring-ring h-8 max-w-full min-w-0 rounded-md border px-2 text-xs focus-visible:ring-2 focus-visible:outline-none"
                                                         >
                                                             {REGIONS.map(
                                                                 (region) => (
@@ -1012,10 +1191,14 @@ export function ProxiesClient({
                                             {editingId === group.id ? (
                                                 <>
                                                     <div className="space-y-2">
-                                                        <Label className="text-[12px]">
+                                                        <Label
+                                                            htmlFor={`proxy-name-${group.id}`}
+                                                            className="text-xs"
+                                                        >
                                                             Name
                                                         </Label>
                                                         <Input
+                                                            id={`proxy-name-${group.id}`}
                                                             value={editName}
                                                             onChange={(e) =>
                                                                 setEditName(
@@ -1027,11 +1210,17 @@ export function ProxiesClient({
                                                         />
                                                     </div>
                                                     <div className="space-y-2">
-                                                        <Label className="text-[12px]">
+                                                        <Label
+                                                            htmlFor={`proxy-list-${group.id}`}
+                                                            className="text-xs"
+                                                        >
                                                             Proxies (one per
                                                             line)
                                                         </Label>
                                                         <textarea
+                                                            id={`proxy-list-${group.id}`}
+                                                            spellCheck={false}
+                                                            autoCapitalize="none"
                                                             value={editProxies}
                                                             onChange={(e) =>
                                                                 setEditProxies(
@@ -1045,10 +1234,14 @@ export function ProxiesClient({
                                                         />
                                                     </div>
                                                     <div className="space-y-2">
-                                                        <Label className="text-[12px]">
+                                                        <Label
+                                                            htmlFor={`proxy-limit-${group.id}`}
+                                                            className="text-xs"
+                                                        >
                                                             Bandwidth Limit (GB)
                                                         </Label>
                                                         <Input
+                                                            id={`proxy-limit-${group.id}`}
                                                             type="number"
                                                             min="0"
                                                             step="0.1"
@@ -1065,7 +1258,7 @@ export function ProxiesClient({
                                                             placeholder="Leave empty for no limit"
                                                         />
                                                     </div>
-                                                    <div className="flex gap-2">
+                                                    <div className="flex min-w-0 flex-wrap gap-2">
                                                         <Button
                                                             size="sm"
                                                             onClick={() =>
@@ -1152,8 +1345,72 @@ export function ProxiesClient({
                 </div>
             )}
 
-            <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-                <DialogContent className="sm:max-w-lg">
+            <Dialog
+                open={Boolean(deletingGroup)}
+                onOpenChange={(open) => {
+                    if (!open && !isDeleting) setDeletingGroup(null);
+                }}
+            >
+                <DialogContent
+                    className="sm:max-w-md"
+                    onCloseAutoFocus={(event) => {
+                        event.preventDefault();
+                        if (deleteTriggerRef.current?.isConnected)
+                            deleteTriggerRef.current.focus();
+                        else createTriggerRef.current?.focus();
+                    }}
+                >
+                    <DialogHeader>
+                        <DialogTitle>Delete proxy group?</DialogTitle>
+                        <DialogDescription className="[overflow-wrap:anywhere] break-words">
+                            This removes “{deletingGroup?.name}” and its saved
+                            proxy list.
+                            {deletingGroup && deletingGroup.monitorCount > 0
+                                ? userRole === "premium" || userRole === "admin"
+                                    ? ` ${deletingGroup.monitorCount} linked monitor${deletingGroup.monitorCount === 1 ? " will" : "s will"} switch to server proxies.`
+                                    : ` ${deletingGroup.monitorCount} linked monitor${deletingGroup.monitorCount === 1 ? " will" : "s will"} pause until you select another proxy group.`
+                                : " No monitors use this group."}{" "}
+                            Any Price Watches using this group will pause and
+                            switch to shared proxies.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={isDeleting}
+                            onClick={() => setDeletingGroup(null)}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="destructive"
+                            size="sm"
+                            disabled={isDeleting}
+                            onClick={() => {
+                                if (deletingGroup)
+                                    void handleDelete(deletingGroup.id);
+                            }}
+                        >
+                            {isDeleting ? "Deleting…" : "Delete group"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog
+                open={isCreateOpen}
+                onOpenChange={(open) => {
+                    if (!isCreating) setIsCreateOpen(open);
+                }}
+            >
+                <DialogContent
+                    className="max-h-[90dvh] overflow-y-auto sm:max-w-lg"
+                    onCloseAutoFocus={(event) => {
+                        event.preventDefault();
+                        createTriggerRef.current?.focus();
+                    }}
+                >
                     <DialogHeader>
                         <DialogTitle>Create Proxy Group</DialogTitle>
                         <DialogDescription>
@@ -1179,7 +1436,9 @@ export function ProxiesClient({
                             <textarea
                                 name="proxies"
                                 id="proxies"
-                                rows={8}
+                                rows={6}
+                                spellCheck={false}
+                                autoCapitalize="none"
                                 required
                                 className="border-input bg-background text-foreground placeholder:text-muted-foreground focus:ring-ring w-full rounded-md border px-3 py-2 font-mono text-[13px] focus:ring-2 focus:ring-offset-1 focus:outline-none"
                                 placeholder={
@@ -1215,11 +1474,19 @@ export function ProxiesClient({
                             <Button
                                 type="button"
                                 variant="outline"
+                                size="sm"
+                                disabled={isCreating}
                                 onClick={() => setIsCreateOpen(false)}
                             >
                                 Cancel
                             </Button>
-                            <Button type="submit">Create Group</Button>
+                            <Button
+                                type="submit"
+                                size="sm"
+                                disabled={isCreating}
+                            >
+                                {isCreating ? "Creating…" : "Create Group"}
+                            </Button>
                         </DialogFooter>
                     </form>
                 </DialogContent>

@@ -60,6 +60,58 @@ async function openMonitors(page: Page) {
     ).toBeVisible();
 }
 
+test("keeps account navigation compact and browser status readable in both themes", async ({
+    page,
+}) => {
+    await page.goto("/account");
+    const connections = page.getByRole("navigation", {
+        name: "Account connections",
+    });
+    await expect(connections.getByRole("link")).toHaveCount(2);
+    for (const link of await connections.getByRole("link").all()) {
+        expect((await link.boundingBox())!.height).toBeLessThanOrEqual(36);
+    }
+    await page.evaluate(() =>
+        window.postMessage(
+            {
+                type: "VINTRACK_EXTENSION_READY",
+                payload: {
+                    installed: true,
+                    configured: true,
+                    version: "0.4.2",
+                },
+            },
+            window.location.origin,
+        ),
+    );
+    await expect(page.getByText("v0.4.2", { exact: true })).toBeVisible();
+    const fallback = page
+        .locator("summary")
+        .filter({ hasText: "Manual token link" });
+    await fallback.focus();
+    await page.keyboard.press("Enter");
+    await expect(
+        page.getByLabel("Access Token", { exact: true }),
+    ).toBeVisible();
+    await expect(
+        page.getByRole("button", { name: "Link Account", exact: true }),
+    ).toBeDisabled();
+    await page.setViewportSize({ width: 320, height: 844 });
+    for (const dark of [false, true]) {
+        await page.evaluate((dark) => {
+            document.documentElement.style.fontSize = "200%";
+            document.documentElement.classList.toggle("dark", dark);
+        }, dark);
+        await expect
+            .poll(() =>
+                page.evaluate(
+                    () => document.documentElement.scrollWidth <= innerWidth,
+                ),
+            )
+            .toBe(true);
+    }
+});
+
 test("searches monitor names, queries and regions without losing empty-state recovery", async ({
     page,
 }) => {

@@ -601,7 +601,7 @@ export function AccountClient({
     return (
         <div className="space-y-4">
             <Card className="border-border/70 gap-0 overflow-hidden py-0 shadow-sm">
-                <CardHeader className="gap-4 border-b p-5 sm:flex-row sm:items-start sm:justify-between">
+                <CardHeader className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                         <CardTitle className="text-base">
                             Browser Extension
@@ -613,7 +613,7 @@ export function AccountClient({
                     </div>
                     <div
                         className={cn(
-                            "inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium",
+                            "inline-flex w-fit items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium",
                             extensionUpdateRequired
                                 ? "border-destructive/30 bg-destructive/10 text-destructive"
                                 : extensionReady
@@ -635,53 +635,46 @@ export function AccountClient({
                         {extensionStatusTitle}
                     </div>
                 </CardHeader>
-                <CardContent className="space-y-4 p-5">
-                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                        <div className="border-border/70 bg-muted/20 rounded-lg border p-3">
-                            <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
-                                Browser
-                            </p>
-                            <p className="mt-1 text-sm font-medium">
-                                {extensionInstalled ? "Detected" : "Missing"}
-                            </p>
-                        </div>
-                        <div className="border-border/70 bg-muted/20 rounded-lg border p-3">
-                            <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
-                                Connection
-                            </p>
-                            <p className="mt-1 text-sm font-medium">
-                                {extensionConfigured
+                <CardContent className="space-y-3 p-4">
+                    <dl className="border-border/70 bg-muted/20 flex flex-wrap gap-x-6 gap-y-3 rounded-lg border px-3 py-2.5">
+                        {[
+                            [
+                                "Browser",
+                                extensionInstalled ? "Detected" : "Missing",
+                            ],
+                            [
+                                "Connection",
+                                extensionConfigured
                                     ? "Connected"
-                                    : "Not connected"}
-                            </p>
-                        </div>
-                        <div className="border-border/70 bg-muted/20 rounded-lg border p-3">
-                            <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
-                                Version
-                            </p>
-                            <p
-                                className={cn(
-                                    "mt-1 text-sm font-medium",
-                                    extensionUpdateRequired &&
-                                        "text-destructive",
-                                )}
-                            >
-                                {!extensionInstalled
+                                    : "Not connected",
+                            ],
+                            [
+                                "Version",
+                                !extensionInstalled
                                     ? "—"
                                     : extensionVersion
                                       ? `v${extensionVersion}`
-                                      : "Legacy"}
-                            </p>
-                        </div>
-                        <div className="border-border/70 bg-muted/20 rounded-lg border p-3">
-                            <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
-                                Last browser sync
-                            </p>
-                            <p className="mt-1 text-sm font-medium">
-                                {lastBrowserSyncLabel}
-                            </p>
-                        </div>
-                    </div>
+                                      : "Legacy",
+                            ],
+                            ["Last browser sync", lastBrowserSyncLabel],
+                        ].map(([label, value]) => (
+                            <div key={label} className="min-w-0">
+                                <dt className="text-muted-foreground text-xs">
+                                    {label}
+                                </dt>
+                                <dd
+                                    className={cn(
+                                        "mt-0.5 text-sm font-medium break-words",
+                                        label === "Version" &&
+                                            extensionUpdateRequired &&
+                                            "text-destructive",
+                                    )}
+                                >
+                                    {value}
+                                </dd>
+                            </div>
+                        ))}
+                    </dl>
 
                     {extensionUpdateRequired ? (
                         <div className="border-destructive/30 bg-destructive/8 rounded-md border p-4">
@@ -753,7 +746,7 @@ export function AccountClient({
                         </div>
                     ) : null}
 
-                    <div className="border-border/70 bg-muted/25 rounded-lg border p-4">
+                    <div className="border-border/70 bg-muted/25 rounded-lg border p-3">
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                             <div>
                                 <p className="text-sm font-medium">
@@ -771,7 +764,8 @@ export function AccountClient({
                                     isBrowserSyncStarting ||
                                     extensionUpdateRequired
                                 }
-                                className="gap-2 md:shrink-0"
+                                size="sm"
+                                className="gap-1.5 md:shrink-0"
                             >
                                 {isBrowserSyncStarting ? (
                                     <RefreshCw className="h-4 w-4 animate-spin" />
@@ -788,7 +782,12 @@ export function AccountClient({
                     </div>
 
                     <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                        <Button asChild variant="outline" className="gap-2">
+                        <Button
+                            asChild
+                            variant="outline"
+                            size="sm"
+                            className="gap-1.5"
+                        >
                             <a
                                 href={CHROME_EXTENSION_DOWNLOAD_URL}
                                 target="_blank"
@@ -799,7 +798,12 @@ export function AccountClient({
                                 <ExternalLink className="h-3.5 w-3.5" />
                             </a>
                         </Button>
-                        <Button asChild variant="outline" className="gap-2">
+                        <Button
+                            asChild
+                            variant="outline"
+                            size="sm"
+                            className="gap-1.5"
+                        >
                             <a
                                 href={firefoxExtensionUrl}
                                 target="_blank"
@@ -814,6 +818,7 @@ export function AccountClient({
                             <Button
                                 type="button"
                                 variant="outline"
+                                size="sm"
                                 onClick={handleManualExtensionSync}
                                 disabled={extensionUpdateRequired}
                                 className="gap-2"
@@ -833,22 +838,16 @@ export function AccountClient({
                 </CardContent>
             </Card>
 
-            {status.linked && (
-                <CheckoutPreferencesCard
-                    key={`${status.vinted_id}:${status.domain}`}
-                    accountKey={`${status.vinted_id}:${status.domain}`}
-                />
-            )}
             {status.linked ? (
                 <Card className="border-border/70 gap-0 overflow-hidden py-0 shadow-sm">
-                    <CardHeader className="border-b p-5">
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-500/20">
+                    <CardHeader className="block min-w-0 border-b p-4">
+                        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                            <div className="flex max-w-full min-w-0 flex-1 items-center gap-3">
+                                <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-emerald-100 dark:bg-emerald-500/20">
                                     <ShieldCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
                                 </div>
-                                <div>
-                                    <CardTitle className="text-lg">
+                                <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                                    <CardTitle className="text-base [overflow-wrap:anywhere]">
                                         @{status.vinted_name}
                                     </CardTitle>
                                     <CardDescription>
@@ -869,7 +868,7 @@ export function AccountClient({
                             </Badge>
                         </div>
                     </CardHeader>
-                    <CardContent className="space-y-4 p-5">
+                    <CardContent className="space-y-3 p-4">
                         {status.requires_browser_reauth ||
                         status.requires_browser_sync ||
                         status.status === "degraded" ? (
@@ -888,7 +887,7 @@ export function AccountClient({
                                 ) : null}
                             </div>
                         ) : null}
-                        <div className="text-muted-foreground flex flex-wrap gap-x-4 gap-y-2 text-sm">
+                        <div className="text-muted-foreground flex flex-wrap gap-x-4 gap-y-2 text-xs">
                             <span>
                                 Last browser sync:{" "}
                                 <strong className="text-foreground font-medium">
@@ -956,7 +955,13 @@ export function AccountClient({
                                                 (prev) => !prev,
                                             )
                                         }
-                                        className="text-muted-foreground hover:text-foreground rounded p-0.5"
+                                        aria-label={
+                                            isVintedIdVisible
+                                                ? "Hide Vinted ID"
+                                                : "Show Vinted ID"
+                                        }
+                                        aria-pressed={isVintedIdVisible}
+                                        className="text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-ring inline-flex size-7 items-center justify-center rounded focus-visible:ring-2 focus-visible:outline-none"
                                         type="button"
                                     >
                                         {isVintedIdVisible ? (
@@ -969,7 +974,7 @@ export function AccountClient({
                             ) : null}
                         </div>
 
-                        <div className="border-border/70 bg-muted/20 rounded-lg border p-4 text-sm">
+                        <div className="border-border/70 bg-muted/20 rounded-lg border p-3 text-sm">
                             <span className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
                                 Primary Region
                             </span>
@@ -985,11 +990,13 @@ export function AccountClient({
                                         <button
                                             key={region.code}
                                             type="button"
+                                            aria-pressed={isSelected}
+                                            aria-label={`Primary region: ${region.label}`}
                                             onClick={() =>
                                                 setSelectedRegion(region.code)
                                             }
                                             className={cn(
-                                                "flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors",
+                                                "focus-visible:ring-ring flex min-h-7 items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none",
                                                 isSelected
                                                     ? "border-primary bg-primary text-primary-foreground"
                                                     : "border-border bg-background hover:bg-muted",
@@ -1023,7 +1030,7 @@ export function AccountClient({
                             </div>
                         </div>
 
-                        <div className="border-border/70 bg-muted/20 rounded-lg border p-4 text-sm">
+                        <div className="border-border/70 bg-muted/20 rounded-lg border p-3 text-sm">
                             <span className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
                                 Shipping Contact
                             </span>
@@ -1042,8 +1049,9 @@ export function AccountClient({
                                     inputMode="tel"
                                     autoComplete="new-password"
                                     name="vintrack-shipping-phone"
+                                    aria-label="Shipping phone number"
                                     placeholder="Set or clear phone number, e.g. +491234567890"
-                                    className="bg-background"
+                                    className="bg-background h-8"
                                 />
                                 <Button
                                     variant="outline"
@@ -1056,7 +1064,7 @@ export function AccountClient({
                                 </Button>
                             </div>
                         </div>
-                        <div className="xs:flex-row flex flex-col gap-2">
+                        <div className="flex flex-wrap gap-2">
                             <Button
                                 variant="outline"
                                 size="sm"
@@ -1087,16 +1095,23 @@ export function AccountClient({
                 </Card>
             ) : null}
 
+            {status.linked && (
+                <CheckoutPreferencesCard
+                    key={`${status.vinted_id}:${status.domain}`}
+                    accountKey={`${status.vinted_id}:${status.domain}`}
+                />
+            )}
+
             {status.linked ? (
                 <Card className="border-border/70 gap-0 overflow-hidden py-0 shadow-sm">
                     <details className="group">
-                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-sm font-medium">
+                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium">
                             Manual repair
                             <span className="text-muted-foreground text-xs font-normal group-open:hidden">
                                 Optional
                             </span>
                         </summary>
-                        <CardContent className="space-y-4 px-5 pb-5">
+                        <CardContent className="space-y-4 px-4 pb-4">
                             <p className="text-muted-foreground text-sm">
                                 Use this only if the extension cannot sync the
                                 current browser session.
@@ -1135,6 +1150,7 @@ export function AccountClient({
                             </div>
 
                             <Button
+                                size="sm"
                                 onClick={handleLink}
                                 disabled={isPending}
                                 className="gap-2"
@@ -1152,13 +1168,13 @@ export function AccountClient({
             ) : (
                 <Card className="border-border/70 gap-0 overflow-hidden py-0 shadow-sm">
                     <details className="group">
-                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-sm font-medium">
+                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium">
                             Manual token link
                             <span className="text-muted-foreground text-xs font-normal group-open:hidden">
                                 Fallback
                             </span>
                         </summary>
-                        <CardContent className="space-y-5 px-5 pb-5">
+                        <CardContent className="space-y-4 px-4 pb-4">
                             <p className="text-muted-foreground text-sm">
                                 Prefer the extension above. Use tokens only if
                                 the extension is unavailable.
@@ -1182,7 +1198,7 @@ export function AccountClient({
                                                     )
                                                 }
                                                 className={cn(
-                                                    "flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors",
+                                                    "focus-visible:ring-ring flex min-h-7 items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none",
                                                     isSelected
                                                         ? "border-primary bg-primary text-primary-foreground"
                                                         : "border-input bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground",
@@ -1246,11 +1262,13 @@ export function AccountClient({
                                     inputMode="tel"
                                     autoComplete="tel"
                                     name="vintrack-shipping-phone"
+                                    aria-label="Shipping phone number"
                                     placeholder="Optional, e.g. +491234567890"
                                 />
                             </div>
 
                             <Button
+                                size="sm"
                                 onClick={handleLink}
                                 disabled={!accessToken.trim() || isPending}
                                 className="gap-2"
