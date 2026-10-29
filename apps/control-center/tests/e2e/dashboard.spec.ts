@@ -812,7 +812,7 @@ test.describe("dashboard monitors", () => {
     test("keeps monitor management on the main dashboard", async ({ page }) => {
         await page.goto("/dashboard");
         await expect(
-            page.getByRole("heading", { name: "Monitors", exact: true }),
+            page.getByRole("heading", { name: /Welcome back/ }),
         ).toBeVisible();
         await expect(page.getByTestId("monitor-card").first()).toBeVisible();
         await expect(page.locator('aside a[href="/monitors"]')).toHaveCount(0);
@@ -1138,7 +1138,7 @@ test.describe("dashboard monitors", () => {
 
         await expect(page).toHaveTitle(/Vintrack/i);
         await expect(
-            page.getByRole("heading", { name: "Monitors", exact: true }),
+            page.getByRole("heading", { name: /Welcome back/ }),
         ).toBeVisible();
         await expect(
             page.getByTestId("monitor-summary").getByText("1 monitor", {
@@ -1175,11 +1175,6 @@ test.describe("dashboard monitors", () => {
         });
         const isMobile = await mobileMenu.isVisible();
         if (isMobile) await mobileMenu.click();
-        await page
-            .locator("summary")
-            .filter({ hasText: "Community" })
-            .filter({ visible: true })
-            .click();
         await expect(
             page.getByRole("link", { name: "Sponsor Vintrack" }),
         ).toHaveAttribute("href", "https://github.com/sponsors/JakobAIOdev");

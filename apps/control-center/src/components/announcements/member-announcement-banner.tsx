@@ -152,7 +152,7 @@ export function MemberAnnouncementBanner({
         : null;
     const CtaIcon = ctaIcon;
     const ctaClassName = cn(
-        "inline-flex min-h-10 min-w-0 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold shadow-sm transition-colors [overflow-wrap:anywhere]",
+        "inline-flex h-8 min-w-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold shadow-sm transition-colors [overflow-wrap:anywhere]",
         styles.button,
     );
     const ctaContent = announcement.cta ? (
@@ -226,7 +226,7 @@ export function MemberAnnouncementBanner({
                         <button
                             type="button"
                             onClick={dismiss}
-                            className="flex h-[40px] w-[40px] items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-black/5 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white"
+                            className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-black/5 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white"
                             aria-label={
                                 announcement.revision ===
                                 DEFAULT_MEMBER_ANNOUNCEMENT.revision

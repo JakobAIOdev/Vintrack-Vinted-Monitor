@@ -285,6 +285,7 @@ function getDemoMonitorLabel(monitor: Monitor, now: number) {
 
 export function DashboardClient({
     initialMonitors,
+    userName,
     initialDedupeMonitorAlerts,
     initialTelegramMessageStyle,
     initialDiscordMessageStyle,
@@ -1263,7 +1264,7 @@ export function DashboardClient({
     const totalItems = monitors.reduce((sum, m) => sum + m._count.items, 0);
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-4">
             {quickStartEligible && (
                 <FirstMonitorQuickStart
                     open={isQuickStartOpen}
@@ -1276,10 +1277,10 @@ export function DashboardClient({
             <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">
-                        Monitors
+                        Welcome back, {userName}
                     </h1>
                     <p className="text-muted-foreground mt-0.5 text-sm">
-                        Your Vinted searches, their status and latest finds.
+                        Manage and monitor your Vinted scrapers.
                     </p>
                 </div>
 
@@ -1327,7 +1328,7 @@ export function DashboardClient({
             </div>
 
             <div
-                className="border-border bg-card flex flex-wrap items-center gap-x-5 gap-y-3 rounded-xl border px-4 py-3"
+                className="border-border/70 bg-card flex flex-wrap items-center gap-x-6 gap-y-3 rounded-xl border px-4 py-3 shadow-sm"
                 data-testid="monitor-summary"
             >
                 <div className="flex items-center gap-2 text-sm">
@@ -1398,29 +1399,29 @@ export function DashboardClient({
             </div>
 
             {monitors.length > 0 && (
-                <section aria-label="Find monitors" className="space-y-3">
-                    <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                        <div className="relative w-full xl:max-w-md">
+                <section aria-label="Find monitors" className="space-y-2">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="relative w-full min-w-0 sm:max-w-sm sm:flex-1">
                             <Search
                                 aria-hidden="true"
-                                className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2"
+                                className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2"
                             />
                             <Input
                                 type="search"
                                 aria-label="Search monitors"
-                                placeholder="Search by name, search term or region"
+                                placeholder="Search monitors"
                                 value={monitorSearch}
                                 onChange={(event) =>
                                     setMonitorSearch(event.target.value)
                                 }
-                                className="bg-card h-11 pr-11 pl-10 [&::-webkit-search-cancel-button]:appearance-none"
+                                className="bg-card h-8 pr-8 pl-8 text-sm shadow-none [&::-webkit-search-cancel-button]:appearance-none"
                             />
                             {monitorSearch && (
                                 <button
                                     type="button"
                                     aria-label="Clear monitor search"
                                     onClick={() => setMonitorSearch("")}
-                                    className="text-muted-foreground hover:bg-accent hover:text-foreground absolute top-0 right-0 flex size-11 items-center justify-center rounded-r-md"
+                                    className="text-muted-foreground hover:bg-accent hover:text-foreground absolute top-0 right-0 flex size-8 items-center justify-center rounded-r-md"
                                 >
                                     <X aria-hidden="true" className="size-4" />
                                 </button>
@@ -1429,7 +1430,7 @@ export function DashboardClient({
                         <div
                             role="group"
                             aria-label="Filter monitors by status"
-                            className="border-border bg-card flex flex-wrap gap-1 rounded-lg border p-1"
+                            className="border-border/70 bg-card flex flex-wrap gap-0.5 self-start rounded-md border p-0.5 sm:shrink-0"
                         >
                             {(
                                 [
@@ -1444,7 +1445,7 @@ export function DashboardClient({
                                     aria-pressed={monitorScope === scope}
                                     onClick={() => setMonitorScope(scope)}
                                     className={cn(
-                                        "flex min-h-11 flex-1 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium transition-colors",
+                                        "flex min-h-7 flex-1 items-center justify-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors",
                                         monitorScope === scope
                                             ? "bg-primary text-primary-foreground"
                                             : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -1458,16 +1459,8 @@ export function DashboardClient({
                             ))}
                         </div>
                     </div>
-                    <p
-                        role="status"
-                        className="text-muted-foreground text-sm"
-                        data-testid="monitor-result-count"
-                    >
-                        Showing {visibleMonitors.length} of {monitors.length}{" "}
-                        monitors
-                    </p>
                     {monitors.length > 0 && (
-                        <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                             <Checkbox
                                 checked={
                                     allMonitorsSelected
@@ -1488,23 +1481,30 @@ export function DashboardClient({
                                 <p className="text-xs font-semibold">
                                     {selectedMonitorIds.length > 0
                                         ? `${selectedMonitorIds.length} selected`
-                                        : "Select monitors"}
+                                        : "Select visible"}
                                 </p>
-                                <p className="text-muted-foreground text-xs">
-                                    {selectedMonitorIds.length > 0
-                                        ? hiddenSelectedCount > 0
-                                            ? `${hiddenSelectedCount} selected outside this view`
-                                            : "Ready to edit"
-                                        : "Select visible results for bulk editing"}
-                                </p>
+                                {hiddenSelectedCount > 0 && (
+                                    <p className="text-muted-foreground text-xs">
+                                        {hiddenSelectedCount} selected outside
+                                        this view
+                                    </p>
+                                )}
                             </div>
+                            <p
+                                role="status"
+                                className="text-muted-foreground text-xs"
+                                data-testid="monitor-result-count"
+                            >
+                                Showing {visibleMonitors.length} of{" "}
+                                {monitors.length} monitors
+                            </p>
                             {selectedMonitorIds.length > 0 && (
                                 <Button
                                     type="button"
                                     variant="ghost"
                                     size="sm"
                                     onClick={() => setSelectedMonitorIds([])}
-                                    className="text-muted-foreground h-8 text-xs"
+                                    className="text-muted-foreground h-7 px-2 text-xs"
                                 >
                                     Clear
                                 </Button>
@@ -1519,7 +1519,7 @@ export function DashboardClient({
                                 }
                                 disabled={selectedMonitorIds.length === 0}
                                 onClick={openBulkEditDialog}
-                                className="h-8 gap-1.5 text-xs"
+                                className="h-7 gap-1.5 px-2 text-xs"
                             >
                                 <ListChecks className="size-3.5" />
                                 {selectedMonitorIds.length > 0
@@ -1630,7 +1630,7 @@ export function DashboardClient({
                                         <div className="min-w-0 flex-1">
                                             <div className="flex min-w-0 items-center gap-2.5">
                                                 <h3
-                                                    className="text-foreground min-w-0 flex-1 text-[15px] leading-6 font-semibold [overflow-wrap:anywhere]"
+                                                    className="text-foreground min-w-0 flex-1 truncate text-[15px] font-semibold"
                                                     title={m.name}
                                                 >
                                                     {m.name}
@@ -1673,7 +1673,7 @@ export function DashboardClient({
                                         <div className="flex min-w-0 items-center gap-2">
                                             <Search className="text-muted-foreground size-3.5 shrink-0" />
                                             <p
-                                                className="text-sm font-medium [overflow-wrap:anywhere]"
+                                                className="truncate text-sm font-medium"
                                                 title={m.query}
                                             >
                                                 {m.query || "All listings"}

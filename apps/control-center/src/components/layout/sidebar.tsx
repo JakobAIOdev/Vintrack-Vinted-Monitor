@@ -43,7 +43,7 @@ type NavItem = {
 };
 
 const primaryNavItems: NavItem[] = [
-    { href: "/dashboard", label: "Monitors", icon: LayoutDashboard },
+    { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     {
         href: "/price-watches",
         label: "Price Watch",
@@ -162,7 +162,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                     onClick={onClose}
                     type="button"
                     aria-label="Close navigation"
-                    className="text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground flex size-11 items-center justify-center rounded-lg transition-colors lg:hidden"
+                    className="text-muted-foreground hover:text-sidebar-foreground flex size-7 items-center justify-center rounded-md transition-colors lg:hidden"
                 >
                     <X className="h-5 w-5" />
                 </button>
@@ -190,7 +190,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                 aria-current={isActive ? "page" : undefined}
                                 onClick={onClose}
                                 className={cn(
-                                    "flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                                    "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                     isActive
                                         ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
                                         : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
@@ -217,7 +217,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                         }
                         onClick={onClose}
                         className={cn(
-                            "mt-1 flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                            "mt-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                             pathname === "/proxies" ||
                                 pathname.startsWith("/proxies/")
                                 ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
@@ -232,7 +232,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                 <div className="py-3">
                     <CreateMonitorLink
                         onClick={onClose}
-                        className="border-sidebar-border/80 text-muted-foreground hover:border-sidebar-foreground/20 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground flex min-h-11 items-center gap-2.5 rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors"
+                        className="border-sidebar-border/80 text-muted-foreground hover:border-sidebar-foreground/20 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground flex items-center gap-2.5 rounded-lg border border-dashed px-3 py-2 text-[13px] font-medium transition-colors"
                     >
                         <PlusCircle className="text-muted-foreground h-4 w-4" />
                         New Monitor
@@ -257,7 +257,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                     aria-current={isActive ? "page" : undefined}
                                     onClick={onClose}
                                     className={cn(
-                                        "mb-1 flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                                        "mb-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                         isActive
                                             ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
                                             : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
@@ -305,7 +305,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                         }
                                         onClick={onClose}
                                         className={cn(
-                                            "flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                                            "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                             isActive
                                                 ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
                                                 : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
@@ -339,7 +339,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                     aria-current={isActive ? "page" : undefined}
                                     onClick={onClose}
                                     className={cn(
-                                        "flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                                        "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                         isActive
                                             ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
                                             : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
@@ -360,16 +360,16 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                     </div>
                 )}
 
-                <details className="border-sidebar-border/60 mt-3 border-t pt-3">
-                    <summary className="text-muted-foreground hover:text-sidebar-foreground min-h-11 cursor-pointer rounded-lg px-3 py-3 text-sm font-medium">
+                <div className="border-sidebar-border/60 mt-3 border-t pt-3">
+                    <p className="text-muted-foreground mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
                         Community
-                    </summary>
+                    </p>
                     <div className="space-y-0.5">
                         <a
                             href="https://discord.gg/WbEpEjaWjP"
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-50 hover:text-blue-800 dark:text-blue-500 dark:hover:bg-blue-500/12 dark:hover:text-blue-400"
+                            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium text-blue-700 transition-colors hover:bg-blue-50 hover:text-blue-800 dark:text-blue-500 dark:hover:bg-blue-500/12 dark:hover:text-blue-400"
                         >
                             <MessageCircle className="h-4 w-4" />
                             Join Discord
@@ -378,7 +378,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                             href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor"
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 hover:text-amber-800 dark:text-amber-500 dark:hover:bg-amber-500/12 dark:hover:text-amber-400"
+                            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium text-amber-700 transition-colors hover:bg-amber-50 hover:text-amber-800 dark:text-amber-500 dark:hover:bg-amber-500/12 dark:hover:text-amber-400"
                         >
                             <Star className="h-4 w-4" />
                             Star on GitHub
@@ -387,13 +387,13 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                             href={GITHUB_SPONSORS_URL}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium text-pink-700 transition-colors hover:bg-pink-50 hover:text-pink-800 dark:text-pink-500 dark:hover:bg-pink-500/12 dark:hover:text-pink-400"
+                            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium text-pink-700 transition-colors hover:bg-pink-50 hover:text-pink-800 dark:text-pink-500 dark:hover:bg-pink-500/12 dark:hover:text-pink-400"
                         >
                             <Heart className="h-4 w-4" />
                             Sponsor Vintrack
                         </a>
                     </div>
-                </details>
+                </div>
             </nav>
 
             <div className="dashboard-navigation-footer border-sidebar-border/80 border-t p-3">
@@ -449,7 +449,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
         <>
             <aside
                 aria-label="Vintrack navigation"
-                className="dashboard-navigation border-sidebar-border bg-sidebar text-sidebar-foreground fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r lg:flex"
+                className="dashboard-navigation border-sidebar-border/80 bg-sidebar/95 text-sidebar-foreground fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r backdrop-blur-xl lg:flex"
             >
                 {navigation}
             </aside>
@@ -471,7 +471,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                 )
                                 ?.focus();
                         }}
-                        className="dashboard-navigation border-sidebar-border bg-sidebar text-sidebar-foreground fixed inset-y-0 left-0 z-50 flex w-[min(20rem,calc(100vw-2rem))] flex-col border-r shadow-xl outline-none lg:hidden"
+                        className="dashboard-navigation border-sidebar-border/80 bg-sidebar/95 text-sidebar-foreground fixed inset-y-0 left-0 z-50 flex w-[min(20rem,calc(100vw-2rem))] flex-col border-r shadow-xl backdrop-blur-xl outline-none lg:hidden"
                     >
                         <Dialog.Title className="sr-only">
                             Vintrack navigation

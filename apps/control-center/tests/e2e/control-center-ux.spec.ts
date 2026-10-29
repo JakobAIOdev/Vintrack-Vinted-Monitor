@@ -56,7 +56,7 @@ async function openMonitors(page: Page) {
     );
     await page.goto("/dashboard");
     await expect(
-        page.getByRole("heading", { name: "Monitors", exact: true }),
+        page.getByRole("heading", { name: /Welcome back/ }),
     ).toBeVisible();
 }
 
@@ -142,7 +142,7 @@ test("keeps mobile navigation out of the tab order until opened and restores foc
     });
     await expect(navigation).toBeVisible();
     await expect(
-        navigation.getByRole("link", { name: "Monitors", exact: true }),
+        navigation.getByRole("link", { name: "Dashboard", exact: true }),
     ).toHaveAttribute("aria-current", "page");
     await page.keyboard.press("Escape");
     await expect(navigation).toHaveCount(0);
@@ -152,8 +152,8 @@ test("keeps mobile navigation out of the tab order until opened and restores foc
     await expect(page).toHaveURL(/\/guide$/);
     await expect(navigation).toHaveCount(0);
     await expect(
-        page.getByRole("navigation", { name: "Breadcrumb" }),
-    ).toContainText("Guide");
+        page.getByRole("heading", { name: /Guide/ }).first(),
+    ).toBeVisible();
 });
 
 test("offers a skip link and breadcrumb navigation on monitor detail pages", async ({
@@ -167,6 +167,17 @@ test("offers a skip link and breadcrumb navigation on monitor detail pages", asy
     await page.keyboard.press("Enter");
     await expect(page.locator("#dashboard-content")).toBeFocused();
     await page.goto("/monitors/990701/edit?from=dashboard");
+    if ((page.viewportSize()?.width ?? 0) < 640) {
+        await page
+            .getByRole("button", { name: "Open navigation", exact: true })
+            .click();
+        await page
+            .getByRole("dialog", { name: "Vintrack navigation" })
+            .getByRole("link", { name: "Dashboard", exact: true })
+            .click();
+        await expect(page).toHaveURL(/\/dashboard$/);
+        return;
+    }
     const crumbs = page.getByRole("navigation", { name: "Breadcrumb" });
     await expect(crumbs).toContainText("Edit Monitor");
     if ((page.viewportSize()?.width ?? 0) >= 640) {
@@ -303,4 +314,54 @@ test("opens the live stream without waiting for a new listing", async ({
     await expect(
         page.getByRole("status", { name: "Live updates", exact: true }),
     ).toBeVisible();
+});
+
+test("restores the compact topbar, original palette and working light mode toggle", async ({
+    page,
+}) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.addInitScript(() => {
+        if (!localStorage.getItem("theme"))
+            localStorage.setItem("theme", "dark");
+    });
+    await openMonitors(page);
+    const theme = page
+        .locator("header")
+        .getByRole("button", { name: "Toggle color theme" });
+    await expect(theme).toBeVisible();
+    await expect(page.locator("html")).toHaveClass(/dark/);
+    await theme.click();
+    await expect(page.locator("html")).not.toHaveClass(/dark/);
+    expect(
+        await page
+            .locator(".dashboard-shell")
+            .evaluate((node) =>
+                getComputedStyle(node).getPropertyValue("--primary").trim(),
+            ),
+    ).toBe(
+        await page
+            .locator("html")
+            .evaluate((node) =>
+                getComputedStyle(node).getPropertyValue("--primary").trim(),
+            ),
+    );
+    expect((await page.locator("header").boundingBox())?.height).toBe(48);
+    expect((await theme.boundingBox())?.height).toBe(32);
+    expect(
+        (
+            await page
+                .getByRole("searchbox", { name: "Search monitors" })
+                .boundingBox()
+        )?.height,
+    ).toBe(32);
+    const filters = page.getByRole("group", {
+        name: "Filter monitors by status",
+    });
+    for (const button of await filters.getByRole("button").all()) {
+        expect((await button.boundingBox())?.height).toBeLessThanOrEqual(32);
+    }
+    await page.reload();
+    await expect(page.locator("html")).not.toHaveClass(/dark/);
+    await theme.click();
+    await expect(page.locator("html")).toHaveClass(/dark/);
 });

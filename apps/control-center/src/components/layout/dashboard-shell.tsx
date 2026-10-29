@@ -57,7 +57,7 @@ export function DashboardShell({
         <MonitorMaintenanceProvider initialMaintenance={maintenance}>
             <MonitorStreamProvider>
                 <DashboardActivity />
-                <div className="dashboard-shell bg-background flex min-h-screen">
+                <div className="dashboard-shell flex min-h-screen bg-transparent">
                     <a
                         href="#dashboard-content"
                         className="bg-primary text-primary-foreground fixed top-3 left-3 z-[60] -translate-y-24 rounded-lg px-4 py-3 text-sm font-medium focus:translate-y-0"

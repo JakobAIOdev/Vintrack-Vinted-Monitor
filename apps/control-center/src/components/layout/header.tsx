@@ -6,7 +6,8 @@ import { usePathname } from "next/navigation";
 import {
     Bell,
     ChevronRight,
-    ChevronLeft,
+    Github,
+    Star,
     ExternalLink,
     Menu,
     Volume1,
@@ -16,6 +17,7 @@ import {
     RefreshCw,
 } from "lucide-react";
 import { Popover } from "radix-ui";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { useVintedAccount } from "@/components/account-provider";
 import { useMonitorStreamContext } from "@/components/monitors/monitor-stream-context";
 import { cn } from "@/lib/utils";
@@ -197,7 +199,7 @@ function NotificationBell() {
                             void fetchNotifications();
                         }
                     }}
-                    className="border-border bg-card text-foreground hover:bg-accent relative inline-flex h-[44px] w-[44px] items-center justify-center rounded-lg border transition-colors"
+                    className="border-border/80 bg-background/70 text-foreground hover:border-border hover:bg-accent hover:text-accent-foreground relative inline-flex h-8 w-8 items-center justify-center rounded-lg border shadow-sm transition-colors"
                     aria-label="Open Vinted notifications"
                 >
                     <Bell className="h-4 w-4" />
@@ -214,7 +216,7 @@ function NotificationBell() {
                     sideOffset={8}
                     collisionPadding={12}
                     aria-label="Vinted notifications"
-                    className="dashboard-popover border-border bg-card text-foreground z-50 w-[min(22rem,calc(100vw-1.5rem))] overflow-hidden rounded-xl border shadow-lg outline-none"
+                    className="dashboard-popover border-border/70 bg-background/96 text-foreground z-50 w-[min(22rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border shadow-[0_20px_60px_rgba(15,23,42,0.18)] backdrop-blur-xl outline-none"
                 >
                     <div className="border-border/60 flex items-center justify-between border-b px-4 py-3">
                         <div>
@@ -379,7 +381,7 @@ export function Header({ onMenuClick, menuOpen = false }: HeaderProps) {
     const { soundEnabled, soundReady, toggleSound, connectionStatus } =
         useMonitorStreamContext();
     const pages: Record<string, string> = {
-        "/dashboard": "Monitors",
+        "/dashboard": "Dashboard",
         "/monitors": "Monitors",
         "/price-watches": "Price Watch",
         "/proxies": "Proxy Groups",
@@ -420,58 +422,39 @@ export function Header({ onMenuClick, menuOpen = false }: HeaderProps) {
               : "Connecting";
 
     return (
-        <header className="dashboard-header border-border bg-card sticky top-0 z-40 flex min-h-14 min-w-0 items-center justify-between gap-3 border-b px-4 md:px-6">
-            <div className="flex min-w-0 items-center gap-2">
+        <header className="border-border/70 bg-background/72 sticky top-0 z-40 flex h-12 items-center justify-between border-b px-4 backdrop-blur-xl md:px-6">
+            <div className="flex min-w-0 items-center gap-3">
                 <button
                     type="button"
                     onClick={onMenuClick}
                     aria-label="Open navigation"
                     aria-controls="mobile-navigation"
                     aria-expanded={menuOpen}
-                    className="text-muted-foreground hover:bg-accent hover:text-foreground -ml-2 flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-lg lg:hidden"
+                    className="text-muted-foreground hover:bg-accent hover:text-accent-foreground -ml-1.5 rounded-md p-1.5 transition-colors lg:hidden"
                 >
-                    <Menu className="size-[20px]" />
+                    <Menu className="h-5 w-5" />
                 </button>
                 <nav
                     aria-label="Breadcrumb"
-                    className="flex min-w-0 items-center gap-1 text-[min(0.875rem,18px)]"
+                    className="hidden min-w-0 items-center gap-1 text-sm sm:flex"
                 >
                     {crumbs.map((crumb, index) => (
                         <span
                             key={crumb.label}
-                            className={cn(
-                                "min-w-0 items-center gap-1",
-                                crumb.href && index > 0
-                                    ? "hidden sm:flex"
-                                    : "flex",
-                            )}
+                            className="flex min-w-0 items-center gap-1"
                         >
                             {index > 0 && (
                                 <ChevronRight
                                     aria-hidden="true"
-                                    className="text-muted-foreground hidden size-3.5 shrink-0 sm:block"
+                                    className="text-muted-foreground/50 h-3.5 w-3.5 shrink-0"
                                 />
                             )}
                             {crumb.href ? (
                                 <Link
                                     href={crumb.href}
-                                    className="text-muted-foreground hover:text-foreground rounded-md px-1 py-2 hover:underline"
+                                    className="text-muted-foreground hover:text-foreground hover:underline"
                                 >
-                                    {index === 0 && (
-                                        <ChevronLeft
-                                            aria-hidden="true"
-                                            className="size-5 sm:hidden"
-                                        />
-                                    )}
-                                    <span
-                                        className={
-                                            index === 0
-                                                ? "sr-only sm:not-sr-only"
-                                                : undefined
-                                        }
-                                    >
-                                        {crumb.label}
-                                    </span>
+                                    {crumb.label}
                                 </Link>
                             ) : (
                                 <span
@@ -485,27 +468,18 @@ export function Header({ onMenuClick, menuOpen = false }: HeaderProps) {
                     ))}
                 </nav>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
-                <span
-                    role="status"
-                    aria-label={connectionLabel}
-                    className="text-muted-foreground flex items-center gap-2 text-xs"
-                >
-                    <span
-                        aria-hidden="true"
-                        className={cn(
-                            "size-2 rounded-full",
-                            connectionStatus === "live"
-                                ? "bg-emerald-600 dark:bg-emerald-400"
-                                : "bg-amber-600 dark:bg-amber-400",
-                        )}
-                    />
-                    <span className="hidden md:inline">{connectionLabel}</span>
-                </span>
+            <div className="flex shrink-0 items-center gap-3 md:gap-4">
                 <button
                     type="button"
                     onClick={() => void toggleSound()}
-                    className="border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground flex h-[44px] w-[44px] items-center justify-center rounded-lg border transition-colors"
+                    className={cn(
+                        "border-border/80 bg-background/70 hover:border-border hover:bg-accent hover:text-accent-foreground inline-flex h-8 w-8 items-center justify-center rounded-lg border shadow-sm transition-colors",
+                        soundEnabled
+                            ? soundReady
+                                ? "text-emerald-600 dark:text-emerald-400"
+                                : "text-amber-600 dark:text-amber-400"
+                            : "text-muted-foreground",
+                    )}
                     aria-label={
                         soundEnabled
                             ? soundReady
@@ -524,15 +498,46 @@ export function Header({ onMenuClick, menuOpen = false }: HeaderProps) {
                 >
                     {soundEnabled ? (
                         soundReady ? (
-                            <Volume2 className="size-4" />
+                            <Volume2 className="h-4 w-4" />
                         ) : (
-                            <Volume1 className="size-4" />
+                            <Volume1 className="h-4 w-4" />
                         )
                     ) : (
-                        <VolumeX className="size-4" />
+                        <VolumeX className="h-4 w-4" />
                     )}
                 </button>
                 <NotificationBell />
+                <ThemeToggle compact className="hidden sm:inline-flex" />
+                <a
+                    href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="border-border/80 bg-card/70 text-muted-foreground hidden items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800 sm:flex dark:hover:border-amber-500/30 dark:hover:bg-amber-500/10 dark:hover:text-amber-400"
+                >
+                    <Github className="h-3.5 w-3.5" />
+                    <span className="hidden md:inline">Star on GitHub</span>
+                    <Star className="h-3.5 w-3.5" />
+                </a>
+                <span
+                    role="status"
+                    aria-label={connectionLabel}
+                    className="text-muted-foreground flex items-center gap-1.5 text-[11px]"
+                >
+                    <span
+                        aria-hidden="true"
+                        className={cn(
+                            "h-2 w-2 rounded-full",
+                            connectionStatus === "live"
+                                ? "bg-emerald-500"
+                                : "bg-amber-500",
+                        )}
+                    />
+                    <span className="hidden xl:inline">
+                        {connectionStatus === "live"
+                            ? "Connected"
+                            : connectionLabel}
+                    </span>
+                </span>
             </div>
         </header>
     );
