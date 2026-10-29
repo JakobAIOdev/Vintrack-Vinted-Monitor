@@ -558,6 +558,10 @@ test.describe("monitor maintenance", () => {
             select: { id: true, status: true },
         });
 
+        let releaseActions!: () => void;
+        const actionsReady = new Promise<void>((resolve) => {
+            releaseActions = resolve;
+        });
         try {
             await db.app_settings.deleteMany({
                 where: { key: MONITOR_MAINTENANCE_SETTING_KEY },
@@ -584,7 +588,28 @@ test.describe("monitor maintenance", () => {
             });
             await expect(startAll).toBeVisible();
 
+            // Keep both actions in flight before either can remove Start All.
+            const actionPaths = new Set<string>();
+            await context.route(
+                (url) =>
+                    ["/admin/operations", "/dashboard", "/monitors"].includes(
+                        url.pathname,
+                    ),
+                async (route) => {
+                    const request = route.request();
+                    if (
+                        request.method() === "POST" &&
+                        request.headers()["next-action"]
+                    ) {
+                        actionPaths.add(new URL(request.url()).pathname);
+                        if (actionPaths.size === 2) releaseActions();
+                        await actionsReady;
+                    }
+                    await route.continue();
+                },
+            );
             await Promise.all([confirmMaintenance.click(), startAll.click()]);
+            await expect.poll(() => actionPaths.size).toBe(2);
             await expect
                 .poll(async () => {
                     const setting = await db.app_settings.findUnique({
@@ -603,6 +628,7 @@ test.describe("monitor maintenance", () => {
             ).toBe(0);
             await dashboardPage.close();
         } finally {
+            releaseActions();
             for (const monitor of monitorStates) {
                 await db.monitors.updateMany({
                     where: { id: monitor.id },

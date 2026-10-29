@@ -3296,7 +3296,7 @@ export function AdminClient({
                                                     ? "destructive"
                                                     : "secondary"
                                             }
-                                            className="rounded-md text-[10px] uppercase"
+                                            className="max-w-full rounded-md text-[10px] whitespace-normal uppercase"
                                         >
                                             {maintenanceStatusLabel}
                                         </Badge>
@@ -3317,6 +3317,7 @@ export function AdminClient({
                                             type="button"
                                             size="sm"
                                             variant="outline"
+                                            className="h-auto min-h-8 max-w-full whitespace-normal py-1.5"
                                             onClick={() =>
                                                 openMaintenanceDialog("update")
                                             }
@@ -3326,6 +3327,7 @@ export function AdminClient({
                                         <Button
                                             type="button"
                                             size="sm"
+                                            className="h-auto min-h-8 max-w-full whitespace-normal py-1.5"
                                             onClick={() =>
                                                 openMaintenanceDialog("disable")
                                             }
@@ -3338,6 +3340,7 @@ export function AdminClient({
                                         type="button"
                                         size="sm"
                                         variant="destructive"
+                                        className="h-auto min-h-8 max-w-full whitespace-normal py-1.5"
                                         onClick={() =>
                                             openMaintenanceDialog("enable")
                                         }
@@ -4462,6 +4465,7 @@ export function AdminClient({
                             <Button
                                 type="button"
                                 variant="outline"
+                                className="h-auto min-h-9 max-w-full whitespace-normal"
                                 onClick={() => switchTab("price_watch")}
                             >
                                 Open Price Watch Operations
@@ -4490,7 +4494,7 @@ export function AdminClient({
                                                     ? "default"
                                                     : "secondary"
                                             }
-                                            className="rounded-md text-[10px] uppercase"
+                                            className="max-w-full rounded-md text-[10px] whitespace-normal uppercase"
                                         >
                                             {inactivePolicyState.policy.enabled
                                                 ? inactivePolicyState.status ===
@@ -4583,7 +4587,7 @@ export function AdminClient({
                                     </option>
                                     <option value="all">All monitors</option>
                                 </select>
-                                <label className="border-input bg-background mt-2 flex h-9 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm">
+                                <label className="border-input bg-background mt-2 flex min-h-9 cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm">
                                     <input
                                         type="checkbox"
                                         checked={
@@ -4604,12 +4608,12 @@ export function AdminClient({
                             </div>
                             <div>
                                 <Label className="text-xs">Member roles</Label>
-                                <div className="mt-2 flex h-9 gap-2">
+                                <div className="mt-2 flex flex-wrap gap-2">
                                     {(["free", "premium"] as const).map(
                                         (role) => (
                                             <label
                                                 key={role}
-                                                className="border-input bg-background flex flex-1 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm capitalize"
+                                                className="border-input bg-background flex min-h-9 flex-1 basis-28 cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm capitalize"
                                             >
                                                 <input
                                                     type="checkbox"
@@ -4800,14 +4804,14 @@ export function AdminClient({
                                                     data-testid="active-monitor-member-toggle"
                                                     aria-expanded={isExpanded}
                                                     aria-controls={contentId}
-                                                    className="bg-muted/20 hover:bg-muted/40 flex w-full items-center justify-between gap-4 px-5 py-3 text-left transition-colors"
+                                                    className="bg-muted/20 hover:bg-muted/40 flex w-full flex-wrap items-center justify-between gap-4 px-5 py-3 text-left transition-colors"
                                                     onClick={() =>
                                                         toggleMonitorMember(
                                                             user.id,
                                                         )
                                                     }
                                                 >
-                                                    <span className="flex min-w-0 items-center gap-3">
+                                                    <span className="flex min-w-0 flex-1 basis-48 items-center gap-3">
                                                         {user.image ? (
                                                             <img
                                                                 src={user.image}

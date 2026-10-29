@@ -223,7 +223,17 @@ test("keeps new monitor and admin overview within a narrow viewport with enlarge
         "/admin/features",
     ]) {
         await page.goto(path);
-        await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+        await expect(
+            page.getByRole("heading", {
+                level: 1,
+                name: path === "/monitors/new" ? "Create Monitor" : "Admin Panel",
+                exact: true,
+            }),
+        ).toBeVisible();
+        // Measure the final layout, not a frame during button size transitions.
+        await page.addStyleTag({
+            content: "*, *::before, *::after { transition: none !important; }",
+        });
         if (path === "/monitors/new") {
             await expect(
                 page.getByRole("button", {
