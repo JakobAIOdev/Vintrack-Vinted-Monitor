@@ -29,7 +29,7 @@ const (
 	maximumFreeProxyClientPoolSize  = 100
 	freeProxyMaxInFlightPerClient   = 2
 	defaultFreeProxyHedgeDelayMilli = 900
-	freeProxyRuntimeSuccessInterval = 5 * time.Minute
+	freeProxyRuntimeSuccessInterval = model.FreeProxyRuntimeSuccessInterval
 )
 
 type Engine struct {

@@ -172,7 +172,7 @@ func TestFreeProxyRegionalFailuresPreserveRecentlyWorkingRegions(t *testing.T) {
 			NOW()-INTERVAL '10 minutes', NOW()-INTERVAL '1 minute', 'timeout', 50
 		FROM free_proxies WHERE proxy_url=$1
 		UNION ALL
-		SELECT id, 'sqlhealthy', 'active', 2, 0, 2, NOW(), NULL, NULL, 80
+		SELECT id, 'sqlhealthy', 'active', 2, 0, 2, NOW()-INTERVAL '4 minutes', NULL, NULL, 80
 		FROM free_proxies WHERE proxy_url=$1`, proxyURL); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestFreeProxyRegionalFailuresPreserveRecentlyWorkingRegions(t *testing.T) {
 	}
 	// Old evidence cannot protect an endpoint that now fails in multiple
 	// regions. Global quarantine must still remove it from every pool.
-	if _, err := store.db.ExecContext(ctx, `UPDATE free_proxy_health SET last_success_at=NOW()-INTERVAL '3 minutes' WHERE region='sqlhealthy' AND proxy_id=(SELECT id FROM free_proxies WHERE proxy_url=$1)`, proxyURL); err != nil {
+	if _, err := store.db.ExecContext(ctx, `UPDATE free_proxy_health SET last_success_at=NOW()-INTERVAL '7 minutes' WHERE region='sqlhealthy' AND proxy_id=(SELECT id FROM free_proxies WHERE proxy_url=$1)`, proxyURL); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.RecordFreeProxyFailureStageContext(ctx, proxyURL, "sqlrely", 0, "synthetic correlated outage", "timeout", "warmup", 3, 30); err != nil {

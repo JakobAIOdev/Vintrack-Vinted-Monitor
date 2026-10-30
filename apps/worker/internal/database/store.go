@@ -2596,9 +2596,9 @@ func (s *Store) RecordFreeProxyFailureStageContext(
 				  AND healthy.status = 'active'
 				  AND healthy.success_streak >= 2
 				  AND healthy.failure_streak = 0
-				  AND healthy.last_success_at >= NOW() - INTERVAL '2 minutes'
+				  AND healthy.last_success_at >= NOW() - $3::interval
 				  AND healthy.last_success_at > COALESCE(healthy.last_failure_at, 'epoch'::timestamp)
-			)`, proxyURL, region).Scan(&globalTransportFailure); queryErr != nil {
+			)`, proxyURL, region, fmt.Sprintf("%d seconds", int(model.FreeProxyRuntimeSuccessFreshness/time.Second))).Scan(&globalTransportFailure); queryErr != nil {
 			return queryErr
 		}
 	}
