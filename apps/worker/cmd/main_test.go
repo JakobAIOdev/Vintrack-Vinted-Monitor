@@ -244,31 +244,49 @@ func TestFreeProxyWaveClassSlotsPrioritizeUsedRecovery(t *testing.T) {
 	}
 }
 
-func TestFreeProxyRegionWorkClassPrioritizesEveryUnderfilledRegion(t *testing.T) {
+func TestFreeProxyRegionWorkClassPrioritizesReadinessBeforeReserve(t *testing.T) {
 	tests := []struct {
-		name      string
-		bootstrap bool
-		used      bool
-		want      freeProxyRegionWorkClass
+		name   string
+		active int
+		target int
+		used   bool
+		want   freeProxyRegionWorkClass
 	}{
-		{name: "used recovery", bootstrap: true, used: true, want: freeProxyRegionWorkRecovery},
-		{name: "idle recovery", bootstrap: true, used: false, want: freeProxyRegionWorkRecovery},
-		{name: "used keepalive", used: true, want: freeProxyRegionWorkKeepalive},
-		{name: "idle maintenance", want: freeProxyRegionWorkIdle},
+		{name: "used recovery", active: 8, target: 100, used: true, want: freeProxyRegionWorkRecovery},
+		{name: "idle recovery", active: 0, target: 10, used: false, want: freeProxyRegionWorkRecovery},
+		{name: "used keepalive", active: 50, target: 50, used: true, want: freeProxyRegionWorkKeepalive},
+		{name: "reserve refill", active: 13, target: 100, used: true, want: freeProxyRegionWorkKeepalive},
+		{name: "idle maintenance", active: 10, target: 10, want: freeProxyRegionWorkIdle},
+		{name: "target below minimum", active: 5, target: 5, want: freeProxyRegionWorkIdle},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := freeProxyRegionWorkClassFor(test.bootstrap, test.used); got != test.want {
+			if got := freeProxyRegionWorkClassFor(test.active, test.target, 10, test.used); got != test.want {
 				t.Fatalf(
-					"freeProxyRegionWorkClassFor(%v, %v) = %d, want %d",
-					test.bootstrap,
+					"freeProxyRegionWorkClassFor(%v, %v, 10, %v) = %d, want %d",
+					test.active,
+					test.target,
 					test.used,
 					got,
 					test.want,
 				)
 			}
 		})
+	}
+}
+
+func TestFreeProxyRecoverySlotsDoNotQueueBehindOneRegion(t *testing.T) {
+	groups := [3][]string{{"slot-recovery"}, {"slot-working-a", "slot-working-b", "slot-working-c", "slot-working-d", "slot-working-e"}, nil}
+	recovery, keepalive, idle := freeProxyWaveSlotsForRegions(64, 12, groups)
+	if recovery != 12 || keepalive != 52 || idle != 0 {
+		t.Fatalf("one-region recovery starved working pools or queued excess checks: %d/%d/%d", recovery, keepalive, idle)
+	}
+	for maximum := 0; maximum <= 64; maximum++ {
+		r, k, i := freeProxyWaveSlotsForRegions(maximum, 2, groups)
+		if r+k+i > maximum || r > 2 || k > 10 || i != 0 {
+			t.Fatalf("unbounded allocation at %d slots: %d/%d/%d", maximum, r, k, i)
+		}
 	}
 }
 
