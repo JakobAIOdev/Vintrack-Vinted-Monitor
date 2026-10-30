@@ -426,7 +426,7 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 			activeCount,
 			minActive,
 		)
-		if !serving {
+		if !serving && state != "limited" {
 			freeProxyPools.Publish(region, "", state, activeCount, reason, readyObservations)
 			_ = publishFreeProxyRegionServingState(refreshCtx, store, region, state, activeCount, reason)
 			continue
@@ -443,8 +443,8 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 			_ = publishFreeProxyRegionServingState(refreshCtx, store, region, "recovering", activeCount, "snapshot_query_failed")
 			continue
 		}
-		freeProxyPools.Publish(region, strings.Join(proxies, "\n"), "ready", activeCount, "", readyObservations)
-		_ = publishFreeProxyRegionServingState(refreshCtx, store, region, "ready", activeCount, "")
+		freeProxyPools.Publish(region, strings.Join(proxies, "\n"), state, activeCount, reason, readyObservations)
+		_ = publishFreeProxyRegionServingState(refreshCtx, store, region, state, activeCount, reason)
 	}
 }
 
@@ -525,6 +525,10 @@ func freeProxyServingDecision(previous proxy.PoolSnapshot, activeCount int, minA
 	}
 	if serving {
 		state = "ready"
+	} else if activeCount > 0 {
+		// Every published exit still passed independent validation. Insufficient
+		// aggregate capacity requires admission control, not a region-wide stop.
+		state = "limited"
 	}
 	return serving, state, reason, readyObservations
 }

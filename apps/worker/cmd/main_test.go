@@ -717,11 +717,11 @@ func TestFreeProxyServingDecisionRequiresConfirmationAndUsesHysteresis(t *testin
 	}
 
 	serving, state, reason, observations = freeProxyServingDecision(proxy.PoolSnapshot{}, 10, 10)
-	if serving || state != "recovering" || reason != "confirming_readiness" || observations != 1 {
+	if serving || state != "limited" || reason != "confirming_readiness" || observations != 1 {
 		t.Fatalf("first ready observation = %v/%s/%s/%d", serving, state, reason, observations)
 	}
 
-	previous := proxy.PoolSnapshot{State: "recovering", ReadyObservations: observations, Version: 1}
+	previous := proxy.PoolSnapshot{State: "limited", ReadyObservations: observations, Version: 1}
 	serving, state, reason, observations = freeProxyServingDecision(previous, 10, 10)
 	if !serving || state != "ready" || reason != "" || observations != 2 {
 		t.Fatalf("second ready observation = %v/%s/%s/%d", serving, state, reason, observations)
@@ -733,8 +733,22 @@ func TestFreeProxyServingDecisionRequiresConfirmationAndUsesHysteresis(t *testin
 		t.Fatalf("hysteresis floor decision = %v/%s/%s/%d", serving, state, reason, observations)
 	}
 	serving, state, reason, observations = freeProxyServingDecision(previous, 7, 10)
-	if serving || state != "recovering" || reason != "below_hysteresis_floor" || observations != 0 {
+	if serving || state != "limited" || reason != "below_hysteresis_floor" || observations != 0 {
 		t.Fatalf("below hysteresis decision = %v/%s/%s/%d", serving, state, reason, observations)
+	}
+}
+
+func TestFreeProxyLimitedServingNeverPublishesAnEmptyPool(t *testing.T) {
+	previous := proxy.PoolSnapshot{State: "ready", ReadyObservations: 2, Version: 1}
+	for count := 1; count < 8; count++ {
+		ready, state, _, _ := freeProxyServingDecision(previous, count, 10)
+		if ready || state != "limited" {
+			t.Fatalf("%d validated exits did not enter paced operation: ready=%v state=%s", count, ready, state)
+		}
+	}
+	ready, state, _, _ := freeProxyServingDecision(previous, 0, 10)
+	if ready || state == "limited" || state == "ready" {
+		t.Fatalf("empty pool remained available: ready=%v state=%s", ready, state)
 	}
 }
 

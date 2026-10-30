@@ -273,6 +273,13 @@ Shared public proxies are volatile and should not be treated as guaranteed
 capacity. Configure imports, regions, thresholds, and pool availability in the
 admin settings, and use owned capacity for sustained deployments.
 
+When a shared pool drops below its normal capacity threshold, existing monitors
+continue in a limited mode using only independently validated proxies. Catalog
+requests are paced at no more than one every two seconds per proxy, so search
+intervals can grow while capacity recovers. The dashboard may show the pool as
+recovering during this period. If no validated proxies remain, monitors wait and resume
+automatically when safe capacity returns.
+
 ### Choosing a provider
 
 Vintrack does not require a specific proxy vendor. Match the provider's proxy

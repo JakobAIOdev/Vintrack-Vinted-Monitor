@@ -37,13 +37,19 @@ func (e *Engine) applyWorkerPolicy(policy workerPolicy) {
 	}
 	e.enrichersMu.RUnlock()
 	freePolicy := loadFreeProxyPacingPolicy(e.db)
+	e.applyFreeProxyPacingPolicy(freePolicy)
+}
+
+func (e *Engine) applyFreeProxyPacingPolicy(freePolicy freeProxyPacingPolicy) {
 	e.freePacersMu.Lock()
 	e.freePacingPolicy = freePolicy
 	for region, pacer := range e.freePacers {
+		limited := e.freeProxy != nil && e.freeProxy.Snapshot(region).State == "limited"
+		policy := freePolicy.forPool(region, limited)
 		pacer.mu.Lock()
-		pacer.policy = freePolicy
+		pacer.policy = policy
 		pacer.mu.Unlock()
-		if !freePolicy.applies(region) {
+		if !policy.applies(region) {
 			delete(e.freePacers, region)
 		}
 	}
