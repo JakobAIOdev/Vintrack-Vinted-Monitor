@@ -29,7 +29,7 @@ const (
 	maximumFreeProxyClientPoolSize  = 100
 	freeProxyMaxInFlightPerClient   = 2
 	defaultFreeProxyHedgeDelayMilli = 900
-	freeProxyRuntimeSuccessInterval = 5 * time.Minute
+	freeProxyRuntimeSuccessInterval = model.FreeProxyRuntimeSuccessInterval
 )
 
 type Engine struct {
@@ -151,17 +151,22 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 	return engine
 }
 
-func (e *Engine) freeProxyPacer(region string) *freeProxyRegionPacer {
+func (e *Engine) freeProxyPacer(region string, limited bool) *freeProxyRegionPacer {
 	region = strings.ToLower(strings.TrimSpace(region))
 	e.freePacersMu.Lock()
 	defer e.freePacersMu.Unlock()
-	if !e.freePacingPolicy.applies(region) {
+	policy := e.freePacingPolicy.forPool(region, limited)
+	if !policy.applies(region) {
+		delete(e.freePacers, region)
 		return nil
 	}
 	if pacer := e.freePacers[region]; pacer != nil {
+		pacer.mu.Lock()
+		pacer.policy = policy
+		pacer.mu.Unlock()
 		return pacer
 	}
-	pacer := newFreeProxyRegionPacer(region, e.freePacingPolicy)
+	pacer := newFreeProxyRegionPacer(region, policy)
 	e.freePacers[region] = pacer
 	return pacer
 }
@@ -658,8 +663,10 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			pool.Reconcile(e.freePoolSize)
 		}
 		var pacer *freeProxyRegionPacer
+		limited := false
 		if proxySource == "free" {
-			pacer = e.freeProxyPacer(m.Region)
+			limited = pm.PoolSnapshot().State == "limited"
+			pacer = e.freeProxyPacer(m.Region, limited)
 		}
 		if pacer != nil {
 			if _, admitted := pacer.admit(ctx, m.ID, monitorQueryInterval(m, time.Now()), pool.Size()); !admitted {
@@ -687,7 +694,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			}
 		}
 		fetchCtx, cancelFetch := context.WithTimeout(ctx, timeoutDuration)
-		allowHedge := pacer == nil || pacer.allowHedge()
+		allowHedge := !limited && (pacer == nil || pacer.allowHedge())
 		result := e.fetchCatalogHedgedWithPrimary(
 			fetchCtx,
 			pool,

@@ -426,7 +426,7 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 			activeCount,
 			minActive,
 		)
-		if !serving {
+		if !serving && state != "limited" {
 			freeProxyPools.Publish(region, "", state, activeCount, reason, readyObservations)
 			_ = publishFreeProxyRegionServingState(refreshCtx, store, region, state, activeCount, reason)
 			continue
@@ -443,8 +443,8 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 			_ = publishFreeProxyRegionServingState(refreshCtx, store, region, "recovering", activeCount, "snapshot_query_failed")
 			continue
 		}
-		freeProxyPools.Publish(region, strings.Join(proxies, "\n"), "ready", activeCount, "", readyObservations)
-		_ = publishFreeProxyRegionServingState(refreshCtx, store, region, "ready", activeCount, "")
+		freeProxyPools.Publish(region, strings.Join(proxies, "\n"), state, activeCount, reason, readyObservations)
+		_ = publishFreeProxyRegionServingState(refreshCtx, store, region, state, activeCount, reason)
 	}
 }
 
@@ -525,6 +525,10 @@ func freeProxyServingDecision(previous proxy.PoolSnapshot, activeCount int, minA
 	}
 	if serving {
 		state = "ready"
+	} else if activeCount > 0 {
+		// Every published exit still passed independent validation. Insufficient
+		// aggregate capacity requires admission control, not a region-wide stop.
+		state = "limited"
 	}
 	return serving, state, reason, readyObservations
 }
@@ -622,6 +626,11 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 	idleTarget, err := settingIntContext(cycleCtx, store, "free_proxy_idle_region_target", 10)
 	if err != nil {
 		log.Printf("free proxy idle target setting load failed: %v", err)
+		return
+	}
+	minimumReady, err := settingIntContext(cycleCtx, store, "free_proxy_min_active_per_region", 25)
+	if err != nil {
+		log.Printf("free proxy minimum capacity setting load failed: %v", err)
 		return
 	}
 	readyTarget, err := settingIntContext(cycleCtx, store, "free_proxy_ready_target_active_region", 50)
@@ -764,13 +773,13 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 				continue
 			}
 
+			activeCount, countErr := store.CountActiveFreeProxiesContext(cycleCtx, region)
+			if countErr != nil {
+				log.Printf("free proxy active count failed for %s: %v", region, countErr)
+				remainingByRegion[region] = 0
+				continue
+			}
 			if bootstrapByRegion[region] {
-				activeCount, countErr := store.CountActiveFreeProxiesContext(cycleCtx, region)
-				if countErr != nil {
-					log.Printf("free proxy active count failed for %s: %v", region, countErr)
-					remainingByRegion[region] = 0
-					continue
-				}
 				if activeCount >= targetByRegion[region] {
 					remainingByRegion[region] = 0
 					continue
@@ -778,7 +787,9 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 			}
 
 			switch freeProxyRegionWorkClassFor(
-				bootstrapByRegion[region],
+				activeCount,
+				targetByRegion[region],
+				minimumReady,
 				regionDemand[region] > 0,
 			) {
 			case freeProxyRegionWorkRecovery:
@@ -794,11 +805,10 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 			break
 		}
 
-		recoverySlots, keepaliveSlots, idleSlots := freeProxyWaveClassSlots(
+		recoverySlots, keepaliveSlots, idleSlots := freeProxyWaveSlotsForRegions(
 			concurrency,
-			len(usedRecoveryRegions),
-			len(usedKeepaliveRegions),
-			len(idleRegions),
+			perRegionConcurrency,
+			[3][]string{usedRecoveryRegions, usedKeepaliveRegions, idleRegions},
 		)
 		regionBatches := make([][]database.FreeProxyCandidate, 0, 3)
 		claimGroup := func(groupRegions []string, limit int, bootstrap bool) {
@@ -1068,17 +1078,49 @@ const (
 	freeProxyRegionWorkIdle
 )
 
-// freeProxyRegionWorkClassFor treats every region below its configured target
-// as recovery work. Monitor demand changes the target size, but it must not
-// demote a configured region that still lacks minimum production capacity.
-func freeProxyRegionWorkClassFor(bootstrap bool, used bool) freeProxyRegionWorkClass {
-	if bootstrap {
+// Recovery capacity goes to regions below serving readiness. A running pool
+// refilling its larger reserve must not compete at the same priority as an
+// unavailable one. Cold configured regions still retain a recovery lane.
+func freeProxyRegionWorkClassFor(activeCount int, target int, minimum int, used bool) freeProxyRegionWorkClass {
+	if activeCount < max(1, min(target, minimum)) {
 		return freeProxyRegionWorkRecovery
 	}
 	if used {
 		return freeProxyRegionWorkKeepalive
 	}
 	return freeProxyRegionWorkIdle
+}
+
+// Cap claims at the slots each region can actually use. Otherwise a single
+// recovering region receives most of a wave, queues behind its semaphore, and
+// holds the entire wave while the working regions' validators sit idle.
+func freeProxyWaveSlotsForRegions(maximumSlots int, perRegionConcurrency int, groups [3][]string) (int, int, int) {
+	r, k, i := freeProxyWaveClassSlots(maximumSlots, len(groups[0]), len(groups[1]), len(groups[2]))
+	allocations := [3]int{r, k, i}
+	capacities := [3]int{}
+	now := time.Now()
+	remaining := maximumSlots
+	for class, regions := range groups {
+		for _, region := range regions {
+			capacities[class] += freeProxyRegionConcurrency(region, perRegionConcurrency, now)
+		}
+		allocations[class] = min(allocations[class], capacities[class])
+		remaining -= allocations[class]
+	}
+	for remaining > 0 {
+		progress := false
+		for class := range allocations {
+			if remaining > 0 && allocations[class] < capacities[class] {
+				allocations[class]++
+				remaining--
+				progress = true
+			}
+		}
+		if !progress {
+			break
+		}
+	}
+	return allocations[0], allocations[1], allocations[2]
 }
 
 func freeProxyWaveClassSlots(
@@ -1318,9 +1360,16 @@ func validateFreeProxyWave(
 	)
 }
 
+type freeProxyValidationStore interface {
+	RecordFreeProxySuccessContext(context.Context, string, string, int) error
+	RecordFreeProxyFailureStageContext(context.Context, string, string, int, string, string, string, int, int) error
+	RecordFreeProxyInfrastructureFailureContext(context.Context, string, string, int, string, string, string) error
+	ReleaseFreeProxyCheckClaimsContext(context.Context, []database.FreeProxyCandidate) error
+}
+
 func validateFreeProxyWaveWithValidator(
 	ctx context.Context,
-	store *database.Store,
+	store freeProxyValidationStore,
 	candidates []database.FreeProxyCandidate,
 	validationTimeout time.Duration,
 	maxLatencyMs int,
@@ -1328,11 +1377,25 @@ func validateFreeProxyWaveWithValidator(
 	quarantineMinutes int,
 	perRegionConcurrency int,
 	validator freeProxyValidator,
-) freeProxyWaveStats {
-	stats := freeProxyWaveStats{
+) (stats freeProxyWaveStats) {
+	stats = freeProxyWaveStats{
 		ErrorCounts: make(map[string]int),
 		StageCounts: make(map[string]int),
 	}
+	defer func() {
+		if store == nil {
+			return
+		}
+		// Outcome writes clear their own claims. Anything still owned by this
+		// wave was canceled or could not be persisted; do not strand it behind
+		// the six-minute lease and ten-minute regional scheduling hold.
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancelCleanup()
+		if err := store.ReleaseFreeProxyCheckClaimsContext(cleanupCtx, candidates); err != nil {
+			stats.PersistenceFailed++
+			log.Printf("free proxy validation claim cleanup failed: %v", err)
+		}
+	}()
 	results := make(chan freeProxyValidationOutcome, len(candidates))
 	errorCounts := make(map[string]int)
 	stageCounts := make(map[string]int)

@@ -20,6 +20,21 @@ type freeProxyPacingPolicy struct {
 	MaxAdmissionDelayMS       int      `json:"maxAdmissionDelayMs"`
 }
 
+func (p freeProxyPacingPolicy) forPool(region string, limited bool) freeProxyPacingPolicy {
+	if limited {
+		p.Enabled = true
+		p.Regions = []string{region}
+		if p.MaxRequestsPerProxySecond <= 0 || p.MaxRequestsPerProxySecond > 0.5 {
+			p.MaxRequestsPerProxySecond = 0.5
+		}
+		// Queue a small cohort fairly instead of repeatedly rejecting the same
+		// monitors at the normal short admission deadline. All waits remain
+		// bounded and cancel immediately when the monitor stops.
+		p.MaxAdmissionDelayMS = 30_000
+	}
+	return p
+}
+
 func loadFreeProxyPacingPolicy(store *database.Store) freeProxyPacingPolicy {
 	policy := freeProxyPacingPolicy{
 		Regions: []string{"de", "fr"}, MaxRequestsPerProxySecond: 0.5, MaxAdmissionDelayMS: 1500,
@@ -233,7 +248,7 @@ func (p *freeProxyRegionPacer) rotateLocked(now time.Time, clients int) {
 		return
 	}
 	p.lastWindow = p.snapshotLocked(now, clients)
-	if p.outcomes == 0 && p.poolWaits == 0 {
+	if p.outcomes == 0 {
 		p.healthyWindows = 0
 		p.resetWindowLocked(now)
 		return
@@ -241,9 +256,10 @@ func (p *freeProxyRegionPacer) rotateLocked(now time.Time, clients int) {
 	attempts := max(uint64(1), p.outcomes)
 	successRate := float64(p.successes) / float64(attempts)
 	rateLimitedRate := float64(p.rateLimited) / float64(attempts)
-	waitRate := float64(p.poolWaits) / float64(max(uint64(1), p.requested))
-	unhealthy := rateLimitedRate >= 0.05 || waitRate >= 0.02 || successRate < 0.95
-	healthy := successRate >= 0.95 && rateLimitedRate < 0.01 && waitRate < 0.01
+	// Demand above the admission budget is not evidence of a slower proxy.
+	// Halving capacity because callers wait creates a self-reinforcing stall.
+	unhealthy := rateLimitedRate >= 0.05 || successRate < 0.95
+	healthy := successRate >= 0.95 && rateLimitedRate < 0.01
 	if unhealthy {
 		p.capacityFactor = math.Max(0.0625, p.capacityFactor/2)
 		p.healthyWindows = 0
