@@ -1318,9 +1318,16 @@ func validateFreeProxyWave(
 	)
 }
 
+type freeProxyValidationStore interface {
+	RecordFreeProxySuccessContext(context.Context, string, string, int) error
+	RecordFreeProxyFailureStageContext(context.Context, string, string, int, string, string, string, int, int) error
+	RecordFreeProxyInfrastructureFailureContext(context.Context, string, string, int, string, string, string) error
+	ReleaseFreeProxyCheckClaimsContext(context.Context, []database.FreeProxyCandidate) error
+}
+
 func validateFreeProxyWaveWithValidator(
 	ctx context.Context,
-	store *database.Store,
+	store freeProxyValidationStore,
 	candidates []database.FreeProxyCandidate,
 	validationTimeout time.Duration,
 	maxLatencyMs int,
@@ -1328,11 +1335,25 @@ func validateFreeProxyWaveWithValidator(
 	quarantineMinutes int,
 	perRegionConcurrency int,
 	validator freeProxyValidator,
-) freeProxyWaveStats {
-	stats := freeProxyWaveStats{
+) (stats freeProxyWaveStats) {
+	stats = freeProxyWaveStats{
 		ErrorCounts: make(map[string]int),
 		StageCounts: make(map[string]int),
 	}
+	defer func() {
+		if store == nil {
+			return
+		}
+		// Outcome writes clear their own claims. Anything still owned by this
+		// wave was canceled or could not be persisted; do not strand it behind
+		// the six-minute lease and ten-minute regional scheduling hold.
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancelCleanup()
+		if err := store.ReleaseFreeProxyCheckClaimsContext(cleanupCtx, candidates); err != nil {
+			stats.PersistenceFailed++
+			log.Printf("free proxy validation claim cleanup failed: %v", err)
+		}
+	}()
 	results := make(chan freeProxyValidationOutcome, len(candidates))
 	errorCounts := make(map[string]int)
 	stageCounts := make(map[string]int)
