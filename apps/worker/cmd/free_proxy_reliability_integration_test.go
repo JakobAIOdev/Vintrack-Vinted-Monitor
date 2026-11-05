@@ -207,3 +207,81 @@ func TestFreeProxyPublicationKeepsValidatedCapacityAtLimitedRate(t *testing.T) {
 		t.Fatalf("full recovery failed: %+v", pools.Snapshot("uk"))
 	}
 }
+
+func resetFreeProxyRefreshStateForTest(t *testing.T) {
+	t.Helper()
+	previousState, previousNow := freeProxyRefreshState, freeProxyRefreshNow
+	freeProxyRefreshState = &freeProxyRefreshTracker{lastRegion: make(map[string]time.Time)}
+	t.Cleanup(func() {
+		freeProxyRefreshState, freeProxyRefreshNow = previousState, previousNow
+	})
+}
+
+// A refresh that cannot read PostgreSQL must not tear down validated pools:
+// doing so closed every warmed client in every region and produced
+// simultaneous member-visible outages. The kept snapshot is bounded in age.
+func TestFreeProxyRefreshFailureKeepsLastValidatedPool(t *testing.T) {
+	resetFreeProxyRefreshStateForTest(t)
+	store, db, ctx := freeProxyMaintainerTestStore(t)
+	for key, value := range map[string]string{"free_proxy_starter_regions": "uk,de", "free_proxy_min_active_per_region": "3"} {
+		if err := store.SetSettingValueContext(ctx, key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO feature_policies (feature, enabled, updated_at) VALUES ('free_proxy_pool',TRUE,NOW())`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		WITH proxies AS (
+			INSERT INTO free_proxies (proxy_url, host, port, protocol, source, status)
+			SELECT 'http://keep-'||n||'.invalid:80', 'keep-'||n||'.invalid', 80, 'http', 'keep-test', 'active'
+			FROM generate_series(1,5) n RETURNING id
+		)
+		INSERT INTO free_proxy_health (proxy_id, region, status, score, success_streak, success_count, last_success_at)
+		SELECT id, region, 'active', 80, 2, 2, NOW() FROM proxies CROSS JOIN (VALUES ('uk'),('de')) r(region)`); err != nil {
+		t.Fatal(err)
+	}
+
+	pools := proxy.NewRegionPools()
+	refreshFreeProxies(store, pools)
+	refreshFreeProxies(store, pools)
+	for _, region := range []string{"uk", "de"} {
+		if snapshot := pools.Snapshot(region); snapshot.State != "ready" || len(snapshot.Proxies) != 5 {
+			t.Fatalf("%s did not become ready: %+v", region, snapshot)
+		}
+	}
+	versionBefore := pools.Version("uk")
+
+	unavailable, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	refreshFreeProxiesContext(unavailable, store, pools)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("failed refresh was not bounded: %s", elapsed)
+	}
+	for _, region := range []string{"uk", "de"} {
+		if snapshot := pools.Snapshot(region); snapshot.State != "ready" || len(snapshot.Proxies) != 5 {
+			t.Fatalf("transient refresh failure tore down %s: %+v", region, snapshot)
+		}
+	}
+	if pools.Version("uk") != versionBefore {
+		t.Fatal("transient refresh failure republished the pool and would reset client pools")
+	}
+
+	// Validated state is authoritative again once queries succeed: a demoted
+	// exit leaves the pool immediately.
+	if _, err := db.ExecContext(ctx, `UPDATE free_proxy_health SET status='cooldown' FROM free_proxies fp WHERE fp.id=proxy_id AND fp.proxy_url='http://keep-5.invalid:80' AND region='uk'`); err != nil {
+		t.Fatal(err)
+	}
+	refreshFreeProxies(store, pools)
+	if count := pools.Manager("uk").Count(); count != 4 {
+		t.Fatalf("successful refresh did not apply validated state, got %d", count)
+	}
+
+	// Beyond the staleness bound the old fail-closed behaviour applies.
+	freeProxyRefreshNow = func() time.Time { return time.Now().Add(freeProxyRefreshMaxStale + time.Second) }
+	refreshFreeProxiesContext(unavailable, store, pools)
+	if pools.Manager("uk").Count() != 0 || pools.Manager("de").Count() != 0 {
+		t.Fatal("stale snapshot was served beyond the staleness bound")
+	}
+}

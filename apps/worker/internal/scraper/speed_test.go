@@ -694,3 +694,26 @@ func TestDiscoveryFingerprintTracksNotificationChanges(t *testing.T) {
 		t.Fatal("notification change did not alter discovery fingerprint")
 	}
 }
+
+func TestWaitForProxyManagerResumesBeforeObserverInterval(t *testing.T) {
+	manager := &proxy.Manager{}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		manager.ReplaceFromString("http://1.2.3.4:8080")
+	}()
+
+	observations := 0
+	start := time.Now()
+	if !waitForProxyManagerObserved(ctx, manager, time.Hour, func() { observations++ }) {
+		t.Fatal("proxy manager did not recover")
+	}
+	if elapsed := time.Since(start); elapsed > 3*proxyManagerRecoveryPoll {
+		t.Fatalf("waiting monitor resumed after %s instead of the recovery poll", elapsed)
+	}
+	if observations != 0 {
+		t.Fatalf("observer ran %d times before its interval elapsed", observations)
+	}
+}

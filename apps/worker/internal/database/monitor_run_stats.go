@@ -151,6 +151,11 @@ func buildMonitorRunStatsUpsert(rows []monitorRunStatsRow) (string, []interface{
 		return sorted[i].key.bucketHour.Before(sorted[j].key.bucketHour)
 	})
 
+	// Rows are filtered against monitors inside the statement. A monitor that
+	// is deleted while its task still records checks otherwise makes the whole
+	// chunk violate the foreign key on every flush; the requeue then keeps that
+	// poisoned bucket forever and silently drops the statistics of every other
+	// monitor that lands in the same chunk.
 	var statement strings.Builder
 	statement.WriteString(`
 		INSERT INTO monitor_run_hourly_stats (
@@ -158,7 +163,12 @@ func buildMonitorRunStatsUpsert(rows []monitorRunStatsRow) (string, []interface{
 			check_count, successful_check_count, failed_check_count,
 			new_item_count, duration_total_ms, duration_sample_count,
 			last_checked_at, latest_error, latest_error_at, latest_status_code
-		) VALUES `)
+		)
+		SELECT v.monitor_id, v.fetch_source, v.bucket_hour,
+			v.check_count, v.successful_check_count, v.failed_check_count,
+			v.new_item_count, v.duration_total_ms, v.duration_sample_count,
+			v.last_checked_at, v.latest_error, v.latest_error_at, v.latest_status_code
+		FROM (VALUES `)
 
 	args := make([]interface{}, 0, len(sorted)*13)
 	for index, row := range sorted {
@@ -167,7 +177,7 @@ func buildMonitorRunStatsUpsert(rows []monitorRunStatsRow) (string, []interface{
 		}
 		base := index * 13
 		statement.WriteString(fmt.Sprintf(
-			"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+			"($%d::integer,$%d::varchar,$%d::timestamp,$%d::bigint,$%d::bigint,$%d::bigint,$%d::bigint,$%d::bigint,$%d::bigint,$%d::timestamp,$%d::text,$%d::timestamp,$%d::integer)",
 			base+1, base+2, base+3, base+4, base+5, base+6, base+7,
 			base+8, base+9, base+10, base+11, base+12, base+13,
 		))
@@ -197,6 +207,13 @@ func buildMonitorRunStatsUpsert(rows []monitorRunStatsRow) (string, []interface{
 	// The CASE blocks mirror the dropped trigger exactly so a bucket written by
 	// the old trigger and one written here are indistinguishable.
 	statement.WriteString(`
+		) AS v (
+			monitor_id, fetch_source, bucket_hour,
+			check_count, successful_check_count, failed_check_count,
+			new_item_count, duration_total_ms, duration_sample_count,
+			last_checked_at, latest_error, latest_error_at, latest_status_code
+		)
+		WHERE EXISTS (SELECT 1 FROM monitors m WHERE m.id = v.monitor_id)
 		ON CONFLICT (monitor_id, fetch_source, bucket_hour) DO UPDATE SET
 			check_count            = monitor_run_hourly_stats.check_count            + EXCLUDED.check_count,
 			successful_check_count = monitor_run_hourly_stats.successful_check_count + EXCLUDED.successful_check_count,
