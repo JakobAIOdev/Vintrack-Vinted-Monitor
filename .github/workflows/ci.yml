@@ -357,7 +357,7 @@ jobs:
           for migration in ../control-center/prisma/migrations/*/migration.sql; do
             docker exec -i "${{ job.services.postgres.id }}" psql -U postgres -d vintrack_worker_test -v ON_ERROR_STOP=1 < "$migration" > /dev/null
           done
-          go test -race ./internal/database ./cmd -run '^Test(FreeProxy|DiverseActiveFreeProxies)' -count=1
+          go test -race ./internal/database ./cmd -run '^Test(FreeProxy|DiverseActiveFreeProxies|MonitorRunStatsFlush)' -count=1
 
   vinted-service-tests:
     name: Go Tests (apps/vinted-service)

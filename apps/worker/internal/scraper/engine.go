@@ -993,6 +993,11 @@ func waitForProxyManager(ctx context.Context, manager *proxy.Manager, interval t
 	return waitForProxyManagerObserved(ctx, manager, interval, nil)
 }
 
+// proxyManagerRecoveryPoll bounds how long a waiting monitor stays idle after
+// its pool was republished. The observer (health/incident reporting) keeps its
+// slower interval; only the cheap in-memory count is polled this often.
+const proxyManagerRecoveryPoll = time.Second
+
 func waitForProxyManagerObserved(ctx context.Context, manager *proxy.Manager, interval time.Duration, observe func()) bool {
 	if manager.Count() > 0 {
 		return true
@@ -1000,16 +1005,19 @@ func waitForProxyManagerObserved(ctx context.Context, manager *proxy.Manager, in
 	if interval <= 0 {
 		interval = 15 * time.Second
 	}
+	poll := min(interval, proxyManagerRecoveryPoll)
 
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
+	nextObservation := time.Now().Add(interval)
 	for {
 		select {
 		case <-ctx.Done():
 			return false
-		case <-ticker.C:
-			if observe != nil {
+		case now := <-ticker.C:
+			if observe != nil && !now.Before(nextObservation) {
 				observe()
+				nextObservation = now.Add(interval)
 			}
 			if manager.Count() > 0 {
 				return true
