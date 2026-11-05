@@ -1,45 +1,37 @@
 import { db } from "@/lib/db";
+import { buildSellerProfileUrl } from "@/lib/seller-bans";
 import {
-    buildSellerProfileUrl,
-    getBannedSellerIds,
-    visibleSellerWhere,
-} from "@/lib/seller-bans";
+    getRecentVisibleItemKeys,
+    loadItemsInKeyOrder,
+} from "@/lib/recent-items.server";
 
 export async function getExtensionRecentFeed(userId: string, limit = 6) {
-    const [monitors, bannedSellerIds] = await Promise.all([
-        db.monitors.findMany({
-            where: { userId },
-            select: { id: true },
+    const keys = await getRecentVisibleItemKeys(
+        userId,
+        Math.min(12, Math.max(1, limit)),
+    );
+    const items = await loadItemsInKeyOrder(keys, (where) =>
+        db.items.findMany({
+            where,
+            select: {
+                id: true,
+                monitor_id: true,
+                title: true,
+                brand: true,
+                price: true,
+                total_price: true,
+                size: true,
+                condition: true,
+                url: true,
+                image_url: true,
+                found_at: true,
+                seller_id: true,
+                seller_login: true,
+                seller_profile_url: true,
+                monitors: { select: { id: true, name: true } },
+            },
         }),
-        getBannedSellerIds(userId),
-    ]);
-    const monitorIds = monitors.map((monitor) => monitor.id);
-    if (monitorIds.length === 0) return [];
-
-    const items = await db.items.findMany({
-        where: {
-            monitor_id: { in: monitorIds },
-            ...visibleSellerWhere(bannedSellerIds),
-        },
-        orderBy: { found_at: "desc" },
-        take: Math.min(12, Math.max(1, limit)),
-        select: {
-            id: true,
-            title: true,
-            brand: true,
-            price: true,
-            total_price: true,
-            size: true,
-            condition: true,
-            url: true,
-            image_url: true,
-            found_at: true,
-            seller_id: true,
-            seller_login: true,
-            seller_profile_url: true,
-            monitors: { select: { id: true, name: true } },
-        },
-    });
+    );
 
     return items.map(({ monitors: monitor, ...item }) => ({
         ...item,

@@ -7,6 +7,8 @@ import { guardApiFeature } from "@/lib/features.server";
 
 export const dynamic = "force-dynamic";
 
+const STREAM_HEARTBEAT_MS = 20_000;
+
 export async function GET(req: NextRequest) {
     const session = await auth();
     if (!session?.user?.id) {
@@ -69,16 +71,25 @@ export async function GET(req: NextRequest) {
                             parsed.url,
                         ),
                 });
-                void writer.write(
-                    encoder.encode(`data: ${enrichedPayload}\n\n`),
-                );
+                void writer
+                    .write(encoder.encode(`data: ${enrichedPayload}\n\n`))
+                    .catch(() => {});
             } catch {
                 // Skip malformed messages
             }
         },
     );
 
+    // Quiet members can go minutes without a listing. Without traffic the
+    // reverse proxy closes the idle stream, and every reconnect repeats the
+    // session and monitor lookups above. A comment line keeps it open and is
+    // ignored by EventSource.
+    const heartbeat = setInterval(() => {
+        void writer.write(encoder.encode(": ping\n\n")).catch(() => {});
+    }, STREAM_HEARTBEAT_MS);
+
     req.signal.addEventListener("abort", () => {
+        clearInterval(heartbeat);
         unsubscribe();
         void writer.close().catch(() => {});
     });
