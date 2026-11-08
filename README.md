@@ -202,6 +202,10 @@ Caddy and uses mock listings; it does not test real Vinted access. Stop it with
 
 ### Deploy your own instance
 
+## One-Click Deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/Vintrack/)
+
 Follow [Getting Started → Self-host Vintrack](docs/getting-started.md#self-host-vintrack)
 in order. It covers public DNS and HTTPS, OAuth/OIDC, starting containers,
 granting your first account the admin role, adding proxies, and creating your
