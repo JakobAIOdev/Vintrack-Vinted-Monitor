@@ -118,7 +118,7 @@ export function CheckoutLinksClient() {
                 <div className="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-blue-500/10 text-blue-500">
                     <Link2 className="h-8 w-8" />
                 </div>
-                <h2 className="text-2xl font-bold tracking-tight">
+                <h2 className="text-2xl font-semibold tracking-tight">
                     Vinted Account Not Linked
                 </h2>
                 <p className="text-muted-foreground mt-1.5 max-w-sm">
@@ -136,7 +136,7 @@ export function CheckoutLinksClient() {
         <div className="space-y-6">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                    <h1 className="text-2xl font-bold tracking-tight">
+                    <h1 className="text-2xl font-semibold tracking-tight">
                         Checkout Links
                     </h1>
                     <p className="text-muted-foreground mt-0.5 text-sm">
@@ -187,7 +187,7 @@ export function CheckoutLinksClient() {
                             <CardContent className="space-y-4">
                                 <div className="grid gap-3 text-sm sm:grid-cols-3">
                                     <div className="border-border/70 bg-muted/30 rounded-md border p-3">
-                                        <span className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                                        <span className="text-muted-foreground text-xs font-medium">
                                             Purchase ID
                                         </span>
                                         <p className="mt-1 font-medium break-all">
@@ -195,7 +195,7 @@ export function CheckoutLinksClient() {
                                         </p>
                                     </div>
                                     <div className="border-border/70 bg-muted/30 rounded-md border p-3">
-                                        <span className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                                        <span className="text-muted-foreground text-xs font-medium">
                                             Transaction
                                         </span>
                                         <p className="mt-1 font-medium">
@@ -203,7 +203,7 @@ export function CheckoutLinksClient() {
                                         </p>
                                     </div>
                                     <div className="border-border/70 bg-muted/30 rounded-md border p-3">
-                                        <span className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                                        <span className="text-muted-foreground text-xs font-medium">
                                             Seller
                                         </span>
                                         <p className="mt-1 font-medium">

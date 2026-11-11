@@ -67,7 +67,7 @@ export default async function AccountPage({
                     <CircleUserRound className="h-5 w-5" />
                 </div>
                 <div>
-                    <p className="text-muted-foreground text-xs font-medium tracking-[0.18em] uppercase">
+                    <p className="text-muted-foreground text-xs font-medium">
                         Settings
                     </p>
                     <h1 className="mt-0.5 text-2xl font-semibold tracking-tight sm:text-3xl">
@@ -113,7 +113,7 @@ export default async function AccountPage({
                             href={`/account?connection=${connection.id}`}
                             aria-current={selected ? "page" : undefined}
                             className={cn(
-                                "group border-border/70 bg-card flex items-center gap-3 rounded-2xl border p-4 shadow-sm transition-all",
+                                "group border-border/70 bg-card flex items-center gap-3 rounded-2xl border p-4 transition-colors",
                                 "hover:border-foreground/20 hover:-translate-y-0.5 hover:shadow-md",
                                 selected &&
                                     "border-foreground/20 bg-foreground/[0.035] ring-foreground/8 ring-1",
@@ -135,7 +135,7 @@ export default async function AccountPage({
                                     </span>
                                     <span
                                         className={cn(
-                                            "text-muted-foreground rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase",
+                                            "text-muted-foreground rounded-full border px-2 py-0.5 text-[10px] font-semibold",
                                             selected &&
                                                 "border-foreground/15 text-foreground",
                                         )}

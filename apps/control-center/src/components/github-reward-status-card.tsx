@@ -333,7 +333,7 @@ export function GithubRewardStatusCard({
 
                         <div className="mt-6 flex items-end justify-between gap-4">
                             <div>
-                                <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                                <p className="text-muted-foreground text-xs font-medium">
                                     Free Pool usage
                                 </p>
                                 <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">
@@ -389,7 +389,7 @@ export function GithubRewardStatusCard({
 
                     <div>
                         <div className="mb-2.5 flex items-center justify-between">
-                            <p className="text-xs font-semibold tracking-wide uppercase">
+                            <p className="text-xs font-semibold">
                                 Reward levels
                             </p>
                             <Sparkles className="text-muted-foreground h-4 w-4" />
@@ -446,7 +446,7 @@ export function GithubRewardStatusCard({
                     <div className="border-border/60 bg-muted/25 rounded-lg border p-3">
                         <div className="flex items-center justify-between gap-3">
                             <div className="min-w-0">
-                                <p className="text-muted-foreground text-[10px] font-medium tracking-wide uppercase">
+                                <p className="text-muted-foreground text-[10px] font-medium">
                                     Connected identity
                                 </p>
                                 <p className="mt-1 truncate text-sm font-medium">
@@ -456,7 +456,7 @@ export function GithubRewardStatusCard({
                                 </p>
                             </div>
                             <div className="text-right">
-                                <p className="text-muted-foreground text-[10px] font-medium tracking-wide uppercase">
+                                <p className="text-muted-foreground text-[10px] font-medium">
                                     Login providers
                                 </p>
                                 <p className="mt-1 text-sm font-medium capitalize">

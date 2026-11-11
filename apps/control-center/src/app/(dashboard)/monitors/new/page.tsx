@@ -460,7 +460,7 @@ export default function NewMonitorPage() {
                         </Button>
                     </Link>
                     <div>
-                        <h1 className="text-2xl font-bold tracking-tight">
+                        <h1 className="text-2xl font-semibold tracking-tight">
                             Create Monitor
                         </h1>
                         <p className="text-muted-foreground mt-0.5 text-sm">
@@ -507,7 +507,7 @@ export default function NewMonitorPage() {
                     </Button>
                 </Link>
                 <div>
-                    <h1 className="text-2xl font-bold tracking-tight">
+                    <h1 className="text-2xl font-semibold tracking-tight">
                         Create Monitor
                     </h1>
                     <p className="text-muted-foreground mt-0.5 text-sm">
@@ -1129,7 +1129,7 @@ export default function NewMonitorPage() {
                                     <Input
                                         name="discord_webhook"
                                         id="discord_webhook"
-                                        placeholder="https://discord.com/api/webhooks/..."
+                                        placeholder="https://discord.com/api/webhooks/"
                                         value={webhookUrl}
                                         onChange={(e) =>
                                             setWebhookUrl(e.target.value)

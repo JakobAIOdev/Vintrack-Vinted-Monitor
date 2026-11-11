@@ -340,7 +340,7 @@ export function ProxiesClient({
         <div className="mx-auto max-w-5xl space-y-6">
             <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
                 <div>
-                    <h1 className="text-2xl font-bold tracking-tight">
+                    <h1 className="text-2xl font-semibold tracking-tight">
                         Proxy Infrastructure
                     </h1>
                     <p className="text-muted-foreground mt-0.5 text-sm">
@@ -407,7 +407,7 @@ export function ProxiesClient({
                     <>
                         <div className="border-border/70 bg-muted/20 grid border-y sm:grid-cols-3">
                             <div className="border-border/70 px-5 py-3 sm:border-r">
-                                <p className="text-muted-foreground text-[11px] font-medium uppercase">
+                                <p className="text-muted-foreground text-[11px] font-medium">
                                     Ready regions
                                 </p>
                                 <p className="mt-1 text-lg font-semibold">
@@ -418,7 +418,7 @@ export function ProxiesClient({
                                 </p>
                             </div>
                             <div className="border-border/70 border-t px-5 py-3 sm:border-t-0 sm:border-r">
-                                <p className="text-muted-foreground text-[11px] font-medium uppercase">
+                                <p className="text-muted-foreground text-[11px] font-medium">
                                     Usable candidates
                                 </p>
                                 <p className="mt-1 text-lg font-semibold">
@@ -426,7 +426,7 @@ export function ProxiesClient({
                                 </p>
                             </div>
                             <div className="border-border/70 border-t px-5 py-3 sm:border-t-0">
-                                <p className="text-muted-foreground text-[11px] font-medium uppercase">
+                                <p className="text-muted-foreground text-[11px] font-medium">
                                     Pool management
                                 </p>
                                 <p className="mt-1 flex items-center gap-1.5 text-sm font-medium">
@@ -661,7 +661,7 @@ export function ProxiesClient({
                                                             </div>
                                                             <div className="bg-muted h-1.5 overflow-hidden rounded-full">
                                                                 <div
-                                                                    className="bg-foreground h-full rounded-full transition-all"
+                                                                    className="bg-foreground h-full rounded-full transition-[width]"
                                                                     style={{
                                                                         width: `${usagePercent}%`,
                                                                     }}
@@ -804,7 +804,7 @@ export function ProxiesClient({
                                                 {checkRunning && (
                                                     <div className="bg-muted h-1.5 overflow-hidden rounded-full">
                                                         <div
-                                                            className="bg-foreground h-full rounded-full transition-all"
+                                                            className="bg-foreground h-full rounded-full transition-[width]"
                                                             style={{
                                                                 width: `${checkProgress}%`,
                                                             }}

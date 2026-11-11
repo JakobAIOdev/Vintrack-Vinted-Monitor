@@ -493,7 +493,7 @@ export function ChatsClient() {
                 <div className="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-blue-500/10 text-blue-500">
                     <MessageCircle className="h-8 w-8" />
                 </div>
-                <h2 className="text-2xl font-bold tracking-tight">
+                <h2 className="text-2xl font-semibold tracking-tight">
                     Vinted Account Not Linked
                 </h2>
                 <p className="text-muted-foreground mt-1.5 max-w-sm">
@@ -511,7 +511,7 @@ export function ChatsClient() {
         <div className="space-y-5">
             <div className="flex items-start justify-between gap-4">
                 <div>
-                    <h1 className="text-2xl font-bold tracking-tight">Chats</h1>
+                    <h1 className="text-2xl font-semibold tracking-tight">Chats</h1>
                     <p className="text-muted-foreground mt-0.5 text-sm">
                         {pagination
                             ? `${pagination.total_entries} conversation${pagination.total_entries === 1 ? "" : "s"} in your Vinted inbox${unreadCount > 0 ? ` · ${unreadCount} unread` : ""}.`
@@ -913,7 +913,7 @@ export function ChatsClient() {
                                     onChange={(event) =>
                                         setMessage(event.target.value)
                                     }
-                                    placeholder="Write a reply..."
+                                    placeholder="Write a reply"
                                     rows={2}
                                     className="border-input bg-background placeholder:text-muted-foreground focus:border-ring focus:ring-ring/20 min-h-18 w-full resize-none rounded-lg border px-3 py-2.5 text-sm transition outline-none focus:ring-2"
                                     maxLength={2000}

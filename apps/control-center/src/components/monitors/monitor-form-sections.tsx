@@ -209,7 +209,7 @@ export function RegionPoolStatus({
             <div className="bg-muted mt-4 h-2 overflow-hidden rounded-full">
                 <div
                     className={cn(
-                        "h-full rounded-full transition-all",
+                        "h-full rounded-full transition-[width]",
                         isHealthy ? "bg-emerald-500" : "bg-amber-500",
                     )}
                     style={{ width: `${percentage}%` }}

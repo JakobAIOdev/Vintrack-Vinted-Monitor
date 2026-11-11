@@ -222,7 +222,7 @@ export function FreePoolLimitDialog({
                                             </p>
                                             <p className="mt-3 text-2xl font-semibold tabular-nums">
                                                 {tier.limit}
-                                                <span className="text-muted-foreground ml-1 text-[10px] font-medium uppercase">
+                                                <span className="text-muted-foreground ml-1 text-[10px] font-medium">
                                                     monitors
                                                 </span>
                                             </p>

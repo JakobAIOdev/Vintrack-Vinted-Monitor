@@ -34,7 +34,7 @@ function PresetButton({
             aria-pressed={active}
             onClick={onClick}
             className={cn(
-                "h-8 rounded-md border px-2.5 text-xs font-semibold transition-all",
+                "h-8 rounded-md border px-2.5 text-xs font-medium transition-colors",
                 active
                     ? "border-amber-400/70 bg-amber-400/15 text-amber-800 shadow-sm dark:border-amber-400/40 dark:text-amber-300"
                     : "border-border/70 bg-background/80 text-muted-foreground hover:text-foreground hover:border-amber-300",
@@ -119,7 +119,7 @@ export function SellerQualityFilter({
                                 <Label htmlFor={ratingId} className="text-xs">
                                     Minimum stars
                                 </Label>
-                                <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 dark:text-amber-300">
+                                <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700 dark:text-amber-300">
                                     <Star className="size-3 fill-current" />
                                     {rating.toFixed(1)}+
                                 </span>
@@ -169,7 +169,7 @@ export function SellerQualityFilter({
                                 <Label htmlFor={countId} className="text-xs">
                                     Minimum ratings
                                 </Label>
-                                <span className="text-xs font-bold text-amber-700 dark:text-amber-300">
+                                <span className="text-xs font-semibold text-amber-700 dark:text-amber-300">
                                     {ratingCount.toLocaleString()}+
                                 </span>
                             </div>

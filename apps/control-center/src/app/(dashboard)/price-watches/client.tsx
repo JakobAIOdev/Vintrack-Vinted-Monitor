@@ -351,7 +351,7 @@ function SettingsFields({
                                 value.webhookActive || Boolean(event.target.value),
                         })
                     }
-                    placeholder="https://discord.com/api/webhooks/..."
+                    placeholder="https://discord.com/api/webhooks/"
                     type="url"
                     autoComplete="off"
                     disabled={!value.notificationsEnabled}
@@ -905,7 +905,7 @@ export function PriceWatchesClient({
                                 id="price-watch-url"
                                 value={itemUrl}
                                 onChange={(event) => setItemUrl(event.target.value)}
-                                placeholder="https://www.vinted.de/items/..."
+                                placeholder="https://www.vinted.de/items/"
                                 type="url"
                                 autoComplete="off"
                             />

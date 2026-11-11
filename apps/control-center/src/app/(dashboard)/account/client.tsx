@@ -638,7 +638,7 @@ export function AccountClient({
                 <CardContent className="space-y-4 p-5">
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                         <div className="border-border/70 bg-muted/20 rounded-lg border p-3">
-                            <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                            <p className="text-muted-foreground text-xs font-medium">
                                 Browser
                             </p>
                             <p className="mt-1 text-sm font-medium">
@@ -646,7 +646,7 @@ export function AccountClient({
                             </p>
                         </div>
                         <div className="border-border/70 bg-muted/20 rounded-lg border p-3">
-                            <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                            <p className="text-muted-foreground text-xs font-medium">
                                 Connection
                             </p>
                             <p className="mt-1 text-sm font-medium">
@@ -656,7 +656,7 @@ export function AccountClient({
                             </p>
                         </div>
                         <div className="border-border/70 bg-muted/20 rounded-lg border p-3">
-                            <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                            <p className="text-muted-foreground text-xs font-medium">
                                 Version
                             </p>
                             <p
@@ -674,7 +674,7 @@ export function AccountClient({
                             </p>
                         </div>
                         <div className="border-border/70 bg-muted/20 rounded-lg border p-3">
-                            <p className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                            <p className="text-muted-foreground text-xs font-medium">
                                 Last browser sync
                             </p>
                             <p className="mt-1 text-sm font-medium">
@@ -970,7 +970,7 @@ export function AccountClient({
                         </div>
 
                         <div className="border-border/70 bg-muted/20 rounded-lg border p-4 text-sm">
-                            <span className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                            <span className="text-muted-foreground text-xs font-medium">
                                 Primary Region
                             </span>
                             <p className="text-muted-foreground mt-1 text-xs">
@@ -1024,7 +1024,7 @@ export function AccountClient({
                         </div>
 
                         <div className="border-border/70 bg-muted/20 rounded-lg border p-4 text-sm">
-                            <span className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                            <span className="text-muted-foreground text-xs font-medium">
                                 Shipping Contact
                             </span>
                             <p className="mt-1 font-medium">
