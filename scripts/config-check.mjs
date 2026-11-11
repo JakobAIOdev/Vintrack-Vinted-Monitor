@@ -22,6 +22,13 @@ const NUMERIC_KEYS = [
     "FREE_PROXY_HEALTH_PER_REGION_CONCURRENCY",
 ];
 const LEGACY_ORIGINS = ["APP_PUBLIC_URL", "DASHBOARD_URL"];
+// Values shipped in .env.example that must be replaced before the stack works.
+const PLACEHOLDERS = {
+    AUTH_SECRET: "your_random_secret_here",
+    VINTED_SESSION_ENCRYPTION_KEY: "your_random_session_encryption_key_here",
+    AUTH_DISCORD_ID: "your_discord_client_id",
+    AUTH_DISCORD_SECRET: "your_discord_client_secret",
+};
 
 function normalizeOrigin(raw) {
     try {
@@ -76,6 +83,46 @@ export function checkConfigText(text) {
     for (const key of NUMERIC_KEYS) {
         const raw = entries.get(key);
         if (raw && (!/^\d+$/.test(raw) || Number(raw) <= 0)) errors.push(`${key} must be a positive integer`);
+    }
+
+    for (const key of ["AUTH_SECRET", "VINTED_SESSION_ENCRYPTION_KEY"]) {
+        if (entries.get(key) === PLACEHOLDERS[key]) errors.push(`${key} still has its template value; run make init to generate it`);
+    }
+
+    // Exactly one login provider signs members in: complete OIDC settings
+    // replace Discord, otherwise Discord must be configured.
+    const oidcConfigured = PAIRS[2].every((key) => Boolean(entries.get(key)));
+    const discordConfigured = ["AUTH_DISCORD_ID", "AUTH_DISCORD_SECRET"].every(
+        (key) => Boolean(entries.get(key)) && entries.get(key) !== PLACEHOLDERS[key],
+    );
+    if (!oidcConfigured && !discordConfigured) {
+        // The mock development stack signs in automatically, so this is only
+        // a blocker for a live stack.
+        warnings.push("no login provider is configured; make up and make local need AUTH_DISCORD_ID and AUTH_DISCORD_SECRET, or the AUTH_OIDC_* settings");
+    }
+
+    // Caddy serves VINTRACK_SITE_ADDRESS, members open AUTH_URL. When both
+    // name a public host they have to be the same one.
+    const siteAddress = entries.get("VINTRACK_SITE_ADDRESS") ?? "";
+    if (canonical && siteAddress) {
+        const authHost = new URL(canonical).hostname.toLowerCase();
+        const siteHost = siteAddress.replace(/^https?:\/\//i, "").replace(/[/:].*$/, "").toLowerCase();
+        const local = (host) => host === "localhost" || host === "127.0.0.1";
+        if (/[/?#]/.test(siteAddress.replace(/^https?:\/\//i, ""))) {
+            errors.push("VINTRACK_SITE_ADDRESS must be a hostname without a path");
+        } else if (!local(authHost) && authHost !== siteHost) {
+            errors.push("VINTRACK_SITE_ADDRESS does not match the AUTH_URL hostname; Caddy would serve a different site than members open");
+        }
+    }
+
+    // The Telegram webhook rejects every update without a secret, and Telegram
+    // only accepts these characters in one.
+    const telegramSecret = entries.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
+    if (entries.get("TELEGRAM_BOT_TOKEN") && !telegramSecret) {
+        errors.push("TELEGRAM_WEBHOOK_SECRET is required when TELEGRAM_BOT_TOKEN is set; run make init to generate it");
+    }
+    if (telegramSecret && !/^[A-Za-z0-9_-]{1,256}$/.test(telegramSecret)) {
+        errors.push("TELEGRAM_WEBHOOK_SECRET may only contain A-Z, a-z, 0-9, _ and - (1-256 characters)");
     }
 
     const production = ["APP_ENV", "NODE_ENV", "ENVIRONMENT"].some(
