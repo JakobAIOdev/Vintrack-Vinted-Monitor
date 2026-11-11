@@ -40,11 +40,10 @@ you want to perform actions with a Vinted account you control.
 Prepare:
 
 - Docker Engine and Docker Compose v2;
-- Git;
-- `make` and OpenSSL for the guided initializer;
-- a Discord OAuth application or an OIDC provider;
+- Git, `make` and OpenSSL;
+- a Discord OAuth application or an OIDC provider for sign-in;
 - reliable proxies for sustained live monitoring;
-- a domain pointed at the host and ports 80/443 for production.
+- for a public instance: a domain pointed at the host, with ports 80 and 443 open.
 
 The containers provide the application runtimes. Node.js and Go are required
 only when running components directly on the host. Building a custom browser
@@ -55,101 +54,142 @@ If `make dev` is running in this checkout, run `make dev-down` before starting
 the live stack. Both modes use the same container names and host ports, although
 their database and Redis volumes are separate.
 
-### 1. Clone and initialize
+### Quick path
 
 ```bash
 git clone https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor.git vintrack
 cd vintrack
-make init
+make setup    # creates .env, generates secrets, asks for your URL and Discord login
+make up       # public domain with HTTPS; use `make local` on your own computer
+make admin    # after signing in once: gives your account the admin role
 ```
 
-The initializer:
+The numbered steps below explain what each command does and what to enter.
+Run `make help` for the full list of commands.
+
+### 1. Clone and run the guided setup
+
+```bash
+git clone https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor.git vintrack
+cd vintrack
+make setup
+```
+
+`make setup`:
 
 - copies `.env.example` to `.env` when `.env` does not exist;
-- generates `AUTH_SECRET`;
-- generates `VINTED_SESSION_ENCRYPTION_KEY`;
-- creates `apps/worker/proxies.txt` when it is missing.
+- generates `AUTH_SECRET`, `VINTED_SESSION_ENCRYPTION_KEY` and
+  `TELEGRAM_WEBHOOK_SECRET`;
+- creates `apps/worker/proxies.txt` when it is missing;
+- asks where Vintrack will be reachable and writes `AUTH_URL` and
+  `VINTRACK_SITE_ADDRESS` to match;
+- asks for your Discord client ID and secret (see step 3; you can skip this and
+  run `make setup` again later);
+- prints the exact redirect URL to register and the command to start with.
 
-An existing `.env` is never replaced. Only missing or template secret values are
-generated; configured non-placeholder secrets remain unchanged.
+An existing `.env` is never replaced. Secrets that are already set stay
+unchanged, and you can run `make setup` again to change the URL or login.
 
-### 2. Set your public URL and HTTPS hostname
+To edit `.env` by hand instead, run `make init`. It does the first three items
+without asking questions.
 
-Point your domain's DNS A record (and AAAA record if using IPv6) at the server.
-Allow incoming TCP ports 80 and 443 to Caddy. Keep application and database
-ports private; Compose binds ports 3000, 4000, 5435 and 6379 to loopback.
+### 2. Choose where Vintrack is reachable
 
-Edit the root `.env`:
+`make setup` offers two choices.
+
+**On a public domain with HTTPS.** Point the domain's DNS A record (and AAAA
+record if using IPv6) at the server and allow incoming TCP ports 80 and 443.
+The bundled Caddy obtains and renews the certificate. The setup writes:
 
 ```env
 AUTH_URL=https://vintrack.example.com
 VINTRACK_SITE_ADDRESS=vintrack.example.com
 ```
 
-`AUTH_URL` is the full public origin; `VINTRACK_SITE_ADDRESS` is the hostname.
-Keep `SEO_INDEXING_ENABLED=false` unless you intend to index the public marketing
-pages. The initializer already generated both required encryption secrets.
+`AUTH_URL` is the full public origin; `VINTRACK_SITE_ADDRESS` is the same
+hostname without a scheme or path. Start this variant with `make up`.
 
-For a live stack used only on your own computer, keep the example defaults
-`AUTH_URL=http://localhost:3000` and `VINTRACK_SITE_ADDRESS=http://localhost`,
-and use that localhost origin in the callbacks below. Caddy exposes
-`http://localhost` only in the full stack; changing the canonical origin also
-requires changing your callbacks. The localhost extension build supports port
-3000 only.
+**Only on this computer.** The setup writes:
 
-### 3. Configure authentication
+```env
+AUTH_URL=http://localhost:3000
+VINTRACK_SITE_ADDRESS=http://localhost
+```
+
+Start this variant with `make local`. It runs the same stack without Caddy, so
+it does not need ports 80 and 443, and the dashboard is served on
+`http://localhost:3000`. The localhost extension build supports port 3000 only.
+
+**Behind your own reverse proxy.** Choose the public domain in the setup, start
+with `make local`, and forward your proxy to `127.0.0.1:3000`. The proxy must
+terminate HTTPS for the hostname in `AUTH_URL` and pass long-lived responses
+through unbuffered for the live feed.
+
+In every variant the application and database ports stay private: Compose binds
+3000, 4000, 5435 and 6379 to loopback. Keep `SEO_INDEXING_ENABLED=false` unless
+you intend to index the public marketing pages.
+
+### 3. Configure sign-in
 
 For Discord:
 
 1. Open the [Discord Developer Portal](https://discord.com/developers/applications)
    and create an application.
-2. Open its **OAuth2** settings, copy the client ID and client secret, and set
-   these values in the root `.env`:
+2. Open its **OAuth2** settings and copy the client ID and client secret. Enter
+   them when `make setup` asks, or set them in the root `.env`:
 
    ```env
    AUTH_DISCORD_ID=your-client-id
    AUTH_DISCORD_SECRET=your-client-secret
    ```
 
-3. Add and save this exact OAuth redirect in the same application:
+3. Add and save the redirect URL that `make setup` printed in the same
+   application. It is your `AUTH_URL` followed by `/api/auth/callback/discord`:
 
    ```text
    https://vintrack.example.com/api/auth/callback/discord
+   http://localhost:3000/api/auth/callback/discord
    ```
+
+   Use the first form for a public domain and the second for a local instance.
+   The value must match exactly, including the scheme and port.
 
 To use OIDC instead, configure the issuer, client ID, and client secret described
 in [Configuration](configuration.md#authentication). When all required OIDC
-variables are set, OIDC replaces Discord on the login page.
+variables are set, OIDC replaces Discord on the login page, and the redirect
+ends in `/api/auth/callback/oidc`.
 
 Optionally enable GitHub account linking for rewards. Register
 `https://vintrack.example.com/api/auth/callback/github`, set both `AUTH_GITHUB_ID`
 and `AUTH_GITHUB_SECRET`, and follow [GitHub Login and Rewards](github-rewards.md).
 Users still sign in with Discord or OIDC first. Reward enforcement starts disabled.
 
-### 4. Validate and start the stack
+### 4. Start the stack
 
-Validate the configuration without printing secrets:
+If Node.js is installed on the host, check `.env` first. The check never prints
+secret values:
 
 ```bash
-docker compose config --quiet
+make config-check
 ```
 
-Choose one installation method. Published images avoid compiling on the server:
+Then start the variant from step 2. Both build the images from the checked-out
+source:
+
+```bash
+make up       # public domain, with Caddy and HTTPS
+make local    # this computer or your own reverse proxy, without Caddy
+```
+
+To use the published images instead of compiling on the server:
 
 ```bash
 docker compose pull
-docker compose up -d --no-build
+docker compose up -d --no-build                  # with Caddy
+docker compose up -d --no-build --scale caddy=0  # without Caddy
 ```
 
-Alternatively, build the checked-out source:
-
-```bash
-docker compose up -d --build
-```
-
-The first startup can take several minutes. Caddy obtains and renews certificates
-automatically when DNS and the public ports are correct. Open your `AUTH_URL`,
-for example `https://vintrack.example.com`, and sign in.
+The first startup can take several minutes. Open your `AUTH_URL` and sign in.
 
 Check service state and migrations:
 
@@ -165,29 +205,24 @@ PostgreSQL and Redis healthy. The experimental `id-scanner` is not required.
 ### 5. Grant your first account admin access
 
 New accounts, including the first account, have the `free` role. There is no
-automatic production admin or default admin password. Sign in once to create
-your user, then open the database shell on your own server:
+automatic production admin or default admin password. Sign in once in the
+browser to create your account, then run:
 
 ```bash
-docker compose exec postgres psql -U vinuser -d vintrack
+make admin
 ```
 
-Inside `psql`, identify your own user:
+When your account is the only one, it becomes admin. When several accounts
+exist, the command lists them and you choose one by ID or email:
 
-```sql
-SELECT id, name, email, role FROM "User" ORDER BY "createdAt";
+```bash
+make admin ACCOUNT=you@example.com
 ```
 
-Copy that user's exact `id`, replace `YOUR_USER_ID` below, and run:
-
-```sql
-UPDATE "User" SET role = 'admin' WHERE id = 'YOUR_USER_ID' RETURNING id, role;
-```
-
-Expect exactly one updated row (`UPDATE 1`). Exit with `\q`, reload the dashboard
-or sign out and back in, and confirm **Admin** is visible. Manage subsequent
-members through **Admin → Members**. Do not promote every user or use the
-development authentication bypass to obtain admin access on a public instance.
+Reload the dashboard or sign out and back in, and confirm **Admin** is visible.
+Manage subsequent members through **Admin → Members**. Do not promote every
+user or use the development authentication bypass to obtain admin access on a
+public instance.
 
 ### 6. Add proxies and create your first monitor
 
@@ -245,47 +280,39 @@ deleting Docker volumes.
 
 ## Updating production
 
-Keep `.env` owner-readable only (`chmod 600 .env`). Before updating, create a
-database dump and keep a secure copy of `.env` and any proxy files. For example:
+Keep `.env` owner-readable only (`chmod 600 .env`). One command updates a
+running instance:
 
 ```bash
-umask 077
-mkdir -p ../vintrack-backups
-docker compose exec -T postgres pg_dump -U vinuser -d vintrack -Fc > "../vintrack-backups/vintrack-$(date +%Y%m%d-%H%M%S).dump"
+make update            # published images
+make update BUILD=1    # build the images from the checked-out source
 ```
 
-Check that the dump command succeeded and store backups outside the server too.
-Back up Redis and Caddy volumes as part of a full recovery plan; the database
-dump alone does not preserve every coordination record or HTTPS certificate.
-The original `VINTED_SESSION_ENCRYPTION_KEY` is required to read restored sessions.
+It stops at the first step that fails and runs, in order:
 
-For published images, update the checkout and fetch the images:
+1. `make backup`, which writes a database dump to `../vintrack-backups`;
+2. `git pull --ff-only`;
+3. `docker compose pull`, or `docker compose build` with `BUILD=1`;
+4. the one-shot migration service, which runs `prisma migrate deploy`;
+5. `docker compose up -d` for the full stack. An instance that runs without
+   Caddy stays without it.
+
+Afterwards, review the release notes and compare `.env.example` with your
+`.env` for new settings. The default image tags are `latest`; they are not
+pinned to your checkout. Never use `prisma db push --accept-data-loss` against
+production.
+
+Take a backup at any other time with:
 
 ```bash
-git pull --ff-only
-docker compose pull
-docker compose config --quiet
+make backup
 ```
 
-For a source-built deployment, use `docker compose build` instead of
-`docker compose pull`. Review release notes and any new `.env.example` settings.
-The default image tags are `latest`; they are not pinned to your checkout.
-
-With PostgreSQL and Redis still running, apply migrations and wait for success:
-
-```bash
-docker compose up --no-deps --force-recreate --abort-on-container-exit --exit-code-from control-center-migrate control-center-migrate
-```
-
-Continue only if that command exits successfully. Then recreate the full stack,
-including the proxy maintainer and GitHub rewards scheduler:
-
-```bash
-docker compose up -d --no-build --pull never
-```
-
-The migration service runs `prisma migrate deploy` using the control-center
-image. Never use `prisma db push --accept-data-loss` against production.
+Store backups outside the server too, together with a secure copy of `.env` and
+any proxy files. Back up the Redis and Caddy volumes as part of a full recovery
+plan; the database dump alone does not preserve every coordination record or
+HTTPS certificate. The original `VINTED_SESSION_ENCRYPTION_KEY` is required to
+read restored sessions.
 
 After an update:
 

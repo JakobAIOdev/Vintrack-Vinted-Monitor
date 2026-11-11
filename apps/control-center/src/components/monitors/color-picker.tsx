@@ -119,7 +119,7 @@ export function ColorPicker({ selected, onChange }: ColorPickerProps) {
                         setOpen(true);
                     }}
                     onFocus={() => setOpen(true)}
-                    placeholder="Search color…"
+                    placeholder="Search color"
                     className="border-input bg-background focus:border-border h-9 w-full rounded-md border pr-3 pl-8 text-[13px] transition-colors outline-none focus:ring-2 focus:ring-slate-900/10"
                 />
             </div>

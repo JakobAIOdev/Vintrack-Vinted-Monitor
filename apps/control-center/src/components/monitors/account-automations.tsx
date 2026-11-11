@@ -228,7 +228,7 @@ function AutomationModule({
                             />
                         </div>
                         <div className="bg-muted/40 col-span-2 rounded-lg border p-4">
-                            <p className="text-muted-foreground mb-3 text-[11px] font-medium tracking-wide uppercase">
+                            <p className="text-muted-foreground mb-3 text-[11px] font-medium">
                                 Offer preview
                             </p>
                             <div className="flex items-center justify-between gap-3">

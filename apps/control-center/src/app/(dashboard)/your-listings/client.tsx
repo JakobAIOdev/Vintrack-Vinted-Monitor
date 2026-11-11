@@ -213,7 +213,7 @@ export function YourListingsClient() {
                 <div className="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-blue-500/10 text-blue-500">
                     <Store className="h-8 w-8" />
                 </div>
-                <h2 className="text-2xl font-bold tracking-tight">
+                <h2 className="text-2xl font-semibold tracking-tight">
                     Vinted Account Not Linked
                 </h2>
                 <p className="text-muted-foreground mt-1.5 max-w-sm">
@@ -231,7 +231,7 @@ export function YourListingsClient() {
         <div className="space-y-6">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                    <h1 className="text-2xl font-bold tracking-tight">
+                    <h1 className="text-2xl font-semibold tracking-tight">
                         Your Listings
                     </h1>
                     <p className="text-muted-foreground mt-0.5 text-sm">

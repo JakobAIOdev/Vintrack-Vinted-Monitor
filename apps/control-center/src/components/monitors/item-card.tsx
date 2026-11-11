@@ -351,7 +351,7 @@ function ItemCardComponent({
                         <img
                             src={item.image_url}
                             alt={item.title || "Item"}
-                            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.025]"
+                            className="h-full w-full object-cover "
                             loading="lazy"
                         />
                     </button>
@@ -477,7 +477,7 @@ function ItemCardComponent({
                         {item.title || "Untitled"}
                     </h3>
                     <div className="shrink-0 text-right">
-                        <p className="text-foreground text-base font-bold tabular-nums">
+                        <p className="text-foreground text-base font-semibold tabular-nums">
                             {item.price || "—"}
                         </p>
                         {hasDifferentTotalPrice && (
@@ -696,11 +696,11 @@ function ItemCardComponent({
                                     </div>
                                 </div>
                                 <div className="border-border/70 bg-muted/45 mb-4 flex items-center justify-between rounded-lg border p-2.5">
-                                    <span className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                                    <span className="text-muted-foreground text-xs font-medium">
                                         Price
                                     </span>
                                     <div className="text-right">
-                                        <span className="text-foreground text-base font-bold">
+                                        <span className="text-foreground text-base font-semibold">
                                             €{item.price || "0.00"}
                                         </span>
                                         {hasDifferentTotalPrice && (
@@ -720,7 +720,7 @@ function ItemCardComponent({
                     <textarea
                         value={msgText}
                         onChange={(e) => setMsgText(e.target.value)}
-                        placeholder="Write your message..."
+                        placeholder="Write your message"
                         maxLength={2000}
                         rows={4}
                         className="border-border bg-background placeholder:text-muted-foreground focus:ring-ring w-full resize-none rounded-md border px-3 py-2 text-sm focus:ring-2 focus:ring-offset-1 focus:outline-none"
@@ -801,11 +801,11 @@ function ItemCardComponent({
                                 </div>
 
                                 <div className="border-border/70 bg-muted/45 flex items-center justify-between rounded-lg border p-2.5">
-                                    <span className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+                                    <span className="text-muted-foreground text-xs font-medium">
                                         Original Price
                                     </span>
                                     <div className="text-right">
-                                        <span className="text-foreground text-base font-bold">
+                                        <span className="text-foreground text-base font-semibold">
                                             €{item.price || "0.00"}
                                         </span>
                                         {hasDifferentTotalPrice && (
@@ -884,7 +884,7 @@ function ItemCardComponent({
                 >
                     <button
                         onClick={() => setSelectedImgIndex(null)}
-                        className="group fixed top-6 right-6 z-60 flex h-12 w-12 cursor-pointer items-center justify-center rounded-full border border-white/10 bg-black/20 text-white shadow-2xl backdrop-blur-xl transition-all hover:scale-110 hover:bg-black/40 active:scale-95"
+                        className="group fixed top-6 right-6 z-60 flex h-12 w-12 cursor-pointer items-center justify-center rounded-full border border-white/10 bg-black/20 text-white shadow-2xl backdrop-blur-xl transition-[background-color,transform] hover:bg-black/40 active:scale-95"
                     >
                         <XIcon className="h-6 w-6 transition-transform group-hover:rotate-90" />
                     </button>
@@ -893,13 +893,13 @@ function ItemCardComponent({
                         <>
                             <button
                                 onClick={handlePrevImage}
-                                className="fixed top-1/2 left-6 z-60 flex h-12 w-12 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full border border-white/10 bg-black/20 text-white shadow-2xl backdrop-blur-xl transition-all hover:scale-110 hover:bg-black/40 active:scale-95"
+                                className="fixed top-1/2 left-6 z-60 flex h-12 w-12 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full border border-white/10 bg-black/20 text-white shadow-2xl backdrop-blur-xl transition-[background-color,transform] hover:bg-black/40 active:scale-95"
                             >
                                 <ChevronLeft className="h-6 w-6 pr-0.5" />
                             </button>
                             <button
                                 onClick={handleNextImage}
-                                className="fixed top-1/2 right-6 z-60 flex h-12 w-12 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full border border-white/10 bg-black/20 text-white shadow-2xl backdrop-blur-xl transition-all hover:scale-110 hover:bg-black/40 active:scale-95"
+                                className="fixed top-1/2 right-6 z-60 flex h-12 w-12 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full border border-white/10 bg-black/20 text-white shadow-2xl backdrop-blur-xl transition-[background-color,transform] hover:bg-black/40 active:scale-95"
                             >
                                 <ChevronRight className="h-6 w-6 pl-0.5" />
                             </button>

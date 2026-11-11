@@ -155,6 +155,9 @@ test("legacy buy, warmup and saved-link endpoints enforce persisted consent befo
                 "@/lib/checkout-notifications.server": {
                     queueCheckoutNotification: async () => {},
                 },
+                "@/lib/checkout-notification-limit.server": {
+                    allowBrowserCheckoutNotification: async () => true,
+                },
                 "@/auth": {
                     auth: async () => ({ user: { id: "synthetic-member" } }),
                 },

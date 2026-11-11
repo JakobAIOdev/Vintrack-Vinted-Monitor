@@ -181,7 +181,7 @@ export function FirstMonitorQuickStart({
                 <div className="border-border/60 bg-muted/20 border-b px-5 py-5 sm:px-7 sm:py-6">
                     <DialogHeader className="pr-7">
                         <div className="mb-1 flex items-center gap-2">
-                            <span className="border-border/70 bg-background text-muted-foreground inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wider uppercase">
+                            <span className="border-border/70 bg-background text-muted-foreground inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold">
                                 <Rocket className="size-3" /> Quick start · ~10
                                 seconds
                             </span>

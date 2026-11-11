@@ -23,7 +23,7 @@ test.describe("auth boundaries", () => {
 
         await expect(page).toHaveURL(/\/login$/);
         await expect(
-            page.getByRole("heading", { name: /Secure access/i }),
+            page.getByRole("heading", { name: /Sign in to your Vinted monitors/i }),
         ).toBeVisible();
     });
 

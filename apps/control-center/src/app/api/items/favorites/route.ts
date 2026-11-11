@@ -17,10 +17,13 @@ export async function GET(request: Request) {
     const page = searchParams.get("page") || "";
 
     try {
-        const res = await fetch(`${API_URL}/api/items/favorites?page=${page}`, {
-            headers: { "X-User-ID": session.user.id },
-            cache: "no-store",
-        });
+        const res = await fetch(
+            `${API_URL}/api/items/favorites?page=${encodeURIComponent(page)}`,
+            {
+                headers: { "X-User-ID": session.user.id },
+                cache: "no-store",
+            },
+        );
 
         if (!res.ok) {
             const errData = await res.json().catch(() => ({}));

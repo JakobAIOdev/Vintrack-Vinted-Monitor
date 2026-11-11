@@ -33,7 +33,7 @@ export function StatusPicker({
                             key={status.id}
                             type="button"
                             onClick={() => toggle(status.id)}
-                            className={`group rounded-xl border px-3 py-3 text-left transition-all ${
+                            className={`group rounded-xl border px-3 py-3 text-left transition-colors ${
                                 isSelected
                                     ? "border-primary bg-accent text-accent-foreground shadow-sm"
                                     : "border-input bg-background hover:border-border hover:bg-muted/50"

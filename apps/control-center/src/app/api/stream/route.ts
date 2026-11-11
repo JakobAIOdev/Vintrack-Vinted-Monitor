@@ -41,6 +41,22 @@ export async function GET(req: NextRequest) {
     // already belongs to this member and no ownership filtering is needed. The
     // subscription itself is shared process-wide rather than opening a Redis
     // connection per browser tab.
+    let closed = false;
+    // Quiet members can go minutes without a listing. Without traffic the
+    // reverse proxy closes the idle stream, and every reconnect repeats the
+    // session and monitor lookups above. A comment line keeps it open and is
+    // ignored by EventSource.
+    const heartbeat = setInterval(() => {
+        writer.write(encoder.encode(": ping\n\n")).catch(() => close());
+    }, STREAM_HEARTBEAT_MS);
+    const close = () => {
+        if (closed) return;
+        closed = true;
+        clearInterval(heartbeat);
+        unsubscribe();
+        void writer.close().catch(() => {});
+    };
+
     const unsubscribe = redisSubscriber().subscribe(
         userItemChannel(userId),
         (message) => {
@@ -71,28 +87,22 @@ export async function GET(req: NextRequest) {
                             parsed.url,
                         ),
                 });
-                void writer
+                // A rejected write means the reader is gone; drop the
+                // subscription instead of feeding a dead stream.
+                writer
                     .write(encoder.encode(`data: ${enrichedPayload}\n\n`))
-                    .catch(() => {});
+                    .catch(close);
             } catch {
                 // Skip malformed messages
             }
         },
     );
 
-    // Quiet members can go minutes without a listing. Without traffic the
-    // reverse proxy closes the idle stream, and every reconnect repeats the
-    // session and monitor lookups above. A comment line keeps it open and is
-    // ignored by EventSource.
-    const heartbeat = setInterval(() => {
-        void writer.write(encoder.encode(": ping\n\n")).catch(() => {});
-    }, STREAM_HEARTBEAT_MS);
-
-    req.signal.addEventListener("abort", () => {
-        clearInterval(heartbeat);
-        unsubscribe();
-        void writer.close().catch(() => {});
-    });
+    req.signal.addEventListener("abort", close);
+    // The client can disconnect during the lookups above. A listener added to
+    // an already aborted signal never fires, which would leave the
+    // subscription registered for the lifetime of the process.
+    if (req.signal.aborted) close();
 
     return new NextResponse(stream.readable, {
         headers: {

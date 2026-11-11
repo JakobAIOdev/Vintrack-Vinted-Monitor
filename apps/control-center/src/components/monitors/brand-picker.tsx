@@ -342,7 +342,7 @@ export function BrandPicker({
                         setAddError("");
                     }}
                     onFocus={() => setOpen(true)}
-                    placeholder="Search brand…"
+                    placeholder="Search brand"
                     aria-label="Search brand"
                     className="border-input bg-background focus:border-border h-9 w-full rounded-md border pr-3 pl-8 text-[13px] transition-colors outline-none focus:ring-2 focus:ring-slate-900/10"
                 />
@@ -448,7 +448,7 @@ export function BrandPicker({
                                                     void addPersonalBrand();
                                                 }
                                             }}
-                                            placeholder="https://www.vinted.cz/brand/..."
+                                            placeholder="https://www.vinted.cz/brand/"
                                             className="border-input bg-background h-8 min-w-0 flex-1 rounded border px-2 text-[12px] outline-none focus:ring-2 focus:ring-slate-900/10"
                                         />
                                         <button

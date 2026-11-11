@@ -512,7 +512,7 @@ export function Header({ onMenuClick, menuOpen = false }: HeaderProps) {
                     href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="border-border/80 bg-card/70 text-muted-foreground hidden items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800 sm:flex dark:hover:border-amber-500/30 dark:hover:bg-amber-500/10 dark:hover:text-amber-400"
+                    className="border-border/80 bg-card/70 text-muted-foreground hover:bg-accent hover:text-accent-foreground hidden items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors sm:flex"
                 >
                     <Github className="h-3.5 w-3.5" />
                     <span className="hidden md:inline">Star on GitHub</span>

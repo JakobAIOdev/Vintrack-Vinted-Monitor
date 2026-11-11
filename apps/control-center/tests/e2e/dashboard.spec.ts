@@ -935,7 +935,7 @@ test.describe("dashboard monitors", () => {
     test("keeps monitor management on the main dashboard", async ({ page }) => {
         await page.goto("/dashboard");
         await expect(
-            page.getByRole("heading", { name: /Welcome back/ }),
+            page.getByRole("heading", { name: /Your monitors/ }),
         ).toBeVisible();
         await expect(page.getByTestId("monitor-card").first()).toBeVisible();
         await expect(page.locator('aside a[href="/monitors"]')).toHaveCount(0);
@@ -1264,7 +1264,7 @@ test.describe("dashboard monitors", () => {
 
         await expect(page).toHaveTitle(/Vintrack/i);
         await expect(
-            page.getByRole("heading", { name: /Welcome back/ }),
+            page.getByRole("heading", { name: /Your monitors/i }),
         ).toBeVisible();
         await expect(
             page.getByTestId("monitor-summary").getByText("1 monitor", {

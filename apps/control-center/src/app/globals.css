@@ -163,32 +163,11 @@
     .landing-card {
         transition:
             border-color 220ms ease,
-            box-shadow 220ms ease,
-            transform 220ms ease,
             background-color 220ms ease;
     }
 
     .landing-card:hover {
         border-color: color-mix(in oklab, var(--foreground) 24%, var(--border));
-        box-shadow: 0 20px 60px
-            color-mix(in oklab, var(--foreground) 10%, transparent);
-        transform: translateY(-3px);
-    }
-
-    .landing-float {
-        animation: landing-float 5.5s ease-in-out infinite;
-    }
-
-    .landing-float-slow {
-        animation: landing-float 7s ease-in-out infinite;
-    }
-
-    .landing-scan {
-        animation: landing-scan 4.8s ease-in-out infinite;
-    }
-
-    .landing-line-pulse {
-        animation: landing-line-pulse 2.8s ease-in-out infinite;
     }
 
     @keyframes landing-reveal {
@@ -202,53 +181,13 @@
         }
     }
 
-    @keyframes landing-float {
-        0%,
-        100% {
-            transform: translateY(0);
-        }
-        50% {
-            transform: translateY(-7px);
-        }
-    }
-
-    @keyframes landing-scan {
-        0%,
-        100% {
-            opacity: 0.18;
-            transform: translateY(-42%);
-        }
-        50% {
-            opacity: 0.5;
-            transform: translateY(42%);
-        }
-    }
-
-    @keyframes landing-line-pulse {
-        0%,
-        100% {
-            opacity: 0.28;
-        }
-        50% {
-            opacity: 0.72;
-        }
-    }
-
     @media (prefers-reduced-motion: reduce) {
         html {
             scroll-behavior: auto;
         }
 
-        .landing-reveal,
-        .landing-float,
-        .landing-float-slow,
-        .landing-scan,
-        .landing-line-pulse {
+        .landing-reveal {
             animation: none;
-        }
-
-        .landing-card:hover {
-            transform: none;
         }
     }
 }

@@ -3617,7 +3617,12 @@ export async function getAdminUserDetails(userId: string) {
     if (!user) throw new Error("User not found");
 
     return {
-        monitors: user.monitors,
+        // The webhook URL is a credential; the admin view only needs to know
+        // whether one is configured.
+        monitors: user.monitors.map(({ discord_webhook, ...monitor }) => ({
+            ...monitor,
+            discord_configured: Boolean(discord_webhook),
+        })),
         limits: {
             active: userLimit?.active_limit ?? null,
             freeProxy: userLimit?.free_proxy_active_limit ?? null,

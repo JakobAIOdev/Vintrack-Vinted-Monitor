@@ -6,12 +6,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"vintrack-vinted/internal/api"
 	"vintrack-vinted/internal/config"
 	"vintrack-vinted/internal/session"
-	"vintrack-vinted/internal/vinted"
 
 	"github.com/joho/godotenv"
 )
@@ -32,47 +30,8 @@ func main() {
 	}
 	defer sessionMgr.Close()
 
-	go sessionMgr.StartKeepAlive(func(sess *session.VintedSession) bool {
-		client, err := vinted.NewClient(sess)
-		if err != nil {
-			return false
-		}
-		_ = client.WarmUp()
-
-		if client.ValidateSession() {
-			now := time.Now().UTC().Format(time.RFC3339)
-			sess.LastValidAt = now
-			sess.LastCheck = now
-			sess.Status = "active"
-			sess.InvalidReason = ""
-			return true
-		}
-
-		if sess.RefreshToken != "" {
-			log.Printf("[keep-alive] validation failed for user %s, attempting token refresh...", sess.UserID)
-			if err := client.RefreshAccessToken(); err != nil {
-				log.Printf("[keep-alive] token refresh failed for user %s: %v", sess.UserID, err)
-				return false
-			}
-
-			updated := client.GetSession()
-			now := time.Now().UTC().Format(time.RFC3339)
-			updated.Status = "active"
-			updated.LastCheck = now
-			updated.LastRefreshAt = now
-			updated.LastValidAt = now
-			updated.InvalidReason = ""
-			_ = sessionMgr.Store(*updated)
-			sess.AccessToken = updated.AccessToken
-			sess.RefreshToken = updated.RefreshToken
-			log.Printf("[keep-alive] token refreshed for user %s", sess.UserID)
-			return true
-		}
-
-		return false
-	})
-
 	server := api.NewServer(sessionMgr, cfg.ListenAddr)
+	go sessionMgr.StartKeepAlive(server.ValidateSessionForKeepAlive)
 	automationCtx, stopAutomations := context.WithCancel(context.Background())
 	defer stopAutomations()
 	go server.StartAccountAutomations(automationCtx)

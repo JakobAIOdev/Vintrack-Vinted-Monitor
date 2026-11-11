@@ -140,15 +140,14 @@ type UserMonitor = {
     created_at: Date | null;
     price_min: number | null;
     price_max: number | null;
-    discord_webhook: string | null;
+    discord_configured: boolean;
     webhook_active: boolean;
     telegram_active: boolean;
     proxy_source: string;
     proxy_group: { name: string } | null;
 };
 
-type ActiveMonitor = Omit<UserMonitor, "discord_webhook" | "_count"> & {
-    discord_configured: boolean;
+type ActiveMonitor = UserMonitor & {
     userId: string;
     user: {
         id: string;
@@ -9284,7 +9283,7 @@ export function AdminClient({
                                                             ) : null}
                                                             <span>
                                                                 {[
-                                                                    monitor.discord_webhook &&
+                                                                    monitor.discord_configured &&
                                                                     monitor.webhook_active
                                                                         ? "Discord"
                                                                         : null,
@@ -9429,7 +9428,7 @@ export function AdminClient({
                                                         <span className="inline-flex items-center gap-1">
                                                             <Webhook className="h-3.5 w-3.5" />
                                                             {[
-                                                                monitor.discord_webhook
+                                                                monitor.discord_configured
                                                                     ? monitor.webhook_active
                                                                         ? "Discord active"
                                                                         : "Discord paused"

@@ -547,7 +547,9 @@ func refreshFreeProxyRegion(
 	}
 
 	previous := freeProxyPools.Snapshot(region)
-	if previous.Version == 0 {
+	if previous.Version == 0 || previous.Reason == proxy.RegionInactiveReason {
+		// A region that was never published, or that returns after its last
+		// free monitor paused, resumes from the persisted serving state.
 		previous = persistedFreeProxyServingSnapshot(refreshCtx, store, region)
 	}
 	serving, state, reason, readyObservations := freeProxyServingDecision(

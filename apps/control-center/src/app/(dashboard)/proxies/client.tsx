@@ -985,7 +985,7 @@ export function ProxiesClient({
                                                 {checkRunning && (
                                                     <div className="bg-muted h-1.5 overflow-hidden rounded-full">
                                                         <div
-                                                            className="bg-foreground h-full rounded-full transition-all"
+                                                            className="bg-foreground h-full rounded-full transition-[width]"
                                                             style={{
                                                                 width: `${checkProgress}%`,
                                                             }}
