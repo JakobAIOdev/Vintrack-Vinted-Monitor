@@ -1,5 +1,11 @@
 import { db } from "@/lib/db";
-import { getEffectivePriceWatchLimit } from "@/lib/monitor-limits";
+import {
+    assertPriceWatchSlot,
+    lockPriceWatchCapacity,
+    lockPriceWatchUser,
+    PriceWatchRuleError,
+    resolveSchedule,
+} from "@/lib/price-watch-schedule.server";
 
 export type ExtensionPriceWatchMutationResult =
     | { ok: true }
@@ -24,33 +30,34 @@ export async function setExtensionPriceWatchStatus(
 
     try {
         const result = await db.$transaction(async (tx) => {
-            await tx.$executeRaw`
-                SELECT pg_advisory_xact_lock(hashtextextended(${`price-watch:${userId}`}, 0))
-            `;
-            await tx.$executeRaw`
-                SELECT pg_advisory_xact_lock(hashtextextended('price-watch:capacity', 0))
-            `;
+            await lockPriceWatchUser(tx, userId);
+            await lockPriceWatchCapacity(tx);
             const watch = await tx.price_watches.findFirst({
                 where: { id, user_id: userId },
-                select: { id: true, status: true, schedule_id: true },
+                select: {
+                    id: true,
+                    status: true,
+                    schedule_id: true,
+                    poll_interval_seconds: true,
+                    target: { select: { id: true, region: true } },
+                    schedule: { select: { proxy_group_id: true } },
+                },
             });
             if (!watch) return "missing" as const;
             if (watch.status === status) return "unchanged" as const;
 
             if (status === "active") {
-                const { priceWatchLimit } = await getEffectivePriceWatchLimit(
+                // Same checks as activating from the dashboard: slot limit,
+                // minimum interval, request capacity and proxy group state.
+                await assertPriceWatchSlot(tx, userId);
+                await resolveSchedule(tx, {
                     userId,
-                    tx,
-                );
-                const activeCount = await tx.price_watches.count({
-                    where: { user_id: userId, status: "active" },
+                    targetId: watch.target.id,
+                    region: watch.target.region,
+                    proxyGroupId: watch.schedule.proxy_group_id,
+                    intervalSeconds: watch.poll_interval_seconds,
+                    excludeWatchId: watch.id,
                 });
-                if (
-                    priceWatchLimit !== null &&
-                    activeCount >= priceWatchLimit
-                ) {
-                    return "limit" as const;
-                }
                 await tx.price_watches.update({
                     where: { id },
                     data: {
@@ -88,16 +95,11 @@ export async function setExtensionPriceWatchStatus(
                 message: "Price Watch not found.",
             };
         }
-        if (result === "limit") {
-            return {
-                ok: false,
-                status: 409,
-                message:
-                    "Your active Price Watch limit is reached. Pause or delete a watch first.",
-            };
-        }
         return { ok: true };
-    } catch {
+    } catch (error) {
+        if (error instanceof PriceWatchRuleError) {
+            return { ok: false, status: 409, message: error.message };
+        }
         return {
             ok: false,
             status: 500,
