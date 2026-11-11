@@ -284,7 +284,6 @@ function getDemoMonitorLabel(monitor: Monitor, now: number) {
 
 export function DashboardClient({
     initialMonitors,
-    userName,
     initialDedupeMonitorAlerts,
     initialTelegramMessageStyle,
     initialDiscordMessageStyle,
@@ -1229,11 +1228,11 @@ export function DashboardClient({
 
             <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
                 <div>
-                    <h1 className="text-2xl font-bold tracking-tight">
-                        Welcome back, {userName}
+                    <h1 className="text-2xl font-semibold tracking-tight">
+                        Your monitors
                     </h1>
                     <p className="text-muted-foreground mt-0.5 text-sm">
-                        Manage and monitor your Vinted scrapers.
+                        Create, pause and edit your Vinted searches
                     </p>
                 </div>
 
@@ -1990,7 +1989,7 @@ export function DashboardClient({
                                                 event.target.value,
                                             )
                                         }
-                                        placeholder="https://discord.com/api/webhooks/..."
+                                        placeholder="https://discord.com/api/webhooks/"
                                     />
                                 </div>
                             )}
@@ -2641,7 +2640,7 @@ export function DashboardClient({
                             <div className="flex gap-2">
                                 <Input
                                     id="webhook"
-                                    placeholder="https://discord.com/api/webhooks/..."
+                                    placeholder="https://discord.com/api/webhooks/"
                                     value={webhookInput}
                                     onChange={(e) =>
                                         setWebhookInput(e.target.value)
