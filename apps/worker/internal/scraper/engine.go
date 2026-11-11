@@ -736,6 +736,16 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			continue
 		}
 
+		if proxySource == "free" && result.neverStarted {
+			// Every client was busy or cooling down for the whole fetch window, so
+			// nothing was sent. That is a wait for local capacity, not a failed
+			// catalog check, and must not count towards the monitor's errors.
+			setRuntimeState("waiting_for_pool")
+			reportHealth("free proxy pool is waiting for safe capacity", proxyErrorPoolWaiting, "waiting_for_proxy", time.Time{}, "")
+			sleepMonitorCycle(ctx, cycleStart, monitorQueryInterval(m, time.Now()))
+			continue
+		}
+
 		checks = nextCheck
 		gotSuccess := result.err == nil && result.status == 200
 		// The fetch duration and attempt list were already measured by the hedged
@@ -826,6 +836,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 		consecutiveErrors = 0
 		lastSuccessAt = time.Now().UTC()
+		resumedRunning := runtimeState != "running"
 		setRuntimeState("running")
 		recoveredFromProxyWait := false
 		if waitingForProxy {
@@ -843,7 +854,10 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 				}
 			}
 		}
-		if recoveredFromProxyWait || checks%5 == 0 || checks <= 3 {
+		// Report a recovery on the cycle it happens instead of leaving the
+		// dashboard on the previous waiting or degraded state until the next
+		// periodic report.
+		if recoveredFromProxyWait || resumedRunning || checks%5 == 0 || checks <= 3 {
 			reportHealth("", "", "", time.Time{}, "")
 		}
 

@@ -15,6 +15,9 @@ type catalogFetchResult struct {
 	client   *Client
 	duration time.Duration
 	attempts []catalogFetchAttempt
+	// neverStarted marks a fetch that ended before any request was launched
+	// because no client could be acquired.
+	neverStarted bool
 }
 
 type catalogFetchAttempt struct {
@@ -58,7 +61,7 @@ func (e *Engine) fetchCatalogHedgedWithPrimary(ctx context.Context, pool *Client
 		var acquireErr error
 		primary, acquireErr = acquireCatalogPrimary(ctx, pool, attempted)
 		if acquireErr != nil {
-			return catalogFetchResult{err: acquireErr}
+			return catalogFetchResult{err: acquireErr, neverStarted: true}
 		}
 	}
 
