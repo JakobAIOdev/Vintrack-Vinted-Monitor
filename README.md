@@ -166,8 +166,7 @@ Extension** to connect a Vinted account you control.
 ### Requirements
 
 - Docker Engine with Docker Compose v2
-- Git
-- `make` and OpenSSL for the guided initializer
+- Git, `make` and OpenSSL
 - for real monitoring: a Discord OAuth application **or** an OIDC provider
 - for a public deployment: a domain with ports 80/443 for HTTPS
 
@@ -179,8 +178,8 @@ cd vintrack
 make init
 ```
 
-`make init` creates `.env`, generates the two required encryption secrets, and
-creates the local proxy file. It never replaces an existing `.env` or changes
+`make init` creates `.env`, generates the required secrets, and creates the
+local proxy file. It never replaces an existing `.env` or changes
 non-placeholder secrets; missing or template secret values are filled in.
 
 Start the low-power local stack (Discord OAuth or OIDC credentials are not
@@ -192,7 +191,7 @@ make dev
 
 This uses an automatically signed-in local admin, synthetic free-proxy pools,
 safe test monitors, isolated development data, a deterministic mock catalog,
-serial cached builds, and resource-capped containers. Run `make up` only when
+serial cached builds, and resource-capped containers. Run `make local` only when
 you intentionally need the full live/production-like worker stack and normal
 authentication.
 
@@ -202,10 +201,23 @@ Caddy and uses mock listings; it does not test real Vinted access. Stop it with
 
 ### Deploy your own instance
 
-Follow [Getting Started → Self-host Vintrack](docs/getting-started.md#self-host-vintrack)
-in order. It covers public DNS and HTTPS, OAuth/OIDC, starting containers,
-granting your first account the admin role, adding proxies, and creating your
-first live monitor. The guide also includes [backups and updates](docs/getting-started.md#updating-production).
+```bash
+git clone https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor.git vintrack
+cd vintrack
+make setup    # creates .env, generates secrets, asks for your URL and Discord login
+make up       # public domain with HTTPS; use `make local` on your own computer
+make admin    # after signing in once: gives your account the admin role
+```
+
+`make setup` prints the OAuth redirect URL to register with Discord. `make up`
+starts Caddy for HTTPS on ports 80 and 443; `make local` runs the same stack
+without Caddy on `http://localhost:3000`. Later, `make update` backs up the
+database, fetches the new version, applies migrations and restarts.
+
+[Getting Started → Self-host Vintrack](docs/getting-started.md#self-host-vintrack)
+explains each step: public DNS and HTTPS, OAuth/OIDC, the first admin, adding
+proxies, and creating your first live monitor. It also covers
+[backups and updates](docs/getting-started.md#updating-production).
 
 The browser extension needs a separate setup for your own domain: the public
 Chrome ZIP and Firefox add-on only connect to `vintrack.jakobaio.dev`.

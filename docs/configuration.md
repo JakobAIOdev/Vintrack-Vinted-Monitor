@@ -4,8 +4,13 @@ Vintrack reads deployment settings from the root `.env` through Docker Compose.
 Start with:
 
 ```bash
-make init
+make setup
 ```
+
+`make setup` creates `.env`, generates the secrets and asks for your public URL
+and Discord login. `make init` does the same without asking questions, for when
+you prefer to edit `.env` by hand. Check the result with `make config-check`
+(needs Node.js on the host).
 
 Treat `.env` as a secret. Never commit it or paste it into an issue.
 
@@ -46,6 +51,14 @@ VINTRACK_SITE_ADDRESS=vintrack.example.com
 The worker resolves canonical `AUTH_URL`, then the deprecated `APP_PUBLIC_URL` and `DASHBOARD_URL` fallbacks. Values must be absolute origins and must agree when several are
 configured. Production requires HTTPS and rejects local or temporary tunnel
 origins; Vintrack omits dashboard buttons while configuration health is red.
+
+For an instance on your own computer, keep the defaults and start with
+`make local`: the stack then runs without Caddy, `VINTRACK_SITE_ADDRESS` is
+unused, and the dashboard is served on `http://localhost:3000`. Use the same
+command behind your own reverse proxy and forward it to `127.0.0.1:3000`.
+
+`make setup` writes both values for either case, and `make config-check`
+reports a `VINTRACK_SITE_ADDRESS` that does not match the `AUTH_URL` hostname.
 
 Search indexing is disabled by default so self-hosted instances do not compete
 with identical marketing content accidentally. Enable `SEO_INDEXING_ENABLED`
@@ -190,47 +203,33 @@ TELEGRAM_BOT_USERNAME=
 TELEGRAM_WEBHOOK_SECRET=
 ```
 
+`make init` and `make setup` generate `TELEGRAM_WEBHOOK_SECRET`. It can stay
+set while the bot is unused.
+
 For an enabled bot:
 
 1. Create a bot with [@BotFather](https://t.me/BotFather).
-2. Set the bot token, public username without `@`, and a random webhook secret.
-3. Ensure `AUTH_URL` is the canonical public HTTPS origin.
+2. Set the bot token and the public username without `@`.
+3. Ensure `AUTH_URL` is the canonical public HTTPS origin. Telegram cannot
+   deliver webhooks to a localhost instance.
 4. Recreate the services so they load the new settings:
 
    ```bash
    docker compose up -d --force-recreate control-center worker
    ```
 
-5. Register and verify the webhook from the repository root. This reads secrets
-   inside the container, keeping the bot token out of command arguments and
-   shell history:
+5. Register and verify the webhook from the repository root:
 
    ```bash
-   docker compose exec -T control-center node --input-type=module <<'NODE'
-   const { TELEGRAM_BOT_TOKEN: token, TELEGRAM_WEBHOOK_SECRET: secret, AUTH_URL: origin } = process.env;
-   if (!token || !secret || !origin?.startsWith("https://")) {
-     throw new Error("Set the Telegram token, webhook secret and HTTPS AUTH_URL first.");
-   }
-   const target = new URL("/api/telegram/webhook", origin).href;
-   async function call(method, body) {
-     const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-       method: "POST", body,
-     });
-     const data = await response.json();
-     if (!response.ok || !data.ok) throw new Error(`Telegram ${method} failed; check the bot settings.`);
-     return data.result;
-   }
-   await call("setWebhook", new URLSearchParams({ url: target, secret_token: secret }));
-   const info = await call("getWebhookInfo");
-   if (info.url !== target) throw new Error("Telegram webhook URL does not match AUTH_URL.");
-   console.log("Webhook registered:", info.url);
-   console.log("Pending updates:", info.pending_update_count);
-   NODE
+   make telegram-webhook
    ```
 
-   Generate `TELEGRAM_WEBHOOK_SECRET` with `openssl rand -hex 32`. The secret
-   is required: Vintrack rejects every webhook update while it is empty. This uses
-   Telegram's documented [webhook API](https://core.telegram.org/bots/api#setwebhook).
+   The command reads the bot token and the secret inside the container, so
+   they stay out of command arguments and shell history. It uses Telegram's
+   documented [webhook API](https://core.telegram.org/bots/api#setwebhook).
+   The secret is required: Vintrack rejects every webhook update while
+   `TELEGRAM_WEBHOOK_SECRET` is empty, and Telegram only accepts the characters
+   `A-Z`, `a-z`, `0-9`, `_` and `-` in it (`openssl rand -hex 32`).
    A bot can have only one webhook; use a separate bot for separate instances.
 
 The webhook target is:
