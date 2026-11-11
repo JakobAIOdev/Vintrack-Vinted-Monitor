@@ -76,7 +76,13 @@ func (s *Server) Start() error {
 	})
 
 	log.Printf("API server listening on %s", s.listenAddr)
-	return http.ListenAndServe(s.listenAddr, s.withMiddleware(mux))
+	server := &http.Server{
+		Addr:              s.listenAddr,
+		Handler:           s.withMiddleware(mux),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+	return server.ListenAndServe()
 }
 
 func featureForPath(path string) string {
@@ -126,13 +132,9 @@ func (s *Server) requireFeature(w http.ResponseWriter, userID string, feature st
 
 func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-User-ID")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(204)
-			return
-		}
+		// No CORS headers: only the control center calls this service, server
+		// to server. X-User-ID is its sole identity check, so a browser page
+		// must never be able to send it cross-origin.
 		if feature := featureForPath(r.URL.Path); feature != "" {
 			if userID := getUserID(r); userID != "" {
 				if !s.requireFeature(w, userID, feature) {
