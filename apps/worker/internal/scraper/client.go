@@ -3,6 +3,7 @@ package scraper
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -205,6 +206,16 @@ type Client struct {
 	warmedMu        sync.Mutex
 	warmed          map[string]bool
 	catalogReady    map[string]bool
+	warmFlights     map[string]*warmFlight
+	warmGenerations map[string]uint64
+	// warmUp replaces the network warmup in tests.
+	warmUp func(ctx context.Context, domain string) error
+}
+
+// warmFlight is one in-progress warmup that concurrent callers wait on.
+type warmFlight struct {
+	done chan struct{}
+	err  error
 }
 
 func NewClient(proxyURL string, trafficRecorder func(txBytes int64, rxBytes int64)) (*Client, error) {
@@ -548,28 +559,103 @@ func (c *Client) EnsureWarm(domain string) error {
 	return c.EnsureWarmContext(context.Background(), domain)
 }
 
+// EnsureWarmContext establishes the anonymous session once per client and
+// domain. Requests that arrive while a warmup is in flight wait for it instead
+// of each sending their own: parallel warmups through one exit multiply the
+// request count and overwrite each other's cookies.
 func (c *Client) EnsureWarmContext(ctx context.Context, domain string) error {
-	c.warmedMu.Lock()
-	if c.warmed[domain] {
+	for {
+		c.warmedMu.Lock()
+		if c.warmed[domain] {
+			c.warmedMu.Unlock()
+			return nil
+		}
+		flight := c.warmFlights[domain]
+		if flight == nil {
+			return c.leadWarmupLocked(ctx, domain)
+		}
 		c.warmedMu.Unlock()
-		return nil
+
+		select {
+		case <-flight.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if flight.err == nil {
+			continue
+		}
+		// The leader's request may have been cancelled or timed out on its own
+		// deadline, for example as the losing side of a hedge. That is not this
+		// caller's failure, so it retries while its own context is alive.
+		if errors.Is(flight.err, context.Canceled) || errors.Is(flight.err, context.DeadlineExceeded) {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			continue
+		}
+		return flight.err
 	}
+}
+
+// leadWarmupLocked runs the warmup for every waiting caller. It is entered
+// with warmedMu held and releases it.
+func (c *Client) leadWarmupLocked(ctx context.Context, domain string) error {
+	flight := &warmFlight{done: make(chan struct{})}
+	if c.warmFlights == nil {
+		c.warmFlights = make(map[string]*warmFlight)
+	}
+	c.warmFlights[domain] = flight
 	c.warmedMu.Unlock()
 
-	if err := c.WarmUpRegionContext(ctx, domain); err != nil {
-		return err
+	var err error
+	if c.warmUp != nil {
+		err = c.warmUp(ctx, domain)
+	} else {
+		err = c.WarmUpRegionContext(ctx, domain)
 	}
 
 	c.warmedMu.Lock()
-	c.warmed[domain] = true
+	if err == nil {
+		if c.warmed == nil {
+			c.warmed = make(map[string]bool)
+		}
+		if c.warmGenerations == nil {
+			c.warmGenerations = make(map[string]uint64)
+		}
+		c.warmed[domain] = true
+		c.warmGenerations[domain]++
+	}
+	delete(c.warmFlights, domain)
 	c.warmedMu.Unlock()
-	return nil
+
+	flight.err = err
+	close(flight.done)
+	return err
 }
 
 func (c *Client) ResetWarm(domain string) {
 	c.warmedMu.Lock()
 	delete(c.warmed, domain)
 	delete(c.catalogReady, domain)
+	c.warmedMu.Unlock()
+}
+
+// warmGeneration identifies the session a request is about to use.
+func (c *Client) warmGeneration(domain string) uint64 {
+	c.warmedMu.Lock()
+	defer c.warmedMu.Unlock()
+	return c.warmGenerations[domain]
+}
+
+// resetWarmIfGeneration discards the session only if it is still the one the
+// caller saw rejected. When another request has already replaced it, resetting
+// again would throw away the fresh session under the requests now using it.
+func (c *Client) resetWarmIfGeneration(domain string, generation uint64) {
+	c.warmedMu.Lock()
+	if c.warmGenerations[domain] == generation {
+		delete(c.warmed, domain)
+		delete(c.catalogReady, domain)
+	}
 	c.warmedMu.Unlock()
 }
 
