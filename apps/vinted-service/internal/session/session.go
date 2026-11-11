@@ -561,10 +561,16 @@ func (m *Manager) GetBrowserLinkByToken(token string) (*BrowserLink, error) {
 		if err := json.Unmarshal(data, &link); err != nil {
 			return nil, err
 		}
-		if m.store != nil {
+		// A link cached before durable storage existed is written through
+		// once. Links already marked persistent are not rewritten on every
+		// read; TouchBrowserLink persists the ones that are actually used.
+		if m.store != nil && !link.Persistent {
 			link.Persistent = true
 			if err := m.store.SaveBrowserLink(m.ctx, browserLinkTokenHash(token), link); err != nil {
 				return nil, err
+			}
+			if err := m.cacheBrowserLink(link); err != nil {
+				log.Printf("[session] failed to recache browser link for user %s: %v", link.UserID, err)
 			}
 		}
 		return &link, nil
