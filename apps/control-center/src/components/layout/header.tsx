@@ -220,7 +220,7 @@ function NotificationBell() {
             >
                 <Bell className="h-4 w-4" />
                 {unreadCount > 0 && (
-                    <span className="absolute -top-1 -right-1 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1.5 text-[10px] leading-5 font-semibold text-white shadow-sm">
+                    <span className="absolute -top-1 -right-1 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1.5 text-[10px] leading-5 font-medium text-white">
                         {unreadCount > 9 ? "9+" : unreadCount}
                     </span>
                 )}
@@ -466,17 +466,14 @@ export function Header({ onMenuClick }: HeaderProps) {
                     href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="border-border/80 bg-card/70 text-muted-foreground hidden items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800 sm:flex dark:hover:border-amber-500/30 dark:hover:bg-amber-500/10 dark:hover:text-amber-400"
+                    className="border-border/80 bg-card/70 text-muted-foreground hover:bg-accent hover:text-accent-foreground hidden items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors sm:flex"
                 >
                     <Github className="h-3.5 w-3.5" />
                     <span className="hidden md:inline">Star on GitHub</span>
                     <Star className="h-3.5 w-3.5" />
                 </a>
                 <div className="text-muted-foreground flex items-center gap-1.5 text-[11px]">
-                    <span className="relative flex h-2 w-2">
-                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                        <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-                    </span>
+                    <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500" />
                     <span className="xs:inline hidden">Connected</span>
                 </div>
             </div>

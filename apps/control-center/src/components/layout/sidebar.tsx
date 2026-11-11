@@ -18,7 +18,6 @@ import {
     MessageCircle,
     Store,
     Link2,
-    FlaskConical,
     TrendingDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -138,10 +137,10 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
             <div className="border-sidebar-border/80 flex h-14 items-center justify-between border-b px-5">
                 <Link href="/dashboard" className="flex items-center gap-2">
                     <div className="bg-sidebar-primary text-sidebar-primary-foreground flex h-7 w-7 items-center justify-center rounded-lg shadow-sm">
-                        <span className="text-xs font-bold">V</span>
+                        <span className="text-xs font-semibold">V</span>
                     </div>
                     <div className="flex items-baseline gap-1.5">
-                        <span className="text-[15px] font-semibold tracking-tight">
+                        <span className="text-[15px] font-semibold">
                             Vintrack
                         </span>
                     </div>
@@ -155,7 +154,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
             </div>
 
             <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
-                <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
+                <p className="text-sidebar-foreground/45 mb-1 px-3 text-xs font-medium">
                     Track
                 </p>
 
@@ -176,7 +175,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                 className={cn(
                                     "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                     isActive
-                                        ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
+                                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
                                         : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                                 )}
                             >
@@ -184,7 +183,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                     className={cn(
                                         "h-4 w-4",
                                         isActive
-                                            ? "text-sidebar-primary-foreground"
+                                            ? "text-sidebar-accent-foreground"
                                             : "text-sidebar-foreground/45",
                                     )}
                                 />
@@ -198,14 +197,22 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                         href="/proxies"
                         onClick={onClose}
                         className={cn(
-                            "mt-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
+                            "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                             pathname === "/proxies" ||
                                 pathname.startsWith("/proxies/")
-                                ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
+                                ? "bg-sidebar-accent text-sidebar-accent-foreground"
                                 : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                         )}
                     >
-                        <Globe className="h-4 w-4" />
+                        <Globe
+                            className={cn(
+                                "h-4 w-4",
+                                pathname === "/proxies" ||
+                                    pathname.startsWith("/proxies/")
+                                    ? "text-sidebar-accent-foreground"
+                                    : "text-sidebar-foreground/45",
+                            )}
+                        />
                         Proxy Groups
                     </Link>
                 ) : null}
@@ -221,52 +228,55 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                 </div>
 
                 <div className="border-sidebar-border/60 border-t pt-3">
-                    <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
+                    <p className="text-sidebar-foreground/45 mb-1 px-3 text-xs font-medium">
                         Account
                     </p>
-                    {accountNavItems
-                        .filter(
-                            (item) =>
-                                !item.feature || features[item.feature].allowed,
-                        )
-                        .map((item) => {
-                            const isActive =
-                                pathname === item.href ||
-                                pathname.startsWith(item.href + "/");
-                            return (
-                                <Link
-                                    key={item.href}
-                                    href={item.href}
-                                    onClick={onClose}
-                                    className={cn(
-                                        "mb-1 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
-                                        isActive
-                                            ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
-                                            : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-                                    )}
-                                >
-                                    <item.icon
+                    <div className="space-y-0.5">
+                        {accountNavItems
+                            .filter(
+                                (item) =>
+                                    !item.feature ||
+                                    features[item.feature].allowed,
+                            )
+                            .map((item) => {
+                                const isActive =
+                                    pathname === item.href ||
+                                    pathname.startsWith(item.href + "/");
+                                return (
+                                    <Link
+                                        key={item.href}
+                                        href={item.href}
+                                        onClick={onClose}
                                         className={cn(
-                                            "h-4 w-4",
+                                            "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                             isActive
-                                                ? "text-sidebar-primary-foreground"
-                                                : "text-sidebar-foreground/45",
+                                                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                                                : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                                         )}
-                                    />
-                                    {item.label}
-                                    {item.href === "/account" &&
-                                        showAccountBadge && (
-                                            <span className="ml-auto rounded-full bg-blue-500 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-white uppercase">
-                                                New
-                                            </span>
-                                        )}
-                                </Link>
-                            );
-                        })}
+                                    >
+                                        <item.icon
+                                            className={cn(
+                                                "h-4 w-4",
+                                                isActive
+                                                    ? "text-sidebar-accent-foreground"
+                                                    : "text-sidebar-foreground/45",
+                                            )}
+                                        />
+                                        {item.label}
+                                        {item.href === "/account" &&
+                                            showAccountBadge && (
+                                                <span className="text-sidebar-foreground/55 ml-auto text-[11px]">
+                                                    New
+                                                </span>
+                                            )}
+                                    </Link>
+                                );
+                            })}
+                    </div>
                 </div>
 
                 <div className="border-sidebar-border/60 mt-3 border-t pt-3">
-                    <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
+                    <p className="text-sidebar-foreground/45 mb-1 px-3 text-xs font-medium">
                         Tools
                     </p>
                     <div className="space-y-0.5">
@@ -288,15 +298,26 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                         className={cn(
                                             "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                             isActive
-                                                ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
+                                                ? "bg-sidebar-accent text-sidebar-accent-foreground"
                                                 : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                                         )}
                                     >
-                                        <item.icon className="h-4 w-4 opacity-60" />
-                                        {item.label}
+                                        <item.icon
+                                            className={cn(
+                                                "h-4 w-4",
+                                                isActive
+                                                    ? "text-sidebar-accent-foreground"
+                                                    : "text-sidebar-foreground/45",
+                                            )}
+                                        />
+                                        <span className="truncate">
+                                            {item.label}
+                                        </span>
                                         {item.experimental && (
-                                            <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-amber-600 uppercase dark:text-amber-400">
-                                                <FlaskConical className="h-2.5 w-2.5" />
+                                            <span
+                                                className="text-sidebar-foreground/55 ml-auto shrink-0 text-[11px]"
+                                                title="Experimental"
+                                            >
                                                 Exp
                                             </span>
                                         )}
@@ -308,7 +329,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
 
                 {user?.role === "admin" && (
                     <div className="pt-3">
-                        <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
+                        <p className="text-sidebar-foreground/45 mb-1 px-3 text-xs font-medium">
                             Admin
                         </p>
                         {adminNavItems.map((item) => {
@@ -323,7 +344,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                     className={cn(
                                         "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                                         isActive
-                                            ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
+                                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
                                             : "text-sidebar-foreground/68 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                                     )}
                                 >
@@ -331,7 +352,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                         className={cn(
                                             "h-4 w-4",
                                             isActive
-                                                ? "text-sidebar-primary-foreground"
+                                                ? "text-sidebar-accent-foreground"
                                                 : "text-sidebar-foreground/45",
                                         )}
                                     />
@@ -343,7 +364,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                 )}
 
                 <div className="border-sidebar-border/60 mt-3 border-t pt-3">
-                    <p className="text-sidebar-foreground/40 mb-2 px-3 text-[11px] font-medium tracking-widest uppercase">
+                    <p className="text-sidebar-foreground/45 mb-1 px-3 text-xs font-medium">
                         Community
                     </p>
                     <div className="space-y-0.5">
@@ -388,7 +409,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                             className="h-7 w-7 rounded-full"
                         />
                     ) : (
-                        <div className="bg-sidebar-accent text-sidebar-accent-foreground flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-bold">
+                        <div className="bg-sidebar-accent text-sidebar-accent-foreground flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-medium">
                             {initials}
                         </div>
                     )}
@@ -398,12 +419,12 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                                 {user?.name || "User"}
                             </p>
                             {user?.role === "premium" && (
-                                <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-amber-700 uppercase dark:bg-amber-500/15 dark:text-amber-400">
+                                <span className="text-sidebar-foreground/55 text-[11px]">
                                     Pro
                                 </span>
                             )}
                             {user?.role === "admin" && (
-                                <span className="rounded-full bg-red-50 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-red-700 uppercase dark:bg-red-500/15 dark:text-red-400">
+                                <span className="text-sidebar-foreground/55 text-[11px]">
                                     Admin
                                 </span>
                             )}
@@ -418,7 +439,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                     </Link>
                 </div>
                 <div className="mt-2 flex justify-center px-2">
-                    <p className="text-sidebar-foreground/40 text-[10px] font-medium">
+                    <p className="text-sidebar-foreground/45 font-mono text-[11px]">
                         Vintrack v{process.env.NEXT_PUBLIC_APP_VERSION}
                     </p>
                 </div>
