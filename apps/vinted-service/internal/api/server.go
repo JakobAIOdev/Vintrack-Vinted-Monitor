@@ -473,6 +473,72 @@ func (s *Server) refreshSessionWithLock(userID string, sess *session.VintedSessi
 	return updated, client, nil
 }
 
+// ValidateSessionForKeepAlive is the periodic background check of one linked
+// session. It follows the same boundaries as the request path: a
+// browser-linked session is never refreshed server-side, a refresh runs under
+// the shared refresh lock, and rejected credentials are not sent again.
+func (s *Server) ValidateSessionForKeepAlive(sess *session.VintedSession) session.KeepAliveOutcome {
+	if sess == nil {
+		return session.KeepAliveRejected
+	}
+	expired := accessTokenExpired(sess.AccessToken)
+	if expired && !serverSideTokenRefreshAllowed(sess) {
+		// The token is known to be dead and only the member's browser can
+		// supply a new one, so there is nothing to ask Vinted.
+		if sess.BrowserLinked {
+			return session.KeepAliveNeedsBrowserSync
+		}
+		return session.KeepAliveRejected
+	}
+	if expired {
+		return s.refreshForKeepAlive(sess)
+	}
+
+	client, err := vinted.NewClient(sessionForServerSideClient(sess))
+	if err != nil {
+		return session.KeepAliveRejected
+	}
+	if err := client.WarmUp(); err != nil {
+		log.Printf("[keep-alive] warmup warning for user %s: %v", sess.UserID, err)
+	}
+	info, err := client.GetAccountInfo()
+	if err == nil {
+		if info != nil && info.ID > 0 {
+			return session.KeepAliveValid
+		}
+		return session.KeepAliveTransient
+	}
+
+	status := vinted.UpstreamStatus(err)
+	var authErr *vinted.AuthError
+	switch {
+	case status == http.StatusTooManyRequests:
+		return session.KeepAliveDeferred
+	case status == http.StatusUnauthorized || status == http.StatusForbidden || errors.As(err, &authErr):
+		if serverSideTokenRefreshAllowed(sess) {
+			return s.refreshForKeepAlive(sess)
+		}
+		if sess.BrowserLinked {
+			return session.KeepAliveNeedsBrowserSync
+		}
+		return session.KeepAliveRejected
+	default:
+		log.Printf("[keep-alive] validation failed for user %s: %v", sess.UserID, err)
+		return session.KeepAliveTransient
+	}
+}
+
+// refreshForKeepAlive makes one refresh attempt. A failed refresh can already
+// have rotated the credentials on Vinted's side, so it is never repeated.
+func (s *Server) refreshForKeepAlive(sess *session.VintedSession) session.KeepAliveOutcome {
+	if _, _, err := s.refreshSessionWithLock(sess.UserID, sess); err != nil {
+		log.Printf("[keep-alive] token refresh failed for user %s: %v", sess.UserID, err)
+		return session.KeepAliveRejected
+	}
+	log.Printf("[keep-alive] token refreshed for user %s", sess.UserID)
+	return session.KeepAliveStored
+}
+
 type accountSessionClient interface {
 	GetAccountInfo() (*vinted.AccountInfo, error)
 	GetSession() *session.VintedSession
@@ -1884,8 +1950,13 @@ func (s *Server) persistSessionIfChanged(original *session.VintedSession, update
 		}
 	}
 
-	if err := s.sessions.Store(*updated); err != nil {
+	stored, err := s.sessions.StoreIfCurrent(*original, *updated)
+	if err != nil {
 		log.Printf("[server] failed to persist session for user %s: %v", updated.UserID, err)
+		return
+	}
+	if !stored {
+		log.Printf("[server] session for user %s changed during the request; update discarded", updated.UserID)
 		return
 	}
 
