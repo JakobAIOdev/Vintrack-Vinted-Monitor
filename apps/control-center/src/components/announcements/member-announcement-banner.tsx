@@ -39,31 +39,27 @@ const variantStyles: Record<
     }
 > = {
     support: {
-        container:
-            "border-pink-200/80 bg-gradient-to-r from-pink-50 via-amber-50/80 to-orange-50/70 text-slate-900 dark:border-pink-500/20 dark:from-pink-500/10 dark:via-amber-500/8 dark:to-orange-500/6 dark:text-slate-100",
-        icon: "bg-pink-500 text-white shadow-pink-500/20",
-        button: "bg-slate-950 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200",
+        container: "border-border bg-card text-card-foreground",
+        icon: "bg-muted text-muted-foreground",
+        button: "bg-primary text-primary-foreground hover:bg-primary/90",
         Icon: Rocket,
     },
     info: {
-        container:
-            "border-sky-200/90 bg-gradient-to-r from-sky-50 via-blue-50/70 to-indigo-50/60 text-slate-900 dark:border-sky-500/25 dark:from-sky-500/12 dark:via-blue-500/8 dark:to-indigo-500/6 dark:text-slate-100",
-        icon: "bg-sky-500 text-white shadow-sky-500/20",
-        button: "bg-sky-600 text-white hover:bg-sky-700 dark:bg-sky-400 dark:text-slate-950 dark:hover:bg-sky-300",
+        container: "border-border bg-card text-card-foreground",
+        icon: "bg-muted text-muted-foreground",
+        button: "bg-primary text-primary-foreground hover:bg-primary/90",
         Icon: Info,
     },
     warning: {
-        container:
-            "border-amber-200/90 bg-gradient-to-r from-amber-50 via-yellow-50/75 to-orange-50/60 text-slate-900 dark:border-amber-500/25 dark:from-amber-500/12 dark:via-yellow-500/8 dark:to-orange-500/6 dark:text-slate-100",
-        icon: "bg-amber-500 text-white shadow-amber-500/20",
-        button: "bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-400 dark:text-slate-950 dark:hover:bg-amber-300",
+        container: "border-border bg-card text-card-foreground",
+        icon: "bg-muted text-amber-600 dark:text-amber-400",
+        button: "bg-primary text-primary-foreground hover:bg-primary/90",
         Icon: AlertTriangle,
     },
     critical: {
-        container:
-            "border-red-200/90 bg-gradient-to-r from-red-50 via-rose-50/75 to-orange-50/50 text-slate-900 dark:border-red-500/30 dark:from-red-500/14 dark:via-rose-500/9 dark:to-orange-500/5 dark:text-slate-100",
-        icon: "bg-red-600 text-white shadow-red-600/20",
-        button: "bg-red-600 text-white hover:bg-red-700 dark:bg-red-400 dark:text-slate-950 dark:hover:bg-red-300",
+        container: "border-border bg-card text-card-foreground",
+        icon: "bg-muted text-red-600 dark:text-red-400",
+        button: "bg-primary text-primary-foreground hover:bg-primary/90",
         Icon: ShieldAlert,
     },
 };
@@ -152,7 +148,7 @@ export function MemberAnnouncementBanner({
         : null;
     const CtaIcon = ctaIcon;
     const ctaClassName = cn(
-        "inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold shadow-sm transition-colors",
+        "inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium transition-colors",
         styles.button,
     );
     const ctaContent = announcement.cta ? (
@@ -168,24 +164,22 @@ export function MemberAnnouncementBanner({
             data-announcement-variant={announcement.variant}
             data-announcement-revision={announcement.revision}
             className={cn(
-                "flex flex-col gap-3 rounded-xl border px-3.5 py-3 shadow-sm sm:flex-row sm:items-center",
+                "flex flex-col gap-3 rounded-xl border px-4 py-3 sm:flex-row sm:items-center",
                 styles.container,
             )}
         >
             <div className="flex min-w-0 flex-1 items-start gap-3">
                 <div
                     className={cn(
-                        "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg shadow-sm",
+                        "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
                         styles.icon,
                     )}
                 >
                     <Icon className="h-4 w-4" />
                 </div>
                 <div className="min-w-0">
-                    <p className="text-sm font-semibold">
-                        {announcement.title}
-                    </p>
-                    <p className="mt-0.5 text-xs leading-5 whitespace-pre-wrap text-slate-600 sm:text-sm dark:text-slate-300">
+                    <p className="text-sm font-medium">{announcement.title}</p>
+                    <p className="text-muted-foreground mt-0.5 text-xs leading-5 whitespace-pre-wrap sm:text-sm">
                         {announcement.message}
                     </p>
                 </div>
@@ -226,7 +220,7 @@ export function MemberAnnouncementBanner({
                         <button
                             type="button"
                             onClick={dismiss}
-                            className="text-slate-500 transition-colors hover:text-slate-950 dark:text-slate-400 dark:hover:text-white"
+                            className="text-muted-foreground hover:text-foreground transition-colors"
                             aria-label={
                                 announcement.revision ===
                                 DEFAULT_MEMBER_ANNOUNCEMENT.revision
