@@ -31,6 +31,7 @@ import (
 
 var (
 	freeProxyCheckRunning        atomic.Bool
+	freeProxyRefreshFailures     atomic.Int32
 	freeProxyImportRunning       atomic.Bool
 	freeProxyEgressLimited       atomic.Bool
 	freeProxyEgressRecoveryWaves atomic.Int32
@@ -62,6 +63,9 @@ const (
 	freeProxyWriteTimeout      = 5 * time.Second
 	freeProxyDegradationKey    = "free_proxy_degradation_reason"
 	freeProxyEgressLimitedCode = "host_egress_limited"
+	// Consecutive failed refresh reads (30s apart) that keep the last serving
+	// snapshot before the pools fail closed.
+	freeProxyRefreshFailureTolerance = 2
 )
 
 type freeProxyImportCandidate struct {
@@ -374,25 +378,49 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 	refreshCtx, cancelRefresh := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancelRefresh()
 
+	// A failed read says nothing about the proxies themselves. The serving
+	// snapshot is kept for a bounded number of refreshes so a database blip does
+	// not drain every warmed client pool; a persistent failure still fails
+	// closed.
+	failed := false
+	defer func() {
+		if failed {
+			freeProxyRefreshFailures.Add(1)
+		} else {
+			freeProxyRefreshFailures.Store(0)
+		}
+	}()
+	keepServing := func() bool {
+		failed = true
+		return freeProxyRefreshFailures.Load() < freeProxyRefreshFailureTolerance
+	}
+
 	regions, err := freeProxyRegionsContext(refreshCtx, store)
 	if err != nil {
 		log.Printf("free proxy region refresh failed: %v", err)
-		freeProxyPools.Retain(nil)
+		if !keepServing() {
+			freeProxyPools.Retain(nil)
+		}
 		return
 	}
-	freeProxyPools.Retain(regions)
 	enabled, err := store.FeatureGloballyEnabledContext(refreshCtx, "free_proxy_pool", "free_proxy_enabled", false)
 	if err != nil {
 		log.Printf("free proxy enabled setting refresh failed: %v", err)
-		freeProxyPools.Retain(nil)
+		if !keepServing() {
+			freeProxyPools.Retain(nil)
+		}
 		return
 	}
 	if !enabled {
 		freeProxyPools.Retain(nil)
 		return
 	}
+	freeProxyPools.Retain(regions)
 	if demoted, normalizeErr := store.NormalizeFreeProxyPromotionStateContext(refreshCtx); normalizeErr != nil {
 		log.Printf("free proxy promotion normalization failed: %v", normalizeErr)
+		if keepServing() {
+			return
+		}
 		for _, region := range regions {
 			freeProxyPools.Publish(region, "", "recovering", 0, "validation_state_unavailable", 0)
 		}
@@ -413,7 +441,9 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 		activeCount, err := store.CountActiveFreeProxiesContext(refreshCtx, region)
 		if err != nil {
 			log.Printf("free proxy active count failed for %s: %v", region, err)
-			freeProxyPools.Publish(region, "", "recovering", 0, "active_count_unavailable", 0)
+			if !keepServing() {
+				freeProxyPools.Publish(region, "", "recovering", 0, "active_count_unavailable", 0)
+			}
 			continue
 		}
 
@@ -441,6 +471,9 @@ func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools
 		proxies, err := store.GetActiveFreeProxiesContext(refreshCtx, region, poolLimit)
 		if err != nil {
 			log.Printf("free proxy refresh failed for %s: %v", region, err)
+			if keepServing() {
+				continue
+			}
 			freeProxyPools.Publish(region, "", "recovering", activeCount, "snapshot_query_failed", 0)
 			_ = publishFreeProxyRegionServingState(refreshCtx, store, region, "recovering", activeCount, "snapshot_query_failed")
 			continue
