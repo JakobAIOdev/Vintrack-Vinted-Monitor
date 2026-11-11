@@ -41,27 +41,31 @@ func (p *RegionPools) Snapshot(region string) PoolSnapshot {
 	return p.Manager(region).PoolSnapshot()
 }
 
-// Retain removes pools that are no longer configured. Managers are emptied
-// before removal so existing references cannot keep using a stale region.
+// RegionInactiveReason marks a manager that Retain emptied because its region
+// is not configured right now.
+const RegionInactiveReason = "region_inactive"
+
+// Retain empties pools that are no longer configured. The Manager itself stays
+// registered: monitor tasks and client pools hold the pointer for as long as
+// the process runs, so handing out a fresh Manager when the region returns
+// would leave them bound to an empty one that is never published to again.
 func (p *RegionPools) Retain(regions []string) {
 	desired := make(map[string]bool, len(regions))
 	for _, region := range regions {
 		desired[region] = true
 	}
 
-	p.mu.Lock()
-	removed := make([]*Manager, 0)
+	p.mu.RLock()
+	inactive := make([]*Manager, 0)
 	for region, manager := range p.pools {
-		if desired[region] {
-			continue
+		if !desired[region] {
+			inactive = append(inactive, manager)
 		}
-		removed = append(removed, manager)
-		delete(p.pools, region)
 	}
-	p.mu.Unlock()
+	p.mu.RUnlock()
 
-	for _, manager := range removed {
-		manager.ReplaceFromString("")
+	for _, manager := range inactive {
+		manager.ReplaceSnapshot("", "recovering", 0, RegionInactiveReason, 0)
 	}
 }
 
