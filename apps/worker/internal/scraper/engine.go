@@ -29,7 +29,7 @@ const (
 	maximumFreeProxyClientPoolSize  = 100
 	freeProxyMaxInFlightPerClient   = 2
 	defaultFreeProxyHedgeDelayMilli = 900
-	freeProxyRuntimeSuccessInterval = 5 * time.Minute
+	freeProxyRuntimeSuccessInterval = model.FreeProxyRuntimeSuccessInterval
 	// Small relative to the 500ms interval floor.
 	monitorCycleJitterMS = 50
 )
@@ -153,17 +153,22 @@ func NewEngine(db *database.Store, pm *proxy.Manager, freePM *proxy.RegionPools)
 	return engine
 }
 
-func (e *Engine) freeProxyPacer(region string) *freeProxyRegionPacer {
+func (e *Engine) freeProxyPacer(region string, limited bool) *freeProxyRegionPacer {
 	region = strings.ToLower(strings.TrimSpace(region))
 	e.freePacersMu.Lock()
 	defer e.freePacersMu.Unlock()
-	if !e.freePacingPolicy.applies(region) {
+	policy := e.freePacingPolicy.forPool(region, limited)
+	if !policy.applies(region) {
+		delete(e.freePacers, region)
 		return nil
 	}
 	if pacer := e.freePacers[region]; pacer != nil {
+		pacer.mu.Lock()
+		pacer.policy = policy
+		pacer.mu.Unlock()
 		return pacer
 	}
-	pacer := newFreeProxyRegionPacer(region, e.freePacingPolicy)
+	pacer := newFreeProxyRegionPacer(region, policy)
 	e.freePacers[region] = pacer
 	return pacer
 }
@@ -523,6 +528,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		len(monitorQueries),
 		m.ResumeAfterQuietHours,
 	)
+	queryBaselines := make([]catalogBaseline, len(monitorQueries))
 	var totalErrors int64
 	localSeen := make(map[int64]time.Time, 128)
 	waitingForProxy := initialProxyWait
@@ -659,8 +665,10 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			pool.Reconcile(e.freePoolSize)
 		}
 		var pacer *freeProxyRegionPacer
+		limited := false
 		if proxySource == "free" {
-			pacer = e.freeProxyPacer(m.Region)
+			limited = pm.PoolSnapshot().State == "limited"
+			pacer = e.freeProxyPacer(m.Region, limited)
 		}
 		if pacer != nil {
 			if _, admitted := pacer.admit(ctx, m.ID, monitorQueryInterval(m, time.Now()), pool.Size()); !admitted {
@@ -688,7 +696,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			}
 		}
 		fetchCtx, cancelFetch := context.WithTimeout(ctx, timeoutDuration)
-		allowHedge := pacer == nil || pacer.allowHedge()
+		allowHedge := !limited && (pacer == nil || pacer.allowHedge())
 		result := e.fetchCatalogHedgedWithPrimary(
 			fetchCtx,
 			pool,
@@ -865,11 +873,25 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		if titleBlockedCount > 0 && (checks <= 3 || checks%100 == 0) {
 			log.Printf("[%d] skipped %d items because their titles did not match the query", m.ID, titleBlockedCount)
 		}
+		// Use the raw page: a title filter must not make an existing catalog
+		// look empty or lower the boundary. Empty pages leave startup muted
+		// until there is an actual baseline, even after many successful polls.
+		if !initializedQueries[queryIndex] && len(result.items) > 0 {
+			queryBaselines[queryIndex].seed(result.items)
+			seedIDs := markInitialBaseline(result.items, localSeen, time.Now())
+			e.db.MarkItemsSeen(m.ID, seedIDs)
+			log.Printf("[%d] initial scan established a muted baseline with %d items (query=%d, item_id=%d)", m.ID, len(result.items), queryIndex, queryBaselines[queryIndex].itemID)
+			initializedQueries[queryIndex] = true
+			recordCatalogCycle(len(items), 0)
+			e.db.RecordMonitorRun(model.MonitorRun{
+				MonitorID: m.ID, Status: "success", StatusCode: 200,
+				DurationMS: int(time.Since(cycleStart).Milliseconds()), ItemCount: len(items),
+				ProxySource: proxySource, FetchSource: "canonical", Region: m.Region,
+			})
+			sleepMonitorCycle(ctx, cycleStart, monitorQueryInterval(m, time.Now()))
+			continue
+		}
 		if len(items) == 0 {
-			if !initializedQueries[queryIndex] {
-				initializedQueries[queryIndex] = true
-				log.Printf("[%d] initial scan completed with no items", m.ID)
-			}
 			if checks%10 == 0 {
 				log.Printf("[%d] #%d | 0 items returned by Vinted", m.ID, checks)
 			}
@@ -884,28 +906,11 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		}
 
 		now := time.Now()
-		if !initializedQueries[queryIndex] {
-			seedIDs := markInitialBaseline(items, localSeen, now)
-			e.db.MarkItemsSeen(m.ID, seedIDs)
-			// The first successful response defines the monitor baseline. These
-			// items existed before monitoring began, so they must not enter any
-			// downstream path: enrichment persists items and strict seller filters
-			// may publish them, which would make muted startup results appear in the
-			// dashboard even though external notifications stay disabled.
-			log.Printf("[%d] initial scan established a muted baseline with %d items", m.ID, len(items))
-			initializedQueries[queryIndex] = true
-			recordCatalogCycle(len(items), 0)
-			e.db.RecordMonitorRun(model.MonitorRun{
-				MonitorID: m.ID, Status: "success", StatusCode: 200,
-				DurationMS: int(time.Since(cycleStart).Milliseconds()), ItemCount: len(items),
-				ProxySource: proxySource, FetchSource: "canonical", Region: m.Region,
-			})
-			sleepMonitorCycle(ctx, cycleStart, monitorQueryInterval(m, time.Now()))
-			continue
-		}
-
 		newItems := make([]model.VintedItem, 0)
 		if resumeQueries[queryIndex] {
+			// Preserve the intentional quiet-hours catch-up on the first page;
+			// subsequent pages use its fixed boundary and durable deduplication.
+			queryBaselines[queryIndex].seed(result.items)
 			itemIDs := make([]int64, len(items))
 			for index, item := range items {
 				itemIDs[index] = item.ID
@@ -925,6 +930,11 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 					newItems = append(newItems, item)
 				}
 				localSeen[item.ID] = now
+			}
+			var historicalCount int
+			newItems, historicalCount = queryBaselines[queryIndex].filter(newItems)
+			if historicalCount > 0 {
+				log.Printf("[%d] skipped %d items at or below startup baseline (query=%d, item_id=%d)", m.ID, historicalCount, queryIndex, queryBaselines[queryIndex].itemID)
 			}
 		}
 		if checks%100 == 0 {
@@ -947,10 +957,6 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 		delivered := 0
 		for _, item := range alertItems {
-			seenAt := time.Now()
-			e.db.RecordItemDetection(model.MonitorItemDetection{
-				MonitorID: m.ID, ItemID: item.ID, Source: "canonical", SeenAt: seenAt,
-			})
 			if e.handleDetectedItem(ctx, m, item, "canonical", proxySource, enricher) {
 				delivered++
 			}
@@ -1003,6 +1009,11 @@ func waitForProxyManager(ctx context.Context, manager *proxy.Manager, interval t
 	return waitForProxyManagerObserved(ctx, manager, interval, nil)
 }
 
+// proxyManagerRecoveryPoll bounds how long a waiting monitor stays idle after
+// its pool was republished. The observer (health/incident reporting) keeps its
+// slower interval; only the cheap in-memory count is polled this often.
+const proxyManagerRecoveryPoll = time.Second
+
 func waitForProxyManagerObserved(ctx context.Context, manager *proxy.Manager, interval time.Duration, observe func()) bool {
 	if manager.Count() > 0 {
 		return true
@@ -1010,16 +1021,19 @@ func waitForProxyManagerObserved(ctx context.Context, manager *proxy.Manager, in
 	if interval <= 0 {
 		interval = 15 * time.Second
 	}
+	poll := min(interval, proxyManagerRecoveryPoll)
 
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
+	nextObservation := time.Now().Add(interval)
 	for {
 		select {
 		case <-ctx.Done():
 			return false
-		case <-ticker.C:
-			if observe != nil {
+		case now := <-ticker.C:
+			if observe != nil && !now.Before(nextObservation) {
 				observe()
+				nextObservation = now.Add(interval)
 			}
 			if manager.Count() > 0 {
 				return true
@@ -1029,7 +1043,15 @@ func waitForProxyManagerObserved(ctx context.Context, manager *proxy.Manager, in
 }
 
 func (e *Engine) handleDetectedItem(ctx context.Context, monitor model.Monitor, vintedItem model.VintedItem, source string, proxySource string, enricher *SellerEnricher) bool {
-	if !e.db.ClaimMonitorItem(monitor.ID, vintedItem.ID, source) {
+	seenAt := time.Now()
+	claimed := e.db.ClaimMonitorItem(ctx, monitor.ID, vintedItem.ID, source)
+	// Claim before recording telemetry: the SQL fallback uses the detection
+	// row for atomic ownership. Enqueue telemetry before publishing so alert
+	// timing updates still follow the detection in the store's FIFO queue.
+	e.db.RecordItemDetection(model.MonitorItemDetection{
+		MonitorID: monitor.ID, ItemID: vintedItem.ID, Source: source, SeenAt: seenAt,
+	})
+	if !claimed {
 		return false
 	}
 	item := e.buildItems(monitor, []model.VintedItem{vintedItem})[0]

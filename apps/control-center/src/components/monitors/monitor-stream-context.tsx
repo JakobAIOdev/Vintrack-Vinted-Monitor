@@ -30,6 +30,7 @@ type MonitorStreamListener = (item: ItemData) => void;
 type MonitorStreamContextValue = {
     soundEnabled: boolean;
     soundReady: boolean;
+    connectionStatus: "connecting" | "live" | "reconnecting";
     subscribe: (listener: MonitorStreamListener) => () => void;
     toggleSound: () => Promise<void>;
 };
@@ -78,6 +79,9 @@ export function MonitorStreamProvider({
     const soundReadyRef = useRef(false);
     const [soundEnabled, setSoundEnabled] = useState(false);
     const [soundReady, setSoundReady] = useState(false);
+    const [connectionStatus, setConnectionStatus] = useState<
+        "connecting" | "live" | "reconnecting"
+    >("connecting");
 
     const updateSoundEnabled = useCallback((enabled: boolean) => {
         soundEnabledRef.current = enabled;
@@ -240,6 +244,8 @@ export function MonitorStreamProvider({
 
     useEffect(() => {
         const eventSource = new EventSource("/api/stream");
+        eventSource.onopen = () => setConnectionStatus("live");
+        eventSource.onerror = () => setConnectionStatus("reconnecting");
 
         eventSource.onmessage = (event) => {
             try {
@@ -278,10 +284,11 @@ export function MonitorStreamProvider({
         () => ({
             soundEnabled,
             soundReady,
+            connectionStatus,
             subscribe,
             toggleSound,
         }),
-        [soundEnabled, soundReady, subscribe, toggleSound],
+        [soundEnabled, soundReady, connectionStatus, subscribe, toggleSound],
     );
 
     return (

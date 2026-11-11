@@ -131,3 +131,61 @@ func TestFreeProxyBackgroundWritesSkipLockedRows(t *testing.T) {
 		}
 	}
 }
+
+func TestFreeProxyClaimCleanupDoesNotInvertValidatorLocks(t *testing.T) {
+	store := freeProxyConcurrentTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var until time.Time
+	if err := store.db.QueryRowContext(ctx, `UPDATE free_proxies SET check_claimed_until=NOW()+INTERVAL '6 minutes' RETURNING check_claimed_until`).Scan(&until); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT id FROM free_proxy_health FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	completed := make(chan error, 1)
+	go func() {
+		completed <- store.ReleaseFreeProxyCheckClaimsContext(ctx, []FreeProxyCandidate{{
+			ProxyURL: "http://contended.invalid:80", Region: "uk", ClaimedUntil: until,
+		}})
+	}()
+	observer, err := sql.Open("postgres", os.Getenv("FREE_PROXY_STORE_INTEGRATION_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer observer.Close()
+	for {
+		var waiting bool
+		if err := observer.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE query LIKE '%AS claim(proxy_url, region, claimed_until)%' AND wait_event_type='Lock')`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		select {
+		case err := <-completed:
+			t.Fatalf("cleanup did not wait for the validator: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	writeCtx, cancelWrite := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancelWrite()
+	// Outcome persistence locks regional health before the global proxy.
+	// Cleanup must wait at the same first lock, leaving this write unblocked.
+	if _, err := tx.ExecContext(writeCtx, `UPDATE free_proxies SET check_claimed_until=NULL`); err != nil {
+		t.Fatalf("cleanup inverted validator lock order: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-completed; err != nil {
+		t.Fatal(err)
+	}
+}

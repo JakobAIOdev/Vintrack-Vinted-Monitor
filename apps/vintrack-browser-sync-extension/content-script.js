@@ -348,6 +348,7 @@
   let companionMode = "inline";
   let companionDrawerHost = null;
   let companionController = null;
+  let companionReturnFocus = null;
   let companionObserver = null;
   let companionUrlTimer = null;
   let companionRenderTimer = null;
@@ -485,6 +486,9 @@
     companionController = null;
     companionDrawerHost?.remove();
     companionDrawerHost = null;
+    if (companionReturnFocus?.isConnected)
+      companionReturnFocus.focus({ preventScroll: true });
+    companionReturnFocus = null;
   }
 
   function openCompanionDrawer() {
@@ -492,6 +496,7 @@
     const runtime = getRuntime();
     if (!runtime?.getURL || !globalThis.VintrackCompanion?.mount) return;
 
+    companionReturnFocus = document.activeElement;
     const host = document.createElement("div");
     host.dataset.vintrackCompanionDrawer = "true";
     host.style.cssText =
@@ -502,13 +507,48 @@
     stylesheet.href = runtime.getURL("companion.css");
     const backdrop = document.createElement("button");
     backdrop.type = "button";
+    backdrop.tabIndex = -1;
     backdrop.setAttribute("aria-label", "Close Vintrack Companion");
     backdrop.style.cssText =
       "position:absolute;inset:0;border:0;background:rgba(7,22,25,.34);pointer-events:auto;cursor:default;";
     const drawer = document.createElement("aside");
     drawer.setAttribute("aria-label", "Vintrack Companion");
+    drawer.setAttribute("role", "dialog");
+    drawer.setAttribute("aria-modal", "true");
     drawer.style.cssText =
       "position:absolute;top:0;right:0;width:min(430px,100vw);height:100vh;overflow:hidden;background:#f5f7f8;box-shadow:-20px 0 60px rgba(7,22,25,.24);pointer-events:auto;";
+    shadow.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeCompanionDrawer();
+      } else if (event.key === "Tab") {
+        const controls = [
+          ...drawer.querySelectorAll(
+            'button:not(:disabled), a[href], input:not(:disabled), summary, [tabindex="0"]',
+          ),
+        ].filter(
+          (node) => node.getClientRects().length > 0 && node.tabIndex >= 0,
+        );
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (
+          event.shiftKey &&
+          (shadow.activeElement === first ||
+            !drawer.contains(shadow.activeElement))
+        ) {
+          event.preventDefault();
+          last?.focus();
+        } else if (
+          !event.shiftKey &&
+          (shadow.activeElement === last ||
+            !drawer.contains(shadow.activeElement))
+        ) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    });
     backdrop.addEventListener("click", closeCompanionDrawer);
     shadow.append(stylesheet, backdrop, drawer);
     (document.body || document.documentElement).appendChild(host);
@@ -518,6 +558,7 @@
       onClose: closeCompanionDrawer,
       onStateChange: updateInlineActionState,
     });
+    drawer.querySelector('[data-action="close"]')?.focus();
   }
 
   function updateInlineActionState(state) {

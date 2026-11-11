@@ -129,6 +129,109 @@ test.describe("dashboard feed", () => {
         ).toBeVisible();
     });
 
+    test("filters locally by search and monitor, then clears an empty result", async ({
+        page,
+    }) => {
+        await page.route("**/api/feed?*", async (route) => {
+            const response = await route.fetch();
+            const items = await response.json();
+            await route.fulfill({
+                response,
+                json: items.map((item: { id: string }) =>
+                    String(item.id) === "990002"
+                        ? {
+                              ...item,
+                              monitor_id: 990799,
+                              monitor_name: "Workwear finds",
+                          }
+                        : item,
+                ),
+            });
+        });
+        await page.goto("/feed");
+        const cards = page.getByTestId("item-card");
+        const search = page.getByRole("searchbox", {
+            name: "Search feed items",
+        });
+        await expect(cards).toHaveCount(2);
+        await search.fill("e2e_seller_one");
+        await expect(cards).toHaveCount(1);
+        await expect(cards).toContainText("Nike Dunk");
+        await page.getByRole("button", { name: "Clear feed search" }).click();
+        await expect(search).toBeFocused();
+        await page.getByLabel("Filter feed by monitor").selectOption("990799");
+        await expect(cards).toHaveCount(1);
+        await expect(cards).toContainText("Carhartt");
+        await search.fill("Nike");
+        await expect(
+            page.getByRole("heading", { name: "No matching items" }),
+        ).toBeVisible();
+        await page
+            .getByRole("button", { name: "Clear search and filters" })
+            .click();
+        await expect(cards).toHaveCount(2);
+        await expect(search).toHaveValue("");
+        await expect(page.getByLabel("Filter feed by monitor")).toHaveValue(
+            "all",
+        );
+    });
+
+    test("recovers from a failed feed request", async ({ page }) => {
+        await page.route("**/api/feed?*", (route) =>
+            route.fulfill({ status: 503, json: { error: "Unavailable" } }),
+        );
+        await page.goto("/feed");
+        await expect(
+            page
+                .getByRole("alert")
+                .filter({ hasText: "Couldn’t load feed items" }),
+        ).toContainText("Couldn’t load feed items");
+        await expect(page.getByText("Waiting for items...")).toBeHidden();
+        await page.unroute("**/api/feed?*");
+        await page.getByRole("button", { name: "Retry", exact: true }).click();
+        await expect(page.getByTestId("item-card")).toHaveCount(2);
+        await expect(
+            page
+                .getByRole("alert")
+                .filter({ hasText: "Couldn’t load feed items" }),
+        ).toBeHidden();
+    });
+
+    test("keeps loaded items visible when changing the limit fails", async ({
+        page,
+    }) => {
+        await page.goto("/feed");
+        await expect(page.getByTestId("item-card")).toHaveCount(2);
+        await page.route("**/api/feed?limit=200", (route) => route.abort());
+        await page.getByLabel("Live feed item limit").selectOption("200");
+        await expect(
+            page
+                .getByRole("alert")
+                .filter({ hasText: "Couldn’t load feed items" }),
+        ).toContainText("Couldn’t load feed items");
+        await expect(page.getByTestId("item-card")).toHaveCount(2);
+    });
+
+    test("explains how to fill an empty feed without active monitors", async ({
+        page,
+    }) => {
+        await page.route("**/api/feed?*", (route) =>
+            route.fulfill({ json: [] }),
+        );
+        await page.route("**/api/monitors/summary", (route) =>
+            route.fulfill({ json: { activeMonitors: 0, totalMonitors: 1 } }),
+        );
+        await page.goto("/feed");
+        await expect(
+            page.getByRole("heading", {
+                name: "Start a monitor to fill your feed",
+            }),
+        ).toBeVisible();
+        await expect(
+            page.getByRole("link", { name: "Manage monitors" }),
+        ).toHaveAttribute("href", "/dashboard");
+    });
+
     test("requests the selected item limit", async ({ page }) => {
         await page.goto("/feed");
 

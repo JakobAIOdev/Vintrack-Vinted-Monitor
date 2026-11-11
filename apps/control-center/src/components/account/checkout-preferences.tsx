@@ -117,8 +117,8 @@ export function CheckoutPreferencesCard({
             id="checkout-settings"
             className="border-border/70 scroll-mt-20 gap-0 overflow-hidden py-0 shadow-sm"
         >
-            <CardHeader className="border-b p-5">
-                <CardTitle className="flex items-center justify-between gap-3">
+            <CardHeader className="border-b p-4">
+                <CardTitle className="flex flex-wrap items-center justify-between gap-3 text-base">
                     Oneclick checkout
                     <Badge variant={checkoutEnabled ? "default" : "secondary"}>
                         {!loaded
@@ -134,8 +134,8 @@ export function CheckoutPreferencesCard({
                         : `Choose delivery and payment for your buy links${domain ? ` (${domain.replace("www.vinted.", "").toUpperCase()})` : ""}. Oneclick opens the final review; auto-checkout can start payment.`}
                 </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4 p-5">
-                <div className="flex items-center justify-between gap-4 rounded-md border p-4">
+            <CardContent className="space-y-4 p-4">
+                <div className="flex items-center justify-between gap-4 rounded-md border p-3">
                     <div className="space-y-1">
                         <Label htmlFor="checkout-module">
                             Enable checkout module
@@ -202,7 +202,7 @@ export function CheckoutPreferencesCard({
                     className="grid gap-3 sm:grid-cols-2"
                     aria-label="Saved checkout status"
                 >
-                    <div className="flex items-center justify-between gap-3 rounded-md border px-4 py-3 text-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2.5 text-sm">
                         <span>Oneclick buy</span>
                         <Badge
                             variant={checkoutEnabled ? "default" : "secondary"}
@@ -214,7 +214,7 @@ export function CheckoutPreferencesCard({
                                   : "Disabled"}
                         </Badge>
                     </div>
-                    <div className="flex items-center justify-between gap-3 rounded-md border px-4 py-3 text-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2.5 text-sm">
                         <span>Auto-checkout / auto-buy</span>
                         <Badge
                             variant={

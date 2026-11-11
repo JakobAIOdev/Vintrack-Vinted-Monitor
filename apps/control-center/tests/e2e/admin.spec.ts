@@ -177,9 +177,10 @@ test.describe("admin running monitors", () => {
             "The shared database mutation runs once on desktop",
         );
         await page.goto("/admin/members");
-        const search = getAdminMain(page).getByPlaceholder(
-            "Search by name, email or role...",
-        );
+        const search = getAdminMain(page).getByRole("searchbox", {
+            name: "Search members",
+            exact: true,
+        });
         await search.fill("E2E Limit User");
         await getAdminMain(page)
             .getByRole("row", { name: /E2E Limit User/ })
@@ -246,7 +247,7 @@ test.describe("admin running monitors", () => {
         await memberToggle.click();
         await expect(memberToggle).toHaveAttribute("aria-expanded", "false");
 
-        const search = getAdminMain(page).getByRole("textbox", {
+        const search = getAdminMain(page).getByRole("searchbox", {
             name: "Search running monitors",
         });
         await search.fill("E2E Mock Feed");
@@ -363,7 +364,7 @@ test.describe("admin running monitors", () => {
                 .selectOption("operations");
         } else {
             await getAdminMain(page)
-                .getByRole("tab", { name: "Operations", exact: true })
+                .getByRole("link", { name: "Operations", exact: true })
                 .click();
         }
         await operationsNavigation;

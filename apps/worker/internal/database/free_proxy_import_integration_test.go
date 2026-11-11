@@ -51,6 +51,7 @@ func freeProxyImportTestStore(t *testing.T) *Store {
 			proxy_id INTEGER NOT NULL REFERENCES free_proxies(id) ON DELETE CASCADE,
 			region TEXT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'pending',
+			success_streak INTEGER NOT NULL DEFAULT 0,
 			success_count INTEGER NOT NULL DEFAULT 0,
 			last_success_at TIMESTAMP,
 			failure_count INTEGER NOT NULL DEFAULT 0,

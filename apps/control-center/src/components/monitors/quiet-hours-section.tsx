@@ -58,8 +58,10 @@ const QUIET_HOURS_TIMEZONE_OPTIONS = REGIONS.map((region) => ({
 
 export function QuietHoursSection({
     defaultValue,
+    compact = false,
 }: {
     defaultValue?: Partial<QuietHoursSettings>;
+    compact?: boolean;
 }) {
     const initial = {
         enabled: false,
@@ -115,6 +117,7 @@ export function QuietHoursSection({
 
     return (
         <FormSection
+            compact={compact}
             title="Quiet Hours"
             description="Reduce proxy usage and alerts during a daily low-activity window."
             defaultOpen={initial.enabled}

@@ -193,8 +193,6 @@ The development overlay:
 - disables live seller enrichment;
 - starts a local webhook catcher on `127.0.0.1:8088`.
 
-See [Mock Vinted data](mock-vinted-data.md) for scenarios and monitor setup.
-
 ## Validation
 
 Run the standard repository suite:
@@ -204,7 +202,7 @@ make check
 ```
 
 It covers Go unit tests, control-center lint and build, and public Playwright
-tests. More modes are documented in [Testing](testing.md).
+tests.
 
 Before a pull request, also run:
 

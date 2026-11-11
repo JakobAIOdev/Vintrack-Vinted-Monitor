@@ -82,11 +82,12 @@ type proxyGroupBandwidthState struct {
 }
 
 type FreeProxyCandidate struct {
-	ProxyURL string
-	Region   string
-	Protocol string
-	Source   string
-	Proven   bool
+	ProxyURL     string
+	Region       string
+	Protocol     string
+	Source       string
+	Proven       bool
+	ClaimedUntil time.Time
 }
 
 type FreeProxyRecord struct {
@@ -530,8 +531,24 @@ func (s *Store) CacheRuntimeMetrics(ctx context.Context) map[string]any {
 	return metrics
 }
 
-func (s *Store) ClaimMonitorItem(monitorID int, itemID int64, source string) bool {
+func (s *Store) ClaimMonitorItem(ctx context.Context, monitorID int, itemID int64, source string) bool {
 	if monitorID <= 0 || itemID <= 0 {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	// Redis buckets and outbox idempotency keys expire. Persisted items are the
+	// durable history for a monitor and must be checked even when Redis works.
+	// Check before claiming so a database failure does not poison the cache.
+	var exists bool
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM items WHERE monitor_id = $1 AND id = $2)`,
+		monitorID, itemID,
+	).Scan(&exists); err != nil {
+		log.Printf("db monitor item history check failed for %d:%d: %v", monitorID, itemID, err)
+		return false
+	}
+	if exists {
 		return false
 	}
 	if s.cache != nil {
@@ -547,14 +564,14 @@ func (s *Store) ClaimMonitorItem(monitorID int, itemID int64, source string) boo
 		source = "canonical"
 	}
 	var claimedItemID int64
-	err := s.db.QueryRow(`
+	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO monitor_item_detections (
 			monitor_id, item_id, first_source, early_seen_at, canonical_seen_at, updated_at
 		)
 		SELECT
-			$1, $2, $3,
-			CASE WHEN $3 = 'discovery' THEN NOW() END,
-			CASE WHEN $3 <> 'discovery' THEN NOW() END,
+			$1, $2, $3::text,
+			CASE WHEN $3::text = 'discovery' THEN NOW() END,
+			CASE WHEN $3::text <> 'discovery' THEN NOW() END,
 			NOW()
 		WHERE NOT EXISTS (
 			SELECT 1 FROM items WHERE monitor_id = $1 AND id = $2
@@ -566,15 +583,7 @@ func (s *Store) ClaimMonitorItem(monitorID int, itemID int64, source string) boo
 	}
 	if err != nil {
 		log.Printf("db monitor item claim fallback failed for %d:%d: %v", monitorID, itemID, err)
-		var exists bool
-		if fallbackErr := s.db.QueryRow(
-			`SELECT EXISTS(SELECT 1 FROM items WHERE monitor_id = $1 AND id = $2)`,
-			monitorID,
-			itemID,
-		).Scan(&exists); fallbackErr == nil {
-			return !exists
-		}
-		return true
+		return false
 	}
 	return claimedItemID == itemID
 }
@@ -1297,6 +1306,48 @@ func (s *Store) ReleaseFreeProxyCanaryClaimContext(
 	return err
 }
 
+// ReleaseFreeProxyCheckClaimsContext makes unfinished validations immediately
+// due again. The deadline is an ownership token: cleanup from an old wave must
+// never release a newer validator or canary claim, or reset its retry backoff.
+func (s *Store) ReleaseFreeProxyCheckClaimsContext(ctx context.Context, candidates []FreeProxyCandidate) error {
+	var urls, regions, deadlines []string
+	for _, candidate := range candidates {
+		if candidate.ClaimedUntil.IsZero() {
+			continue
+		}
+		urls = append(urls, candidate.ProxyURL)
+		regions = append(regions, candidate.Region)
+		deadlines = append(deadlines, candidate.ClaimedUntil.UTC().Format(time.RFC3339Nano))
+	}
+	if len(urls) == 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+		WITH owned AS (
+			SELECT h.id AS health_id, fp.id AS proxy_id, claim.claimed_until
+			FROM unnest($1::text[], $2::text[], $3::timestamp[])
+				AS claim(proxy_url, region, claimed_until)
+			JOIN free_proxies fp ON fp.proxy_url = claim.proxy_url
+			JOIN free_proxy_health h ON h.proxy_id = fp.id AND h.region = claim.region
+			WHERE fp.check_claimed_until = claim.claimed_until
+			FOR UPDATE OF h
+		), released AS (
+			UPDATE free_proxies fp
+			SET check_claimed_until = NULL, updated_at = NOW()
+			FROM owned
+			WHERE fp.id = owned.proxy_id
+			  AND fp.check_claimed_until = owned.claimed_until
+			RETURNING owned.health_id
+		)
+		UPDATE free_proxy_health h
+		SET next_check_at = LEAST(COALESCE(h.next_check_at, NOW()), NOW()),
+			updated_at = NOW()
+		FROM released
+		WHERE h.id = released.health_id`,
+		pq.Array(urls), pq.Array(regions), pq.Array(deadlines))
+	return err
+}
+
 func (s *Store) GetFreeProxyURLSet() (map[string]struct{}, error) {
 	return s.GetFreeProxyURLSetContext(context.Background())
 }
@@ -2004,6 +2055,7 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 					FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint
 				  AND (fph.next_check_at IS NULL OR fph.next_check_at <= NOW())
 				  AND CASE $4
+					WHEN 'promotion' THEN fph.status = 'pending' AND fph.success_streak = 1 AND fph.failure_streak = 0
 					WHEN 'explore' THEN fph.last_checked_at IS NULL AND NOT source_choice.region_affine
 					WHEN 'region_affine' THEN fph.success_count = 0 AND source_choice.region_affine
 					WHEN 'fanout' THEN fph.success_count = 0 AND fp.success_count > 0 AND NOT source_choice.region_affine
@@ -2086,14 +2138,16 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 					fp.proxy_url,
 					fp.protocol,
 					fp.source,
-					fp.success_count > 0 AS proven
+					fp.success_count > 0 AS proven,
+					fp.check_claimed_until
 			)
 			SELECT
 				claimed_proxies.proxy_url,
 				claimed_health.region,
 				claimed_proxies.protocol,
 				claimed_health.source,
-				claimed_proxies.proven
+				claimed_proxies.proven,
+				claimed_proxies.check_claimed_until
 			FROM claimed_health
 			JOIN claimed_proxies
 			  ON claimed_proxies.id = claimed_health.proxy_id`,
@@ -2116,6 +2170,7 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 				&candidate.Protocol,
 				&candidate.Source,
 				&candidate.Proven,
+				&candidate.ClaimedUntil,
 			); scanErr != nil {
 				return nil, scanErr
 			}
@@ -2157,7 +2212,14 @@ func freeProxyLaneQuotas(limit int, bootstrap bool) []freeProxyLaneQuota {
 	}
 	explore := min(limit, max(1, limit*10/100))
 	remaining := limit - explore
-	lanes := make([]freeProxyLaneQuota, 0, 4)
+	lanes := make([]freeProxyLaneQuota, 0, 5)
+	// The second successful check is what creates new serving capacity. Keep
+	// it ahead of routine rechecks even while every region is bootstrapping.
+	promotion := min(remaining, max(1, limit*20/100))
+	if promotion > 0 {
+		lanes = append(lanes, freeProxyLaneQuota{name: "promotion", limit: promotion})
+		remaining -= promotion
+	}
 	if bootstrap {
 		regionAffine := min(remaining, limit*30/100)
 		fanout := min(remaining-regionAffine, limit*20/100)
@@ -2255,6 +2317,9 @@ func (s *Store) RecordFreeProxySuccessContext(ctx context.Context, proxyURL stri
 // evidence without incrementing validator counters. Runtime failures are kept
 // local until the maintainer independently reproduces them. A sampled write
 // skips contended rows rather than waiting behind validation or source imports.
+// Live traffic refreshes serving evidence, not the independent check schedule.
+// Otherwise busy proxies continually postpone their own validation and can
+// retain an old quality score indefinitely.
 func (s *Store) TouchFreeProxyRuntimeSuccessContext(
 	ctx context.Context,
 	proxyURL string,
@@ -2279,12 +2344,10 @@ func (s *Store) TouchFreeProxyRuntimeSuccessContext(
 			UPDATE free_proxy_health fph
 			SET latency_ms = $3,
 				last_status_code = 200,
-				last_checked_at = NOW(),
 				last_success_at = NOW(),
 				last_error = NULL,
 				last_error_code = NULL,
 				last_error_stage = NULL,
-				next_check_at = NOW() + INTERVAL '8 minutes',
 				score = GREATEST(fph.score, 50),
 				updated_at = NOW()
 			FROM available
@@ -2293,7 +2356,6 @@ func (s *Store) TouchFreeProxyRuntimeSuccessContext(
 		)
 		UPDATE free_proxies fp
 		SET
-			last_checked_at = NOW(),
 			last_success_at = NOW(),
 			last_error = NULL,
 			last_error_code = NULL,
@@ -2537,7 +2599,9 @@ func (s *Store) RecordFreeProxyFailureStageContext(
 	if regionalTransportFailure {
 		// A public exit can fail against one regional Vinted edge while still
 		// working elsewhere. Escalate to a global quarantine only after the same
-		// endpoint fails in a second region inside a short correlation window.
+		// endpoint fails in a second region inside a short correlation window,
+		// with no recent successful traffic through another mature region.
+		// Otherwise two slow regional edges can empty every healthy pool.
 		if queryErr := s.db.QueryRowContext(ctx, `
 			SELECT EXISTS (
 				SELECT 1
@@ -2547,7 +2611,18 @@ func (s *Store) RecordFreeProxyFailureStageContext(
 				  AND other.region <> $2
 				  AND other.last_failure_at >= NOW() - INTERVAL '15 minutes'
 				  AND other.last_error_code IN ('connect', 'timeout', 'tls', 'transport')
-			)`, proxyURL, region).Scan(&globalTransportFailure); queryErr != nil {
+			) AND NOT EXISTS (
+				SELECT 1
+				FROM free_proxy_health healthy
+				JOIN free_proxies fp ON fp.id = healthy.proxy_id
+				WHERE fp.proxy_url = $1
+				  AND healthy.region <> $2
+				  AND healthy.status = 'active'
+				  AND healthy.success_streak >= 2
+				  AND healthy.failure_streak = 0
+				  AND healthy.last_success_at >= NOW() - $3::interval
+				  AND healthy.last_success_at > COALESCE(healthy.last_failure_at, 'epoch'::timestamp)
+			)`, proxyURL, region, fmt.Sprintf("%d seconds", int(model.FreeProxyRuntimeSuccessFreshness/time.Second))).Scan(&globalTransportFailure); queryErr != nil {
 			return queryErr
 		}
 	}

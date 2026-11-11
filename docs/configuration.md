@@ -273,6 +273,13 @@ Shared public proxies are volatile and should not be treated as guaranteed
 capacity. Configure imports, regions, thresholds, and pool availability in the
 admin settings, and use owned capacity for sustained deployments.
 
+When a shared pool drops below its normal capacity threshold, existing monitors
+continue in a limited mode using only independently validated proxies. Catalog
+requests are paced at no more than one every two seconds per proxy, so search
+intervals can grow while capacity recovers. The dashboard may show the pool as
+recovering during this period. If no validated proxies remain, monitors wait and resume
+automatically when safe capacity returns.
+
 ### Choosing a provider
 
 Vintrack does not require a specific proxy vendor. Match the provider's proxy
@@ -338,10 +345,6 @@ Deployment-bound worker settings (discovery, enrichment and latency switches are
 Change concurrency only after observing database, Redis, proxy, and upstream
 behavior. More workers do not automatically improve useful throughput.
 
-See [Worker speed and hybrid discovery](worker-speed.md) for the full rollout
-model and [Pre-index shadow scanner](preindex-shadow.md) for the isolated
-experiment.
-
 ## Retention and maintenance
 
 The proxy-maintainer worker also performs bounded cleanup:
@@ -355,15 +358,3 @@ The proxy-maintainer worker also performs bounded cleanup:
 | `PREINDEX_SAMPLE_RETENTION_DAYS` | `14` |
 
 Review storage requirements before increasing retention.
-
-## Experimental pre-index scanner
-
-The scanner is opt-in and shadow-only:
-
-```env
-COMPOSE_PROFILES=preindex
-ID_SCANNER_ENABLED=true
-```
-
-It does not send alerts. Read [Pre-index shadow scanner](preindex-shadow.md)
-before enabling it.

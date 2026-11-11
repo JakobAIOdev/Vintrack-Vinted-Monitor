@@ -25,6 +25,8 @@
     "vinted.sk",
   ]);
 
+  let nextInstanceId = 0;
+
   function element(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -147,6 +149,7 @@
   function mountCompanion(container, options = {}) {
     const surface = options.surface === "drawer" ? "drawer" : "popup";
     const root = element("section", `vtc-root vtc-${surface}`);
+    const instanceId = `vtc-${surface}-${++nextInstanceId}`;
     const header = element("header", "vtc-header");
     const brand = element("div", "vtc-brand");
     const brandCopy = element("div");
@@ -172,6 +175,7 @@
 
     const tabs = element("nav", "vtc-tabs");
     tabs.setAttribute("aria-label", "Companion views");
+    tabs.setAttribute("role", "tablist");
     for (const [name, label] of [
       ["overview", "Overview"],
       ["feed", "Feed"],
@@ -180,6 +184,10 @@
       const button = element("button", "", label);
       button.type = "button";
       button.dataset.tab = name;
+      button.id = `${instanceId}-tab-${name}`;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-controls", `${instanceId}-panel-${name}`);
+      button.tabIndex = name === "overview" ? 0 : -1;
       button.setAttribute(
         "aria-selected",
         name === "overview" ? "true" : "false",
@@ -188,7 +196,9 @@
     }
 
     const notice = element("div", "vtc-notice");
-    notice.hidden = true;
+    notice.setAttribute("role", "status");
+    notice.setAttribute("aria-live", "polite");
+    notice.setAttribute("aria-atomic", "true");
     const content = element("main", "vtc-content");
     const overviewPanel = element("section");
     overviewPanel.dataset.panel = "overview";
@@ -199,11 +209,27 @@
     watchesPanel.dataset.panel = "watches";
     watchesPanel.hidden = true;
     content.append(overviewPanel, feedPanel, watchesPanel);
+    for (const panel of [overviewPanel, feedPanel, watchesPanel]) {
+      panel.id = `${instanceId}-panel-${panel.dataset.panel}`;
+      panel.setAttribute("role", "tabpanel");
+      panel.setAttribute(
+        "aria-labelledby",
+        `${instanceId}-tab-${panel.dataset.panel}`,
+      );
+      panel.tabIndex = 0;
+    }
+    overviewPanel.appendChild(
+      emptyState(
+        "Loading Companion…",
+        "Checking your connection and current Vinted page.",
+      ),
+    );
 
     const footer = element("footer", "vtc-footer");
     const modeLabel = element("label", "vtc-mode");
     const inlineToggle = element("input");
     inlineToggle.type = "checkbox";
+    inlineToggle.disabled = true;
     inlineToggle.dataset.role = "inline-toggle";
     modeLabel.append(
       inlineToggle,
@@ -230,6 +256,9 @@
     let feedTimer = null;
     let feedBusy = false;
     let lastFeedUpdatedAt = null;
+    let watchesError = "";
+    let refreshing = false;
+    let destroyed = false;
 
     function featureAllowed(feature) {
       const capability = state?.overview?.capabilities?.[feature];
@@ -264,7 +293,6 @@
     extensionApi?.storage?.onChanged?.addListener(handleStorageThemeChange);
 
     function showNotice(message, tone = "error") {
-      notice.hidden = !message;
       notice.textContent = message || "";
       notice.dataset.tone = tone;
     }
@@ -389,28 +417,65 @@
         card.appendChild(actions);
       } else {
         card.append(
-          element("strong", "vtc-card-title", "No supported Vinted context"),
+          element("strong", "vtc-card-title", "Ready for your next find"),
           element(
             "p",
             "vtc-muted",
-            "Open a Vinted catalog or item tab to use a quick handoff.",
+            "Open a search on Vinted to create a monitor, or an item to track its price.",
           ),
         );
       }
       parent.appendChild(card);
     }
 
+    // Rendering new data must not send keyboard users back to the page body.
+    function rememberPanelFocus(panel) {
+      const focused = root.getRootNode().activeElement;
+      if (!focused || !panel.contains(focused)) return () => {};
+      const disclosures = [...panel.querySelectorAll("details")].map(
+        (node) => node.open,
+      );
+      const summaryIndex = [...panel.querySelectorAll("summary")].indexOf(
+        focused,
+      );
+      return () => {
+        panel.querySelectorAll("details").forEach((node, index) => {
+          node.open = disclosures[index] || false;
+        });
+        const replacement = focused.dataset.action
+          ? [...panel.querySelectorAll("[data-action]")].find((node) =>
+              ["action", "id", "destination"].every(
+                (key) => node.dataset[key] === focused.dataset[key],
+              ),
+            )
+          : panel.querySelectorAll("summary")[summaryIndex];
+        (replacement || panel).focus({ preventScroll: true });
+      };
+    }
+
     function renderOverview() {
+      const restoreFocus = rememberPanelFocus(overviewPanel);
       overviewPanel.replaceChildren();
+      if (state && !state.ok) {
+        const error = emptyState(
+          "Companion could not load",
+          "Check your connection and refresh to try again.",
+        );
+        addButton(error, "Try again", "refresh", { secondary: true });
+        overviewPanel.appendChild(error);
+        restoreFocus();
+        return;
+      }
       if (!state?.configured) {
         const empty = emptyState(
           "Connect Vintrack",
-          "Open Vintrack Account and link this browser once. The link stays stored until you explicitly clear it.",
+          "Open Account in Vintrack and choose Link With Installed Extension. Then return here to see your monitors and finds.",
         );
         addButton(empty, "Open Vintrack Account", "open", {
           destination: "account",
         });
         overviewPanel.appendChild(empty);
+        restoreFocus();
         return;
       }
 
@@ -439,12 +504,14 @@
       renderContext(overviewPanel);
 
       const links = element("div", "vtc-card vtc-quick-links");
+      const moreLinks = element("details", "vtc-disclosure");
+      moreLinks.appendChild(element("summary", "", "More destinations"));
+      const moreGrid = element("div", "vtc-link-grid");
       links.appendChild(element("span", "vtc-eyebrow", "QUICK LINKS"));
       const grid = element("div", "vtc-link-grid");
       for (const [label, destination, feature] of [
         ["Dashboard", "dashboard", null],
         ["Monitors", "monitors", null],
-        ["New monitor", "newMonitor", null],
         ["Notifications", "notifications", null],
         ["Feed", "feed", "live_feed"],
         ["Watches", "priceWatches", "price_watch"],
@@ -453,18 +520,32 @@
         ["Account", "account", null],
       ]) {
         if (!feature || featureAllowed(feature)) {
-          addButton(grid, label, "open", { destination, secondary: true });
+          addButton(
+            ["dashboard", "monitors", "priceWatches"].includes(destination)
+              ? grid
+              : moreGrid,
+            label,
+            "open",
+            { destination, secondary: true },
+          );
         }
       }
-      links.appendChild(grid);
-      overviewPanel.appendChild(links);
+      addButton(moreGrid, "New monitor", "open", {
+        destination: "newMonitor",
+        secondary: true,
+      });
+      moreLinks.appendChild(moreGrid);
+      links.append(grid, moreLinks);
 
       const metrics = element("div", "vtc-metrics");
-      metrics.append(metric("Active monitors", state.overview?.monitors?.active ?? 0));
+      metrics.append(
+        metric("Active monitors", state.overview?.monitors?.active ?? 0),
+      );
       if (featureAllowed("price_watch")) {
-        metrics.append(metric("Price Watches", state.overview?.priceWatches?.total ?? 0));
+        metrics.append(
+          metric("Price Watches", state.overview?.priceWatches?.total ?? 0),
+        );
       }
-      overviewPanel.appendChild(metrics);
 
       const accountCard = element("div", "vtc-card vtc-account-card");
       const accountSummary = element("div", "vtc-account-summary");
@@ -479,7 +560,7 @@
         element(
           "p",
           "vtc-muted",
-          [accountStatus, account?.domain].filter(Boolean).join(" · "),
+          account?.domain || "Manage your connection in Vintrack Account",
         ),
       );
       accountSummary.append(
@@ -490,13 +571,39 @@
       if (syncError) {
         accountCard.appendChild(element("p", "vtc-muted", syncError));
       }
-      addButton(accountCard, "Sync linked account now", "sync", {
+      const accountActions = element("details", "vtc-disclosure");
+      accountActions.open = Boolean(
+        needsBrowserAction || syncError || !account?.linked,
+      );
+      accountActions.appendChild(element("summary", "", "Connection actions"));
+      if (needsBrowserAction || !account?.linked) {
+        accountActions.appendChild(
+          element(
+            "p",
+            "vtc-muted",
+            needsBrowserAction
+              ? "Check your login on Vinted, then sync again."
+              : "Link your Vinted account in Vintrack to sync this browser.",
+          ),
+        );
+      }
+      addButton(accountActions, "Sync linked account now", "sync", {
         secondary: true,
       });
-      if (featureAllowed("vinted_account")) overviewPanel.appendChild(accountCard);
+      addButton(accountActions, "Open account settings", "open", {
+        destination: "account",
+        secondary: true,
+      });
+      accountCard.appendChild(accountActions);
+      if (featureAllowed("vinted_account")) overviewPanel.prepend(accountCard);
+      overviewPanel.append(metrics, links);
+      restoreFocus();
     }
 
     function renderFeed() {
+      const focused = root.getRootNode().activeElement;
+      const hadFocus = focused && feedPanel.contains(focused);
+      const focusedHref = hadFocus ? focused.getAttribute("href") : null;
       feedPanel.replaceChildren();
       const items = Array.isArray(state?.overview?.recentFeed)
         ? state.overview.recentFeed
@@ -571,10 +678,18 @@
         list.appendChild(card);
       }
       feedPanel.appendChild(list);
-      addButton(feedPanel, "Open full feed", "open", {
+      const openFeed = addButton(feedPanel, "Open full feed", "open", {
         destination: "feed",
         secondary: true,
       });
+      if (focusedHref) {
+        const replacement = [...feedPanel.querySelectorAll("a")].find(
+          (link) => link.href === focusedHref,
+        );
+        (replacement || feedPanel).focus({ preventScroll: true });
+      } else if (hadFocus && focused?.dataset?.destination === "feed") {
+        openFeed.focus({ preventScroll: true });
+      }
     }
 
     async function loadLiveFeed() {
@@ -582,6 +697,7 @@
       feedBusy = true;
       const response = await send({ type: "VINTRACK_COMPANION_FEED" });
       feedBusy = false;
+      if (destroyed) return;
       if (!response?.ok) {
         showNotice(
           response?.error || "Live feed temporarily unavailable.",
@@ -610,6 +726,7 @@
     }
 
     function renderWatches() {
+      const restoreFocus = rememberPanelFocus(watchesPanel);
       watchesPanel.replaceChildren();
       if (!state?.configured) {
         watchesPanel.appendChild(
@@ -618,12 +735,21 @@
             "Your Price Watches appear after linking.",
           ),
         );
+        restoreFocus();
+        return;
+      }
+      if (watchesError && !watches.length) {
+        const error = emptyState("Price Watches could not load", watchesError);
+        addButton(error, "Try again", "retry-watches", { secondary: true });
+        watchesPanel.appendChild(error);
+        restoreFocus();
         return;
       }
       if (!watchesLoaded) {
         watchesPanel.appendChild(
           emptyState("Loading…", "Fetching Price Watches."),
         );
+        restoreFocus();
         return;
       }
       if (watches.length === 0) {
@@ -635,6 +761,7 @@
           destination: "priceWatches",
         });
         watchesPanel.appendChild(empty);
+        restoreFocus();
         return;
       }
 
@@ -697,28 +824,55 @@
       }
       watchesPanel.appendChild(list);
       if (nextCursor) {
-        addButton(watchesPanel, "Load more", "load-more", { secondary: true });
+        if (watchesError)
+          watchesPanel.appendChild(
+            element(
+              "p",
+              "vtc-muted",
+              "More Price Watches could not load. Your loaded watches are still available.",
+            ),
+          );
+        addButton(
+          watchesPanel,
+          watchesError ? "Try loading more again" : "Load more",
+          "load-more",
+          { secondary: true },
+        );
       }
       addButton(watchesPanel, "Open all Price Watches", "open", {
         destination: "priceWatches",
         secondary: true,
       });
+      restoreFocus();
+    }
+
+    function setWatchBusy(value) {
+      busy = value;
+      watchesPanel.setAttribute("aria-busy", String(value));
+      for (const button of watchesPanel.querySelectorAll("button"))
+        button.disabled = value;
     }
 
     async function loadWatches(append = false) {
       if (busy) return;
-      busy = true;
+      setWatchBusy(true);
+      const previousError = watchesError;
+      watchesError = "";
       const response = await send({
         type: "VINTRACK_COMPANION_PRICE_WATCHES",
         payload: { cursor: append ? nextCursor : "" },
       });
-      busy = false;
+      setWatchBusy(false);
+      if (destroyed) return;
       watchesLoaded = true;
       if (!response?.ok) {
-        showNotice(response?.error || "Price Watches unavailable.");
+        watchesError =
+          response?.error || "Check your connection, then try again.";
+        showNotice(watchesError);
         renderWatches();
         return;
       }
+      if (previousError && notice.textContent === previousError) showNotice("");
       watches = append
         ? [...watches, ...(response.items || [])]
         : response.items || [];
@@ -727,12 +881,16 @@
     }
 
     function selectTab(name) {
+      const selectedTab = tabs.querySelector(`[data-tab="${name}"]`);
+      if (!selectedTab || selectedTab.hidden) return;
       activeTab = name;
+      content.scrollTop = 0;
       for (const button of root.querySelectorAll("[data-tab]")) {
         button.setAttribute(
           "aria-selected",
           button.dataset.tab === name ? "true" : "false",
         );
+        button.tabIndex = button.dataset.tab === name ? 0 : -1;
       }
       for (const panel of root.querySelectorAll("[data-panel]")) {
         panel.hidden = panel.dataset.panel !== name;
@@ -744,12 +902,52 @@
       else stopLiveFeed();
     }
 
-    async function refresh() {
-      showNotice("");
+    tabs.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+        return;
+      const visibleTabs = [...tabs.querySelectorAll("[data-tab]")].filter(
+        (tab) => !tab.hidden,
+      );
+      const index = visibleTabs.indexOf(event.target);
+      if (index < 0) return;
+      event.preventDefault();
+      const nextIndex =
+        event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? visibleTabs.length - 1
+            : (index +
+                (event.key === "ArrowRight" ? 1 : -1) +
+                visibleTabs.length) %
+              visibleTabs.length;
+      selectTab(visibleTabs[nextIndex].dataset.tab);
+      visibleTabs[nextIndex].focus();
+    });
+
+    async function refresh({ clearNotice = true } = {}) {
+      if (refreshing || destroyed) return;
+      refreshing = true;
+      if (clearNotice) showNotice("");
       root.dataset.loading = "true";
+      content.setAttribute("aria-busy", "true");
+      refreshButton.disabled = true;
+      refreshButton.setAttribute("aria-label", "Refreshing Companion");
       const response = await send({ type: "VINTRACK_COMPANION_STATE" });
+      refreshing = false;
+      if (destroyed) return;
       root.dataset.loading = "false";
+      content.setAttribute("aria-busy", "false");
+      refreshButton.disabled = false;
+      refreshButton.setAttribute("aria-label", "Refresh");
+      if (!response?.ok && state?.ok) {
+        showNotice(
+          response?.error ||
+            "Companion could not refresh. Your last update is still shown.",
+        );
+        return state;
+      }
       state = response || { ok: false };
+      inlineToggle.disabled = !state.ok;
       applyTheme(state.theme);
       inlineToggle.checked = state.companionMode !== "popup";
       version.textContent = state.version ? `v${state.version}` : "";
@@ -761,17 +959,19 @@
       renderWatches();
       options.onStateChange?.(state);
       if (activeTab === "feed") startLiveFeed();
+      if (activeTab === "watches" && state?.configured && !watchesLoaded)
+        void loadWatches();
       return state;
     }
 
     async function mutateWatch(id, operation) {
       if (busy) return;
-      busy = true;
+      setWatchBusy(true);
       const response = await send({
         type: "VINTRACK_COMPANION_WATCH_MUTATION",
         payload: { id, operation },
       });
-      busy = false;
+      setWatchBusy(false);
       if (!response?.ok) {
         showNotice(response?.error || "Price Watch action failed.");
         return;
@@ -783,12 +983,12 @@
         "ok",
       );
       await loadWatches(false);
-      await refresh();
+      await refresh({ clearNotice: false });
     }
 
     root.addEventListener("click", async (event) => {
       const target = event.target.closest("button");
-      if (!target || busy) return;
+      if (!target) return;
       if (target.dataset.tab) {
         selectTab(target.dataset.tab);
         return;
@@ -796,13 +996,16 @@
       const action = target.dataset.action;
       if (action === "close") {
         options.onClose?.();
-      } else if (action === "refresh") {
+        return;
+      }
+      if (busy || refreshing) return;
+      if (action === "refresh") {
         watchesLoaded = false;
-        watches = [];
-        nextCursor = null;
+        watchesError = "";
         await refresh();
       } else if (action === "sync") {
         busy = true;
+        target.disabled = true;
         target.textContent = "Syncing…";
         const response = await send({
           type: "VINTRACK_COMPANION_MANUAL_SYNC",
@@ -814,16 +1017,19 @@
             : response?.error || "Sync failed.",
           response?.ok ? "ok" : "error",
         );
-        target.textContent = "Sync now";
-        if (response?.ok) await refresh();
+        target.disabled = false;
+        target.textContent = "Sync linked account now";
+        if (response?.ok) await refresh({ clearNotice: false });
       } else if (action === "open") {
-        await send({
+        const response = await send({
           type: "VINTRACK_COMPANION_OPEN",
           payload: {
             destination: target.dataset.destination,
             id: target.dataset.id,
           },
         });
+        if (!response?.ok)
+          showNotice(response?.error || "Could not open Vintrack. Try again.");
       } else if (action === "handoff") {
         const response = await send({
           type: "VINTRACK_COMPANION_HANDOFF",
@@ -853,6 +1059,8 @@
         ) {
           await mutateWatch(target.dataset.id, "delete");
         }
+      } else if (action === "retry-watches") {
+        await loadWatches(false);
       } else if (action === "load-more") {
         await loadWatches(true);
       }
@@ -860,10 +1068,12 @@
 
     inlineToggle.addEventListener("change", async () => {
       const mode = inlineToggle.checked ? "inline" : "popup";
+      inlineToggle.disabled = true;
       const response = await send({
         type: "VINTRACK_COMPANION_SET_MODE",
         payload: { mode },
       });
+      inlineToggle.disabled = false;
       if (!response?.ok) {
         inlineToggle.checked = !inlineToggle.checked;
         showNotice(response?.error || "Could not update companion mode.");
@@ -883,6 +1093,7 @@
       refresh,
       selectTab,
       destroy() {
+        destroyed = true;
         stopLiveFeed();
         extensionApi?.storage?.onChanged?.removeListener(
           handleStorageThemeChange,

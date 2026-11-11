@@ -13,7 +13,7 @@ export function OwnProxyUsageSummary({
     if (appearance === "inline") {
         return (
             <div
-                className={`flex items-center gap-1.5 text-sm ${
+                className={`flex min-w-0 flex-wrap items-center gap-1.5 text-sm ${
                     limitReached
                         ? "text-amber-700 dark:text-amber-300"
                         : "text-muted-foreground"

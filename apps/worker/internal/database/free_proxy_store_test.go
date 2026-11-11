@@ -76,7 +76,8 @@ func TestFreeProxyCandidateWindowWork(t *testing.T) {
 func TestFreeProxyLaneQuotas(t *testing.T) {
 	bootstrap := freeProxyLaneQuotas(100, true)
 	wantBootstrap := []freeProxyLaneQuota{
-		{name: "keepalive", limit: 40},
+		{name: "promotion", limit: 20},
+		{name: "keepalive", limit: 20},
 		{name: "region_affine", limit: 30},
 		{name: "fanout", limit: 20},
 		{name: "explore", limit: 10},
@@ -92,7 +93,8 @@ func TestFreeProxyLaneQuotas(t *testing.T) {
 
 	maintenance := freeProxyLaneQuotas(40, false)
 	wantMaintenance := []freeProxyLaneQuota{
-		{name: "keepalive", limit: 28},
+		{name: "promotion", limit: 8},
+		{name: "keepalive", limit: 20},
 		{name: "fanout", limit: 8},
 		{name: "explore", limit: 4},
 	}

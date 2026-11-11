@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -31,7 +32,6 @@ import (
 
 var (
 	freeProxyCheckRunning        atomic.Bool
-	freeProxyRefreshFailures     atomic.Int32
 	freeProxyImportRunning       atomic.Bool
 	freeProxyEgressLimited       atomic.Bool
 	freeProxyEgressRecoveryWaves atomic.Int32
@@ -63,9 +63,6 @@ const (
 	freeProxyWriteTimeout      = 5 * time.Second
 	freeProxyDegradationKey    = "free_proxy_degradation_reason"
 	freeProxyEgressLimitedCode = "host_egress_limited"
-	// Consecutive failed refresh reads (30s apart) that keep the last serving
-	// snapshot before the pools fail closed.
-	freeProxyRefreshFailureTolerance = 2
 )
 
 type freeProxyImportCandidate struct {
@@ -374,113 +371,216 @@ func refreshServerProxies(store *database.Store, proxyManager *proxy.Manager) {
 	}
 }
 
+// A free proxy snapshot is only published after the maintainer validated every
+// exit in it, and each monitor's ClientPool quarantines exits that fail at
+// runtime. A failed refresh query therefore says nothing about the exits; it
+// only means this process could not read newer state. Emptying the pools on
+// such an error closed every warmed client in every region at once and turned
+// a single slow query into a member-visible outage of more than a minute.
+// The last validated snapshot is kept instead, bounded by this age, after which
+// the previous fail-closed behaviour applies.
+const freeProxyRefreshMaxStale = 5 * time.Minute
+
+const (
+	// The refresh runs on the monitor sync loop, so its total stays at the
+	// previous 15s bound; each step has a smaller budget so one slow query
+	// cannot consume the deadline of every region.
+	freeProxyRefreshTimeout          = 15 * time.Second
+	freeProxyRefreshGlobalTimeout    = 4 * time.Second
+	freeProxyRefreshNormalizeTimeout = 2 * time.Second
+	freeProxyRefreshRegionTimeout    = 3 * time.Second
+)
+
+type freeProxyRefreshTracker struct {
+	mu         sync.Mutex
+	lastGlobal time.Time
+	lastRegion map[string]time.Time
+}
+
+var (
+	freeProxyRefreshState = &freeProxyRefreshTracker{lastRegion: make(map[string]time.Time)}
+	freeProxyRefreshNow   = time.Now
+)
+
+func (t *freeProxyRefreshTracker) markGlobal(now time.Time) {
+	t.mu.Lock()
+	t.lastGlobal = now
+	t.mu.Unlock()
+}
+
+func (t *freeProxyRefreshTracker) markRegion(region string, now time.Time) {
+	t.mu.Lock()
+	t.lastRegion[region] = now
+	t.mu.Unlock()
+}
+
+func (t *freeProxyRefreshTracker) forgetRegion(region string) {
+	t.mu.Lock()
+	delete(t.lastRegion, region)
+	t.mu.Unlock()
+}
+
+// globalFresh reports whether the last fully successful refresh is recent
+// enough to keep serving after the region list or kill switch became
+// unreadable.
+func (t *freeProxyRefreshTracker) globalFresh(now time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return !t.lastGlobal.IsZero() && now.Sub(t.lastGlobal) < freeProxyRefreshMaxStale
+}
+
+func (t *freeProxyRefreshTracker) regionFresh(region string, now time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	last, ok := t.lastRegion[region]
+	return ok && now.Sub(last) < freeProxyRefreshMaxStale
+}
+
 func refreshFreeProxies(store *database.Store, freeProxyPools *proxy.RegionPools) {
-	refreshCtx, cancelRefresh := context.WithTimeout(context.Background(), 15*time.Second)
+	refreshFreeProxiesContext(context.Background(), store, freeProxyPools)
+}
+
+func refreshFreeProxiesContext(parent context.Context, store *database.Store, freeProxyPools *proxy.RegionPools) {
+	refreshCtx, cancelRefresh := context.WithTimeout(parent, freeProxyRefreshTimeout)
 	defer cancelRefresh()
+	tracker := freeProxyRefreshState
 
-	// A failed read says nothing about the proxies themselves. The serving
-	// snapshot is kept for a bounded number of refreshes so a database blip does
-	// not drain every warmed client pool; a persistent failure still fails
-	// closed.
-	failed := false
-	defer func() {
-		if failed {
-			freeProxyRefreshFailures.Add(1)
-		} else {
-			freeProxyRefreshFailures.Store(0)
+	keepOnGlobalFailure := func(what string, err error) {
+		if tracker.globalFresh(freeProxyRefreshNow()) {
+			log.Printf("free proxy %s refresh failed; keeping last validated pools: %v", what, err)
+			return
 		}
-	}()
-	keepServing := func() bool {
-		failed = true
-		return freeProxyRefreshFailures.Load() < freeProxyRefreshFailureTolerance
+		log.Printf("free proxy %s refresh failed beyond %s; stopping free pools: %v", what, freeProxyRefreshMaxStale, err)
+		freeProxyPools.Retain(nil)
 	}
 
-	regions, err := freeProxyRegionsContext(refreshCtx, store)
+	globalCtx, cancelGlobal := context.WithTimeout(refreshCtx, freeProxyRefreshGlobalTimeout)
+	regions, err := freeProxyRegionsContext(globalCtx, store)
 	if err != nil {
-		log.Printf("free proxy region refresh failed: %v", err)
-		if !keepServing() {
-			freeProxyPools.Retain(nil)
-		}
+		cancelGlobal()
+		keepOnGlobalFailure("region", err)
 		return
 	}
-	enabled, err := store.FeatureGloballyEnabledContext(refreshCtx, "free_proxy_pool", "free_proxy_enabled", false)
+	enabled, err := store.FeatureGloballyEnabledContext(globalCtx, "free_proxy_pool", "free_proxy_enabled", false)
+	cancelGlobal()
 	if err != nil {
-		log.Printf("free proxy enabled setting refresh failed: %v", err)
-		if !keepServing() {
-			freeProxyPools.Retain(nil)
-		}
+		keepOnGlobalFailure("enabled setting", err)
 		return
 	}
+	// Both values were read successfully, so an explicit removal or the kill
+	// switch is applied immediately.
+	freeProxyPools.Retain(regions)
 	if !enabled {
 		freeProxyPools.Retain(nil)
 		return
 	}
-	freeProxyPools.Retain(regions)
-	if demoted, normalizeErr := store.NormalizeFreeProxyPromotionStateContext(refreshCtx); normalizeErr != nil {
-		log.Printf("free proxy promotion normalization failed: %v", normalizeErr)
-		if keepServing() {
-			return
-		}
-		for _, region := range regions {
-			freeProxyPools.Publish(region, "", "recovering", 0, "validation_state_unavailable", 0)
-		}
-		return
+	tracker.markGlobal(freeProxyRefreshNow())
+
+	// Normalization is hygiene for rows the maintainer left half-promoted. The
+	// serving queries below independently require success_streak >= 2, so a
+	// failed or slow UPDATE must not withhold capacity. It has its own short
+	// budget so lock waits on rows the maintainer is writing cannot consume the
+	// refresh deadline of every region.
+	normalizeCtx, cancelNormalize := context.WithTimeout(refreshCtx, freeProxyRefreshNormalizeTimeout)
+	if demoted, normalizeErr := store.NormalizeFreeProxyPromotionStateContext(normalizeCtx); normalizeErr != nil {
+		log.Printf("free proxy promotion normalization failed (serving queries stay strict): %v", normalizeErr)
 	} else if demoted > 0 {
 		log.Printf("free proxy promotion normalization: moved %d one-check proxies back to warming", demoted)
 	}
-	regionDemand, err := store.GetFreeProxyRegionDemandContext(refreshCtx)
-	if err != nil {
-		log.Printf("free proxy region demand refresh failed: %v", err)
-		regionDemand = make(map[string]int)
+	cancelNormalize()
+
+	settingsCtx, cancelSettings := context.WithTimeout(refreshCtx, freeProxyRefreshGlobalTimeout)
+	regionDemand, demandErr := store.GetFreeProxyRegionDemandContext(settingsCtx)
+	minActive, minErr := settingIntContext(settingsCtx, store, "free_proxy_min_active_per_region", 25)
+	readyTarget, readyErr := settingIntContext(settingsCtx, store, "free_proxy_ready_target_active_region", 50)
+	reserveTarget, reserveErr := settingIntContext(settingsCtx, store, "free_proxy_reserve_target_active_region", 50)
+	idleTarget, idleErr := settingIntContext(settingsCtx, store, "free_proxy_idle_region_target", 10)
+	cancelSettings()
+
+	keepRegionOnFailure := func(region string, state string, mature int, reason string) {
+		if tracker.regionFresh(region, freeProxyRefreshNow()) && freeProxyPools.Manager(region).Count() > 0 {
+			return
+		}
+		freeProxyPools.Publish(region, "", state, mature, reason, 0)
+		tracker.forgetRegion(region)
 	}
-	minActive, _ := settingIntContext(refreshCtx, store, "free_proxy_min_active_per_region", 25)
-	readyTarget, _ := settingIntContext(refreshCtx, store, "free_proxy_ready_target_active_region", 50)
-	reserveTarget, _ := settingIntContext(refreshCtx, store, "free_proxy_reserve_target_active_region", 50)
-	idleTarget, _ := settingIntContext(refreshCtx, store, "free_proxy_idle_region_target", 10)
+	// Unreadable demand or thresholds would silently fall back to defaults that
+	// differ from the operator's configuration, shrinking or throttling healthy
+	// regions, so the last validated pools are kept instead.
+	if settingsErr := errors.Join(demandErr, minErr, readyErr, reserveErr, idleErr); settingsErr != nil {
+		log.Printf("free proxy serving thresholds unavailable; keeping last validated pools: %v", settingsErr)
+		for _, region := range regions {
+			keepRegionOnFailure(region, "recovering", 0, "thresholds_unavailable")
+		}
+		return
+	}
 	for _, region := range regions {
-		activeCount, err := store.CountActiveFreeProxiesContext(refreshCtx, region)
-		if err != nil {
-			log.Printf("free proxy active count failed for %s: %v", region, err)
-			if !keepServing() {
-				freeProxyPools.Publish(region, "", "recovering", 0, "active_count_unavailable", 0)
-			}
+		if refreshCtx.Err() != nil {
+			log.Printf("free proxy refresh deadline reached before %s; keeping its last validated pool", region)
+			keepRegionOnFailure(region, "recovering", 0, "refresh_deadline")
 			continue
 		}
-
-		previous := freeProxyPools.Snapshot(region)
-		if previous.Version == 0 || previous.Reason == proxy.RegionInactiveReason {
-			// A region that was never published, or that returns after its last
-			// free monitor paused, resumes from the persisted serving state.
-			previous = persistedFreeProxyServingSnapshot(refreshCtx, store, region)
-		}
-		serving, state, reason, readyObservations := freeProxyServingDecision(
-			previous,
-			activeCount,
-			minActive,
-		)
-		if !serving {
-			freeProxyPools.Publish(region, "", state, activeCount, reason, readyObservations)
-			_ = publishFreeProxyRegionServingState(refreshCtx, store, region, state, activeCount, reason)
-			continue
-		}
-
-		poolLimit := max(1, idleTarget*2)
-		if regionDemand[region] > 0 {
-			poolLimit = max(1, readyTarget+reserveTarget)
-		}
-		proxies, err := store.GetActiveFreeProxiesContext(refreshCtx, region, poolLimit)
-		if err != nil {
-			log.Printf("free proxy refresh failed for %s: %v", region, err)
-			if keepServing() {
-				continue
-			}
-			freeProxyPools.Publish(region, "", "recovering", activeCount, "snapshot_query_failed", 0)
-			_ = publishFreeProxyRegionServingState(refreshCtx, store, region, "recovering", activeCount, "snapshot_query_failed")
-			continue
-		}
-		freeProxyPools.Publish(region, strings.Join(proxies, "\n"), "ready", activeCount, "", readyObservations)
-		_ = publishFreeProxyRegionServingState(refreshCtx, store, region, "ready", activeCount, "")
+		regionCtx, cancelRegion := context.WithTimeout(refreshCtx, freeProxyRefreshRegionTimeout)
+		refreshFreeProxyRegion(regionCtx, store, freeProxyPools, region, regionDemand[region] > 0,
+			minActive, readyTarget, reserveTarget, idleTarget, keepRegionOnFailure)
+		cancelRegion()
 	}
+}
+
+func refreshFreeProxyRegion(
+	refreshCtx context.Context,
+	store *database.Store,
+	freeProxyPools *proxy.RegionPools,
+	region string,
+	hasDemand bool,
+	minActive int,
+	readyTarget int,
+	reserveTarget int,
+	idleTarget int,
+	keepRegionOnFailure func(region string, state string, mature int, reason string),
+) {
+	activeCount, err := store.CountActiveFreeProxiesContext(refreshCtx, region)
+	if err != nil {
+		log.Printf("free proxy active count failed for %s: %v", region, err)
+		keepRegionOnFailure(region, "recovering", 0, "active_count_unavailable")
+		return
+	}
+
+	previous := freeProxyPools.Snapshot(region)
+	if previous.Version == 0 || previous.Reason == proxy.RegionInactiveReason {
+		// A region that was never published, or that returns after its last
+		// free monitor paused, resumes from the persisted serving state.
+		previous = persistedFreeProxyServingSnapshot(refreshCtx, store, region)
+	}
+	serving, state, reason, readyObservations := freeProxyServingDecision(
+		previous,
+		activeCount,
+		minActive,
+	)
+	if !serving && state != "limited" {
+		freeProxyPools.Publish(region, "", state, activeCount, reason, readyObservations)
+		freeProxyRefreshState.forgetRegion(region)
+		_ = publishFreeProxyRegionServingState(refreshCtx, store, region, state, activeCount, reason)
+		return
+	}
+
+	poolLimit := max(1, idleTarget*2)
+	if hasDemand {
+		poolLimit = max(1, readyTarget+reserveTarget)
+	}
+	proxies, err := store.GetActiveFreeProxiesContext(refreshCtx, region, poolLimit)
+	if err != nil {
+		log.Printf("free proxy refresh failed for %s: %v", region, err)
+		keepRegionOnFailure(region, "recovering", activeCount, "snapshot_query_failed")
+		return
+	}
+	freeProxyPools.Publish(region, strings.Join(proxies, "\n"), state, activeCount, reason, readyObservations)
+	if len(proxies) > 0 {
+		freeProxyRefreshState.markRegion(region, freeProxyRefreshNow())
+	} else {
+		freeProxyRefreshState.forgetRegion(region)
+	}
+	_ = publishFreeProxyRegionServingState(refreshCtx, store, region, state, activeCount, reason)
 }
 
 func persistedFreeProxyServingSnapshot(ctx context.Context, store *database.Store, region string) proxy.PoolSnapshot {
@@ -560,6 +660,10 @@ func freeProxyServingDecision(previous proxy.PoolSnapshot, activeCount int, minA
 	}
 	if serving {
 		state = "ready"
+	} else if activeCount > 0 {
+		// Every published exit still passed independent validation. Insufficient
+		// aggregate capacity requires admission control, not a region-wide stop.
+		state = "limited"
 	}
 	return serving, state, reason, readyObservations
 }
@@ -657,6 +761,11 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 	idleTarget, err := settingIntContext(cycleCtx, store, "free_proxy_idle_region_target", 10)
 	if err != nil {
 		log.Printf("free proxy idle target setting load failed: %v", err)
+		return
+	}
+	minimumReady, err := settingIntContext(cycleCtx, store, "free_proxy_min_active_per_region", 25)
+	if err != nil {
+		log.Printf("free proxy minimum capacity setting load failed: %v", err)
 		return
 	}
 	readyTarget, err := settingIntContext(cycleCtx, store, "free_proxy_ready_target_active_region", 50)
@@ -799,13 +908,13 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 				continue
 			}
 
+			activeCount, countErr := store.CountActiveFreeProxiesContext(cycleCtx, region)
+			if countErr != nil {
+				log.Printf("free proxy active count failed for %s: %v", region, countErr)
+				remainingByRegion[region] = 0
+				continue
+			}
 			if bootstrapByRegion[region] {
-				activeCount, countErr := store.CountActiveFreeProxiesContext(cycleCtx, region)
-				if countErr != nil {
-					log.Printf("free proxy active count failed for %s: %v", region, countErr)
-					remainingByRegion[region] = 0
-					continue
-				}
 				if activeCount >= targetByRegion[region] {
 					remainingByRegion[region] = 0
 					continue
@@ -813,7 +922,9 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 			}
 
 			switch freeProxyRegionWorkClassFor(
-				bootstrapByRegion[region],
+				activeCount,
+				targetByRegion[region],
+				minimumReady,
 				regionDemand[region] > 0,
 			) {
 			case freeProxyRegionWorkRecovery:
@@ -829,11 +940,10 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 			break
 		}
 
-		recoverySlots, keepaliveSlots, idleSlots := freeProxyWaveClassSlots(
+		recoverySlots, keepaliveSlots, idleSlots := freeProxyWaveSlotsForRegions(
 			concurrency,
-			len(usedRecoveryRegions),
-			len(usedKeepaliveRegions),
-			len(idleRegions),
+			perRegionConcurrency,
+			[3][]string{usedRecoveryRegions, usedKeepaliveRegions, idleRegions},
 		)
 		regionBatches := make([][]database.FreeProxyCandidate, 0, 3)
 		claimGroup := func(groupRegions []string, limit int, bootstrap bool) {
@@ -1103,17 +1213,49 @@ const (
 	freeProxyRegionWorkIdle
 )
 
-// freeProxyRegionWorkClassFor treats every region below its configured target
-// as recovery work. Monitor demand changes the target size, but it must not
-// demote a configured region that still lacks minimum production capacity.
-func freeProxyRegionWorkClassFor(bootstrap bool, used bool) freeProxyRegionWorkClass {
-	if bootstrap {
+// Recovery capacity goes to regions below serving readiness. A running pool
+// refilling its larger reserve must not compete at the same priority as an
+// unavailable one. Cold configured regions still retain a recovery lane.
+func freeProxyRegionWorkClassFor(activeCount int, target int, minimum int, used bool) freeProxyRegionWorkClass {
+	if activeCount < max(1, min(target, minimum)) {
 		return freeProxyRegionWorkRecovery
 	}
 	if used {
 		return freeProxyRegionWorkKeepalive
 	}
 	return freeProxyRegionWorkIdle
+}
+
+// Cap claims at the slots each region can actually use. Otherwise a single
+// recovering region receives most of a wave, queues behind its semaphore, and
+// holds the entire wave while the working regions' validators sit idle.
+func freeProxyWaveSlotsForRegions(maximumSlots int, perRegionConcurrency int, groups [3][]string) (int, int, int) {
+	r, k, i := freeProxyWaveClassSlots(maximumSlots, len(groups[0]), len(groups[1]), len(groups[2]))
+	allocations := [3]int{r, k, i}
+	capacities := [3]int{}
+	now := time.Now()
+	remaining := maximumSlots
+	for class, regions := range groups {
+		for _, region := range regions {
+			capacities[class] += freeProxyRegionConcurrency(region, perRegionConcurrency, now)
+		}
+		allocations[class] = min(allocations[class], capacities[class])
+		remaining -= allocations[class]
+	}
+	for remaining > 0 {
+		progress := false
+		for class := range allocations {
+			if remaining > 0 && allocations[class] < capacities[class] {
+				allocations[class]++
+				remaining--
+				progress = true
+			}
+		}
+		if !progress {
+			break
+		}
+	}
+	return allocations[0], allocations[1], allocations[2]
 }
 
 func freeProxyWaveClassSlots(
@@ -1353,9 +1495,16 @@ func validateFreeProxyWave(
 	)
 }
 
+type freeProxyValidationStore interface {
+	RecordFreeProxySuccessContext(context.Context, string, string, int) error
+	RecordFreeProxyFailureStageContext(context.Context, string, string, int, string, string, string, int, int) error
+	RecordFreeProxyInfrastructureFailureContext(context.Context, string, string, int, string, string, string) error
+	ReleaseFreeProxyCheckClaimsContext(context.Context, []database.FreeProxyCandidate) error
+}
+
 func validateFreeProxyWaveWithValidator(
 	ctx context.Context,
-	store *database.Store,
+	store freeProxyValidationStore,
 	candidates []database.FreeProxyCandidate,
 	validationTimeout time.Duration,
 	maxLatencyMs int,
@@ -1363,11 +1512,25 @@ func validateFreeProxyWaveWithValidator(
 	quarantineMinutes int,
 	perRegionConcurrency int,
 	validator freeProxyValidator,
-) freeProxyWaveStats {
-	stats := freeProxyWaveStats{
+) (stats freeProxyWaveStats) {
+	stats = freeProxyWaveStats{
 		ErrorCounts: make(map[string]int),
 		StageCounts: make(map[string]int),
 	}
+	defer func() {
+		if store == nil {
+			return
+		}
+		// Outcome writes clear their own claims. Anything still owned by this
+		// wave was canceled or could not be persisted; do not strand it behind
+		// the six-minute lease and ten-minute regional scheduling hold.
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancelCleanup()
+		if err := store.ReleaseFreeProxyCheckClaimsContext(cleanupCtx, candidates); err != nil {
+			stats.PersistenceFailed++
+			log.Printf("free proxy validation claim cleanup failed: %v", err)
+		}
+	}()
 	results := make(chan freeProxyValidationOutcome, len(candidates))
 	errorCounts := make(map[string]int)
 	stageCounts := make(map[string]int)

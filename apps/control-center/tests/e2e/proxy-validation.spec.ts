@@ -32,6 +32,149 @@ test.describe("Proxy group validation", () => {
         await db.$disconnect();
     });
 
+    test("filters group health and regions, recovers empty results and expands with the keyboard", async ({
+        page,
+    }) => {
+        for (const [name, region, status, working] of [
+            ["Residential DE", "de", "completed", 2],
+            ["Backup France", "fr", "completed", 0],
+            ["New group", null, "idle", 0],
+        ] as const) {
+            await db.proxy_groups.create({
+                data: {
+                    userId,
+                    name: `${prefix}${name}`,
+                    proxies: "http://alice:password@proxy.example.com:8080",
+                    proxy_check_region: region,
+                    proxy_check_status: status,
+                    proxy_check_total: 2,
+                    proxy_check_checked: status === "completed" ? 2 : 0,
+                    proxy_check_working: working,
+                },
+            });
+        }
+        await page.goto("/proxies");
+        const search = page.getByRole("searchbox", {
+            name: "Search proxy groups",
+        });
+        await search.fill("France");
+        await expect(page.getByTestId("proxy-group-card")).toHaveCount(1);
+        await expect(page.getByTestId("proxy-group-card")).toContainText(
+            "Backup France",
+        );
+        await search.fill("Germany");
+        await expect(page.getByTestId("proxy-group-card")).toHaveCount(1);
+        await expect(page.getByTestId("proxy-group-card")).toContainText(
+            "Residential DE",
+        );
+        const filters = page.getByRole("group", {
+            name: "Filter proxy groups by health",
+        });
+        await filters
+            .getByRole("button", { name: "Attention", exact: true })
+            .click();
+        await expect(
+            page.getByText("No matching proxy groups", { exact: true }),
+        ).toBeVisible();
+        await page
+            .getByRole("button", { name: "Clear search and filters" })
+            .click();
+        await filters
+            .getByRole("button", { name: "Unchecked", exact: true })
+            .click();
+        await expect(page.getByTestId("proxy-group-card")).toHaveCount(1);
+        const expand = page.getByRole("button", {
+            name: `Expand ${prefix}New group`,
+            exact: true,
+        });
+        await expand.focus();
+        await page.keyboard.press("Enter");
+        const collapse = page.getByRole("button", {
+            name: `Collapse ${prefix}New group`,
+            exact: true,
+        });
+        await expect(collapse).toHaveAttribute("aria-expanded", "true");
+        const card = page.getByTestId("proxy-group-card");
+        await expect(card.locator("pre")).toContainText("alice:****@");
+        await expect(card.locator("pre")).not.toContainText("password");
+        await expect(
+            card.getByLabel(`Check region for ${prefix}New group`),
+        ).toBeVisible();
+        await card.getByRole("button", { name: "Edit", exact: true }).click();
+        await expect(card.getByLabel("Name", { exact: true })).toHaveValue(
+            `${prefix}New group`,
+        );
+        await card.getByRole("button", { name: "Cancel", exact: true }).click();
+        await collapse.focus();
+        await page.keyboard.press("Space");
+        await expect(expand).toHaveAttribute("aria-expanded", "false");
+    });
+
+    test("confirms proxy deletion and restores focus when cancelled", async ({
+        page,
+    }) => {
+        const group = await db.proxy_groups.create({
+            data: {
+                userId,
+                name: `${prefix}Delete fixture`,
+                proxies: "http://proxy.example.com:8080",
+            },
+        });
+        await page.goto("/proxies");
+        const trigger = page.getByRole("button", {
+            name: `Delete ${group.name}`,
+            exact: true,
+        });
+        await trigger.click();
+        const dialog = page.getByRole("dialog", {
+            name: "Delete proxy group?",
+        });
+        await expect(dialog).toContainText("No monitors use this group.");
+        await page.keyboard.press("Escape");
+        await expect(dialog).toBeHidden();
+        await expect(trigger).toBeFocused();
+        expect(
+            await db.proxy_groups.findUnique({ where: { id: group.id } }),
+        ).not.toBeNull();
+        await trigger.click();
+        await dialog
+            .getByRole("button", { name: "Delete group", exact: true })
+            .click();
+        await expect(dialog).toBeHidden();
+        await expect(trigger).toHaveCount(0);
+        expect(
+            await db.proxy_groups.findUnique({ where: { id: group.id } }),
+        ).toBeNull();
+    });
+
+    test("keeps proxy groups usable with enlarged text in both themes", async ({
+        page,
+    }) => {
+        const name = `${prefix}Residential-group-with-a-long-name-for-narrow-screens`;
+        await db.proxy_groups.create({
+            data: { userId, name, proxies: "http://proxy.example.com:8080" },
+        });
+        await page.setViewportSize({ width: 320, height: 844 });
+        await page.goto("/proxies");
+        await page
+            .getByRole("button", { name: `Expand ${name}`, exact: true })
+            .click();
+        for (const dark of [false, true]) {
+            await page.evaluate((dark) => {
+                document.documentElement.style.fontSize = "200%";
+                document.documentElement.classList.toggle("dark", dark);
+            }, dark);
+            await expect
+                .poll(() =>
+                    page.evaluate(
+                        () =>
+                            document.documentElement.scrollWidth <= innerWidth,
+                    ),
+                )
+                .toBe(true);
+        }
+    });
+
     test("rejects invalid hosts, ports and mapped internal addresses without saving", async ({
         page,
     }, testInfo) => {

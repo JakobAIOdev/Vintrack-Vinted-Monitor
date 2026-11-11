@@ -19,8 +19,7 @@ type SizeSnapshot = {
 };
 
 export type NormalizedSizeIds =
-    | { ok: true; value: string | null }
-    | { ok: false; message: string };
+    { ok: true; value: string | null } | { ok: false; message: string };
 
 const snapshotCache = new Map<string, Promise<SizeSnapshot>>();
 const labelMapCache = new Map<string, Promise<Record<string, string>>>();
@@ -53,7 +52,11 @@ async function readSnapshot(region: string): Promise<SizeSnapshot> {
 
     for (const candidate of candidates) {
         try {
-            const content = await fs.readFile(candidate, "utf8");
+            // Size snapshots are bundled explicitly via outputFileTracingIncludes.
+            const content = await fs.readFile(
+                /* turbopackIgnore: true */ candidate,
+                "utf8",
+            );
             return JSON.parse(content) as SizeSnapshot;
         } catch (error) {
             const code = (error as NodeJS.ErrnoException).code;

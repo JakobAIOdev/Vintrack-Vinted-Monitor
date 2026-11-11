@@ -5,6 +5,13 @@ import (
 	"time"
 )
 
+// Runtime successes are sampled to bound database writes. Global transport
+// decisions must allow a healthy sample to survive until the next write.
+const (
+	FreeProxyRuntimeSuccessInterval  = 5 * time.Minute
+	FreeProxyRuntimeSuccessFreshness = FreeProxyRuntimeSuccessInterval + time.Minute
+)
+
 type NotificationMessageStyle string
 
 const (

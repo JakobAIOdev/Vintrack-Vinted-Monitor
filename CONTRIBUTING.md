@@ -74,8 +74,8 @@ cd apps/vinted-service && go test ./...
 cd apps/control-center && npm run lint && npm run build
 ```
 
-Dashboard end-to-end coverage and other options are documented in
-[Testing](docs/testing.md).
+Run the dashboard end-to-end suite with `npm run test:e2e:dashboard` in
+`apps/control-center`, using a separate test database.
 
 ## Pull requests
 

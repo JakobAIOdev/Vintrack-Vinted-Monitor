@@ -18,7 +18,6 @@ import {
     Play,
     PlayCircle,
     Plus,
-    Search,
     Server,
     StopCircle,
     Trash2,
@@ -40,6 +39,7 @@ import {
 } from "@/lib/price-watch-config";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CompactSearch } from "@/components/compact-search";
 import { Card, CardContent } from "@/components/ui/card";
 import {
     Dialog,
@@ -582,15 +582,12 @@ export function PriceWatchesClient({
         <div className="space-y-5">
             <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
                 <div>
-                    <div className="mb-2 flex items-center gap-2">
-                        <div className="bg-primary/10 text-primary flex h-9 w-9 items-center justify-center rounded-xl">
-                            <TrendingDown className="h-4.5 w-4.5" />
-                        </div>
-                        <Badge variant="outline">Individual items</Badge>
-                    </div>
-                    <h1 className="text-2xl font-semibold tracking-tight">Price Watch</h1>
+                    <h1 className="text-2xl font-semibold tracking-tight">
+                        Price Watch
+                    </h1>
                     <p className="text-muted-foreground mt-1 text-sm">
-                        Track individual Vinted prices with shared or personal proxies.
+                        Track individual Vinted prices with shared or personal
+                        proxies.
                     </p>
                 </div>
                 <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
@@ -622,7 +619,7 @@ export function PriceWatchesClient({
                         disabled={limitReached || isPending}
                         className="flex-1 sm:flex-none"
                     >
-                        <Plus className="mr-2 h-4 w-4" />
+                        <Plus className="h-3.5 w-3.5" />
                         Add watch
                     </Button>
                 </div>
@@ -631,7 +628,9 @@ export function PriceWatchesClient({
             <div className="border-border/70 bg-card flex flex-wrap items-center gap-x-6 gap-y-3 rounded-xl border px-4 py-3 shadow-sm">
                 <div className="flex items-center gap-2">
                     <Eye className="text-primary h-4 w-4" />
-                    <span className="text-sm font-medium">{activeCount} active</span>
+                    <span className="text-sm font-medium">
+                        {activeCount} active
+                    </span>
                     <span className="text-muted-foreground text-xs">
                         / {activeLimit ?? "unlimited"}
                     </span>
@@ -658,36 +657,49 @@ export function PriceWatchesClient({
             <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
                 <div>
                     <h2 className="font-semibold">Watched items</h2>
-                    <p className="text-muted-foreground text-xs">
-                        Compact view · fastest schedules first
+                    <p role="status" className="text-muted-foreground text-xs">
+                        {filteredWatches.length} of {initialWatches.length}{" "}
+                        watches · fastest schedules first
                     </p>
                 </div>
                 {initialWatches.length > 0 && (
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                        <div className="relative">
-                            <Search className="text-muted-foreground absolute top-2.5 left-3 h-4 w-4" />
-                            <Input
-                                value={search}
-                                onChange={(event) => setSearch(event.target.value)}
-                                placeholder="Search watches"
-                                aria-label="Search watched items"
-                                className="pl-9 sm:w-64"
-                            />
-                        </div>
-                        <div className="bg-muted/60 flex rounded-lg p-1">
-                            {(["all", "active", "paused", "attention"] as const).map(
-                                (option) => (
-                                    <Button
-                                        key={option}
-                                        size="sm"
-                                        variant={filter === option ? "secondary" : "ghost"}
-                                        className="h-7 px-2.5 text-xs capitalize"
-                                        onClick={() => setFilter(option)}
-                                    >
-                                        {option}
-                                    </Button>
-                                ),
-                            )}
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <CompactSearch
+                            value={search}
+                            onChange={setSearch}
+                            placeholder="Search watches"
+                            label="Search watched items"
+                            clearLabel="Clear watch search"
+                            className="sm:w-56"
+                        />
+                        <div
+                            role="group"
+                            aria-label="Filter watches by status"
+                            className="border-border/70 bg-card flex flex-wrap gap-0.5 self-start rounded-md border p-0.5"
+                        >
+                            {(
+                                [
+                                    "all",
+                                    "active",
+                                    "paused",
+                                    "attention",
+                                ] as const
+                            ).map((option) => (
+                                <button
+                                    key={option}
+                                    type="button"
+                                    aria-pressed={filter === option}
+                                    className={cn(
+                                        "focus-visible:ring-ring min-h-8 rounded px-3 py-1 text-[13px] font-medium capitalize transition-colors focus-visible:ring-2 focus-visible:outline-none",
+                                        filter === option
+                                            ? "bg-primary text-primary-foreground"
+                                            : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                                    )}
+                                    onClick={() => setFilter(option)}
+                                >
+                                    {option}
+                                </button>
+                            ))}
                         </div>
                     </div>
                 )}
@@ -699,21 +711,44 @@ export function PriceWatchesClient({
                         <TrendingDown className="text-muted-foreground/45 mb-3 h-9 w-9" />
                         <p className="font-medium">No watched items yet</p>
                         <p className="text-muted-foreground mt-1 max-w-md text-sm">
-                            Paste a Vinted item link and choose how often Vintrack checks it.
+                            Paste a Vinted item link and choose how often
+                            Vintrack checks it.
                         </p>
-                        <Button className="mt-5" onClick={() => setAddOpen(true)}>
-                            <Plus className="mr-2 h-4 w-4" /> Add your first watch
+                        <Button
+                            size="sm"
+                            className="mt-4"
+                            disabled={limitReached || isPending}
+                            onClick={() => setAddOpen(true)}
+                        >
+                            <Plus className="mr-2 h-4 w-4" /> Add your first
+                            watch
                         </Button>
                     </CardContent>
                 </Card>
             ) : filteredWatches.length === 0 ? (
                 <Card className="border-dashed">
                     <CardContent className="py-10 text-center text-sm">
-                        No watches match these filters.
+                        <p className="font-medium">
+                            No watches match these filters.
+                        </p>
+                        <p className="text-muted-foreground mt-1">
+                            Try another search or show all statuses.
+                        </p>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="mt-4"
+                            onClick={() => {
+                                setSearch("");
+                                setFilter("all");
+                            }}
+                        >
+                            Clear search and filters
+                        </Button>
                     </CardContent>
                 </Card>
             ) : (
-                <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+                <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
                     {filteredWatches.map((watch) => {
                         const status = watchStatus(watch);
                         const latestDrop = watch.target.events[0];
@@ -722,18 +757,18 @@ export function PriceWatchesClient({
                                 key={watch.id}
                                 id={`price-watch-${watch.id}`}
                                 className={cn(
-                                    "scroll-mt-6 overflow-visible transition-shadow",
+                                    "min-w-0 scroll-mt-6 overflow-visible py-0 transition-shadow",
                                     focusedWatchId === watch.id &&
                                         "ring-primary/50 ring-2 shadow-lg",
                                 )}
                             >
-                                <CardContent className="p-3">
-                                    <div className="flex min-w-0 gap-3">
+                                <CardContent className="@container p-3">
+                                    <div className="flex min-w-0 flex-col gap-3 @min-[16rem]:flex-row">
                                         <a
                                             href={watch.target.canonicalUrl}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className="bg-muted relative h-28 w-24 shrink-0 overflow-hidden rounded-lg border"
+                                            className="bg-muted relative h-28 w-24 max-w-full shrink-0 self-start overflow-hidden rounded-lg border"
                                         >
                                             {watch.target.imageUrl ? (
                                                 <img
@@ -833,7 +868,7 @@ export function PriceWatchesClient({
                                                     )}
                                                 </div>
                                             </div>
-                                            <div className="mt-2 flex items-end gap-2">
+                                            <div className="mt-2 flex flex-wrap items-end gap-x-2 gap-y-0.5">
                                                 <span className="text-lg font-semibold">
                                                     {formatPrice(
                                                         watch.target.currentPriceMinor,

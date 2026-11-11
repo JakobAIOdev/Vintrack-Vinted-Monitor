@@ -3345,6 +3345,14 @@ export async function getAdminUsersPage(input?: {
                   { name: { contains: query, mode: "insensitive" } },
                   { email: { contains: query, mode: "insensitive" } },
                   { role: { contains: query, mode: "insensitive" } },
+                  {
+                      accounts: {
+                          some: {
+                              provider: "discord",
+                              providerAccountId: query,
+                          },
+                      },
+                  },
               ],
           }
         : {};

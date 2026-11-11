@@ -2,12 +2,12 @@ import { guardApiFeature } from "@/lib/features.server";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { auth } from "@/auth";
-import {
-    buildSellerProfileUrl,
-    getBannedSellerIds,
-    visibleSellerWhere,
-} from "@/lib/seller-bans";
+import { buildSellerProfileUrl } from "@/lib/seller-bans";
 import { normalizeLiveFeedItemCap } from "@/lib/live-feed";
+import {
+    getRecentVisibleItemKeys,
+    loadItemsInKeyOrder,
+} from "@/lib/recent-items.server";
 
 export const dynamic = "force-dynamic";
 
@@ -24,49 +24,34 @@ export async function GET(request: Request) {
         const itemCap = normalizeLiveFeedItemCap(
             new URL(request.url).searchParams.get("limit"),
         );
-        const userMonitors = await db.monitors.findMany({
-            where: { userId: session.user.id },
-            select: { id: true },
-        });
-
-        const monitorIds = userMonitors.map((m) => m.id);
-
-        if (monitorIds.length === 0) {
-            return NextResponse.json([]);
-        }
-
-        const bannedSellerIds = await getBannedSellerIds(session.user.id);
-
-        const items = await db.items.findMany({
-            where: {
-                monitor_id: { in: monitorIds },
-                ...visibleSellerWhere(bannedSellerIds),
-            },
-            orderBy: { found_at: "desc" },
-            take: itemCap,
-            select: {
-                id: true,
-                monitor_id: true,
-                title: true,
-                brand: true,
-                price: true,
-                total_price: true,
-                size: true,
-                condition: true,
-                url: true,
-                image_url: true,
-                extra_images: true,
-                found_at: true,
-                location: true,
-                rating: true,
-                seller_id: true,
-                seller_login: true,
-                seller_profile_url: true,
-                monitors: {
-                    select: { name: true },
+        const keys = await getRecentVisibleItemKeys(session.user.id, itemCap);
+        const items = await loadItemsInKeyOrder(keys, (where) =>
+            db.items.findMany({
+                where,
+                select: {
+                    id: true,
+                    monitor_id: true,
+                    title: true,
+                    brand: true,
+                    price: true,
+                    total_price: true,
+                    size: true,
+                    condition: true,
+                    url: true,
+                    image_url: true,
+                    extra_images: true,
+                    found_at: true,
+                    location: true,
+                    rating: true,
+                    seller_id: true,
+                    seller_login: true,
+                    seller_profile_url: true,
+                    monitors: {
+                        select: { name: true },
+                    },
                 },
-            },
-        });
+            }),
+        );
 
         const safeItems = items.map(({ monitors, ...item }) => ({
             ...item,
