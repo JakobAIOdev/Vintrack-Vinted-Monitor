@@ -35,6 +35,14 @@ export async function GET(req: NextRequest) {
     // already belongs to this member and no ownership filtering is needed. The
     // subscription itself is shared process-wide rather than opening a Redis
     // connection per browser tab.
+    let closed = false;
+    const close = () => {
+        if (closed) return;
+        closed = true;
+        unsubscribe();
+        void writer.close().catch(() => {});
+    };
+
     const unsubscribe = redisSubscriber().subscribe(
         userItemChannel(userId),
         (message) => {
@@ -65,19 +73,22 @@ export async function GET(req: NextRequest) {
                             parsed.url,
                         ),
                 });
-                void writer.write(
-                    encoder.encode(`data: ${enrichedPayload}\n\n`),
-                );
+                // A rejected write means the reader is gone; drop the
+                // subscription instead of feeding a dead stream.
+                writer
+                    .write(encoder.encode(`data: ${enrichedPayload}\n\n`))
+                    .catch(close);
             } catch {
                 // Skip malformed messages
             }
         },
     );
 
-    req.signal.addEventListener("abort", () => {
-        unsubscribe();
-        void writer.close().catch(() => {});
-    });
+    req.signal.addEventListener("abort", close);
+    // The client can disconnect during the lookups above. A listener added to
+    // an already aborted signal never fires, which would leave the
+    // subscription registered for the lifetime of the process.
+    if (req.signal.aborted) close();
 
     return new NextResponse(stream.readable, {
         headers: {
