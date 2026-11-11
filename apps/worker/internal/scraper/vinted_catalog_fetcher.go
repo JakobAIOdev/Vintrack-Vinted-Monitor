@@ -31,9 +31,12 @@ func (VintedCatalogFetcher) FetchCatalog(ctx context.Context, client *Client, ap
 		return nil, statusCodeFromError(err), fmt.Errorf("warmup %s via %s: %w", domain, client.ProxyLabel(), err)
 	}
 
+	// Captured before the attempt so a rejected session is only discarded by
+	// the first request that saw it rejected.
+	generation := client.warmGeneration(domain)
 	return fetchCatalogWithSessionRetry(
 		func() error {
-			client.ResetWarm(domain)
+			client.resetWarmIfGeneration(domain, generation)
 			if err := client.EnsureWarmContext(ctx, domain); err != nil {
 				return fmt.Errorf("session rewarm %s via %s: %w", domain, client.ProxyLabel(), err)
 			}

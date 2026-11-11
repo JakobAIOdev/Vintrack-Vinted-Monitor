@@ -16,15 +16,44 @@ Validate without printing resolved secrets:
 
 ```bash
 docker compose config --quiet
+make config-check    # needs Node.js on the host
 ```
+
+`make config-check` names the setting that is wrong: template secrets, a
+missing login provider, a `VINTRACK_SITE_ADDRESS` that does not match
+`AUTH_URL`, incomplete credential pairs, or a missing Telegram webhook secret.
 
 If it fails:
 
 1. confirm `.env` exists;
 2. compare variable names with `.env.example`;
 3. look for unquoted values containing shell-sensitive characters;
-4. run `make init` only if you understand that it fills missing placeholder
-   secrets but does not replace an existing `.env`.
+4. run `make init` to fill missing or template secrets. It does not replace an
+   existing `.env` or change secrets that are already set.
+
+## Port 80 or 443 is already in use
+
+```text
+Error response from daemon: ports are not available: ... listen tcp 0.0.0.0:80: bind: address already in use
+```
+
+Caddy publishes ports 80 and 443, and another web server on the host already
+holds one of them. The other services have started; only Caddy and the services
+Compose had not reached yet are missing.
+
+- On your own computer, Caddy is not needed. Start without it and open
+  `http://localhost:3000`:
+
+  ```bash
+  make local
+  ```
+
+- On a server that should serve HTTPS itself, stop the other web server, then
+  run `make up` again.
+- On a server with an existing reverse proxy, keep that proxy, start with
+  `make local`, and forward it to `127.0.0.1:3000`.
+
+Find the process that holds the port with `sudo lsof -nP -iTCP:80 -sTCP:LISTEN`.
 
 ## A required secret is missing
 
@@ -35,7 +64,8 @@ AUTH_SECRET=...
 VINTED_SESSION_ENCRYPTION_KEY=...
 ```
 
-Generate a missing value with:
+`make init` generates whichever of the two is missing or still has its template
+value. To generate one by hand:
 
 ```bash
 openssl rand -base64 32
@@ -121,14 +151,15 @@ Check:
 docker compose logs --since=10m caddy
 ```
 
-For local development use `VINTRACK_SITE_ADDRESS=http://localhost`, or connect
-directly to `http://localhost:3000`.
+A local instance does not need Caddy or a certificate: start it with
+`make local` and open `http://localhost:3000`.
 
 ## My first account has no Admin menu
 
-Production signups start with the `free` role, including the first user. Follow
-the [first-admin setup](getting-started.md#5-grant-your-first-account-admin-access)
-to promote your own account, then reload the dashboard. The automatic admin
+Production signups start with the `free` role, including the first user. Sign
+in once, run `make admin` (see the
+[first-admin setup](getting-started.md#5-grant-your-first-account-admin-access)),
+then reload the dashboard. The automatic admin
 from `make dev` belongs to a separate development database.
 
 ## The extension works on the demo but not my own domain
@@ -182,7 +213,8 @@ Verify:
 - bot token and public username are correct;
 - `AUTH_URL` is public HTTPS;
 - the webhook targets `/api/telegram/webhook`;
-- the registered webhook secret matches `TELEGRAM_WEBHOOK_SECRET`;
+- `TELEGRAM_WEBHOOK_SECRET` is set (the webhook answers 503 while it is empty)
+  and matches the registered secret; `make telegram-webhook` registers it again;
 - Telegram notifications are enabled for the monitor;
 - worker logs show no redacted delivery error.
 

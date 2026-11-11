@@ -79,7 +79,7 @@ export default function VintedPriceTrackerPage() {
                     <div className="grid gap-5 sm:grid-cols-2">
                         <article className="border-border bg-card rounded-lg border p-6">
                             <Timer className="size-5" />
-                            <p className="text-muted-foreground mt-5 text-[11px] font-semibold tracking-wider uppercase">
+                            <p className="text-muted-foreground mt-5 text-[11px] font-semibold">
                                 Price Watch
                             </p>
                             <h3 className="mt-2 text-xl font-semibold">
@@ -92,7 +92,7 @@ export default function VintedPriceTrackerPage() {
                         </article>
                         <article className="border-border bg-muted/35 rounded-lg border p-6">
                             <RefreshCw className="size-5" />
-                            <p className="text-muted-foreground mt-5 text-[11px] font-semibold tracking-wider uppercase">
+                            <p className="text-muted-foreground mt-5 text-[11px] font-semibold">
                                 Listing Monitor
                             </p>
                             <h3 className="mt-2 text-xl font-semibold">

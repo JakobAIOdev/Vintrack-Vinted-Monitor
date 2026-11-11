@@ -2,7 +2,7 @@ package proxy
 
 import "testing"
 
-func TestRegionPoolsRetainClearsRemovedManagers(t *testing.T) {
+func TestRegionPoolsRetainEmptiesInactiveManagersInPlace(t *testing.T) {
 	pools := NewRegionPools()
 	removed := pools.Manager("fr")
 	pools.Replace("de", "http://1.2.3.4:8080")
@@ -16,8 +16,17 @@ func TestRegionPoolsRetainClearsRemovedManagers(t *testing.T) {
 	if got := removed.Count(); got != 0 {
 		t.Fatalf("removed manager count = %d, want 0", got)
 	}
-	if current := pools.Manager("fr"); current == removed {
-		t.Fatal("removed region returned its stale manager")
+	if reason := pools.Snapshot("fr").Reason; reason != RegionInactiveReason {
+		t.Fatalf("inactive region reason = %q, want %q", reason, RegionInactiveReason)
+	}
+	// Running monitors and client pools keep the pointer, so a returning region
+	// must publish into the same manager.
+	if current := pools.Manager("fr"); current != removed {
+		t.Fatal("returning region was given a different manager")
+	}
+	pools.Replace("fr", "http://5.6.7.8:8080")
+	if got := removed.Count(); got != 1 {
+		t.Fatalf("returned region count on the held manager = %d, want 1", got)
 	}
 }
 

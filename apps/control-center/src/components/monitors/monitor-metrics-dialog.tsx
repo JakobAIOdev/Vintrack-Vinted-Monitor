@@ -231,7 +231,7 @@ function Metric({
     return (
         <div className="border-border/75 bg-muted/25 rounded-lg border px-4 py-3">
             <div className="flex items-center gap-1.5">
-                <p className="text-muted-foreground text-[11px] font-medium tracking-widest uppercase">
+                <p className="text-muted-foreground text-[11px] font-medium">
                     {label}
                 </p>
                 <span

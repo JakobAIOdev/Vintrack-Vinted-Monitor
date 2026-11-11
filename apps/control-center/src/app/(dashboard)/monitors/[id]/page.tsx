@@ -224,7 +224,7 @@ export default async function MonitorPage({
 
                         <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
-                                <h1 className="min-w-0 text-2xl font-bold tracking-tight">
+                                <h1 className="min-w-0 text-2xl font-semibold tracking-tight">
                                     {monitor.name}
                                 </h1>
                                 {monitor.status === "active" ? (

@@ -9,6 +9,7 @@ import {
     type SizeGroup,
     type SizeSection,
 } from "@/lib/sizes";
+import { REGIONS } from "@/lib/regions";
 
 type SizeSnapshot = {
     region: string;
@@ -23,6 +24,17 @@ export type NormalizedSizeIds =
 const snapshotCache = new Map<string, Promise<SizeSnapshot>>();
 const labelMapCache = new Map<string, Promise<Record<string, string>>>();
 const validIdCache = new Map<string, Promise<Set<string>>>();
+
+// Region arrives from query strings and form data. Only a supported region
+// code may become a directory name or a cache key. Anything else resolves to
+// the default snapshot anyway, so it shares that entry instead of adding a
+// parsed copy per distinct string.
+function normalizeRegionKey(region: string): string {
+    const normalized = region.trim().toLowerCase();
+    return REGIONS.some((candidate) => candidate.code === normalized)
+        ? normalized
+        : "uk";
+}
 
 async function getDatasetOutputDir() {
     const datasetDir = path.resolve(process.cwd(), "data/vinted-sizes");
@@ -58,8 +70,7 @@ async function readSnapshot(region: string): Promise<SizeSnapshot> {
 export async function getSizeSnapshotForRegion(
     region: string,
 ): Promise<SizeSnapshot> {
-    const normalizedRegion = region.trim().toLowerCase();
-    const cacheKey = normalizedRegion || "uk";
+    const cacheKey = normalizeRegionKey(region);
     const cached = snapshotCache.get(cacheKey);
     if (cached) return cached;
 
@@ -78,7 +89,7 @@ export async function getSizeSectionsForRegion(
 async function getSizeLabelMapForRegion(
     region: string,
 ): Promise<Record<string, string>> {
-    const normalizedRegion = region.trim().toLowerCase() || "uk";
+    const normalizedRegion = normalizeRegionKey(region);
     let labels = labelMapCache.get(normalizedRegion);
     if (!labels) {
         labels = getSizeSnapshotForRegion(normalizedRegion).then((snapshot) => {
@@ -96,7 +107,7 @@ async function getSizeLabelMapForRegion(
 }
 
 async function getValidSizeIdsForRegion(region: string): Promise<Set<string>> {
-    const normalizedRegion = region.trim().toLowerCase() || "uk";
+    const normalizedRegion = normalizeRegionKey(region);
     let validIds = validIdCache.get(normalizedRegion);
     if (!validIds) {
         validIds = getSizeSnapshotForRegion(normalizedRegion).then(

@@ -30,6 +30,8 @@ const (
 	freeProxyMaxInFlightPerClient   = 2
 	defaultFreeProxyHedgeDelayMilli = 900
 	freeProxyRuntimeSuccessInterval = model.FreeProxyRuntimeSuccessInterval
+	// Small relative to the 500ms interval floor.
+	monitorCycleJitterMS = 50
 )
 
 type Engine struct {
@@ -742,6 +744,16 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			continue
 		}
 
+		if proxySource == "free" && result.neverStarted {
+			// Every client was busy or cooling down for the whole fetch window, so
+			// nothing was sent. That is a wait for local capacity, not a failed
+			// catalog check, and must not count towards the monitor's errors.
+			setRuntimeState("waiting_for_pool")
+			reportHealth("free proxy pool is waiting for safe capacity", proxyErrorPoolWaiting, "waiting_for_proxy", time.Time{}, "")
+			sleepMonitorCycle(ctx, cycleStart, monitorQueryInterval(m, time.Now()))
+			continue
+		}
+
 		checks = nextCheck
 		gotSuccess := result.err == nil && result.status == 200
 		// The fetch duration and attempt list were already measured by the hedged
@@ -832,6 +844,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 
 		consecutiveErrors = 0
 		lastSuccessAt = time.Now().UTC()
+		resumedRunning := runtimeState != "running"
 		setRuntimeState("running")
 		recoveredFromProxyWait := false
 		if waitingForProxy {
@@ -849,7 +862,10 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 				}
 			}
 		}
-		if recoveredFromProxyWait || checks%5 == 0 || checks <= 3 {
+		// Report a recovery on the cycle it happens instead of leaving the
+		// dashboard on the previous waiting or degraded state until the next
+		// periodic report.
+		if recoveredFromProxyWait || resumedRunning || checks%5 == 0 || checks <= 3 {
 			reportHealth("", "", "", time.Time{}, "")
 		}
 
@@ -1060,7 +1076,13 @@ func sleepMonitorCycle(ctx context.Context, cycleStart time.Time, interval time.
 	// together, so without jitter they stay in lockstep and every tick lands as
 	// one burst of catalog requests and database writes. The discovery loop
 	// already spreads itself the same way.
-	remaining := interval + monitorCycleJitter() - time.Since(cycleStart)
+	jitter := monitorCycleJitter()
+	if jitter < 0 && interval < minQueryDelayMS*time.Millisecond {
+		// Only the tail of a quiet-hours window produces an interval below the
+		// floor. Shortening it further could skip the sleep altogether.
+		jitter = -jitter
+	}
+	remaining := interval + jitter - time.Since(cycleStart)
 	if remaining <= 0 {
 		return
 	}
@@ -1072,11 +1094,11 @@ func sleepMonitorCycle(ctx context.Context, cycleStart time.Time, interval time.
 	}
 }
 
-// monitorCycleJitter spreads monitors across their interval. It is deliberately
-// small relative to the 500ms interval floor so it never meaningfully slows a
-// monitor down.
+// monitorCycleJitter spreads monitors across their interval. It is centred on
+// zero so the average cycle equals the configured interval: a one-sided jitter
+// spreads the monitors just as well but makes every one of them slower.
 func monitorCycleJitter() time.Duration {
-	return time.Duration(rand.Intn(101)) * time.Millisecond
+	return time.Duration(rand.Intn(2*monitorCycleJitterMS+1)-monitorCycleJitterMS) * time.Millisecond
 }
 
 func waitForProxyRetry(ctx context.Context, retryAt time.Time) bool {

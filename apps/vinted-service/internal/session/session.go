@@ -192,6 +192,24 @@ func (m *Manager) Store(sess VintedSession) error {
 	return m.cacheSession(sess)
 }
 
+// StoreIfCurrent writes updated only while the stored session is still the one
+// the caller started from. A session is written as a whole, so a write based on
+// an older read would otherwise undo a token the member synced in the meantime
+// or bring back an account they have just unlinked.
+//
+// The check and the write are separate steps; this narrows the window from the
+// duration of the caller's work to the time between them.
+func (m *Manager) StoreIfCurrent(before VintedSession, updated VintedSession) (bool, error) {
+	latest, err := m.Get(before.UserID)
+	if err != nil {
+		return false, err
+	}
+	if latest == nil || latest.AccessToken != before.AccessToken || latest.LinkedAt != before.LinkedAt {
+		return false, nil
+	}
+	return true, m.Store(updated)
+}
+
 func (m *Manager) Get(userID string) (*VintedSession, error) {
 	sess, err := m.getCached(userID)
 	if err != nil {
@@ -543,10 +561,16 @@ func (m *Manager) GetBrowserLinkByToken(token string) (*BrowserLink, error) {
 		if err := json.Unmarshal(data, &link); err != nil {
 			return nil, err
 		}
-		if m.store != nil {
+		// A link cached before durable storage existed is written through
+		// once. Links already marked persistent are not rewritten on every
+		// read; TouchBrowserLink persists the ones that are actually used.
+		if m.store != nil && !link.Persistent {
 			link.Persistent = true
 			if err := m.store.SaveBrowserLink(m.ctx, browserLinkTokenHash(token), link); err != nil {
 				return nil, err
+			}
+			if err := m.cacheBrowserLink(link); err != nil {
+				log.Printf("[session] failed to recache browser link for user %s: %v", link.UserID, err)
 			}
 		}
 		return &link, nil
@@ -609,50 +633,102 @@ func (m *Manager) DeleteBrowserLink(userID string) error {
 	return m.redis.Del(m.ctx, keys...).Err()
 }
 
-func (m *Manager) StartKeepAlive(validateFn func(sess *VintedSession) bool) {
+// KeepAliveOutcome is what one keep-alive validation learned about a session.
+type KeepAliveOutcome int
+
+const (
+	// KeepAliveValid: Vinted accepted the session.
+	KeepAliveValid KeepAliveOutcome = iota
+	// KeepAliveStored: the validator replaced the session itself, for example
+	// after a token refresh. The stored record must be left alone.
+	KeepAliveStored
+	// KeepAliveTransient: the check could not be completed and may be retried.
+	KeepAliveTransient
+	// KeepAliveDeferred: Vinted asked for fewer requests. Nothing is learned
+	// about the session and it is not retried in this round.
+	KeepAliveDeferred
+	// KeepAliveRejected: Vinted rejected the credentials. Retrying the same
+	// credentials cannot succeed.
+	KeepAliveRejected
+	// KeepAliveNeedsBrowserSync: a browser-linked session can only be renewed
+	// by the extension.
+	KeepAliveNeedsBrowserSync
+)
+
+const keepAliveAttempts = 3
+
+func (m *Manager) StartKeepAlive(validateFn func(sess *VintedSession) KeepAliveOutcome) {
 	ticker := time.NewTicker(15 * time.Minute)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		sessions, err := m.GetAllSessions()
-		if err != nil {
-			log.Printf("[keep-alive] error fetching sessions: %v", err)
+		m.RunKeepAlive(validateFn, 5*time.Second)
+	}
+}
+
+// RunKeepAlive performs one keep-alive round over every linked session.
+func (m *Manager) RunKeepAlive(validateFn func(sess *VintedSession) KeepAliveOutcome, retryDelay time.Duration) {
+	sessions, err := m.GetAllSessions()
+	if err != nil {
+		log.Printf("[keep-alive] error fetching sessions: %v", err)
+		return
+	}
+
+	checked := 0
+	for _, listed := range sessions {
+		// The list is a snapshot and earlier sessions can take a long time. By
+		// the time this one is reached the member may have synced a new token
+		// or unlinked the account, so it is read again before use.
+		current, err := m.Get(listed.UserID)
+		if err != nil || current == nil {
 			continue
 		}
+		if current.Status != "active" && current.Status != "degraded" {
+			continue
+		}
+		checked++
 
-		for _, sess := range sessions {
-			if sess.Status != "active" && sess.Status != "degraded" {
-				continue
+		outcome := KeepAliveTransient
+		for attempt := 1; attempt <= keepAliveAttempts; attempt++ {
+			candidate := *current
+			outcome = validateFn(&candidate)
+			if outcome != KeepAliveTransient {
+				break
 			}
-
-			valid := false
-			for attempt := 1; attempt <= 3; attempt++ {
-				if validateFn(&sess) {
-					valid = true
-					break
-				}
-				if attempt < 3 {
-					log.Printf("[keep-alive] validation attempt %d/3 failed for user %s, retrying...", attempt, sess.UserID)
-					time.Sleep(5 * time.Second)
-				}
-			}
-
-			if valid {
-				now := time.Now().UTC().Format(time.RFC3339)
-				sess.LastCheck = now
-				sess.LastValidAt = now
-				sess.Status = "active"
-				sess.InvalidReason = ""
-			} else {
-				log.Printf("[keep-alive] session degraded for user %s (@%s) after 3 attempts", sess.UserID, sess.VintedName)
-				sess.Status = "degraded"
-				sess.InvalidReason = "keep_alive_validation_failed"
-			}
-			if err := m.Store(sess); err != nil {
-				log.Printf("[keep-alive] failed to update session for %s: %v", sess.UserID, err)
+			if attempt < keepAliveAttempts {
+				log.Printf("[keep-alive] validation attempt %d/%d failed for user %s, retrying...", attempt, keepAliveAttempts, current.UserID)
+				time.Sleep(retryDelay)
 			}
 		}
 
-		log.Printf("[keep-alive] checked %d sessions", len(sessions))
+		updated := *current
+		now := time.Now().UTC().Format(time.RFC3339)
+		switch outcome {
+		case KeepAliveStored, KeepAliveDeferred:
+			continue
+		case KeepAliveValid:
+			updated.LastCheck = now
+			updated.LastValidAt = now
+			updated.Status = "active"
+			updated.InvalidReason = ""
+		case KeepAliveNeedsBrowserSync:
+			log.Printf("[keep-alive] session for user %s needs a browser sync", current.UserID)
+			updated.LastCheck = now
+			updated.Status = "needs_browser_sync"
+			updated.InvalidReason = "browser_session_validation_failed"
+		default:
+			log.Printf("[keep-alive] session degraded for user %s (@%s)", current.UserID, current.VintedName)
+			updated.LastCheck = now
+			updated.Status = "degraded"
+			updated.InvalidReason = "keep_alive_validation_failed"
+		}
+		stored, err := m.StoreIfCurrent(*current, updated)
+		if err != nil {
+			log.Printf("[keep-alive] failed to update session for %s: %v", current.UserID, err)
+		} else if !stored {
+			log.Printf("[keep-alive] session for user %s changed during validation; result discarded", current.UserID)
+		}
 	}
+
+	log.Printf("[keep-alive] checked %d sessions", checked)
 }

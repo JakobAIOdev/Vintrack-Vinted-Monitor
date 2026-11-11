@@ -4,6 +4,7 @@ import { guardCheckoutConsent } from "@/lib/checkout-consent.server";
 import { NextRequest, NextResponse } from "next/server";
 import { logAuditEvent } from "@/lib/audit";
 import { queueCheckoutNotification } from "@/lib/checkout-notifications.server";
+import { allowBrowserCheckoutNotification } from "@/lib/checkout-notification-limit.server";
 
 const API_URL = process.env.VINTED_SERVICE_URL || "http://localhost:4000";
 
@@ -79,7 +80,7 @@ export async function POST(req: NextRequest) {
         });
 
         const data = await res.json().catch(() => ({}));
-        if (res.ok)
+        if (res.ok && (await allowBrowserCheckoutNotification(session.user.id)))
             await queueCheckoutNotification({
                 userId: session.user.id,
                 itemId: parsed.item_id,

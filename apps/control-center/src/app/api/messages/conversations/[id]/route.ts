@@ -17,6 +17,14 @@ export async function GET(
     if (featureDenied) return featureDenied;
 
     const { id } = await params;
+    // The id becomes a path segment of an internal request. Next decodes the
+    // dynamic segment, so anything but digits could address another route.
+    if (!/^\d{1,20}$/.test(id)) {
+        return NextResponse.json(
+            { error: "Invalid conversation id" },
+            { status: 400 },
+        );
+    }
     const search = req.nextUrl.searchParams.toString();
     const url = `${API_URL}/api/messages/conversations/${id}${search ? `?${search}` : ""}`;
 

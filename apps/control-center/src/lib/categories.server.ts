@@ -9,6 +9,7 @@ import {
     type CategoryNode,
     type RawCategoryTree,
 } from "@/lib/categories";
+import { REGIONS } from "@/lib/regions";
 
 const regionCache = new Map<string, Promise<CategoryNode[]>>();
 const regionLabelMapCache = new Map<string, Promise<Record<string, string>>>();
@@ -58,10 +59,21 @@ async function readRegionTree(region: string): Promise<RawCategoryTree> {
     return {};
 }
 
+// Region arrives from query strings and form data. Only a supported region
+// code may become a directory name or a cache key. Anything else resolves to
+// the default snapshot anyway, so it shares that entry instead of adding a
+// parsed copy per distinct string.
+function normalizeRegionKey(region: string): string {
+    const normalized = region.trim().toLowerCase();
+    return REGIONS.some((candidate) => candidate.code === normalized)
+        ? normalized
+        : "de";
+}
+
 export async function getCategoryTreeForRegion(
     region: string,
 ): Promise<CategoryNode[]> {
-    const normalizedRegion = region.toLowerCase();
+    const normalizedRegion = normalizeRegionKey(region);
     const cached = regionCache.get(normalizedRegion);
     if (cached) {
         return cached;
@@ -80,7 +92,7 @@ export async function getCategoryLabelsForRegion(
 ): Promise<string[]> {
     if (!catalogIds) return [];
 
-    const normalizedRegion = region.toLowerCase();
+    const normalizedRegion = normalizeRegionKey(region);
     let labelMapPromise = regionLabelMapCache.get(normalizedRegion);
     if (!labelMapPromise) {
         labelMapPromise = getCategoryTreeForRegion(normalizedRegion).then(

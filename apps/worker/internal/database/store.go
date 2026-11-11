@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"runtime"
 	"sort"
@@ -328,7 +329,30 @@ func (s *Store) alertPool() *sql.DB {
 	return s.db
 }
 
+// withUTCSessionTimeZone pins the session time zone unless the connection
+// string already sets one. Timestamps are stored without a zone and compared
+// with NOW(), so a server whose default zone is not UTC shifts every lease,
+// retry time and retention window by its UTC offset.
+func withUTCSessionTimeZone(connStr string) string {
+	trimmed := strings.TrimSpace(connStr)
+	if trimmed == "" || strings.Contains(strings.ToLower(trimmed), "timezone") {
+		return connStr
+	}
+	if strings.HasPrefix(trimmed, "postgres://") || strings.HasPrefix(trimmed, "postgresql://") {
+		parsed, err := url.Parse(trimmed)
+		if err != nil {
+			return connStr
+		}
+		query := parsed.Query()
+		query.Set("timezone", "UTC")
+		parsed.RawQuery = query.Encode()
+		return parsed.String()
+	}
+	return trimmed + " timezone=UTC"
+}
+
 func NewStore(connStr string, redisCache *cache.RedisCache) (*Store, error) {
+	connStr = withUTCSessionTimeZone(connStr)
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("sql open: %w", err)

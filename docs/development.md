@@ -70,14 +70,18 @@ The public extension downloads do not authorize localhost.
 Only use the live/production-like stack when validating real catalog behavior:
 
 ```bash
-make up
+make local
 ```
+
+`make local` runs the full stack without Caddy and serves the dashboard on
+`http://localhost:3000`. `make up` additionally starts Caddy, which needs host
+ports 80 and 443 and is only useful with a public hostname.
 
 Run `make dev-down` first if the mock stack is running: the two modes use the
 same container names and ports. Configure Discord or OIDC as described in
-[Getting Started](getting-started.md#3-configure-authentication). Live signups
-start as `free`; use the [first-admin step](getting-started.md#5-grant-your-first-account-admin-access)
-for this database. The seeded mock admin does not carry over.
+[Getting Started](getting-started.md#3-configure-sign-in), or run `make setup`.
+Live signups start as `free`; sign in once and run `make admin` to promote your
+account in this database. The seeded mock admin does not carry over.
 
 This can consume substantially more CPU, network, and battery because it starts
 the live monitor worker and proxy maintainer. Enable the pre-index scanner only

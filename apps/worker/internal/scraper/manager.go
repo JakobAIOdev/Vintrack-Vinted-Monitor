@@ -69,6 +69,7 @@ func (m *Manager) Sync(ctx context.Context) {
 	m.initialSyncDone = true
 	maintenanceJustEnded := m.recordMaintenanceState(maintenanceEnabled, maintenanceRead)
 
+	sourceChangedIDs := make([]int, 0, len(monitors))
 	activeIDs := make(map[int]bool, len(monitors))
 	returnedIDs := make(map[int]bool, len(monitors))
 	discoveryMonitors := make([]model.Monitor, 0, len(monitors))
@@ -80,9 +81,7 @@ func (m *Manager) Sync(ctx context.Context) {
 		if mon.ProxySource == "free" {
 			mon.FreeProxyVersion = m.engine.FreeProxyRegionVersion(mon.Region)
 		} else {
-			if err := m.store.CloseProxyIncident(ctx, mon.ID, "proxy_source_changed"); err != nil {
-				log.Printf("Close proxy incident for monitor [%d]: %v", mon.ID, err)
-			}
+			sourceChangedIDs = append(sourceChangedIDs, mon.ID)
 			if mon.ProxyGroupID == nil {
 				mon.ServerProxyVersion = m.engine.ServerProxyVersion()
 			}
@@ -130,17 +129,23 @@ func (m *Manager) Sync(ctx context.Context) {
 		}(mCtx, *mon, task)
 	}
 
+	if err := m.store.CloseProxyIncidents(ctx, sourceChangedIDs, "proxy_source_changed"); err != nil {
+		log.Printf("Close proxy incidents for %d non-free monitors: %v", len(sourceChangedIDs), err)
+	}
+
+	stoppedIDs := make([]int, 0)
 	for id, task := range m.running {
 		if !activeIDs[id] {
-			if err := m.store.CloseProxyIncident(ctx, id, "monitor_stopped"); err != nil {
-				log.Printf("Close proxy incident for monitor [%d]: %v", id, err)
-			}
+			stoppedIDs = append(stoppedIDs, id)
 			if !task.stopping {
 				log.Printf("Stopping monitor [%d] (removed/paused)", id)
 				task.cancel()
 				task.stopping = true
 			}
 		}
+	}
+	if err := m.store.CloseProxyIncidents(ctx, stoppedIDs, "monitor_stopped"); err != nil {
+		log.Printf("Close proxy incidents for %d stopped monitors: %v", len(stoppedIDs), err)
 	}
 	for id := range m.scheduledPaused {
 		if !returnedIDs[id] {

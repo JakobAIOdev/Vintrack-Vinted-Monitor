@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { escapeTelegramHTML, sendTelegramMessage } from "@/lib/telegram";
@@ -29,10 +30,21 @@ type TelegramUpdate = {
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
-    const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    // Without a secret anyone could post a forged update and bind a chat of
+    // their choosing to a member's connect code, so an unset secret rejects
+    // every update instead of accepting all of them.
+    const secret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim();
+    if (!secret) {
+        return NextResponse.json(
+            { error: "Telegram webhook secret is not configured" },
+            { status: 503 },
+        );
+    }
     if (
-        secret &&
-        req.headers.get("x-telegram-bot-api-secret-token") !== secret
+        !secretMatches(
+            req.headers.get("x-telegram-bot-api-secret-token"),
+            secret,
+        )
     ) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -103,6 +115,13 @@ export async function POST(req: NextRequest) {
     );
 
     return NextResponse.json({ ok: true });
+}
+
+function secretMatches(provided: string | null, expected: string) {
+    if (!provided) return false;
+    const left = createHash("sha256").update(provided).digest();
+    const right = createHash("sha256").update(expected).digest();
+    return timingSafeEqual(left, right);
 }
 
 function extractConnectCode(text: string) {

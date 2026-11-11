@@ -59,7 +59,7 @@ export function MarketingPageHero({
             <div className="from-background via-background/92 absolute inset-x-0 bottom-0 -z-10 h-40 bg-linear-to-t to-transparent" />
             <div className="mx-auto grid min-h-155 max-w-7xl items-center gap-12 px-4 py-16 sm:px-6 sm:py-24 lg:grid-cols-[0.92fr_1.08fr] lg:px-8">
                 <div className="max-w-xl">
-                    <p className="text-muted-foreground text-[11px] font-semibold tracking-[0.2em] uppercase">
+                    <p className="text-muted-foreground text-[11px] font-semibold">
                         {kicker}
                     </p>
                     <h1 className="text-foreground mt-5 text-5xl leading-[0.98] font-semibold tracking-tight sm:text-6xl">
@@ -103,7 +103,7 @@ export function MarketingSectionHeading({
 }) {
     return (
         <div className="max-w-2xl">
-            <p className="text-muted-foreground text-[11px] font-semibold tracking-[0.2em] uppercase">
+            <p className="text-muted-foreground text-[11px] font-semibold">
                 {kicker}
             </p>
             <h2 className="mt-3 text-3xl leading-tight font-semibold sm:text-4xl">
@@ -286,7 +286,7 @@ export function PriceWatchPreview() {
         <PreviewShell title="Price watch" status="watch active">
             <div className="space-y-4 p-4 sm:p-5">
                 <div className="border-border bg-background/70 rounded-lg border p-4">
-                    <p className="text-muted-foreground text-[10px] font-semibold tracking-wider uppercase">
+                    <p className="text-muted-foreground text-[10px] font-semibold">
                         Vinted item URL
                     </p>
                     <div className="border-border bg-muted/45 mt-2 truncate rounded-md border px-3 py-2 text-xs">

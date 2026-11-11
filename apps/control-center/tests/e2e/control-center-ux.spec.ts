@@ -56,7 +56,7 @@ async function openMonitors(page: Page) {
     );
     await page.goto("/dashboard");
     await expect(
-        page.getByRole("heading", { name: /Welcome back/ }),
+        page.getByRole("heading", { name: /Your monitors/ }),
     ).toBeVisible();
 }
 

@@ -14,7 +14,7 @@ export function LogoMark({ className = "" }: { className?: string }) {
         <span
             className={`bg-foreground text-background inline-flex items-center justify-center rounded-md shadow-sm ${className}`}
         >
-            <span className="text-xs font-black">V</span>
+            <span className="text-xs font-semibold">V</span>
         </span>
     );
 }

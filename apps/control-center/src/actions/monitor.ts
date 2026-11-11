@@ -1299,6 +1299,10 @@ export async function deleteMonitorAndReturn(id: number) {
 }
 
 export async function testDiscordWebhook(url: string) {
+    const session = await auth();
+    if (!session?.user?.id) {
+        return { error: "Not authenticated" };
+    }
     if (!url || !isValidDiscordWebhook(url)) {
         return { error: "Invalid Discord Webhook URL" };
     }

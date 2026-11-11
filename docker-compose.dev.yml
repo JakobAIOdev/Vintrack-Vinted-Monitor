@@ -33,6 +33,9 @@ services:
     environment:
       - NODE_OPTIONS=--max-old-space-size=${DEV_CONTROL_CENTER_HEAP_MB:-256}
       - E2E_TEST_MODE=true
+      # E2E mode signs every request in as an admin and only starts on a
+      # loopback origin, whatever AUTH_URL the production .env carries.
+      - AUTH_URL=http://localhost:3000
       - E2E_TEST_USER_ID=dev-admin
       - E2E_TEST_USER_NAME=Local Dev Admin
       - E2E_TEST_USER_EMAIL=admin@vintrack.test

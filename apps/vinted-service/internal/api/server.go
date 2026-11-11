@@ -30,6 +30,9 @@ const browserLinkTTL = 180 * 24 * time.Hour
 const proactiveRefreshWindow = 15 * time.Minute
 const refreshLockTTL = 45 * time.Second
 
+// maxRequestBodyBytes bounds every JSON request body the service decodes.
+const maxRequestBodyBytes = 64 * 1024
+
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
 
@@ -73,7 +76,13 @@ func (s *Server) Start() error {
 	})
 
 	log.Printf("API server listening on %s", s.listenAddr)
-	return http.ListenAndServe(s.listenAddr, s.withMiddleware(mux))
+	server := &http.Server{
+		Addr:              s.listenAddr,
+		Handler:           s.withMiddleware(mux),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+	return server.ListenAndServe()
 }
 
 func featureForPath(path string) string {
@@ -123,13 +132,9 @@ func (s *Server) requireFeature(w http.ResponseWriter, userID string, feature st
 
 func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-User-ID")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(204)
-			return
-		}
+		// No CORS headers: only the control center calls this service, server
+		// to server. X-User-ID is its sole identity check, so a browser page
+		// must never be able to send it cross-origin.
 		if feature := featureForPath(r.URL.Path); feature != "" {
 			if userID := getUserID(r); userID != "" {
 				if !s.requireFeature(w, userID, feature) {
@@ -468,6 +473,72 @@ func (s *Server) refreshSessionWithLock(userID string, sess *session.VintedSessi
 	return updated, client, nil
 }
 
+// ValidateSessionForKeepAlive is the periodic background check of one linked
+// session. It follows the same boundaries as the request path: a
+// browser-linked session is never refreshed server-side, a refresh runs under
+// the shared refresh lock, and rejected credentials are not sent again.
+func (s *Server) ValidateSessionForKeepAlive(sess *session.VintedSession) session.KeepAliveOutcome {
+	if sess == nil {
+		return session.KeepAliveRejected
+	}
+	expired := accessTokenExpired(sess.AccessToken)
+	if expired && !serverSideTokenRefreshAllowed(sess) {
+		// The token is known to be dead and only the member's browser can
+		// supply a new one, so there is nothing to ask Vinted.
+		if sess.BrowserLinked {
+			return session.KeepAliveNeedsBrowserSync
+		}
+		return session.KeepAliveRejected
+	}
+	if expired {
+		return s.refreshForKeepAlive(sess)
+	}
+
+	client, err := vinted.NewClient(sessionForServerSideClient(sess))
+	if err != nil {
+		return session.KeepAliveRejected
+	}
+	if err := client.WarmUp(); err != nil {
+		log.Printf("[keep-alive] warmup warning for user %s: %v", sess.UserID, err)
+	}
+	info, err := client.GetAccountInfo()
+	if err == nil {
+		if info != nil && info.ID > 0 {
+			return session.KeepAliveValid
+		}
+		return session.KeepAliveTransient
+	}
+
+	status := vinted.UpstreamStatus(err)
+	var authErr *vinted.AuthError
+	switch {
+	case status == http.StatusTooManyRequests:
+		return session.KeepAliveDeferred
+	case status == http.StatusUnauthorized || status == http.StatusForbidden || errors.As(err, &authErr):
+		if serverSideTokenRefreshAllowed(sess) {
+			return s.refreshForKeepAlive(sess)
+		}
+		if sess.BrowserLinked {
+			return session.KeepAliveNeedsBrowserSync
+		}
+		return session.KeepAliveRejected
+	default:
+		log.Printf("[keep-alive] validation failed for user %s: %v", sess.UserID, err)
+		return session.KeepAliveTransient
+	}
+}
+
+// refreshForKeepAlive makes one refresh attempt. A failed refresh can already
+// have rotated the credentials on Vinted's side, so it is never repeated.
+func (s *Server) refreshForKeepAlive(sess *session.VintedSession) session.KeepAliveOutcome {
+	if _, _, err := s.refreshSessionWithLock(sess.UserID, sess); err != nil {
+		log.Printf("[keep-alive] token refresh failed for user %s: %v", sess.UserID, err)
+		return session.KeepAliveRejected
+	}
+	log.Printf("[keep-alive] token refreshed for user %s", sess.UserID)
+	return session.KeepAliveStored
+}
+
 type accountSessionClient interface {
 	GetAccountInfo() (*vinted.AccountInfo, error)
 	GetSession() *session.VintedSession
@@ -647,6 +718,9 @@ func (s *Server) buildLinkedSession(userID string, req linkRequest) (*session.Vi
 	if domain == "" {
 		return nil, errors.New("domain is required")
 	}
+	if !vinted.IsSupportedAccountDomain(domain) {
+		return nil, errors.New("unsupported Vinted domain")
+	}
 
 	sameContext := existingSession != nil && accessToken != "" &&
 		accessToken == existingSession.AccessToken && domain == existingSession.Domain &&
@@ -713,7 +787,7 @@ func (s *Server) handleLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req linkRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", 400)
 		return
 	}
@@ -824,7 +898,7 @@ func (s *Server) handleBrowserSyncStatus(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleBrowserSyncComplete(w http.ResponseWriter, r *http.Request) {
 	var req browserSyncCompleteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", 400)
 		return
 	}
@@ -1113,7 +1187,7 @@ func (s *Server) handleUpdateDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req updateDomainRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", 400)
 		return
 	}
@@ -1121,6 +1195,10 @@ func (s *Server) handleUpdateDomain(w http.ResponseWriter, r *http.Request) {
 	domain := normalizeVintedDomain(req.Domain)
 	if domain == "" {
 		writeError(w, "domain is required", 400)
+		return
+	}
+	if !vinted.IsSupportedAccountDomain(domain) {
+		writeError(w, "unsupported Vinted domain", 400)
 		return
 	}
 
@@ -1165,7 +1243,7 @@ func (s *Server) handleUpdatePhoneNumber(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req updatePhoneNumberRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", 400)
 		return
 	}
@@ -1282,7 +1360,7 @@ func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req itemRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ItemID == 0 {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil || req.ItemID == 0 {
 		writeError(w, "item_id is required", 400)
 		return
 	}
@@ -1307,7 +1385,7 @@ func (s *Server) handleUnlike(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req itemRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ItemID == 0 {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil || req.ItemID == 0 {
 		writeError(w, "item_id is required", 400)
 		return
 	}
@@ -1507,7 +1585,7 @@ func (s *Server) handleStoreCheckoutLink(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req storeCheckoutLinkRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid json", 400)
 		return
 	}
@@ -1636,7 +1714,7 @@ func (s *Server) handleBrandResolve(w http.ResponseWriter, r *http.Request) {
 		BrandURL string `json:"brand_url"`
 		Region   string `json:"region"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&request); err != nil {
 		writeError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1872,8 +1950,13 @@ func (s *Server) persistSessionIfChanged(original *session.VintedSession, update
 		}
 	}
 
-	if err := s.sessions.Store(*updated); err != nil {
+	stored, err := s.sessions.StoreIfCurrent(*original, *updated)
+	if err != nil {
 		log.Printf("[server] failed to persist session for user %s: %v", updated.UserID, err)
+		return
+	}
+	if !stored {
+		log.Printf("[server] session for user %s changed during the request; update discarded", updated.UserID)
 		return
 	}
 
@@ -1930,7 +2013,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req sendMessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", 400)
 		return
 	}
@@ -1970,7 +2053,7 @@ func (s *Server) handleReplyToConversation(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req replyToConversationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", 400)
 		return
 	}
@@ -2014,7 +2097,7 @@ func (s *Server) handleSendOffer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req sendOfferRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", 400)
 		return
 	}

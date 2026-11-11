@@ -120,7 +120,7 @@ function SectionHeading({
 }) {
     return (
         <div className="lg:sticky lg:top-8 lg:self-start">
-            <p className="text-muted-foreground text-[11px] font-semibold uppercase">
+            <p className="text-muted-foreground text-[11px] font-semibold">
                 Step {number}
             </p>
             <h2 className="mt-3 text-2xl font-semibold">{title}</h2>
@@ -136,11 +136,11 @@ export default function GuidePage() {
         <div className="mx-auto max-w-6xl space-y-12">
             <header className="border-border/60 flex flex-col gap-6 border-b pb-8 md:flex-row md:items-end md:justify-between">
                 <div>
-                    <div className="text-muted-foreground flex items-center gap-2 text-xs font-medium uppercase">
+                    <div className="text-muted-foreground flex items-center gap-2 text-xs font-medium">
                         <CircleGauge className="h-4 w-4" />
                         Vintrack workflow
                     </div>
-                    <h1 className="mt-4 text-3xl font-bold">Setup Guide</h1>
+                    <h1 className="mt-4 text-3xl font-semibold">Setup Guide</h1>
                     <p className="text-muted-foreground mt-3 max-w-2xl text-sm leading-7">
                         Go from a new account to a running monitor with clean
                         alerts and optional Vinted account actions.

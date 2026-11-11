@@ -7,7 +7,6 @@ import {
     Github,
     KeyRound,
     ShieldCheck,
-    Sparkles,
     Zap,
 } from "lucide-react";
 import type { Metadata } from "next";
@@ -40,18 +39,18 @@ async function signInWithOidc(returnTo: string) {
 const highlights = [
     {
         icon: Zap,
-        title: "Realtime monitors",
-        copy: "Sub-second item detection across your active searches.",
+        title: "Live monitors",
+        copy: "New listings from your active searches, as they appear",
     },
     {
         icon: Bell,
-        title: "Instant alerts",
-        copy: "Discord and Telegram alerts, live feed updates and linked account actions.",
+        title: "Alerts where you read them",
+        copy: "Discord, Telegram and the live feed, per monitor",
     },
     {
         icon: ShieldCheck,
         title: "Protected dashboard",
-        copy: "Every internal dashboard route now requires an authenticated session.",
+        copy: "Every dashboard page requires a signed-in session",
     },
 ];
 
@@ -76,31 +75,18 @@ export default async function LoginPage({
 
     return (
         <div className="bg-background text-foreground relative min-h-screen overflow-hidden">
-            <div className="absolute inset-0 -z-10">
-                <div
-                    className="absolute inset-0"
-                    style={{
-                        background:
-                            "radial-gradient(circle at top left, rgba(14,165,233,0.16), transparent 32%), radial-gradient(circle at 85% 18%, rgba(245,158,11,0.16), transparent 24%), linear-gradient(180deg, color-mix(in oklab, var(--background) 86%, white 14%), var(--background))",
-                    }}
-                />
-                <div className="absolute top-24 -left-48 h-80 w-80 rounded-full bg-sky-500/12 blur-3xl" />
-                <div className="absolute -right-20 -bottom-32 h-72 w-72 rounded-full bg-amber-400/12 blur-3xl" />
-                <div className="via-border absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent to-transparent" />
-            </div>
-
             <header className="mx-auto flex w-full max-w-7xl items-center justify-between px-6 py-6 sm:px-8">
                 <Link href="/" className="flex items-center gap-3">
-                    <div className="bg-foreground text-background flex h-10 w-10 items-center justify-center rounded-lg shadow-lg shadow-slate-950/10">
-                        <span className="text-sm leading-none font-black">
+                    <div className="bg-foreground text-background flex h-8 w-8 items-center justify-center rounded-lg">
+                        <span className="text-sm leading-none font-semibold">
                             V
                         </span>
                     </div>
                     <div>
-                        <p className="text-muted-foreground text-[11px] font-semibold tracking-[0.32em] uppercase">
+                        <p className="text-foreground text-[15px] font-semibold">
                             Vintrack
                         </p>
-                        <p className="text-foreground text-sm font-medium">
+                        <p className="text-muted-foreground text-xs">
                             Vinted monitoring control center
                         </p>
                     </div>
@@ -111,62 +97,44 @@ export default async function LoginPage({
 
             <main className="mx-auto grid min-h-[calc(100vh-88px)] w-full max-w-7xl items-center gap-10 px-6 pb-10 sm:px-8 lg:grid-cols-[1.15fr_0.85fr]">
                 <section className="max-w-2xl space-y-8 py-8 lg:py-16">
-                    <div className="inline-flex items-center gap-2 rounded-full border border-sky-500/20 bg-sky-500/10 px-4 py-2 text-[11px] font-semibold tracking-[0.28em] text-sky-700 uppercase dark:text-sky-300">
-                        <Sparkles className="h-3.5 w-3.5" />
-                        Members Dashboard
-                    </div>
-
                     <div className="space-y-5">
-                        <h1 className="max-w-xl text-5xl font-black tracking-tight text-balance sm:text-6xl">
-                            Secure access for the whole dashboard.
+                        <h1 className="max-w-xl text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
+                            Sign in to your Vinted monitors
                         </h1>
                         <p className="text-muted-foreground max-w-xl text-base leading-8 sm:text-lg">
                             {oidcConfigured
-                                ? `Sign in with ${oidcName} to open monitors, feed, chats, likes, proxies and account tools from one protected workspace.`
-                                : "Sign in with Discord to open monitors, feed, chats, likes, proxies and account tools from one protected workspace."}
+                                ? `Sign in with ${oidcName} to open your monitors, live feed, chats, likes, proxies and account tools`
+                                : "Sign in with Discord to open your monitors, live feed, chats, likes, proxies and account tools"}
                         </p>
                     </div>
 
-                    <div className="grid gap-4 sm:grid-cols-3">
+                    <ul className="border-border/70 divide-border/70 max-w-xl divide-y border-y">
                         {highlights.map((item) => (
-                            <div
+                            <li
                                 key={item.title}
-                                className="border-border/70 bg-card/80 rounded-3xl border p-5 shadow-lg shadow-slate-950/5 backdrop-blur-sm"
+                                className="flex items-start gap-3 py-4"
                             >
-                                <div className="bg-foreground text-background mb-4 flex h-11 w-11 items-center justify-center rounded-2xl">
-                                    <item.icon className="h-5 w-5" />
+                                <item.icon className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" />
+                                <div>
+                                    <h2 className="text-foreground text-sm font-medium">
+                                        {item.title}
+                                    </h2>
+                                    <p className="text-muted-foreground mt-1 text-sm leading-6">
+                                        {item.copy}
+                                    </p>
                                 </div>
-                                <h2 className="text-foreground text-sm font-semibold">
-                                    {item.title}
-                                </h2>
-                                <p className="text-muted-foreground mt-2 text-sm leading-6">
-                                    {item.copy}
-                                </p>
-                            </div>
+                            </li>
                         ))}
-                    </div>
+                    </ul>
                 </section>
 
                 <section className="relative">
-                    <div className="absolute inset-6 rounded-[2rem] bg-slate-950/8 blur-2xl dark:bg-black/20" />
-                    <div className="border-border/70 bg-card/88 relative overflow-hidden rounded-[2rem] border p-6 shadow-2xl shadow-slate-950/10 backdrop-blur-xl sm:p-8">
-                        <div className="mb-8 flex items-start justify-between gap-4">
-                            <div>
-                                <p className="text-muted-foreground text-[11px] font-semibold tracking-[0.28em] uppercase">
-                                    {oidcConfigured
-                                        ? `${oidcName} Access`
-                                        : "Discord Access"}
-                                </p>
-                                <h2 className="mt-2 text-3xl font-bold tracking-tight">
-                                    Enter Vintrack
-                                </h2>
-                            </div>
-                            <div className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">
-                                Auth required
-                            </div>
-                        </div>
+                    <div className="border-border/70 bg-card relative overflow-hidden rounded-2xl border p-6 sm:p-8">
+                        <h2 className="mb-6 text-2xl font-semibold tracking-tight">
+                            Sign in
+                        </h2>
 
-                        <div className="border-border/70 bg-background/70 space-y-4 rounded-[1.5rem] border p-5">
+                        <div className="border-border/70 bg-background/70 space-y-4 rounded-xl border p-4">
                             {error ? (
                                 <div
                                     role="alert"
@@ -181,8 +149,8 @@ export default async function LoginPage({
                             ) : null}
                             <p className="text-muted-foreground text-sm leading-7">
                                 {oidcConfigured
-                                    ? `Use your ${oidcName} account to authenticate. After login you will be redirected directly into the dashboard.`
-                                    : "Use your Discord account to authenticate. After login you will be redirected directly into the dashboard."}
+                                    ? `Use your ${oidcName} account to authenticate. You return to the dashboard right after.`
+                                    : "Use your Discord account to authenticate. You return to the dashboard right after."}
                             </p>
 
                             {oidcConfigured ? (
@@ -192,10 +160,10 @@ export default async function LoginPage({
                                     <Button
                                         type="submit"
                                         size="lg"
-                                        className="h-12 w-full justify-between rounded-2xl px-5 text-sm font-semibold shadow-lg shadow-slate-950/10"
+                                        className="h-11 w-full justify-between rounded-lg px-4 text-sm font-medium"
                                     >
                                         <span className="flex items-center gap-3">
-                                            <span className="bg-background/20 flex h-8 w-8 items-center justify-center rounded-xl">
+                                            <span className="bg-background/20 flex h-7 w-7 items-center justify-center rounded-md">
                                                 <KeyRound className="h-4 w-4" />
                                             </span>
                                             Continue with {oidcName}
@@ -213,10 +181,10 @@ export default async function LoginPage({
                                     <Button
                                         type="submit"
                                         size="lg"
-                                        className="h-12 w-full justify-between rounded-2xl px-5 text-sm font-semibold shadow-lg shadow-slate-950/10"
+                                        className="h-11 w-full justify-between rounded-lg px-4 text-sm font-medium"
                                     >
                                         <span className="flex items-center gap-3">
-                                            <span className="bg-background/20 flex h-8 w-8 items-center justify-center rounded-xl">
+                                            <span className="bg-background/20 flex h-7 w-7 items-center justify-center rounded-md">
                                                 <svg
                                                     aria-hidden="true"
                                                     viewBox="0 0 24 24"
@@ -247,8 +215,8 @@ export default async function LoginPage({
                             ) : null}
                         </div>
 
-                        <div className="text-muted-foreground mt-6 grid gap-3 text-sm sm:grid-cols-2">
-                            <div className="border-border/70 bg-background/55 rounded-2xl border p-4">
+                        <div className="text-muted-foreground mt-6 grid gap-6 text-sm sm:grid-cols-2">
+                            <div>
                                 <p className="text-foreground font-medium">
                                     Account linking
                                 </p>
@@ -258,7 +226,7 @@ export default async function LoginPage({
                                         : "Authentication runs through Discord and returns you to the app automatically."}
                                 </p>
                             </div>
-                            <div className="border-border/70 bg-background/55 rounded-2xl border p-4">
+                            <div>
                                 <p className="text-foreground font-medium">
                                     Single provider
                                 </p>

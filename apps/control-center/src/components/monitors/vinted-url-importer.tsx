@@ -149,7 +149,7 @@ export function VintedUrlImporter({
                         if (summary) setSummary("");
                     }}
                     onKeyDown={handleKeyDown}
-                    placeholder="https://www.vinted.de/catalog?..."
+                    placeholder="https://www.vinted.de/catalog?"
                     aria-invalid={Boolean(error)}
                     aria-describedby={`${inputId}-help`}
                     className={cn("min-w-0 flex-1", compact && "h-8")}

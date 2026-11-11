@@ -103,6 +103,12 @@ func failurePolicyWithQuarantineThreshold(status int, err error, failures int, t
 	policy.cooldown = 5 * time.Second
 	policy.quarantine = 0
 	policy.replaceClient = false
+	if policy.code == proxyErrorVintedRateLimited {
+		// A rate limit is about the exit's request rate, not its session. The
+		// client is kept, so discarding the session would only add a warmup
+		// request through the exit that was just told to slow down.
+		policy.resetWarmupSession = false
+	}
 	return policy
 }
 

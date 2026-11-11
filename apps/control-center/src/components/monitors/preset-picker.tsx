@@ -157,7 +157,7 @@ export function MonitorPresetPicker({
                                     </span>
                                 </div>
                                 <div className="mt-auto">
-                                    <p className="text-muted-foreground text-[10px] font-semibold tracking-wider uppercase">
+                                    <p className="text-muted-foreground text-[10px] font-semibold">
                                         {preset.eyebrow}
                                     </p>
                                     <p className="mt-1.5 text-sm font-semibold">

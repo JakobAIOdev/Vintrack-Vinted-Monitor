@@ -88,7 +88,7 @@ export function CheckoutHandoff({
                 </Link>
                 <div className="flex items-center gap-3">
                     <ShoppingCart className="text-primary size-6" />
-                    <h1 className="text-2xl font-bold">
+                    <h1 className="text-2xl font-semibold">
                         {error
                             ? "Checkout could not open"
                             : "Opening Vinted checkout"}

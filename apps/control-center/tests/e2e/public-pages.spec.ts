@@ -111,7 +111,7 @@ test.describe("public pages", () => {
 
         await expect(page).toHaveTitle(/Login/i);
         await expect(
-            page.getByRole("heading", { name: /Secure access/i }),
+            page.getByRole("heading", { name: /Sign in to your Vinted monitors/i }),
         ).toBeVisible();
         await expect(
             page.getByRole("button", { name: /Continue with/i }),

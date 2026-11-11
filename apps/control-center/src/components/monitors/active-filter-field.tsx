@@ -61,7 +61,7 @@ export function ActiveFilterField({
             >
                 <div className="overflow-hidden">
                     <div className="flex min-h-7 items-center justify-between gap-3 rounded-lg border border-violet-400/20 bg-violet-500/[0.045] px-2.5 py-1 text-[11px] font-semibold text-violet-600 shadow-sm dark:text-violet-300">
-                        <span className="inline-flex items-center gap-1.5 tracking-[0.08em] uppercase">
+                        <span className="inline-flex items-center gap-1.5">
                             <CheckCircle2 className="size-3.5" /> Active
                         </span>
                         <span className="text-foreground min-w-0 truncate text-right tracking-normal normal-case">
