@@ -770,6 +770,27 @@ func (s *Store) CloseProxyIncident(ctx context.Context, monitorID int, reason st
 	return err
 }
 
+// CloseProxyIncidents closes the open incidents of many monitors in one
+// statement. The monitor sync calls this every few seconds for every monitor
+// that cannot have an incident, so one round trip per monitor adds up.
+func (s *Store) CloseProxyIncidents(ctx context.Context, monitorIDs []int, reason string) error {
+	if len(monitorIDs) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "recovered"
+	}
+	ids := make([]int64, len(monitorIDs))
+	for index, id := range monitorIDs {
+		ids[index] = int64(id)
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE monitor_proxy_incidents
+		SET recovered_at = NOW(), end_reason = $2, last_wait_at = GREATEST(last_wait_at, started_at)
+		WHERE monitor_id = ANY($1) AND recovered_at IS NULL`, pq.Array(ids), reason)
+	return err
+}
+
 func (s *Store) PruneOperationalEvents(retentionDays int) {
 	if retentionDays < 1 {
 		retentionDays = 30
