@@ -30,6 +30,9 @@ const browserLinkTTL = 180 * 24 * time.Hour
 const proactiveRefreshWindow = 15 * time.Minute
 const refreshLockTTL = 45 * time.Second
 
+// maxRequestBodyBytes bounds every JSON request body the service decodes.
+const maxRequestBodyBytes = 64 * 1024
+
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
 
@@ -716,7 +719,7 @@ func (s *Server) handleLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req linkRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", 400)
 		return
 	}
@@ -827,7 +830,7 @@ func (s *Server) handleBrowserSyncStatus(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleBrowserSyncComplete(w http.ResponseWriter, r *http.Request) {
 	var req browserSyncCompleteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", 400)
 		return
 	}
@@ -1116,7 +1119,7 @@ func (s *Server) handleUpdateDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req updateDomainRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", 400)
 		return
 	}
@@ -1172,7 +1175,7 @@ func (s *Server) handleUpdatePhoneNumber(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req updatePhoneNumberRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", 400)
 		return
 	}
@@ -1289,7 +1292,7 @@ func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req itemRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ItemID == 0 {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil || req.ItemID == 0 {
 		writeError(w, "item_id is required", 400)
 		return
 	}
@@ -1314,7 +1317,7 @@ func (s *Server) handleUnlike(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req itemRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ItemID == 0 {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil || req.ItemID == 0 {
 		writeError(w, "item_id is required", 400)
 		return
 	}
@@ -1514,7 +1517,7 @@ func (s *Server) handleStoreCheckoutLink(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req storeCheckoutLinkRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid json", 400)
 		return
 	}
@@ -1643,7 +1646,7 @@ func (s *Server) handleBrandResolve(w http.ResponseWriter, r *http.Request) {
 		BrandURL string `json:"brand_url"`
 		Region   string `json:"region"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&request); err != nil {
 		writeError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1937,7 +1940,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req sendMessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", 400)
 		return
 	}
@@ -1977,7 +1980,7 @@ func (s *Server) handleReplyToConversation(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req replyToConversationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", 400)
 		return
 	}
@@ -2021,7 +2024,7 @@ func (s *Server) handleSendOffer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req sendOfferRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", 400)
 		return
 	}

@@ -401,24 +401,69 @@ type SellerInfo struct {
 
 type sellerInfoCache struct {
 	mu    sync.RWMutex
-	cache map[int64]SellerInfo
+	cache map[int64]sellerInfoCacheEntry
 }
 
 var globalSellerCache = &sellerInfoCache{
-	cache: make(map[int64]SellerInfo),
+	cache: make(map[int64]sellerInfoCacheEntry),
+}
+
+const (
+	// A seller's rating and location change slowly, but not never.
+	sellerInfoCacheTTL        = 6 * time.Hour
+	sellerInfoCacheMaxEntries = 5000
+	// maxUpstreamBodyBytes bounds every account API response held in memory.
+	maxUpstreamBodyBytes = 8 * 1024 * 1024
+)
+
+type sellerInfoCacheEntry struct {
+	info     SellerInfo
+	storedAt time.Time
 }
 
 func (c *sellerInfoCache) Get(userID int64) (SellerInfo, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	info, ok := c.cache[userID]
-	return info, ok
+	entry, ok := c.cache[userID]
+	if !ok || time.Since(entry.storedAt) > sellerInfoCacheTTL {
+		return SellerInfo{}, false
+	}
+	return entry.info, true
 }
 
 func (c *sellerInfoCache) Set(userID int64, info SellerInfo) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.cache[userID] = info
+	if _, exists := c.cache[userID]; !exists && len(c.cache) >= sellerInfoCacheMaxEntries {
+		now := time.Now()
+		for id, entry := range c.cache {
+			if now.Sub(entry.storedAt) > sellerInfoCacheTTL {
+				delete(c.cache, id)
+			}
+		}
+		// Still full of live entries: drop an arbitrary tenth rather than
+		// growing without limit.
+		for id := range c.cache {
+			if len(c.cache) < sellerInfoCacheMaxEntries*9/10 {
+				break
+			}
+			delete(c.cache, id)
+		}
+	}
+	c.cache[userID] = sellerInfoCacheEntry{info: info, storedAt: time.Now()}
+}
+
+// readUpstreamBody reads an account API response with an upper bound, so a
+// misbehaving upstream cannot make the service buffer an arbitrary amount.
+func readUpstreamBody(reader io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(reader, maxUpstreamBodyBytes+1))
+	if err != nil {
+		return body, err
+	}
+	if len(body) > maxUpstreamBodyBytes {
+		return nil, errors.New("Vinted response exceeded size limit")
+	}
+	return body, nil
 }
 
 type VintedPrice struct {
@@ -912,10 +957,10 @@ func (c *Client) doLike(itemID int64) error {
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := readUpstreamBody(resp.Body)
 	bodyStr := strings.TrimSpace(string(respBody))
 
-	log.Printf("[vinted] POST user_favourites/toggle (like) -> %d (%.300s)", resp.StatusCode, bodyStr)
+	log.Printf("[vinted] POST user_favourites/toggle (like) -> %d (%d bytes)", resp.StatusCode, len(bodyStr))
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		log.Printf("[vinted] Liked item %d", itemID)
@@ -969,10 +1014,10 @@ func (c *Client) doUnlike(itemID int64) error {
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := readUpstreamBody(resp.Body)
 	bodyStr := strings.TrimSpace(string(respBody))
 
-	log.Printf("[vinted] POST user_favourites/toggle (unlike) -> %d (%.300s)", resp.StatusCode, bodyStr)
+	log.Printf("[vinted] POST user_favourites/toggle (unlike) -> %d (%d bytes)", resp.StatusCode, len(bodyStr))
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
@@ -1192,7 +1237,7 @@ func (c *Client) BuyItem(itemID int64) (*BuyResponse, error) {
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := readUpstreamBody(resp.Body)
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		var result BuyResponse
@@ -1589,9 +1634,9 @@ func (c *Client) updateShippingContact(purchaseID string, transactionID, shippin
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := readUpstreamBody(resp.Body)
 	bodyStr := strings.TrimSpace(string(respBody))
-	log.Printf("[vinted] POST /api/v2/shipping_orders/%d/shipping_contact -> %d (%.300s)", shippingOrderID, resp.StatusCode, bodyStr)
+	log.Printf("[vinted] POST /api/v2/shipping_orders/%d/shipping_contact -> %d (%d bytes)", shippingOrderID, resp.StatusCode, len(bodyStr))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, vintedHTTPError("shipping contact", resp.StatusCode, bodyStr)
@@ -1651,9 +1696,9 @@ func (c *Client) createPurchasePayment(purchaseID string, transactionID int64, c
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := readUpstreamBody(resp.Body)
 	bodyStr := strings.TrimSpace(string(respBody))
-	log.Printf("[vinted] POST /api/v2/purchases/%s/checkout/payment -> %d (%.300s)", purchaseID, resp.StatusCode, bodyStr)
+	log.Printf("[vinted] POST /api/v2/purchases/%s/checkout/payment -> %d (%d bytes)", purchaseID, resp.StatusCode, len(bodyStr))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, vintedHTTPError("checkout payment", resp.StatusCode, bodyStr)
@@ -2357,7 +2402,7 @@ func (c *Client) doGetFavourites(vintedUserID int64, page string) (*FavoritesRes
 
 	u := fmt.Sprintf("https://%s/api/v2/users/%d/items/favourites", c.session.Domain, vintedUserID)
 	if page != "" {
-		u += "?page=" + page
+		u += "?page=" + url.QueryEscape(page)
 	}
 
 	req, err := http.NewRequest("GET", u, nil)
@@ -2372,11 +2417,13 @@ func (c *Client) doGetFavourites(vintedUserID int64, page string) (*FavoritesRes
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[vinted] GET /api/v2/users/%d/items/favourites -> %d (%.200s)", vintedUserID, resp.StatusCode, string(body))
+	body, _ := readUpstreamBody(resp.Body)
+	log.Printf("[vinted] GET /api/v2/users/%d/items/favourites -> %d (%d bytes)", vintedUserID, resp.StatusCode, len(body))
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("vinted error: %d %s", resp.StatusCode, string(body))
+		// The upstream body is not passed on: it is returned to the caller
+		// and can be an arbitrary error page.
+		return nil, fmt.Errorf("vinted error: %d", resp.StatusCode)
 	}
 
 	var favs FavoritesResponse
@@ -2425,8 +2472,8 @@ func (c *Client) doGetWardrobe(vintedUserID int64, page, perPage int, order stri
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[vinted] GET /api/v2/wardrobe/%d/items?page=%d&per_page=%d&order=%s -> %d (%.300s)", vintedUserID, page, perPage, order, resp.StatusCode, string(body))
+	body, _ := readUpstreamBody(resp.Body)
+	log.Printf("[vinted] GET /api/v2/wardrobe/%d/items?page=%d&per_page=%d&order=%s -> %d (%d bytes)", vintedUserID, page, perPage, order, resp.StatusCode, len(body))
 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 300))
@@ -2525,7 +2572,7 @@ func (c *Client) SearchPlatforms(catalogIDs []string, query string) ([]FilterOpt
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readUpstreamBody(resp.Body)
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 300))
 	}
@@ -3038,7 +3085,7 @@ func (c *Client) GetItem(itemID int64) (*VintedItemDetailResponse, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readUpstreamBody(resp.Body)
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("item detail error: %d (%.100s)", resp.StatusCode, string(body))
 	}
@@ -3105,7 +3152,7 @@ func (c *Client) GetSellerInfo(userID int64) (*SellerInfo, error) {
 		} `json:"user"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxUpstreamBodyBytes)).Decode(&wrapper); err != nil {
 		return nil, err
 	}
 
@@ -3249,8 +3296,8 @@ func (c *Client) doGetInbox(page, perPage int) (*InboxResponse, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[vinted] GET /api/v2/inbox?page=%d&per_page=%d -> %d (%.300s)", page, perPage, resp.StatusCode, string(body))
+	body, _ := readUpstreamBody(resp.Body)
+	log.Printf("[vinted] GET /api/v2/inbox?page=%d&per_page=%d -> %d (%d bytes)", page, perPage, resp.StatusCode, len(body))
 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 300))
@@ -3413,8 +3460,8 @@ func (c *Client) getConversationDetail(conversationID int64) (map[string]interfa
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[vinted] GET /api/v2/conversations/%d -> %d (%.300s)", conversationID, resp.StatusCode, string(body))
+	body, _ := readUpstreamBody(resp.Body)
+	log.Printf("[vinted] GET /api/v2/conversations/%d -> %d (%d bytes)", conversationID, resp.StatusCode, len(body))
 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 300))
@@ -3469,10 +3516,10 @@ func (c *Client) doReplyToConversation(conversationID int64, message string) err
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := readUpstreamBody(resp.Body)
 	bodyStr := strings.TrimSpace(string(respBody))
 
-	log.Printf("[vinted] POST /api/v2/conversations/%d/replies -> %d (%.300s)", conversationID, resp.StatusCode, bodyStr)
+	log.Printf("[vinted] POST /api/v2/conversations/%d/replies -> %d (%d bytes)", conversationID, resp.StatusCode, len(bodyStr))
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
@@ -3506,7 +3553,7 @@ func (c *Client) doSendMessage(itemID, sellerID int64, message string) error {
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := readUpstreamBody(resp.Body)
 	bodyStr := strings.TrimSpace(string(respBody))
 
 	log.Printf("[vinted] POST /api/v2/conversations -> %d", resp.StatusCode)
@@ -3619,7 +3666,7 @@ func (c *Client) doSendOffer(itemID, sellerID int64, price string, currency stri
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := readUpstreamBody(resp.Body)
 	bodyStr := strings.TrimSpace(string(respBody))
 
 	log.Printf("[vinted] POST /api/v2/conversations (for offer context) -> %d", resp.StatusCode)
