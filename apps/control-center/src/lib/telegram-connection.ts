@@ -12,7 +12,8 @@ export function buildTelegramBotLink(code: string) {
 }
 
 export function createTelegramConnectCode() {
-    return `VT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+    // 64 bits: the code is the only thing tying a chat to a member.
+    return `VT-${crypto.randomBytes(8).toString("hex").toUpperCase()}`;
 }
 
 export async function getTelegramConnection(userId: string) {

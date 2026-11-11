@@ -228,7 +228,8 @@ For an enabled bot:
    NODE
    ```
 
-   Generate `TELEGRAM_WEBHOOK_SECRET` with `openssl rand -hex 32`. This uses
+   Generate `TELEGRAM_WEBHOOK_SECRET` with `openssl rand -hex 32`. The secret
+   is required: Vintrack rejects every webhook update while it is empty. This uses
    Telegram's documented [webhook API](https://core.telegram.org/bots/api#setwebhook).
    A bot can have only one webhook; use a separate bot for separate instances.
 
