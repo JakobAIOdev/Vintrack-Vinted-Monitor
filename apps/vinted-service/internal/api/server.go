@@ -647,6 +647,9 @@ func (s *Server) buildLinkedSession(userID string, req linkRequest) (*session.Vi
 	if domain == "" {
 		return nil, errors.New("domain is required")
 	}
+	if !vinted.IsSupportedAccountDomain(domain) {
+		return nil, errors.New("unsupported Vinted domain")
+	}
 
 	sameContext := existingSession != nil && accessToken != "" &&
 		accessToken == existingSession.AccessToken && domain == existingSession.Domain &&
@@ -1121,6 +1124,10 @@ func (s *Server) handleUpdateDomain(w http.ResponseWriter, r *http.Request) {
 	domain := normalizeVintedDomain(req.Domain)
 	if domain == "" {
 		writeError(w, "domain is required", 400)
+		return
+	}
+	if !vinted.IsSupportedAccountDomain(domain) {
+		writeError(w, "unsupported Vinted domain", 400)
 		return
 	}
 

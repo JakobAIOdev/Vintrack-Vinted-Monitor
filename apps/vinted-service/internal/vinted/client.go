@@ -50,6 +50,9 @@ type vintedHTTPClient interface {
 }
 
 func NewClient(sess *session.VintedSession) (*Client, error) {
+	if sess == nil || !IsSupportedAccountDomain(sess.Domain) {
+		return nil, errors.New("unsupported Vinted domain")
+	}
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, fmt.Errorf("create cookie jar: %w", err)
@@ -680,6 +683,35 @@ var brandSearchDomains = map[string]string{
 	"hu": "www.vinted.hu",
 	"hr": "www.vinted.hr",
 	"fi": "www.vinted.fi",
+}
+
+// accountOnlyDomains are Vinted marketplaces an account can be linked on that
+// have no entry in the brand search map.
+var accountOnlyDomains = []string{
+	"www.vinted.com",
+	"www.vinted.si",
+	"www.vinted.ee",
+	"www.vinted.lv",
+	"www.vinted.gr",
+}
+
+// IsSupportedAccountDomain reports whether domain is a known Vinted
+// marketplace host. Session tokens and cookies are attached to whatever host
+// the session names, so a client is never built for anything else.
+func IsSupportedAccountDomain(domain string) bool {
+	host := strings.ToLower(strings.TrimSpace(domain))
+	if host == "" {
+		return false
+	}
+	if isSupportedBrandHost(host) {
+		return true
+	}
+	for _, candidate := range accountOnlyDomains {
+		if host == candidate || host == strings.TrimPrefix(candidate, "www.") {
+			return true
+		}
+	}
+	return false
 }
 
 func DomainForRegion(region string) (string, bool) {
