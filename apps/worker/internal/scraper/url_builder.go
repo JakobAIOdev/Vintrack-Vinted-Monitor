@@ -123,7 +123,12 @@ func buildVintedURL(m model.Monitor, perPage string, includeQuery bool, page int
 	return fmt.Sprintf("%s?%s", baseURL, params.Encode())
 }
 
+// catalogAPIHost is the host Vinted's web app sends catalogue requests to.
+// Markets use api.<domain>; the US site keeps its www label.
 func catalogAPIHost(domain string) string {
+	if domain == "www.vinted.com" {
+		return "api.www.vinted.com"
+	}
 	if strings.HasPrefix(domain, "www.") {
 		return "api." + strings.TrimPrefix(domain, "www.")
 	}

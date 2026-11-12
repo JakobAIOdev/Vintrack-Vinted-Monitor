@@ -459,7 +459,7 @@ func TestAcceptLanguageForDomain(t *testing.T) {
 		{"www.vinted.co.uk", "en-GB,en-US;q=0.9,en;q=0.8"},
 		{"www.vinted.ie", "en-IE,en;q=0.9"},
 		{"www.vinted.com", "en-US,en;q=0.9"},
-		{"api.vinted.com", "en-US,en;q=0.9"},
+		{"api.www.vinted.com", "en-US,en;q=0.9"},
 		{"www.vinted.fr", "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7"},
 		{"www.vinted.de", "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"},
 	}
