@@ -105,6 +105,7 @@ var regionDomains = map[string]string{
 	"ee": "www.vinted.ee",
 	"lv": "www.vinted.lv",
 	"gr": "www.vinted.gr",
+	"us": "www.vinted.com",
 }
 
 var regionCurrencies = map[string]string{
@@ -113,6 +114,7 @@ var regionCurrencies = map[string]string{
 	"uk": "GBP", "cz": "CZK", "sk": "EUR", "lt": "EUR", "se": "SEK",
 	"dk": "DKK", "ro": "RON", "hu": "HUF", "hr": "EUR", "fi": "EUR",
 	"ie": "EUR", "si": "EUR", "ee": "EUR", "lv": "EUR", "gr": "EUR",
+	"us": "USD",
 }
 
 func RegionDomain(region string) string {

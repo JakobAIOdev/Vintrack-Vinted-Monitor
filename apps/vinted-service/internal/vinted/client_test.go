@@ -327,7 +327,9 @@ func TestParseVintedBrandURL(t *testing.T) {
 	}{
 		{name: "brand page", rawURL: "https://www.vinted.cz/brand/194976-adidas-originals", wantID: 194976, wantSlug: "adidas-originals"},
 		{name: "catalog brand page", rawURL: "https://www.vinted.cz/catalog/97-watches/brand/23065-lip?order=newest_first", wantID: 23065, wantSlug: "lip"},
+		{name: "US brand page", rawURL: "https://www.vinted.com/brand/53-nike", wantID: 53, wantSlug: "nike"},
 		{name: "foreign host", rawURL: "https://example.com/brand/194976-adidas-originals", wantErr: true},
+		{name: "US lookalike host", rawURL: "https://www.vinted.com.example.org/brand/53-nike", wantErr: true},
 		{name: "http", rawURL: "http://www.vinted.cz/brand/194976-adidas-originals", wantErr: true},
 		{name: "userinfo", rawURL: "https://user@www.vinted.cz/brand/194976-adidas-originals", wantErr: true},
 		{name: "missing slug", rawURL: "https://www.vinted.cz/brand/194976", wantErr: true},
@@ -364,6 +366,32 @@ func TestValidateBrandPageHTML(t *testing.T) {
 	}
 }
 
+func TestValidateBrandPageHTMLAcceptsEnglishTaglineTitle(t *testing.T) {
+	body := []byte(`<!doctype html><html><head><title>Nike | Explore Second-Hand Sneakers &amp; Sportswear | Vinted</title><link rel="canonical" href="https://www.vinted.com/brand/53-nike"></head><body><h1>Nike</h1></body></html>`)
+	brand, err := validateBrandPageHTML(body, "www.vinted.com", 53)
+	if err != nil {
+		t.Fatalf("validateBrandPageHTML() error = %v", err)
+	}
+	if brand.ID != "53" || brand.Label != "Nike" || brand.CanonicalURL != "https://www.vinted.com/brand/53-nike" {
+		t.Fatalf("brand = %#v", brand)
+	}
+}
+
+func TestBrandLabelFromPageTitle(t *testing.T) {
+	for title, want := range map[string]string{
+		"adidas Originals | Vinted":                    "adidas Originals",
+		"Nike | Explore Second-Hand Sneakers | Vinted": "Nike",
+		"Nike | Explore Second-Hand Sneakers":          "",
+		"Explore Second-Hand Sneakers | Nike | Vinted": "Explore Second-Hand Sneakers",
+		"| Vinted": "",
+		"Nike":     "",
+	} {
+		if got := brandLabelFromPageTitle(title); got != want {
+			t.Errorf("brandLabelFromPageTitle(%q) = %q, want %q", title, got, want)
+		}
+	}
+}
+
 func TestValidateBrandPageHTMLRejectsInvalidEvidence(t *testing.T) {
 	valid := `<!doctype html><html><head><title>LIP | Vinted</title><link rel="canonical" href="https://www.vinted.cz/brand/23065-lip"></head><body><h1>LIP</h1></body></html>`
 	tests := []struct {
@@ -374,6 +402,8 @@ func TestValidateBrandPageHTMLRejectsInvalidEvidence(t *testing.T) {
 		{name: "cross domain canonical", body: strings.Replace(valid, "www.vinted.cz", "example.com", 1)},
 		{name: "missing title", body: strings.Replace(valid, "<title>LIP | Vinted</title>", "", 1)},
 		{name: "label mismatch", body: strings.Replace(valid, "<h1>LIP</h1>", "<h1>Other</h1>", 1)},
+		{name: "foreign site title", body: strings.Replace(valid, "LIP | Vinted", "LIP | Example", 1)},
+		{name: "tagline before brand", body: strings.Replace(valid, "LIP | Vinted", "Other | LIP | Vinted", 1)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -596,6 +626,9 @@ func TestDomainForPortal(t *testing.T) {
 func TestDomainForRegion(t *testing.T) {
 	if got, ok := DomainForRegion(" CZ "); !ok || got != "www.vinted.cz" {
 		t.Errorf("DomainForRegion(\" CZ \") = %q, %v; want %q, true", got, ok, "www.vinted.cz")
+	}
+	if got, ok := DomainForRegion("us"); !ok || got != "www.vinted.com" {
+		t.Errorf("DomainForRegion(\"us\") = %q, %v; want %q, true", got, ok, "www.vinted.com")
 	}
 	if got, ok := DomainForRegion("unknown"); ok || got != "" {
 		t.Errorf("DomainForRegion(\"unknown\") = %q, %v; want empty, false", got, ok)

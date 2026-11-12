@@ -19,9 +19,18 @@ const db = new PrismaClient();
 test.describe("Regional monitor currencies", () => {
     test("uses the Vinted market currency with an EUR fallback", () => {
         expect(
-            ["de", "pl", "uk", "cz", "se", "dk", "ro", "hu", "unknown"].map(
-                getRegionCurrencyCode,
-            ),
+            [
+                "de",
+                "pl",
+                "uk",
+                "cz",
+                "se",
+                "dk",
+                "ro",
+                "hu",
+                "us",
+                "unknown",
+            ].map(getRegionCurrencyCode),
         ).toEqual([
             "EUR",
             "PLN",
@@ -31,8 +40,104 @@ test.describe("Regional monitor currencies", () => {
             "DKK",
             "RON",
             "HUF",
+            "USD",
             "EUR",
         ]);
+    });
+
+    test("creates a United States monitor with US prices, sizes and categories", async ({
+        page,
+    }) => {
+        await page.goto("/monitors/new");
+        await page
+            .getByLabel("Import Vinted search")
+            .fill(
+                "https://www.vinted.com/catalog?search_text=nike&price_from=20&price_to=60&catalog[]=1231&brand_ids[]=53&status_ids[]=6&size_ids[]=784",
+            );
+        await page.getByTestId("import-vinted-url").click();
+
+        await expect(page.locator('input[name="region"]')).toHaveValue("us");
+        await expect(
+            page
+                .getByTestId("region-picker")
+                .getByRole("button", { name: /United States/ }),
+        ).toHaveAttribute("aria-pressed", "true");
+        await page
+            .locator("summary")
+            .filter({ has: page.getByText("Filters", { exact: true }) })
+            .click();
+        await expect(
+            page
+                .getByTestId("price-filter-field")
+                .getByText("20–60 USD", { exact: true }),
+        ).toBeVisible();
+
+        const sizes = await page.request.get("/api/sizes?region=us");
+        expect(sizes.ok()).toBe(true);
+        const sizeLabels = JSON.stringify(await sizes.json());
+        expect(sizeLabels).toContain("Men's pants");
+        expect(sizeLabels).toContain("S / US 4-6");
+        expect(sizeLabels).not.toContain("Men's trousers");
+
+        const categories = await page.request.get("/api/categories?region=us");
+        expect(categories.ok()).toBe(true);
+        const categoryTree = (await categories.json()) as {
+            categories: { id: number; label: string }[];
+        };
+        expect(
+            categoryTree.categories.map((category) => category.label),
+        ).toContain("Hobbies & collectibles");
+
+        // The shared free pool only covers its configured starter regions.
+        await page
+            .locator('select[name="proxy_group_id"]')
+            .selectOption("server");
+        await page.getByLabel("Monitor Name").fill("US Nike sneakers");
+        await page.getByRole("button", { name: "Create Monitor" }).click();
+        await expect(page).toHaveURL(/\/monitors\/\d+$/);
+
+        const monitorId = Number(page.url().match(/\/monitors\/(\d+)$/)?.[1]);
+        expect(Number.isInteger(monitorId)).toBe(true);
+        try {
+            await expect(
+                db.monitors.findUniqueOrThrow({
+                    where: { id: monitorId },
+                    select: {
+                        region: true,
+                        query: true,
+                        price_min: true,
+                        price_max: true,
+                        catalog_ids: true,
+                        brand_ids: true,
+                        status_ids: true,
+                        size_id: true,
+                    },
+                }),
+            ).resolves.toEqual({
+                region: "us",
+                query: "nike",
+                price_min: 20,
+                price_max: 60,
+                catalog_ids: "1231",
+                brand_ids: "53",
+                status_ids: "6",
+                size_id: "784",
+            });
+            // The detail page labels the saved IDs with the US snapshots:
+            // size 784 is "9" in the US and "8" in the UK.
+            for (const label of [
+                "United States",
+                "Max 60 USD",
+                "Men › Shoes",
+                "Men's shoes · 9",
+            ]) {
+                await expect(
+                    page.getByText(label, { exact: false }).first(),
+                ).toBeVisible();
+            }
+        } finally {
+            await db.monitors.delete({ where: { id: monitorId } });
+        }
     });
 
     test("updates the price label without changing the entered values", async ({
@@ -109,6 +214,28 @@ test.describe("Vinted search URL import", () => {
                 ignoredValueCount: 0,
             },
         });
+    });
+
+    test("imports a United States search and rejects lookalike hosts", () => {
+        expect(
+            parseVintedSearchUrl(
+                "https://www.vinted.com/catalog?search_text=nike&catalog[]=1231&size_ids[]=784",
+            ),
+        ).toMatchObject({
+            ok: true,
+            value: {
+                region: "us",
+                query: "nike",
+                catalogIds: ["1231"],
+                sizeIds: ["784"],
+            },
+        });
+        for (const url of [
+            "https://www.vinted.com.example.org/catalog?search_text=nike",
+            "https://vinted.community/catalog?search_text=nike",
+        ]) {
+            expect(parseVintedSearchUrl(url)).toMatchObject({ ok: false });
+        }
     });
 
     test("reads the category from a Vinted category page path", () => {

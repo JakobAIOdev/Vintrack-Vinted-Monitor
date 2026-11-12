@@ -50,6 +50,8 @@ func acceptLanguageForDomain(domain string) string {
 		return "en-GB,en-US;q=0.9,en;q=0.8"
 	case strings.Contains(domain, "vinted.ie"):
 		return "en-IE,en;q=0.9"
+	case strings.Contains(domain, "vinted.com"):
+		return "en-US,en;q=0.9"
 	case strings.Contains(domain, "vinted.at"):
 		return "de-AT,de;q=0.9,en;q=0.7"
 	case strings.Contains(domain, "vinted.be"):

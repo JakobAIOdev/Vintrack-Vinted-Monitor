@@ -728,12 +728,12 @@ var brandSearchDomains = map[string]string{
 	"hu": "www.vinted.hu",
 	"hr": "www.vinted.hr",
 	"fi": "www.vinted.fi",
+	"us": "www.vinted.com",
 }
 
 // accountOnlyDomains are Vinted marketplaces an account can be linked on that
 // have no entry in the brand search map.
 var accountOnlyDomains = []string{
-	"www.vinted.com",
 	"www.vinted.si",
 	"www.vinted.ee",
 	"www.vinted.lv",
@@ -2990,7 +2990,7 @@ func validateBrandPageHTML(body []byte, domain string, expectedBrandID int64) (*
 
 	title := normalizeHTMLText(string(titleMatch[1]))
 	h1 := normalizeHTMLText(string(h1Match[1]))
-	label := strings.TrimSpace(strings.TrimSuffix(title, "| Vinted"))
+	label := brandLabelFromPageTitle(title)
 	if label == "" || h1 == "" || !strings.EqualFold(label, h1) {
 		return nil, errors.New("Vinted brand page title does not match its brand name")
 	}
@@ -3026,6 +3026,18 @@ func validateBrandPageHTML(body []byte, domain string, expectedBrandID int64) (*
 	}, nil
 }
 
+// brandLabelFromPageTitle returns the brand name a Vinted brand page titles
+// itself with. Most markets use "Brand | Vinted"; the English-language ones
+// insert a tagline, as in "Brand | Explore Second-Hand Sneakers | Vinted".
+func brandLabelFromPageTitle(title string) string {
+	withoutSite, isVintedTitle := strings.CutSuffix(strings.TrimSpace(title), "| Vinted")
+	if !isVintedTitle {
+		return ""
+	}
+	label, _, _ := strings.Cut(withoutSite, " | ")
+	return strings.TrimSpace(label)
+}
+
 func normalizeHTMLText(value string) string {
 	withoutTags := htmlTagPattern.ReplaceAllString(value, " ")
 	return strings.Join(strings.Fields(html.UnescapeString(withoutTags)), " ")
@@ -3038,7 +3050,7 @@ var isoCountryMap = map[string]string{
 	"CZ": "🇨🇿 CZ", "SK": "🇸🇰 SK", "LT": "🇱🇹 LT", "SE": "🇸🇪 SE",
 	"DK": "🇩🇰 DK", "RO": "🇷🇴 RO", "HU": "🇭🇺 HU", "HR": "🇭🇷 HR",
 	"FI": "🇫🇮 FI", "IE": "🇮🇪 IE", "SI": "🇸🇮 SI", "EE": "🇪🇪 EE",
-	"LV": "🇱🇻 LV", "GR": "🇬🇷 GR",
+	"LV": "🇱🇻 LV", "GR": "🇬🇷 GR", "US": "🇺🇸 US",
 }
 
 var countryMap = map[string]string{
@@ -3067,6 +3079,7 @@ var countryMap = map[string]string{
 	"EESTI": "🇪🇪 EE", "ESTLAND": "🇪🇪 EE",
 	"LATVIJA": "🇱🇻 LV", "LETTLAND": "🇱🇻 LV",
 	"ΕΛΛΆΔΑ": "🇬🇷 GR", "GREECE": "🇬🇷 GR", "GRIECHENLAND": "🇬🇷 GR",
+	"UNITED STATES": "🇺🇸 US", "USA": "🇺🇸 US", "VEREINIGTE STAATEN": "🇺🇸 US",
 }
 
 func (c *Client) GetItem(itemID int64) (*VintedItemDetailResponse, error) {

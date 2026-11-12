@@ -135,10 +135,31 @@ func TestSellerInfoCache_Overwrite(t *testing.T) {
 }
 
 func TestISOCountryMap_Coverage(t *testing.T) {
-	expectedCodes := []string{"DE", "FR", "IT", "ES", "NL", "PL", "AT", "BE", "GB", "UK", "LU", "PT"}
+	expectedCodes := []string{"DE", "FR", "IT", "ES", "NL", "PL", "AT", "BE", "GB", "UK", "LU", "PT", "US"}
 	for _, code := range expectedCodes {
 		if _, ok := isoCountryMap[code]; !ok {
 			t.Errorf("isoCountryMap missing code %q", code)
+		}
+	}
+}
+
+func TestSellerCountryMapsCoverUnitedStates(t *testing.T) {
+	if got := isoCountryMap["US"]; got != "🇺🇸 US" {
+		t.Errorf("isoCountryMap[US] = %q, want the US label", got)
+	}
+	if got := countryMap["UNITED STATES"]; got != "🇺🇸 US" {
+		t.Errorf("countryMap[UNITED STATES] = %q, want the US label", got)
+	}
+	allowed := "us"
+	if !sellerCountryAllowed(isoCountryMap["US"], &allowed) {
+		t.Error("US seller rejected by a US country filter")
+	}
+	for code, label := range isoCountryMap {
+		if code == "US" {
+			continue
+		}
+		if sellerCountryAllowed(label, &allowed) {
+			t.Errorf("seller from %s passed a US-only country filter", code)
 		}
 	}
 }
