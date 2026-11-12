@@ -728,12 +728,12 @@ var brandSearchDomains = map[string]string{
 	"hu": "www.vinted.hu",
 	"hr": "www.vinted.hr",
 	"fi": "www.vinted.fi",
+	"us": "www.vinted.com",
 }
 
 // accountOnlyDomains are Vinted marketplaces an account can be linked on that
 // have no entry in the brand search map.
 var accountOnlyDomains = []string{
-	"www.vinted.com",
 	"www.vinted.si",
 	"www.vinted.ee",
 	"www.vinted.lv",
@@ -3050,7 +3050,7 @@ var isoCountryMap = map[string]string{
 	"CZ": "🇨🇿 CZ", "SK": "🇸🇰 SK", "LT": "🇱🇹 LT", "SE": "🇸🇪 SE",
 	"DK": "🇩🇰 DK", "RO": "🇷🇴 RO", "HU": "🇭🇺 HU", "HR": "🇭🇷 HR",
 	"FI": "🇫🇮 FI", "IE": "🇮🇪 IE", "SI": "🇸🇮 SI", "EE": "🇪🇪 EE",
-	"LV": "🇱🇻 LV", "GR": "🇬🇷 GR",
+	"LV": "🇱🇻 LV", "GR": "🇬🇷 GR", "US": "🇺🇸 US",
 }
 
 var countryMap = map[string]string{
@@ -3079,6 +3079,7 @@ var countryMap = map[string]string{
 	"EESTI": "🇪🇪 EE", "ESTLAND": "🇪🇪 EE",
 	"LATVIJA": "🇱🇻 LV", "LETTLAND": "🇱🇻 LV",
 	"ΕΛΛΆΔΑ": "🇬🇷 GR", "GREECE": "🇬🇷 GR", "GRIECHENLAND": "🇬🇷 GR",
+	"UNITED STATES": "🇺🇸 US", "USA": "🇺🇸 US", "VEREINIGTE STAATEN": "🇺🇸 US",
 }
 
 func (c *Client) GetItem(itemID int64) (*VintedItemDetailResponse, error) {

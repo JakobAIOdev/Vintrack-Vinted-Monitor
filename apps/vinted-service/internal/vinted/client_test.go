@@ -327,7 +327,9 @@ func TestParseVintedBrandURL(t *testing.T) {
 	}{
 		{name: "brand page", rawURL: "https://www.vinted.cz/brand/194976-adidas-originals", wantID: 194976, wantSlug: "adidas-originals"},
 		{name: "catalog brand page", rawURL: "https://www.vinted.cz/catalog/97-watches/brand/23065-lip?order=newest_first", wantID: 23065, wantSlug: "lip"},
+		{name: "US brand page", rawURL: "https://www.vinted.com/brand/53-nike", wantID: 53, wantSlug: "nike"},
 		{name: "foreign host", rawURL: "https://example.com/brand/194976-adidas-originals", wantErr: true},
+		{name: "US lookalike host", rawURL: "https://www.vinted.com.example.org/brand/53-nike", wantErr: true},
 		{name: "http", rawURL: "http://www.vinted.cz/brand/194976-adidas-originals", wantErr: true},
 		{name: "userinfo", rawURL: "https://user@www.vinted.cz/brand/194976-adidas-originals", wantErr: true},
 		{name: "missing slug", rawURL: "https://www.vinted.cz/brand/194976", wantErr: true},
@@ -624,6 +626,9 @@ func TestDomainForPortal(t *testing.T) {
 func TestDomainForRegion(t *testing.T) {
 	if got, ok := DomainForRegion(" CZ "); !ok || got != "www.vinted.cz" {
 		t.Errorf("DomainForRegion(\" CZ \") = %q, %v; want %q, true", got, ok, "www.vinted.cz")
+	}
+	if got, ok := DomainForRegion("us"); !ok || got != "www.vinted.com" {
+		t.Errorf("DomainForRegion(\"us\") = %q, %v; want %q, true", got, ok, "www.vinted.com")
 	}
 	if got, ok := DomainForRegion("unknown"); ok || got != "" {
 		t.Errorf("DomainForRegion(\"unknown\") = %q, %v; want empty, false", got, ok)

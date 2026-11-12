@@ -34,6 +34,16 @@ func automaticOfferPrice(c session.AutomationCandidate) (string, string, bool) {
 	return fmt.Sprintf("%d.%02d", discounted/100, discounted%100), match[3], true
 }
 
+// automationRegionCurrency is the currency a monitor region's listings are
+// priced in. An offer in any other currency belongs to a different marketplace.
+func automationRegionCurrency(region string) string {
+	currencies := map[string]string{"uk": "GBP", "pl": "PLN", "cz": "CZK", "se": "SEK", "dk": "DKK", "ro": "RON", "hu": "HUF", "us": "USD"}
+	if currency := currencies[region]; currency != "" {
+		return currency
+	}
+	return "EUR"
+}
+
 func automaticMessage(c session.AutomationCandidate) (string, bool) {
 	template := strings.TrimSpace(c.Template)
 	if template == "" || len(template) > 1000 {
@@ -136,12 +146,7 @@ func (s *Server) runAccountAutomation(ctx context.Context, c session.AutomationC
 		return
 	}
 	if c.Kind == "offer" {
-		currencies := map[string]string{"uk": "GBP", "pl": "PLN", "cz": "CZK", "se": "SEK", "dk": "DKK", "ro": "RON", "hu": "HUF"}
-		expected := currencies[c.Region]
-		if expected == "" {
-			expected = "EUR"
-		}
-		if currency != expected {
+		if currency != automationRegionCurrency(c.Region) {
 			reason = "currency_mismatch"
 			return
 		}

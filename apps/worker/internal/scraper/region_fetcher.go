@@ -56,6 +56,7 @@ var countryMap = map[string]string{
 	"EESTI": "🇪🇪 EE", "ESTLAND": "🇪🇪 EE",
 	"LATVIJA": "🇱🇻 LV", "LETTLAND": "🇱🇻 LV",
 	"ΕΛΛΆΔΑ": "🇬🇷 GR", "GREECE": "🇬🇷 GR", "GRIECHENLAND": "🇬🇷 GR",
+	"UNITED STATES": "🇺🇸 US", "USA": "🇺🇸 US", "VEREINIGTE STAATEN": "🇺🇸 US",
 }
 
 type sellerCacheEntry struct {
@@ -138,7 +139,7 @@ var isoCountryMap = map[string]string{
 	"CZ": "🇨🇿 CZ", "SK": "🇸🇰 SK", "LT": "🇱🇹 LT", "SE": "🇸🇪 SE",
 	"DK": "🇩🇰 DK", "RO": "🇷🇴 RO", "HU": "🇭🇺 HU", "HR": "🇭🇷 HR",
 	"FI": "🇫🇮 FI", "IE": "🇮🇪 IE", "SI": "🇸🇮 SI", "EE": "🇪🇪 EE",
-	"LV": "🇱🇻 LV", "GR": "🇬🇷 GR",
+	"LV": "🇱🇻 LV", "GR": "🇬🇷 GR", "US": "🇺🇸 US",
 }
 
 func logSellerEnrichmentSuccess(source string, userID int64, info SellerInfo) {
