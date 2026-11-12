@@ -111,6 +111,50 @@ test.describe("Vinted search URL import", () => {
         });
     });
 
+    test("reads the category from a Vinted category page path", () => {
+        expect(
+            parseVintedSearchUrl(
+                "https://www.vinted.de/catalog/1195-girls-clothing?search_id=5961265101",
+            ),
+        ).toMatchObject({
+            ok: true,
+            value: {
+                region: "de",
+                query: "",
+                catalogIds: ["1195"],
+                importedFields: ["region", "categories"],
+                ignoredMetadataNames: ["search_id"],
+                ignoredValueCount: 0,
+            },
+        });
+        // Filters added on a category page are kept alongside the category.
+        expect(
+            parseVintedSearchUrl(
+                "vinted.fr/catalog/1195/?catalog[]=1196&brand_ids[]=53",
+            ),
+        ).toMatchObject({
+            ok: true,
+            value: { catalogIds: ["1195", "1196"], brandIds: ["53"] },
+        });
+        // A category that is also listed as a filter is not duplicated.
+        expect(
+            parseVintedSearchUrl(
+                "https://www.vinted.de/catalog/1195-girls-clothing?catalog[]=1196&catalog[]=1195",
+            ),
+        ).toMatchObject({ ok: true, value: { catalogIds: ["1196", "1195"] } });
+        for (const url of [
+            "https://www.vinted.de/catalog/girls-clothing",
+            "https://www.vinted.de/catalog/0-none",
+            "https://www.vinted.de/catalog/99999999999-too-large",
+            "https://www.vinted.de/catalog/1195-girls-clothing/extra",
+        ]) {
+            expect(parseVintedSearchUrl(url)).toEqual({
+                ok: false,
+                error: "Paste a Vinted catalog search URL, not an item or profile URL.",
+            });
+        }
+    });
+
     test("normalizes platform searches and rejects unsafe URLs", () => {
         const platformResult = parseVintedSearchUrl(
             "vinted.de/catalog?catalog[]=257&platform_ids[]=1277&video_game_platform_ids[]=1278",
