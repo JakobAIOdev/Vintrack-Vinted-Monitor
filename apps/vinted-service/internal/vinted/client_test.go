@@ -298,8 +298,8 @@ func TestBuildCatalogFilterSearchURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse catalog filter URL: %v", err)
 	}
-	if parsed.Path != "/api/v2/catalog/filters/search" {
-		t.Errorf("path = %q", parsed.Path)
+	if parsed.Host != "api.vinted.cz" || parsed.Path != "/svc-filters/filters/search" {
+		t.Errorf("endpoint = %s%s", parsed.Host, parsed.Path)
 	}
 	if got := parsed.Query().Get("filter_search_code"); got != "brand" {
 		t.Errorf("filter_search_code = %q", got)
@@ -307,12 +307,30 @@ func TestBuildCatalogFilterSearchURL(t *testing.T) {
 	if got := parsed.Query().Get("filter_search_text"); got != "adidas Originals" {
 		t.Errorf("filter_search_text = %q", got)
 	}
-	if got := parsed.Query().Get("catalog_ids"); got != "97,5" {
-		t.Errorf("catalog_ids = %q", got)
+	if got := parsed.Query().Get("attribute_ids[catalog]"); got != "97,5" {
+		t.Errorf("attribute_ids[catalog] = %q", got)
 	}
-	for _, key := range []string{"size_ids", "brand_ids", "status_ids", "color_ids", "material_ids"} {
-		if !parsed.Query().Has(key) || parsed.Query().Get(key) != "" {
-			t.Errorf("%s should be present and empty", key)
+
+	unscoped, err := url.Parse(buildCatalogFilterSearchURL("www.vinted.cz", nil, "Celine", "brand"))
+	if err != nil {
+		t.Fatalf("parse unscoped catalog filter URL: %v", err)
+	}
+	if unscoped.Query().Has("attribute_ids[catalog]") {
+		t.Error("unscoped search unexpectedly contains a catalog attribute")
+	}
+}
+
+func TestFilterServiceHost(t *testing.T) {
+	for domain, want := range map[string]string{
+		"www.vinted.de":    "api.vinted.de",
+		"vinted.fr":        "api.vinted.fr",
+		"WWW.VINTED.CO.UK": "api.vinted.co.uk",
+		// The US site is the one market whose API host keeps the www label.
+		"www.vinted.com": "api.www.vinted.com",
+		"vinted.com":     "api.www.vinted.com",
+	} {
+		if got := filterServiceHost(domain); got != want {
+			t.Errorf("filterServiceHost(%q) = %q, want %q", domain, got, want)
 		}
 	}
 }
@@ -414,7 +432,7 @@ func TestValidateBrandPageHTMLRejectsInvalidEvidence(t *testing.T) {
 	}
 }
 
-func TestSearchBrandsUsesCatalogWarmupAndPrimaryEndpoint(t *testing.T) {
+func TestSearchBrandsWarmsTheHomepageAndAsksTheFilterService(t *testing.T) {
 	client, transport := testClient(
 		fakeHTTPResult{status: 200, body: `<meta name="csrf-token" content="csrf">`},
 		fakeHTTPResult{status: 200, body: `{"options":[{"id":194976,"title":"adidas Originals"}]}`},
@@ -430,14 +448,76 @@ func TestSearchBrandsUsesCatalogWarmupAndPrimaryEndpoint(t *testing.T) {
 	if len(transport.requests) != 2 {
 		t.Fatalf("request count = %d, want 2", len(transport.requests))
 	}
-	if transport.requests[0].URL.Path != "/catalog" {
-		t.Errorf("warmup path = %q, want /catalog", transport.requests[0].URL.Path)
+	warmup, search := transport.requests[0], transport.requests[1]
+	if warmup.URL.Host != "www.vinted.cz" || warmup.URL.Path != "/" {
+		t.Errorf("warmup = %s%s, want the marketplace homepage", warmup.URL.Host, warmup.URL.Path)
 	}
-	if transport.requests[1].URL.Path != "/api/v2/catalog/filters/search" {
-		t.Errorf("search path = %q", transport.requests[1].URL.Path)
+	if search.URL.Host != "api.vinted.cz" || search.URL.Path != "/svc-filters/filters/search" {
+		t.Errorf("search = %s%s", search.URL.Host, search.URL.Path)
 	}
-	if got := transport.requests[1].Header.Get("X-Csrf-Token"); got != "csrf" {
-		t.Errorf("X-Csrf-Token = %q, want csrf", got)
+	for header, want := range map[string]string{
+		"X-Csrf-Token":   "csrf",
+		"Origin":         "https://www.vinted.cz",
+		"Sec-Fetch-Site": "same-site",
+		"Platform":       "web",
+		"X-Next-App":     "marketplace-web",
+	} {
+		if got := search.Header.Get(header); got != want {
+			t.Errorf("%s = %q, want %q", header, got, want)
+		}
+	}
+}
+
+func TestFilterServiceReceivesTheMarketplaceSession(t *testing.T) {
+	sess := &session.VintedSession{Domain: "www.vinted.com"}
+	client, err := NewClient(sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marketplaceURL, _ := url.Parse("https://www.vinted.com/")
+	filterURL, _ := url.Parse("https://api.www.vinted.com/")
+	otherMarketURL, _ := url.Parse("https://api.vinted.de/")
+	client.httpClient.SetCookies(marketplaceURL, []*http.Cookie{{Name: "anon_id", Value: "synthetic-anon"}})
+	if got := client.httpClient.GetCookies(filterURL); len(got) != 0 {
+		t.Fatalf("filter host already has %d cookies before the hand-off", len(got))
+	}
+
+	client.shareSessionWithFilterService()
+
+	got := client.httpClient.GetCookies(filterURL)
+	if len(got) != 1 || got[0].Name != "anon_id" || got[0].Value != "synthetic-anon" {
+		t.Fatalf("filter host cookies = %#v", got)
+	}
+	if leaked := client.httpClient.GetCookies(otherMarketURL); len(leaked) != 0 {
+		t.Fatalf("session reached another market: %#v", leaked)
+	}
+}
+
+func TestSearchPlatformsAsksTheFilterService(t *testing.T) {
+	client, transport := testClient(
+		fakeHTTPResult{status: 200, body: "warmup"},
+		fakeHTTPResult{status: 200, body: `{"filter_code":"video_game_platform","options":[{"id":"1277","title":"PlayStation 5"},{"id":"1278","title":"Xbox Series X"}]}`},
+	)
+
+	platforms, err := client.SearchPlatforms(nil, "ps5")
+	if err != nil {
+		t.Fatalf("SearchPlatforms() error = %v", err)
+	}
+	if len(platforms) != 1 || platforms[0].ID != "1277" || platforms[0].Label != "PlayStation 5" {
+		t.Fatalf("SearchPlatforms() = %#v", platforms)
+	}
+	request := transport.requests[len(transport.requests)-1]
+	if request.URL.Host != "api.vinted.cz" || request.URL.Path != "/svc-filters/filters/facets" {
+		t.Errorf("facets = %s%s", request.URL.Host, request.URL.Path)
+	}
+	if got := request.URL.Query().Get("filter_code"); got != "video_game_platform" {
+		t.Errorf("filter_code = %q", got)
+	}
+	if got := request.URL.Query().Get("attribute_ids[catalog]"); got != "3002" {
+		t.Errorf("attribute_ids[catalog] = %q, want the video game catalogue", got)
+	}
+	if got := request.Header.Get("Sec-Fetch-Site"); got != "same-site" {
+		t.Errorf("Sec-Fetch-Site = %q, want same-site", got)
 	}
 }
 
@@ -459,7 +539,7 @@ func TestSearchBrandsRetriesOnceAfterUnauthorized(t *testing.T) {
 	if len(transport.requests) != 4 {
 		t.Fatalf("request count = %d, want 4", len(transport.requests))
 	}
-	if transport.requests[2].URL.Path != "/catalog" || transport.requests[3].URL.Path != "/api/v2/catalog/filters/search" {
+	if transport.requests[2].URL.Path != "/" || transport.requests[3].URL.Path != "/svc-filters/filters/search" {
 		t.Fatalf("retry paths = %q, %q", transport.requests[2].URL.Path, transport.requests[3].URL.Path)
 	}
 }
@@ -520,7 +600,6 @@ func TestCatalogFilterSearchRejectsOversizedResponse(t *testing.T) {
 		body:   strings.Repeat("x", maxFilterSearchResponseBytes+1),
 	})
 	client.warmedUp = true
-	client.catalogWarmedUp = true
 
 	_, err := client.searchCatalogFilterOptions(nil, "large", "brand")
 	if err == nil || !strings.Contains(err.Error(), "exceeds") {

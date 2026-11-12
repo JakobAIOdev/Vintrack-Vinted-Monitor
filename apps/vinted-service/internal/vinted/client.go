@@ -255,10 +255,6 @@ func (c *Client) ForceWarmUp() error {
 	return c.warmUpPage("/", true)
 }
 
-func (c *Client) CatalogWarmUp() error {
-	return c.warmUpPage("/catalog", false)
-}
-
 func (c *Client) ForceCatalogWarmUp() error {
 	return c.warmUpPage("/catalog", true)
 }
@@ -2499,8 +2495,8 @@ func (c *Client) SearchBrands(catalogIDs []string, query string) ([]FilterOption
 	}
 
 	if filterSearchStatus(err) == http.StatusUnauthorized || filterSearchStatus(err) == http.StatusForbidden {
-		if warmErr := c.ForceCatalogWarmUp(); warmErr != nil {
-			log.Printf("[vinted] catalog warmup retry failed for domain=%s: %v", c.session.Domain, warmErr)
+		if warmErr := c.ForceWarmUp(); warmErr != nil {
+			log.Printf("[vinted] warmup retry failed for domain=%s: %v", c.session.Domain, warmErr)
 		} else {
 			options, err = c.searchCatalogFilterOptions(normalizedCatalogIDs, query, "brand")
 			if err == nil {
@@ -2529,6 +2525,7 @@ func (c *Client) SearchPlatforms(catalogIDs []string, query string) ([]FilterOpt
 	if err := c.WarmUp(); err != nil {
 		log.Printf("[vinted] warmup failed before platform facets request: %v", err)
 	}
+	c.shareSessionWithFilterService()
 
 	normalizedQuery := strings.TrimSpace(query)
 	if normalizedQuery == "" {
@@ -2545,8 +2542,8 @@ func (c *Client) SearchPlatforms(catalogIDs []string, query string) ([]FilterOpt
 		"attribute_ids[catalog]": {strings.Join(normalizedCatalogIDs, ",")},
 	}
 	u := fmt.Sprintf(
-		"https://%s/web/gateway/svc-filters/filters/facets?%s",
-		c.session.Domain,
+		"https://%s/svc-filters/filters/facets?%s",
+		filterServiceHost(c.session.Domain),
 		params.Encode(),
 	)
 	req, err := http.NewRequest("GET", u, nil)
@@ -2554,17 +2551,7 @@ func (c *Client) SearchPlatforms(catalogIDs []string, query string) ([]FilterOpt
 		return nil, fmt.Errorf("create platform facets request: %w", err)
 	}
 
-	req.Header = c.apiHeaders()
-	req.Header.Set("Platform", "web")
-	req.Header.Set("X-Next-App", "marketplace-web")
-	req.Header.Set(
-		"Referer",
-		fmt.Sprintf(
-			"https://%s/catalog/%s",
-			c.session.Domain,
-			url.PathEscape(normalizedCatalogIDs[0]),
-		),
-	)
+	req.Header = c.filterServiceHeaders()
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -2634,9 +2621,10 @@ func platformOptionMatches(label, query string) bool {
 }
 
 func (c *Client) searchCatalogFilterOptions(catalogIDs []string, query string, filterCode string) ([]FilterOption, error) {
-	if err := c.CatalogWarmUp(); err != nil {
+	if err := c.WarmUp(); err != nil {
 		log.Printf("[vinted] warmup failed before %s catalog search: %v", filterCode, err)
 	}
+	c.shareSessionWithFilterService()
 
 	normalizedQuery := strings.TrimSpace(query)
 	if normalizedQuery == "" {
@@ -2650,9 +2638,7 @@ func (c *Client) searchCatalogFilterOptions(catalogIDs []string, query string, f
 		return nil, &filterSearchError{Operation: "create catalog filter search request", Err: err}
 	}
 
-	req.Header = c.apiHeaders()
-	req.Header.Set("Accept", "application/json,text/plain,*/*,image/webp")
-	req.Header.Set("Referer", fmt.Sprintf("https://%s/catalog", c.session.Domain))
+	req.Header = c.filterServiceHeaders()
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -2667,7 +2653,7 @@ func (c *Client) searchCatalogFilterOptions(catalogIDs []string, query string, f
 	if len(body) > maxFilterSearchResponseBytes {
 		return nil, &filterSearchError{Operation: "catalog filter search response", Err: fmt.Errorf("response exceeds %d bytes", maxFilterSearchResponseBytes)}
 	}
-	log.Printf("[vinted] GET /api/v2/catalog/filters/search code=%s query=%q catalogs=%s -> %d", filterCode, normalizedQuery, strings.Join(normalizedCatalogIDs, ","), resp.StatusCode)
+	log.Printf("[vinted] GET %s/svc-filters/filters/search code=%s query=%q catalogs=%s -> %d", filterServiceHost(c.session.Domain), filterCode, normalizedQuery, strings.Join(normalizedCatalogIDs, ","), resp.StatusCode)
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, &filterSearchError{Operation: "catalog filter search", StatusCode: resp.StatusCode}
@@ -2694,16 +2680,50 @@ func (c *Client) searchCatalogFilterOptions(catalogIDs []string, query string, f
 
 func buildCatalogFilterSearchURL(domain string, catalogIDs []string, query string, filterCode string) string {
 	params := url.Values{
-		"catalog_ids":        {strings.Join(normalizeCatalogIDs(catalogIDs), ",")},
-		"size_ids":           {""},
-		"brand_ids":          {""},
-		"status_ids":         {""},
-		"color_ids":          {""},
-		"material_ids":       {""},
 		"filter_search_code": {filterCode},
 		"filter_search_text": {strings.TrimSpace(query)},
 	}
-	return fmt.Sprintf("https://%s/api/v2/catalog/filters/search?%s", domain, params.Encode())
+	if ids := normalizeCatalogIDs(catalogIDs); len(ids) > 0 {
+		params.Set("attribute_ids[catalog]", strings.Join(ids, ","))
+	}
+	return fmt.Sprintf("https://%s/svc-filters/filters/search?%s", filterServiceHost(domain), params.Encode())
+}
+
+// filterServiceHost is the host Vinted's web app sends catalogue filter
+// requests to. Markets use api.<domain>; the US site keeps its www label.
+func filterServiceHost(domain string) string {
+	base := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(domain)), "www.")
+	if base == "vinted.com" {
+		return "api.www.vinted.com"
+	}
+	return "api." + base
+}
+
+// filterServiceHeaders describes the request as the marketplace page calling
+// its API host, which is a different origin on the same site.
+func (c *Client) filterServiceHeaders() http.Header {
+	headers := c.apiHeaders()
+	headers.Set("Platform", "web")
+	headers.Set("X-Next-App", "marketplace-web")
+	headers.Set("Sec-Fetch-Site", "same-site")
+	return headers
+}
+
+// shareSessionWithFilterService hands the anonymous session cookies from the
+// marketplace host to the filter API host. Vinted sets them for the
+// marketplace host only, and the API host answers 403 without them.
+func (c *Client) shareSessionWithFilterService() {
+	marketplaceURL, err := url.Parse(fmt.Sprintf("https://%s/", c.session.Domain))
+	if err != nil {
+		return
+	}
+	filterURL, err := url.Parse(fmt.Sprintf("https://%s/", filterServiceHost(c.session.Domain)))
+	if err != nil {
+		return
+	}
+	if cookies := c.httpClient.GetCookies(marketplaceURL); len(cookies) > 0 {
+		c.httpClient.SetCookies(filterURL, cookies)
+	}
 }
 
 func (c *Client) searchGatewayFilterOptions(catalogIDs []string, query string, filterCode string) ([]FilterOption, error) {
