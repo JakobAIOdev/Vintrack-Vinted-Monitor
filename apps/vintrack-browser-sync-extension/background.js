@@ -20,6 +20,17 @@ const STORAGE_KEYS = {
   theme: "vintrackTheme",
   companionMode: "vintrackCompanionMode",
 };
+// Inline Vinted features keep larger, rarely read records. They stay out of
+// STORAGE_KEYS so getConfig() does not load them on every sync.
+const INLINE_STORAGE_KEYS = {
+  index: "vintrackInlineIndex",
+  settings: "vintrackInlineSettings",
+  seen: "vintrackInlineSeen",
+  toastCursor: "vintrackInlineToastCursor",
+};
+const INLINE_INDEX_TTL_MS = 60 * 1000;
+const INLINE_INDEX_RETRY_MS = 2 * 60 * 1000;
+const INLINE_FEED_TTL_MS = 15 * 1000;
 const PERIODIC_SYNC_ALARM = "vintrackPeriodicSync";
 const PERIODIC_SYNC_MINUTES = 1;
 const BUY_TAB_READY_TIMEOUT_MS = 20000;
@@ -259,7 +270,11 @@ async function clearLocalExtensionState() {
     clearTimeout(timer);
   }
   syncTimers.clear();
-  await extensionApi.storage.local.remove(Object.values(STORAGE_KEYS));
+  inlineFeedCache = null;
+  await extensionApi.storage.local.remove([
+    ...Object.values(STORAGE_KEYS),
+    ...Object.values(INLINE_STORAGE_KEYS),
+  ]);
 }
 
 async function getStoredCheckoutLinks() {
@@ -1846,6 +1861,131 @@ async function companionState(sender) {
   };
 }
 
+function inlineDigits(value) {
+  const text = String(value ?? "");
+  return /^\d{1,20}$/.test(text) ? text : "";
+}
+
+// The index is drawn into Vinted pages, so only the expected shapes pass.
+function sanitizeInlineIndex(data) {
+  const monitors = (Array.isArray(data?.monitors) ? data.monitors : [])
+    .filter((monitor) => Number.isInteger(monitor?.id))
+    .slice(0, 500)
+    .map((monitor) => ({
+      id: monitor.id,
+      name: String(monitor.name || "").slice(0, 120),
+    }));
+  const finds = (Array.isArray(data?.finds) ? data.finds : [])
+    .filter(
+      (find) =>
+        Array.isArray(find) && inlineDigits(find[0]) && Number.isInteger(find[1]),
+    )
+    .slice(0, 2000)
+    .map((find) => [inlineDigits(find[0]), find[1], Number(find[2]) || 0]);
+  const watches = (Array.isArray(data?.watches) ? data.watches : [])
+    .filter((watch) => inlineDigits(watch?.id) && inlineDigits(watch?.itemId))
+    .slice(0, 500)
+    .map((watch) => ({
+      id: inlineDigits(watch.id),
+      itemId: inlineDigits(watch.itemId),
+      status: String(watch.status || "").slice(0, 20),
+      stateKey: /^[a-z_]{1,20}$/.test(String(watch.stateKey || ""))
+        ? watch.stateKey
+        : "",
+      stateLabel: String(watch.stateLabel || "").slice(0, 30),
+      availability: String(watch.availability || "").slice(0, 30),
+      initialPriceMinor: inlineDigits(watch.initialPriceMinor) || null,
+      currentPriceMinor: inlineDigits(watch.currentPriceMinor) || null,
+      currencyCode: /^[A-Z]{3}$/.test(String(watch.currencyCode || ""))
+        ? watch.currencyCode
+        : null,
+    }));
+  return { monitors, finds, watches };
+}
+
+let inlineIndexRequest = null;
+let inlineFeedCache = null;
+let inlineFeedRequest = null;
+
+// Vinted tabs match listings against this snapshot locally. One request per
+// minute is shared by every tab, and a failure keeps the last good snapshot.
+async function inlineIndexSnapshot() {
+  const config = await getConfig();
+  if (!formatRuntimeState(config).configured) {
+    return { ok: true, configured: false, index: null };
+  }
+  const stored = (
+    await extensionApi.storage.local.get(INLINE_STORAGE_KEYS.index)
+  )[INLINE_STORAGE_KEYS.index];
+  const age = Date.now() - Number(stored?.fetchedAt || 0);
+  const ttl = stored?.failed ? INLINE_INDEX_RETRY_MS : INLINE_INDEX_TTL_MS;
+  if (stored && age >= 0 && age < ttl) {
+    return stored.index
+      ? { ok: true, configured: true, index: stored.index }
+      : { ok: false, configured: true, error: "Vintrack index unavailable." };
+  }
+
+  if (!inlineIndexRequest) {
+    inlineIndexRequest = (async () => {
+      const result = await companionApiRequest("/api/extension/inline-index");
+      const record = result.ok
+        ? { fetchedAt: Date.now(), index: sanitizeInlineIndex(result.data) }
+        : {
+            fetchedAt: Date.now(),
+            failed: true,
+            // A rejected link must not keep showing the previous member's data.
+            index: result.status === 401 ? null : stored?.index || null,
+          };
+      await extensionApi.storage.local.set({
+        [INLINE_STORAGE_KEYS.index]: record,
+      });
+      return record.index
+        ? { ok: true, configured: true, index: record.index }
+        : { ok: false, configured: true, error: result.error };
+    })().finally(() => {
+      inlineIndexRequest = null;
+    });
+  }
+  return inlineIndexRequest;
+}
+
+// Recent finds for the in-page toasts; shared by all visible Vinted tabs.
+async function inlineFeedSnapshot() {
+  const config = await getConfig();
+  if (!formatRuntimeState(config).configured) {
+    return { ok: true, configured: false, items: [] };
+  }
+  if (
+    inlineFeedCache &&
+    Date.now() - inlineFeedCache.fetchedAt < INLINE_FEED_TTL_MS
+  ) {
+    return inlineFeedCache.response;
+  }
+  if (!inlineFeedRequest) {
+    inlineFeedRequest = companionApiRequest("/api/extension/feed")
+      .then((result) => {
+        const response = result.ok
+          ? {
+              ok: true,
+              configured: true,
+              items: Array.isArray(result.data?.items) ? result.data.items : [],
+            }
+          : {
+              ok: false,
+              configured: true,
+              status: result.status,
+              error: result.error,
+            };
+        inlineFeedCache = { fetchedAt: Date.now(), response };
+        return response;
+      })
+      .finally(() => {
+        inlineFeedRequest = null;
+      });
+  }
+  return inlineFeedRequest;
+}
+
 const COMPANION_DESTINATIONS = {
   dashboard: "/dashboard",
   monitors: "/monitors",
@@ -1974,6 +2114,22 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
         companionMode:
           config[STORAGE_KEYS.companionMode] === "popup" ? "popup" : "inline",
       });
+      return;
+    }
+
+    if (
+      message?.type === "VINTRACK_INLINE_INDEX" ||
+      message?.type === "VINTRACK_INLINE_FEED"
+    ) {
+      if (!companionSender) {
+        sendResponse({ ok: false, error: "Unauthorized extension sender" });
+        return;
+      }
+      sendResponse(
+        message.type === "VINTRACK_INLINE_INDEX"
+          ? await inlineIndexSnapshot()
+          : await inlineFeedSnapshot(),
+      );
       return;
     }
 
@@ -2133,6 +2289,12 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
         [STORAGE_KEYS.token]: token,
         [STORAGE_KEYS.appOrigin]: appOrigin,
       });
+      // A new link can belong to another member; drop the cached snapshots.
+      inlineFeedCache = null;
+      await extensionApi.storage.local.remove([
+        INLINE_STORAGE_KEYS.index,
+        INLINE_STORAGE_KEYS.toastCursor,
+      ]);
       ensurePeriodicSyncAlarm();
 
       const results = await syncAndPersistPreferredOrAllDomains(

@@ -38,10 +38,34 @@ Open the extension popup, or use **Alt + Shift + V** on Vinted
   or item. Creation opens a prefilled Vintrack form for review.
 - **Feed** shows recent monitor finds and updates while its tab is open.
 - **Watches** lets you view and manage Price Watches.
-- **Show actions inside Vinted** controls the inline Vinted buttons.
+- **On Vinted** switches the features below on or off and holds your keywords.
+- **Show actions inside Vinted** controls everything Vintrack adds to Vinted
+  pages.
 
 If linking or sync fails, check your Vinted login, reload existing Vintrack and
 Vinted pages, then use **Sync linked account now** under **Connection actions**.
+
+## Inside Vinted
+
+With **Show actions inside Vinted** on, the extension adds read-only context to
+the Vinted pages you browse:
+
+- **Vintrack badges** mark listings in any Vinted grid that one of your
+  monitors found in the last seven days or that have a Price Watch, including
+  the tracked price change or that the listing was sold.
+- **Seen marker and price memory** dims listings you already opened and shows
+  `↓ was …` when a listing is cheaper than at your last visit.
+- **Listing insights** adds a panel below the Track price button on item pages
+  with the monitor that found the listing, its Price Watch and the price change
+  since your last look.
+- **Live find toasts** announce new monitor finds while a Vinted tab is
+  visible. Clicking one opens the listing.
+- **Keywords** fade out or highlight listings whose title or brand contains one
+  of your words.
+
+These features send no requests to Vinted and never act on your account.
+Monitor badges and toasts follow the Live Feed feature policy, Price Watch
+badges the Price Watch policy.
 
 ## Optional checkout
 
@@ -89,6 +113,11 @@ for linking and account-mismatch protection. On supported Vinted pages, the
 Companion sends the current page URL to Vintrack for context actions. Preferences
 are stored locally. It does not upload the complete cookie jar, browser refresh
 token, Vinted password or payment-card data.
+
+Listing badges are matched in the browser against a snapshot of your own
+Vintrack data, so the pages you view are not sent to Vintrack for them. The
+seen history of up to 2,000 opened listings and your keyword lists stay in
+extension storage and can be cleared from the **On Vinted** tab.
 
 Read the [privacy policy](../../docs/browser-extension-privacy.md) for data use,
 storage, deletion and contact information.

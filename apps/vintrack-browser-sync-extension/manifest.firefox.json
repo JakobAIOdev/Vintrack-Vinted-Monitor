@@ -80,7 +80,8 @@
                 "https://*.vinted.se/*",
                 "https://*.vinted.sk/*"
             ],
-            "js": ["companion.js", "content-script.js"],
+            "js": ["companion.js", "inline.js", "content-script.js"],
+            "css": ["inline.css"],
             "run_at": "document_start"
         }
     ],

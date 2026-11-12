@@ -399,6 +399,46 @@
   display: grid;
   gap: 10px;
 }
+.vtc-setting {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 9px;
+  border-top: 1px solid var(--vtc-line);
+  cursor: pointer;
+}
+.vtc-setting-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.vtc-setting-copy small,
+.vtc-field span {
+  color: var(--vtc-muted);
+  font-size: 0.75rem;
+}
+.vtc-setting input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  accent-color: var(--vtc-primary);
+}
+.vtc-field {
+  display: grid;
+  gap: 4px;
+}
+.vtc-root .vtc-field input {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--vtc-line);
+  border-radius: 9px;
+  color: var(--vtc-text);
+  background: var(--vtc-panel);
+  font: inherit;
+}
 .vtc-live-row {
   display: flex;
   flex-wrap: wrap;
