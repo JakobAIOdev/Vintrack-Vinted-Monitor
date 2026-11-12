@@ -364,6 +364,32 @@ func TestValidateBrandPageHTML(t *testing.T) {
 	}
 }
 
+func TestValidateBrandPageHTMLAcceptsEnglishTaglineTitle(t *testing.T) {
+	body := []byte(`<!doctype html><html><head><title>Nike | Explore Second-Hand Sneakers &amp; Sportswear | Vinted</title><link rel="canonical" href="https://www.vinted.com/brand/53-nike"></head><body><h1>Nike</h1></body></html>`)
+	brand, err := validateBrandPageHTML(body, "www.vinted.com", 53)
+	if err != nil {
+		t.Fatalf("validateBrandPageHTML() error = %v", err)
+	}
+	if brand.ID != "53" || brand.Label != "Nike" || brand.CanonicalURL != "https://www.vinted.com/brand/53-nike" {
+		t.Fatalf("brand = %#v", brand)
+	}
+}
+
+func TestBrandLabelFromPageTitle(t *testing.T) {
+	for title, want := range map[string]string{
+		"adidas Originals | Vinted":                    "adidas Originals",
+		"Nike | Explore Second-Hand Sneakers | Vinted": "Nike",
+		"Nike | Explore Second-Hand Sneakers":          "",
+		"Explore Second-Hand Sneakers | Nike | Vinted": "Explore Second-Hand Sneakers",
+		"| Vinted": "",
+		"Nike":     "",
+	} {
+		if got := brandLabelFromPageTitle(title); got != want {
+			t.Errorf("brandLabelFromPageTitle(%q) = %q, want %q", title, got, want)
+		}
+	}
+}
+
 func TestValidateBrandPageHTMLRejectsInvalidEvidence(t *testing.T) {
 	valid := `<!doctype html><html><head><title>LIP | Vinted</title><link rel="canonical" href="https://www.vinted.cz/brand/23065-lip"></head><body><h1>LIP</h1></body></html>`
 	tests := []struct {
@@ -374,6 +400,8 @@ func TestValidateBrandPageHTMLRejectsInvalidEvidence(t *testing.T) {
 		{name: "cross domain canonical", body: strings.Replace(valid, "www.vinted.cz", "example.com", 1)},
 		{name: "missing title", body: strings.Replace(valid, "<title>LIP | Vinted</title>", "", 1)},
 		{name: "label mismatch", body: strings.Replace(valid, "<h1>LIP</h1>", "<h1>Other</h1>", 1)},
+		{name: "foreign site title", body: strings.Replace(valid, "LIP | Vinted", "LIP | Example", 1)},
+		{name: "tagline before brand", body: strings.Replace(valid, "LIP | Vinted", "Other | LIP | Vinted", 1)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

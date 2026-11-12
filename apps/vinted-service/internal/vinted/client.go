@@ -2990,7 +2990,7 @@ func validateBrandPageHTML(body []byte, domain string, expectedBrandID int64) (*
 
 	title := normalizeHTMLText(string(titleMatch[1]))
 	h1 := normalizeHTMLText(string(h1Match[1]))
-	label := strings.TrimSpace(strings.TrimSuffix(title, "| Vinted"))
+	label := brandLabelFromPageTitle(title)
 	if label == "" || h1 == "" || !strings.EqualFold(label, h1) {
 		return nil, errors.New("Vinted brand page title does not match its brand name")
 	}
@@ -3024,6 +3024,18 @@ func validateBrandPageHTML(body []byte, domain string, expectedBrandID int64) (*
 		Label:        label,
 		CanonicalURL: canonicalURL.String(),
 	}, nil
+}
+
+// brandLabelFromPageTitle returns the brand name a Vinted brand page titles
+// itself with. Most markets use "Brand | Vinted"; the English-language ones
+// insert a tagline, as in "Brand | Explore Second-Hand Sneakers | Vinted".
+func brandLabelFromPageTitle(title string) string {
+	withoutSite, isVintedTitle := strings.CutSuffix(strings.TrimSpace(title), "| Vinted")
+	if !isVintedTitle {
+		return ""
+	}
+	label, _, _ := strings.Cut(withoutSite, " | ")
+	return strings.TrimSpace(label)
 }
 
 func normalizeHTMLText(value string) string {
