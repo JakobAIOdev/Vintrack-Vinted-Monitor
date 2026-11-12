@@ -405,12 +405,16 @@ test("supports keyboard tabs and preserves focus during live feed updates", asyn
         .toBe(2);
     await expect(item).toBeFocused();
     await feed.focus();
+    // "On Vinted" is the last tab; Watches sits just before it.
+    const onVinted = page.getByRole("tab", { name: "On Vinted", exact: true });
     await page.keyboard.press("End");
+    await expect(onVinted).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
     await expect(watches).toBeFocused();
     await page.keyboard.press("Home");
     await expect(overview).toBeFocused();
     await page.keyboard.press("ArrowLeft");
-    await expect(watches).toBeFocused();
+    await expect(onVinted).toBeFocused();
     await expect(overview).toHaveAttribute("tabindex", "-1");
 });
 

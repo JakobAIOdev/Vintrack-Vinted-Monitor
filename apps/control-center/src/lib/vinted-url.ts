@@ -45,6 +45,10 @@ const VINTED_URL_METADATA_PARAM_KEYS = new Set([
     "time",
 ]);
 
+// Vinted category pages carry the category in the path instead of a
+// `catalog[]` parameter: /catalog/1195-girls-clothing.
+const CATALOG_CATEGORY_PATH_PATTERN = /^\/catalog\/([1-9]\d{0,9})(?:-[^/]*)?$/;
+
 const EXTRA_PARAM_KEY_PATTERN = /^[a-z][a-z0-9_]*(?:\[\])?$/;
 const SENSITIVE_EXTRA_PARAM_PATTERN =
     /(auth|bearer|cookie|credential|csrf|password|redirect|session|token|url)/i;
@@ -266,9 +270,16 @@ export function parseVintedSearchUrl(
     }
 
     const normalizedPath = url.pathname.replace(/\/+$/, "") || "/";
+    const categoryPathId =
+        CATALOG_CATEGORY_PATH_PATTERN.exec(normalizedPath)?.[1] ?? "";
+    const pathCatalogId =
+        categoryPathId && Number(categoryPathId) <= MAX_DATABASE_INTEGER
+            ? categoryPathId
+            : "";
     if (
         normalizedPath !== "/catalog" &&
-        normalizedPath !== "/api/v2/catalog/items"
+        normalizedPath !== "/api/v2/catalog/items" &&
+        !pathCatalogId
     ) {
         return {
             ok: false,
@@ -324,9 +335,15 @@ export function parseVintedSearchUrl(
     ]);
     const extras = collectExtraParams(url.searchParams);
 
+    // A category page with extra category filters keeps both, so the monitor
+    // never covers less than the page the member was looking at.
+    const urlCatalogIds =
+        pathCatalogId && !catalogs.ids.includes(pathCatalogId)
+            ? [pathCatalogId, ...catalogs.ids]
+            : catalogs.ids;
     const catalogIds = platforms.ids.length
         ? [VIDEO_GAME_PLATFORM_CATALOG_ID]
-        : catalogs.ids;
+        : urlCatalogIds;
     const importedFields = [
         "region",
         ...(query ? ["search"] : []),

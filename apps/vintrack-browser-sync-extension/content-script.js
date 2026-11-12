@@ -650,7 +650,8 @@
     }
 
     const path = window.location.pathname.replace(/\/+$/, "") || "/";
-    if (path === "/catalog") {
+    // Search results live on /catalog, category pages on /catalog/<id>-<slug>.
+    if (path === "/catalog" || /^\/catalog\/[1-9]\d*(?:-[^/]*)?$/.test(path)) {
       const catalogTarget = catalogFilterRow();
       if (
         catalogTarget &&

@@ -1,0 +1,298 @@
+/* Vintrack elements drawn into Vinted pages. The stylesheet is injected by the
+   manifest, so it is not subject to the page's style CSP. Every selector is
+   prefixed and sets its own typography to stay independent of Vinted's CSS. */
+
+.vtk-badges {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 3;
+  display: flex;
+  max-width: calc(100% - 12px);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.vtk-chip {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 3px 7px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  border-radius: 999px;
+  color: #0f172a;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
+  font: 600 11px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vtk-chip[data-kind="found"] {
+  border-color: #0f172a;
+  color: #f8fafc;
+  background: #0f172a;
+}
+
+.vtk-chip[data-kind="found"]::before {
+  content: "V";
+  margin-right: 5px;
+  font-weight: 800;
+  opacity: 0.72;
+}
+
+.vtk-chip[data-kind="drop"] {
+  border-color: #0b7a55;
+  color: #fff;
+  background: #0b7a55;
+}
+
+.vtk-chip[data-kind="watch"] {
+  border-color: rgba(11, 122, 85, 0.5);
+  color: #0b6a4a;
+}
+
+.vtk-chip[data-kind="highlight"] {
+  border-color: #b7791f;
+  color: #7a4d0b;
+  background: #fff7e0;
+}
+
+.vtk-chip[data-kind="muted"],
+.vtk-chip[data-kind="seen"],
+.vtk-chip[data-kind="ended"] {
+  color: #475569;
+}
+
+[data-vtk-seen] img {
+  opacity: 0.62;
+  transition: opacity 150ms ease;
+}
+
+[data-vtk-seen]:hover img {
+  opacity: 1;
+}
+
+[data-vtk-muted] {
+  opacity: 0.3;
+  filter: grayscale(1);
+  transition:
+    opacity 150ms ease,
+    filter 150ms ease;
+}
+
+[data-vtk-muted]:hover,
+[data-vtk-muted]:focus-within {
+  opacity: 1;
+  filter: none;
+}
+
+[data-vtk-highlight] {
+  border-radius: 10px;
+  outline: 2px solid #d69e2e;
+  outline-offset: 3px;
+}
+
+.vtk-panel {
+  display: grid;
+  gap: 10px;
+  margin: 6px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+  border-radius: 10px;
+  color: inherit;
+  font: 400 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: left;
+}
+
+.vtk-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.vtk-mark {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 6px;
+  color: #fafafa;
+  background: #09090b;
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.35);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.vtk-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.vtk-row-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.vtk-row-copy span {
+  font-size: 11px;
+  opacity: 0.68;
+}
+
+.vtk-row-copy strong {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* Mixed with the page's text color so it stays readable on Vinted's light
+   and dark themes. */
+.vtk-row[data-kind="drop"] .vtk-row-copy strong {
+  color: color-mix(in srgb, #10b981 72%, currentColor);
+}
+
+.vtk-row-action {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 8px;
+  color: inherit;
+  background: transparent;
+  font: 600 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.vtk-row-action:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.vtk-row-action:focus-visible,
+.vtk-toast-link:focus-visible,
+.vtk-toast-close:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
+
+.vtk-toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483000;
+  display: flex;
+  width: min(340px, calc(100vw - 32px));
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.vtk-toast {
+  position: relative;
+  display: flex;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 12px;
+  color: #f8fafc;
+  background: #0f172a;
+  box-shadow: 0 14px 34px rgba(2, 6, 23, 0.32);
+  font: 400 12px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  pointer-events: auto;
+  animation: vtk-toast-in 180ms ease-out;
+}
+
+.vtk-toast-link {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 34px 9px 9px;
+  border-radius: 12px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.vtk-toast-thumb {
+  width: 44px;
+  height: 52px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  object-fit: cover;
+  background: #1e293b;
+}
+
+.vtk-toast-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.vtk-toast-copy small {
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vtk-toast-copy strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vtk-toast-copy span:empty {
+  display: none;
+}
+
+.vtk-toast-close {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  color: #94a3b8;
+  background: transparent;
+  font: 400 16px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer;
+}
+
+.vtk-toast-close:hover {
+  color: #f8fafc;
+  background: rgba(148, 163, 184, 0.16);
+}
+
+@keyframes vtk-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vtk-toast {
+    animation: none;
+  }
+
+  [data-vtk-seen] img,
+  [data-vtk-muted] {
+    transition: none;
+  }
+}

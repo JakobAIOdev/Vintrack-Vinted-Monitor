@@ -327,6 +327,18 @@ direct traffic. Free public proxies are not used for Price Watch polling. Set
 `AUTH_URL` to the public HTTPS origin so Discord and Telegram alerts can
 link directly to the corresponding Price Watch.
 
+A watch ends on its own when its listing is gone. Two consecutive checks that
+find the listing sold or removed stop every watch on it and show **Sold** or
+**Removed** on the Price Watches page; the confirming check runs about a minute
+after the first. A failed request in between does not reset that count. A
+reserved or hidden listing still exists, so it stays watched and is labelled
+**Reserved** or **Hidden** until it returns to sale or is sold. A stopped watch
+can be resumed, which validates the listing again.
+
+When a watch ends this way, members who have notifications enabled for it get
+one Discord or Telegram message naming the reason, the last price seen and the
+listing link. It uses the same channels as the watch's price-drop alerts.
+
 ## Worker behavior
 
 Deployment-bound worker settings (discovery, enrichment and latency switches are managed under **Admin → System → Worker Policy**):

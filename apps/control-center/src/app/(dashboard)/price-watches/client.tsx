@@ -52,6 +52,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import {
+    describePriceWatchState,
+    type PriceWatchStateTone,
+} from "@/lib/price-watch-state";
 import { getRegionLabel, REGIONS } from "@/lib/regions";
 import { cn } from "@/lib/utils";
 
@@ -158,40 +162,23 @@ function proxyGroupUnavailableReason(
     return null;
 }
 
+const WATCH_STATE_CLASS_NAMES: Record<PriceWatchStateTone, string> = {
+    ok: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+    info: "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300",
+    warn: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+    danger: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300",
+    muted: "border-border bg-muted text-muted-foreground",
+};
+
 function watchStatus(watch: PriceWatchView) {
-    if (watch.status === "paused") {
-        return {
-            label: "Paused",
-            className:
-                "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-        };
-    }
-    if (watch.status === "stopped") {
-        return {
-            label: "Stopped",
-            className:
-                "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300",
-        };
-    }
-    if (watch.target.lastErrorCode) {
-        return {
-            label: "Retrying",
-            className:
-                "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-        };
-    }
-    if (!watch.armedAt || watch.target.availability === "pending") {
-        return {
-            label: "Validating",
-            className:
-                "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300",
-        };
-    }
-    return {
-        label: "Watching",
-        className:
-            "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-    };
+    const state = describePriceWatchState({
+        status: watch.status,
+        stoppedReason: watch.stoppedReason,
+        availability: watch.target.availability,
+        lastErrorCode: watch.target.lastErrorCode,
+        armed: Boolean(watch.armedAt),
+    });
+    return { ...state, className: WATCH_STATE_CLASS_NAMES[state.tone] };
 }
 
 function regionFromItemUrl(rawUrl: string) {
@@ -800,6 +787,11 @@ export function PriceWatchesClient({
                                                         {watch.target.title ||
                                                             `Vinted item ${watch.target.itemId}`}
                                                     </a>
+                                                    {status.hint && (
+                                                        <p className="text-muted-foreground mt-1 text-xs leading-4">
+                                                            {status.hint}
+                                                        </p>
+                                                    )}
                                                 </div>
                                                 <div className="relative">
                                                     <button

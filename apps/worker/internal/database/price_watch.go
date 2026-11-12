@@ -11,6 +11,29 @@ import (
 	"vintrack-worker/internal/model"
 )
 
+// Schedule availability values. Everything except "unavailable" keeps being
+// polled: a reserved or hidden listing still exists and can return to sale.
+const (
+	PriceWatchAvailabilityPending     = "pending"
+	PriceWatchAvailabilityActive      = "active"
+	PriceWatchAvailabilityReserved    = "reserved"
+	PriceWatchAvailabilityHidden      = "hidden"
+	PriceWatchAvailabilityUnavailable = "unavailable"
+)
+
+// Reasons stored on a watch that stopped because its listing is gone.
+// "item_unavailable" is the value written before the reasons were split.
+const (
+	PriceWatchStopSold        = "item_sold"
+	PriceWatchStopDeleted     = "item_deleted"
+	PriceWatchStopUnavailable = "item_unavailable"
+)
+
+// PriceWatchGoneConfirmations is how many consecutive checks must agree that
+// a listing is gone before its watches stop. One confirmation guards against
+// a single misleading response without keeping a dead watch alive for long.
+const PriceWatchGoneConfirmations = 2
+
 type PriceWatchObservation struct {
 	ScheduleID   int64
 	TargetID     int64
@@ -20,6 +43,8 @@ type PriceWatchObservation struct {
 	ImageURL     string
 	PriceMinor   int64
 	CurrencyCode string
+	// Availability defaults to active; reserved and hidden are also accepted.
+	Availability string
 	ObservedAt   time.Time
 	NextCheckAt  time.Time
 }
@@ -66,7 +91,7 @@ func (s *Store) ClaimPriceWatchTargets(ctx context.Context, claimToken string, l
 		WITH candidates AS (
 			SELECT schedule.id
 			FROM price_watch_schedules schedule
-			WHERE schedule.availability IN ('pending', 'active')
+			WHERE schedule.availability IN ('pending', 'active', 'reserved', 'hidden')
 			  AND schedule.next_check_at <= NOW()
 			  AND (schedule.lease_until IS NULL OR schedule.lease_until <= NOW())
 			  AND EXISTS (
@@ -158,6 +183,11 @@ func (s *Store) ApplyPriceWatchObservation(ctx context.Context, observation Pric
 	if len(observation.CurrencyCode) != 3 {
 		return 0, 0, errors.New("invalid price watch currency")
 	}
+	switch observation.Availability {
+	case PriceWatchAvailabilityReserved, PriceWatchAvailabilityHidden:
+	default:
+		observation.Availability = PriceWatchAvailabilityActive
+	}
 	if observation.ObservedAt.IsZero() {
 		observation.ObservedAt = time.Now().UTC()
 	}
@@ -226,7 +256,7 @@ func (s *Store) ApplyPriceWatchObservation(ctx context.Context, observation Pric
 		UPDATE price_watch_schedules
 		SET current_price_minor = $4,
 			currency_code = $5,
-			availability = 'active',
+			availability = $8,
 			consecutive_unavailable = 0,
 			consecutive_errors = 0,
 			last_error_code = NULL,
@@ -240,7 +270,8 @@ func (s *Store) ApplyPriceWatchObservation(ctx context.Context, observation Pric
 		WHERE id = $1 AND target_id = $2 AND claim_token = $3`,
 		observation.ScheduleID, observation.TargetID, observation.ClaimToken,
 		observation.PriceMinor, observation.CurrencyCode,
-		observation.ObservedAt.UTC(), observation.NextCheckAt.UTC()); err != nil {
+		observation.ObservedAt.UTC(), observation.NextCheckAt.UTC(),
+		observation.Availability); err != nil {
 		return 0, 0, err
 	}
 
@@ -350,7 +381,15 @@ func loadPriceWatchSubscribersTx(ctx context.Context, tx *sql.Tx, scheduleID int
 	return subscribers, rows.Err()
 }
 
-func (s *Store) RecordPriceWatchUnavailable(ctx context.Context, scheduleID int64, claimToken string, checkedAt time.Time, nextCheckAt time.Time, reason string) (bool, error) {
+// RecordPriceWatchUnavailable counts a check that found the listing sold or
+// deleted. Once enough consecutive checks agree, the schedule is retired and
+// its active watches stop with the given reason. It reports whether they did.
+func (s *Store) RecordPriceWatchUnavailable(ctx context.Context, scheduleID int64, claimToken string, checkedAt time.Time, nextCheckAt time.Time, reason string, detail string) (bool, error) {
+	switch reason {
+	case PriceWatchStopSold, PriceWatchStopDeleted:
+	default:
+		reason = PriceWatchStopUnavailable
+	}
 	if checkedAt.IsZero() {
 		checkedAt = time.Now().UTC()
 	}
@@ -366,30 +405,39 @@ func (s *Store) RecordPriceWatchUnavailable(ctx context.Context, scheduleID int6
 	err = tx.QueryRowContext(ctx, `
 		UPDATE price_watch_schedules
 		SET consecutive_unavailable = consecutive_unavailable + 1,
-			consecutive_errors = 0, last_error_code = 'item_unavailable',
+			consecutive_errors = 0, last_error_code = $6,
 			last_error_detail = NULLIF($3, ''), last_checked_at = $4,
 			next_check_at = $5, lease_until = NULL, claim_token = NULL,
 			updated_at = NOW()
 		WHERE id = $1 AND claim_token = $2
 		RETURNING consecutive_unavailable`, scheduleID, claimToken,
-		boundedAlertDetail(reason), checkedAt.UTC(), nextCheckAt.UTC()).Scan(&count)
+		boundedAlertDetail(detail), checkedAt.UTC(), nextCheckAt.UTC(), reason).Scan(&count)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	stopped := count >= 3
+	stopped := count >= PriceWatchGoneConfirmations
 	if stopped {
+		// Read the subscribers while their watches are still active; the
+		// update below is what ends them.
+		subscribers, err := loadPriceWatchSubscribersTx(ctx, tx, scheduleID)
+		if err != nil {
+			return false, err
+		}
+		if err := enqueuePriceWatchStoppedTx(ctx, tx, scheduleID, reason, checkedAt.UTC(), subscribers); err != nil {
+			return false, err
+		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE price_watch_schedules SET availability = 'unavailable', updated_at = NOW()
 			WHERE id = $1`, scheduleID); err != nil {
 			return false, err
 		}
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE price_watches SET status = 'stopped', stopped_reason = 'item_unavailable',
+			UPDATE price_watches SET status = 'stopped', stopped_reason = $2,
 				armed_at = NULL, updated_at = NOW()
-			WHERE schedule_id = $1 AND status = 'active'`, scheduleID); err != nil {
+			WHERE schedule_id = $1 AND status = 'active'`, scheduleID, reason); err != nil {
 			return false, err
 		}
 	}
@@ -399,6 +447,81 @@ func (s *Store) RecordPriceWatchUnavailable(ctx context.Context, scheduleID int6
 	return stopped, nil
 }
 
+// priceWatchStoppedMessage is what a member is told when a watch ends because
+// its listing is gone.
+func priceWatchStoppedMessage(reason string, title string, itemID int64, lastPriceMinor sql.NullInt64, currencyCode string, itemURL string) (string, string) {
+	name := strings.TrimSpace(title)
+	if name == "" {
+		name = fmt.Sprintf("Vinted item #%d", itemID)
+	}
+	heading, explanation := "Price Watch ended: listing unavailable", "is no longer available"
+	switch reason {
+	case PriceWatchStopSold:
+		heading, explanation = "Price Watch ended: listing sold", "was sold or is no longer for sale"
+	case PriceWatchStopDeleted:
+		heading, explanation = "Price Watch ended: listing removed", "was removed from Vinted"
+	}
+	lines := []string{fmt.Sprintf("“%s” %s, so Vintrack stopped watching it.", name, explanation)}
+	if lastPriceMinor.Valid && lastPriceMinor.Int64 >= 0 && len(strings.TrimSpace(currencyCode)) == 3 {
+		lines = append(lines, fmt.Sprintf("Last price: %d.%02d %s",
+			lastPriceMinor.Int64/100, lastPriceMinor.Int64%100, strings.ToUpper(strings.TrimSpace(currencyCode))))
+	}
+	if strings.HasPrefix(itemURL, "https://") {
+		lines = append(lines, itemURL)
+	}
+	return heading, strings.Join(lines, "\n")
+}
+
+// enqueuePriceWatchStoppedTx tells every subscriber with notifications on that
+// their watch ended. It is sent as a plain title-and-text notification, which
+// both providers already deliver.
+func enqueuePriceWatchStoppedTx(ctx context.Context, tx *sql.Tx, scheduleID int64, reason string, stoppedAt time.Time, subscribers []priceWatchSubscriber) error {
+	var itemID int64
+	var region, itemURL string
+	var title, currencyCode sql.NullString
+	var lastPriceMinor sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT target.item_id, target.region, target.canonical_url, target.title,
+			COALESCE(schedule.current_price_minor, target.current_price_minor),
+			COALESCE(schedule.currency_code, target.currency_code)
+		FROM price_watch_schedules schedule
+		JOIN price_watch_targets target ON target.id = schedule.target_id
+		WHERE schedule.id = $1`, scheduleID).Scan(&itemID, &region, &itemURL, &title, &lastPriceMinor, &currencyCode); err != nil {
+		return err
+	}
+	heading, message := priceWatchStoppedMessage(reason, title.String, itemID, lastPriceMinor, currencyCode.String, itemURL)
+
+	for _, subscriber := range subscribers {
+		if !subscriber.notificationsEnabled {
+			continue
+		}
+		request := model.AlertNotificationRequest{
+			UserID: subscriber.userID, PriceWatchID: subscriber.id, ItemID: itemID,
+			Kind: "price_watch_stopped",
+			// A watch can be resumed and end again, so the stop time is part of the key.
+			IdempotencyKey: fmt.Sprintf("price_watch_stopped:%d:%d", subscriber.id, stoppedAt.Unix()),
+			ExpiresAt:      stoppedAt.Add(6 * time.Hour),
+			Payload: model.AlertNotificationPayload{
+				Version: 1, Kind: "price_watch_stopped", Title: heading, Message: message,
+				Region: region, TelegramStyle: subscriber.telegramStyle, DiscordStyle: subscriber.discordStyle,
+			},
+		}
+		if subscriber.webhookActive {
+			request.DiscordTarget = subscriber.discordWebhook
+		}
+		if subscriber.telegramActive {
+			request.TelegramTarget = subscriber.telegramChatID
+		}
+		if _, err := enqueueAlertNotificationTx(ctx, tx, request); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RecordPriceWatchError notes a check that could not be completed. It leaves
+// the unavailable streak alone: a failed request says nothing about whether
+// the listing still exists, so it must not undo an earlier "gone" result.
 func (s *Store) RecordPriceWatchError(ctx context.Context, scheduleID int64, claimToken string, checkedAt time.Time, nextCheckAt time.Time, code string, detail string) error {
 	if checkedAt.IsZero() {
 		checkedAt = time.Now().UTC()
@@ -409,7 +532,7 @@ func (s *Store) RecordPriceWatchError(ctx context.Context, scheduleID int64, cla
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE price_watch_schedules
 		SET consecutive_errors = consecutive_errors + 1,
-			consecutive_unavailable = 0, last_error_code = NULLIF($3, ''),
+			last_error_code = NULLIF($3, ''),
 			last_error_detail = NULLIF($4, ''), last_checked_at = $5,
 			next_check_at = $6, lease_until = NULL, claim_token = NULL,
 			updated_at = NOW()

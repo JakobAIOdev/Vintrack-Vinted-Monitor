@@ -28,9 +28,22 @@ const (
 var vintedItemPathPattern = regexp.MustCompile(`^/items/(\d+)(?:-[^/]*)?/?$`)
 
 var (
-	flightPricePattern = regexp.MustCompile(`(?s)\\"price\\":\{\\"amount\\":\\"([0-9]+(?:\.[0-9]+)?)\\",\\"currency_code\\":\\"([A-Za-z]{3})\\"`)
-	flightTitlePattern = regexp.MustCompile(`\\"title\\":\\"((?:\\\\.|[^"\\])*)\\"`)
-	flightImagePattern = regexp.MustCompile(`(?s)\\"photos\\":\[\{.{0,1000}?\\"url\\":\\"((?:\\\\.|[^"\\])*)\\"`)
+	flightPricePattern    = regexp.MustCompile(`(?s)\\"price\\":\{\\"amount\\":\\"([0-9]+(?:\.[0-9]+)?)\\",\\"currency_code\\":\\"([A-Za-z]{3})\\"`)
+	flightTitlePattern    = regexp.MustCompile(`\\"title\\":\\"((?:\\\\.|[^"\\])*)\\"`)
+	flightImagePattern    = regexp.MustCompile(`(?s)\\"photos\\":\[\{.{0,1000}?\\"url\\":\\"((?:\\\\.|[^"\\])*)\\"`)
+	flightCanBuyPattern   = regexp.MustCompile(`\\"can_buy\\":(true|false)`)
+	flightReservedPattern = regexp.MustCompile(`\\"is_reserved\\":(true|false)`)
+	flightHiddenPattern   = regexp.MustCompile(`\\"is_hidden\\":(true|false)`)
+)
+
+// What a check found out about the listing itself. Sold and deleted listings
+// end a watch; reserved and hidden ones can come back and stay watched.
+const (
+	PriceWatchItemAvailable = "available"
+	PriceWatchItemReserved  = "reserved"
+	PriceWatchItemHidden    = "hidden"
+	PriceWatchItemSold      = "sold"
+	PriceWatchItemDeleted   = "deleted"
 )
 
 type PriceWatchPage struct {
@@ -39,7 +52,14 @@ type PriceWatchPage struct {
 	CanonicalURL string
 	PriceMinor   int64
 	CurrencyCode string
-	Available    bool
+	// Available is true only while the listing can be bought.
+	Available bool
+	State     string
+}
+
+// Gone reports a listing that will not return: it was sold or deleted.
+func (p PriceWatchPage) Gone() bool {
+	return p.State == PriceWatchItemSold || p.State == PriceWatchItemDeleted
 }
 
 type PriceWatchFetchError struct {
@@ -65,10 +85,10 @@ func fetchPriceWatchPage(ctx context.Context, client *Client, target model.Price
 	}
 	expectedHost := model.RegionDomain(target.Region)
 	currentURL := target.CanonicalURL
+	if err := validatePriceWatchURL(currentURL, expectedHost, target.ItemID); err != nil {
+		return PriceWatchPage{}, &PriceWatchFetchError{Code: "invalid_item_url", Detail: err.Error()}
+	}
 	for redirects := 0; redirects < 3; redirects++ {
-		if err := validatePriceWatchURL(currentURL, expectedHost, target.ItemID); err != nil {
-			return PriceWatchPage{}, &PriceWatchFetchError{Code: "invalid_item_url", Detail: err.Error()}
-		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentURL, nil)
 		if err != nil {
@@ -92,12 +112,9 @@ func fetchPriceWatchPage(ctx context.Context, client *Client, target model.Price
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
 			resp.Body.Close()
 			client.FlushTrackedTraffic()
-			if location == "" {
-				return PriceWatchPage{}, &PriceWatchFetchError{Code: "invalid_redirect", StatusCode: resp.StatusCode, Detail: "item page redirect is missing a location"}
-			}
-			nextURL, err := resolveRedirectURL(currentURL, location)
-			if err != nil {
-				return PriceWatchPage{}, &PriceWatchFetchError{Code: "invalid_redirect", Detail: "item page redirect is invalid"}
+			nextURL, redirectErr := nextPriceWatchURL(currentURL, location, expectedHost, target.ItemID, resp.StatusCode)
+			if redirectErr != nil {
+				return PriceWatchPage{}, redirectErr
 			}
 			currentURL = nextURL
 			continue
@@ -107,7 +124,7 @@ func fetchPriceWatchPage(ctx context.Context, client *Client, target model.Price
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
 			resp.Body.Close()
 			client.FlushTrackedTraffic()
-			return PriceWatchPage{CanonicalURL: currentURL, Available: false}, nil
+			return PriceWatchPage{CanonicalURL: currentURL, State: PriceWatchItemDeleted}, nil
 		}
 		if resp.StatusCode != http.StatusOK {
 			status := resp.StatusCode
@@ -148,6 +165,41 @@ func fetchPriceWatchPage(ctx context.Context, client *Client, target model.Price
 	return PriceWatchPage{}, &PriceWatchFetchError{Code: "too_many_redirects", Detail: "item page redirected too many times"}
 }
 
+// nextPriceWatchURL resolves an item page redirect. Vinted may move a listing
+// to another slug, which is followed; any other destination is an error.
+func nextPriceWatchURL(currentURL string, location string, expectedHost string, itemID int64, statusCode int) (string, *PriceWatchFetchError) {
+	if location == "" {
+		return "", &PriceWatchFetchError{Code: "invalid_redirect", StatusCode: statusCode, Detail: "item page redirect is missing a location"}
+	}
+	nextURL, err := resolveRedirectURL(currentURL, location)
+	if err != nil {
+		return "", &PriceWatchFetchError{Code: "invalid_redirect", StatusCode: statusCode, Detail: "item page redirect is invalid"}
+	}
+	// The stored URL is fine; Vinted sent this client somewhere else. That is
+	// a property of the attempt, so another client may still succeed.
+	if validatePriceWatchURL(nextURL, expectedHost, itemID) != nil {
+		return "", &PriceWatchFetchError{
+			Code: "unexpected_redirect", StatusCode: statusCode,
+			Detail: "item page redirected to " + redirectTargetLabel(nextURL),
+		}
+	}
+	return nextURL, nil
+}
+
+// redirectTargetLabel names a redirect target for diagnostics without its
+// query string, which can carry session-bound values.
+func redirectTargetLabel(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "an unreadable location"
+	}
+	label := parsed.Hostname() + parsed.EscapedPath()
+	if len(label) > 120 {
+		label = label[:120]
+	}
+	return label
+}
+
 func validatePriceWatchURL(rawURL string, expectedHost string, expectedItemID int64) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Hostname(), expectedHost) {
@@ -174,6 +226,8 @@ func parsePriceWatchHTML(reader io.Reader, expectedItemID int64, maximumBytes in
 	flightAfter := 0
 	var total int64
 	internalNotFound := false
+	closed := false
+	closedMarkers := flightClosedMarkers(expectedItemID)
 
 	for {
 		n, readErr := reader.Read(buffer)
@@ -183,6 +237,16 @@ func parsePriceWatchHTML(reader io.Reader, expectedItemID int64, maximumBytes in
 			rolling = appendRolling(rolling, chunk, priceWatchRollingBytes)
 			if bytes.Contains(rolling, []byte("<title>404:")) {
 				internalNotFound = true
+			}
+			// The closed flag sits far ahead of the price data, so it is
+			// noted while streaming instead of being searched for afterwards.
+			if !closed {
+				for _, marker := range closedMarkers {
+					if bytes.Contains(rolling, marker) {
+						closed = true
+						break
+					}
+				}
 			}
 			if page, ok := parseProductJSONLD(rolling, expectedItemID); ok {
 				return page, nil
@@ -196,7 +260,7 @@ func parsePriceWatchHTML(reader io.Reader, expectedItemID int64, maximumBytes in
 				flightAfter += len(chunk)
 			}
 			if flightCapture != nil {
-				if page, ok := parseNextFlightItem(flightCapture, expectedItemID); ok {
+				if page, ok := parseNextFlightItem(flightCapture, expectedItemID, closed); ok {
 					return page, nil
 				}
 				if flightAfter >= priceWatchFlightAfterBytes {
@@ -217,12 +281,12 @@ func parsePriceWatchHTML(reader io.Reader, expectedItemID int64, maximumBytes in
 	}
 
 	if flightCapture != nil {
-		if page, ok := parseNextFlightItem(flightCapture, expectedItemID); ok {
+		if page, ok := parseNextFlightItem(flightCapture, expectedItemID, closed); ok {
 			return page, nil
 		}
 	}
 	if internalNotFound {
-		return PriceWatchPage{Available: false}, nil
+		return PriceWatchPage{State: PriceWatchItemDeleted}, nil
 	}
 	return PriceWatchPage{}, &PriceWatchFetchError{Code: "item_schema_missing", Detail: "item page did not contain supported price data"}
 }
@@ -282,7 +346,10 @@ func parseProductJSONLD(window []byte, expectedItemID int64) (PriceWatchPage, bo
 		return PriceWatchPage{}, false
 	}
 	availability, _ := offers["availability"].(string)
-	available := availability == "" || strings.HasSuffix(strings.ToLower(availability), "instock")
+	state := PriceWatchItemSold
+	if availability == "" || strings.HasSuffix(strings.ToLower(availability), "instock") {
+		state = PriceWatchItemAvailable
+	}
 	title, _ := product["name"].(string)
 	return PriceWatchPage{
 		Title:        strings.TrimSpace(title),
@@ -290,7 +357,8 @@ func parseProductJSONLD(window []byte, expectedItemID int64) (PriceWatchPage, bo
 		CanonicalURL: rawURL,
 		PriceMinor:   priceMinor,
 		CurrencyCode: currency,
-		Available:    available,
+		Available:    state == PriceWatchItemAvailable,
+		State:        state,
 	}, true
 }
 
@@ -329,62 +397,171 @@ func firstJSONLDImage(value any) string {
 	return ""
 }
 
-func parseNextFlightItem(capture []byte, expectedItemID int64) (PriceWatchPage, bool) {
-	itemPrefix := fmt.Sprintf(`\"id\":%d`, expectedItemID)
-	searchFrom := 0
-	var item []byte
-	var priceMatch [][]byte
-	for searchFrom < len(capture) {
-		relativeIndex := bytes.Index(capture[searchFrom:], []byte(itemPrefix))
-		if relativeIndex < 0 {
+// flightClosedMarkers are the byte sequences Vinted emits for a closed (sold)
+// listing. The listing ID has been shipped both as a string and as a number.
+func flightClosedMarkers(itemID int64) [][]byte {
+	return [][]byte{
+		[]byte(fmt.Sprintf(`\"is_closed\":true,\"item_id\":\"%d\"`, itemID)),
+		[]byte(fmt.Sprintf(`\"is_closed\":true,\"item_id\":%d,`, itemID)),
+		[]byte(fmt.Sprintf(`\"is_closed\":true,\"item_id\":%d}`, itemID)),
+	}
+}
+
+// flightItemIDIndex finds the next reference to the listing ID at or after
+// from, accepting `"id":"123"` and `"id":123` but not a longer number.
+func flightItemIDIndex(capture []byte, itemID int64, from int) (int, int) {
+	quoted := []byte(fmt.Sprintf(`\"id\":\"%d\"`, itemID))
+	numeric := []byte(fmt.Sprintf(`\"id\":%d`, itemID))
+	best, bestLength := -1, 0
+	if index := bytes.Index(capture[from:], quoted); index >= 0 {
+		best, bestLength = from+index, len(quoted)
+	}
+	for search := from; search < len(capture); {
+		index := bytes.Index(capture[search:], numeric)
+		if index < 0 {
 			break
 		}
-		itemIndex := searchFrom + relativeIndex
-		candidateEnd := itemIndex + 4096
-		if candidateEnd > len(capture) {
-			candidateEnd = len(capture)
+		start := search + index
+		end := start + len(numeric)
+		if end >= len(capture) || capture[end] < '0' || capture[end] > '9' {
+			if best < 0 || start < best {
+				best, bestLength = start, len(numeric)
+			}
+			break
 		}
-		candidate := capture[itemIndex:candidateEnd]
-		candidatePrice := flightPricePattern.FindSubmatch(candidate)
+		search = end
+	}
+	return best, bestLength
+}
+
+func firstFlightFlag(pattern *regexp.Regexp, window []byte) (bool, bool) {
+	match := pattern.FindSubmatch(window)
+	if len(match) != 2 {
+		return false, false
+	}
+	return string(match[1]) == "true", true
+}
+
+// flightObjectEnd returns the offset just past the JSON object that contains
+// start, scanning at most limit bytes. The flight payload is JSON inside a
+// JavaScript string, so a JSON quote is written \" and a quote inside a JSON
+// string \\\". Without a closing brace in range the limit is returned.
+func flightObjectEnd(capture []byte, start int, limit int) int {
+	end := min(start+limit, len(capture))
+	depth := 0
+	inString := false
+	for index := start; index < end; index++ {
+		switch capture[index] {
+		case '\\':
+			if index+1 >= end {
+				return end
+			}
+			switch capture[index+1] {
+			case '"':
+				inString = !inString
+				index++
+			case '\\':
+				// A JSON escape: skip it together with the character it escapes.
+				index += 2
+				if index+1 < end && capture[index] == '\\' && (capture[index+1] == '"' || capture[index+1] == '\\') {
+					index++
+				}
+			default:
+				index++
+			}
+		case '{':
+			if !inString {
+				depth++
+			}
+		case '}':
+			if !inString {
+				if depth == 0 {
+					return index + 1
+				}
+				depth--
+			}
+		}
+	}
+	return end
+}
+
+func parseNextFlightItem(capture []byte, expectedItemID int64, closed bool) (PriceWatchPage, bool) {
+	const itemWindow = 4096
+	searchFrom := 0
+	itemIndex, itemEnd := -1, 0
+	var priceMatch [][]byte
+	for searchFrom < len(capture) {
+		index, length := flightItemIDIndex(capture, expectedItemID, searchFrom)
+		if index < 0 {
+			break
+		}
+		// Everything is read from the listing's own object; later objects on
+		// the page describe other listings.
+		candidateEnd := flightObjectEnd(capture, index, itemWindow)
+		candidatePrice := flightPricePattern.FindSubmatch(capture[index:candidateEnd])
 		if len(candidatePrice) == 3 {
-			item = capture[itemIndex:]
+			itemIndex, itemEnd = index, candidateEnd
 			priceMatch = candidatePrice
 			break
 		}
-		searchFrom = itemIndex + len(itemPrefix)
+		searchFrom = index + length
 	}
-	if len(priceMatch) != 3 {
+	if itemIndex < 0 {
 		return PriceWatchPage{}, false
 	}
 	priceMinor, ok := decimalStringToMinor(string(priceMatch[1]))
 	if !ok {
 		return PriceWatchPage{}, false
 	}
+	item := capture[itemIndex:itemEnd]
 	titleMatch := flightTitlePattern.FindSubmatch(item)
 	if len(titleMatch) != 2 {
 		return PriceWatchPage{}, false
 	}
-	imageMatch := flightImagePattern.FindSubmatch(item)
-
-	title := decodeFlightString(string(titleMatch[1]))
 	imageURL := ""
-	if len(imageMatch) == 2 {
+	if imageMatch := flightImagePattern.FindSubmatch(item); len(imageMatch) == 2 {
 		imageURL = decodeFlightString(string(imageMatch[1]))
 	}
-	available := true
-	statusPattern := regexp.MustCompile(fmt.Sprintf(`(?s)\\"item_id\\":%d.{0,1000}?\\"can_buy\\":(true|false).{0,256}?\\"is_closed\\":(true|false)`, expectedItemID))
-	for _, status := range statusPattern.FindAllSubmatch(capture, -1) {
+
+	// The current schema keeps the state flags inside the item object, whose
+	// keys are sorted, so they can precede the ID.
+	objectStart := itemIndex
+	lookBehind := capture[max(0, itemIndex-1024):itemIndex]
+	if index := bytes.LastIndex(lookBehind, []byte(`\"item\":{`)); index >= 0 {
+		objectStart = itemIndex - len(lookBehind) + index
+	}
+	object := capture[objectStart:itemEnd]
+	canBuy, hasCanBuy := firstFlightFlag(flightCanBuyPattern, object)
+	reserved, _ := firstFlightFlag(flightReservedPattern, object)
+	hidden, _ := firstFlightFlag(flightHiddenPattern, object)
+
+	// Older pages published the state next to a numeric item_id instead.
+	legacyStatus := regexp.MustCompile(fmt.Sprintf(`(?s)\\"item_id\\":%d.{0,1000}?\\"can_buy\\":(true|false).{0,256}?\\"is_closed\\":(true|false)`, expectedItemID))
+	for _, status := range legacyStatus.FindAllSubmatch(capture, -1) {
 		if len(status) == 3 && (string(status[1]) == "false" || string(status[2]) == "true") {
-			available = false
+			closed = true
 		}
 	}
 
+	state := PriceWatchItemAvailable
+	switch {
+	case closed:
+		state = PriceWatchItemSold
+	case hidden:
+		state = PriceWatchItemHidden
+	case reserved:
+		state = PriceWatchItemReserved
+	case hasCanBuy && !canBuy:
+		state = PriceWatchItemSold
+	}
+
 	return PriceWatchPage{
-		Title:        title,
+		Title:        decodeFlightString(string(titleMatch[1])),
 		ImageURL:     imageURL,
 		PriceMinor:   priceMinor,
 		CurrencyCode: strings.ToUpper(string(priceMatch[2])),
-		Available:    available,
+		Available:    state == PriceWatchItemAvailable,
+		State:        state,
 	}, true
 }
 

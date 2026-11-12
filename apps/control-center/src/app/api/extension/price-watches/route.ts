@@ -5,6 +5,7 @@ import {
     extensionOptions,
 } from "@/lib/extension-auth.server";
 import { serializePriceMinor } from "@/lib/price-watch";
+import { describePriceWatchState } from "@/lib/price-watch-state";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -69,6 +70,13 @@ export async function GET(request: Request) {
             items: page.map((watch) => ({
                 id: watch.id.toString(),
                 status: watch.status,
+                state: describePriceWatchState({
+                    status: watch.status,
+                    stoppedReason: watch.stopped_reason,
+                    availability: watch.schedule.availability,
+                    lastErrorCode: watch.schedule.last_error_code,
+                    armed: watch.armed_at !== null,
+                }),
                 createdAt: watch.created_at.toISOString(),
                 target: {
                     itemId: watch.target.item_id.toString(),

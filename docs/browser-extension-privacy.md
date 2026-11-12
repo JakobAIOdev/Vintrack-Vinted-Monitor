@@ -1,6 +1,6 @@
 # Vintrack Browser Sync Privacy Policy
 
-Effective date: October 5, 2026
+Effective date: November 12, 2026
 
 Vintrack Browser Sync links a Vinted account that the user is already signed in
 to with the Vintrack service. The extension runs only on the public Vintrack
@@ -32,6 +32,26 @@ by default on supported Vinted pages and can be disabled in the popup. Pausing,
 resuming, and deleting a Price Watch requires a deliberate click; deletion also
 requires confirmation. Recent finds refresh every 12 seconds only while the
 Feed tab is open.
+
+Inline mode can also add Vintrack context to supported Vinted pages: badges on
+listings, an insights panel on item pages, and toasts for new monitor finds.
+For this, Vintrack returns a snapshot of the user's own data after
+authenticating the browser-link token: the IDs of listings their monitors
+found in the last seven days with the monitor name, and their Price Watches
+with status and prices. The extension requests it at most once a minute while
+a Vinted page with listings is visible and compares listings with it inside
+the browser. The pages and listings a user views are not sent to Vintrack for
+these badges. While toasts are enabled and a Vinted tab is visible, recent
+monitor finds are requested about every 20 seconds. These features only read
+the page that is already open; they send no requests to Vinted.
+
+To mark listings as seen and show a price change since the last visit, the
+extension stores the IDs of up to 2,000 opened Vinted listings together with
+the first and last visit time and the price shown on the page. This history,
+the user's fade and highlight keywords, and the per-feature switches stay in
+local extension storage and are never transmitted. The history can be deleted
+with **Clear seen history** in the companion's On Vinted tab; clearing
+extension state or removing the extension deletes all of it.
 
 The extension stores the Vintrack light or dark theme locally and mirrors that
 preference between the approved Vintrack page and supported Vinted pages. It
