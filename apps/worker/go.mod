@@ -1,6 +1,6 @@
 module vintrack-worker
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/bogdanfinn/fhttp v0.7.1
@@ -8,7 +8,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.12.3
 	github.com/redis/go-redis/v9 v9.23.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 )
 
 require (
@@ -24,7 +24,7 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5 // indirect
 	go.uber.org/atomic v1.12.0 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/crypto v0.59.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 )

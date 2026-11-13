@@ -20,6 +20,10 @@ ENV NEXT_BUILD_CPUS=$NEXT_BUILD_CPUS
 RUN npx prisma generate
 RUN --mount=type=cache,target=/app/.next/cache npm run build
 
+# Keep the Prisma migration CLI, but exclude build and development tools.
+FROM builder AS production-deps
+RUN npm prune --omit=dev --ignore-scripts --no-audit --no-fund
+
 # --- Runtime ---
 FROM base AS runner
 WORKDIR /app
@@ -37,9 +41,9 @@ RUN useradd --system --uid=1001 --gid nodejs nextjs
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=production-deps /app/node_modules ./node_modules
+COPY --from=production-deps /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=production-deps /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
 COPY --from=builder /app/package.json ./package.json
