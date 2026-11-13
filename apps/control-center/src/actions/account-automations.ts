@@ -10,6 +10,7 @@ import {
     type AutomationSettings,
 } from "@/lib/account-automations";
 import { revalidatePath } from "next/cache";
+import { withMonitorActivationLock } from "@/lib/monitor-limits";
 
 export async function saveAccountAutomation(
     monitorId: number,
@@ -50,7 +51,7 @@ export async function saveAccountAutomation(
     );
     if (!access.allowed)
         return { error: "This module is unavailable for your account." };
-    const result = await db.$transaction(async (tx) => {
+    const result = await withMonitorActivationLock(userId, async (tx) => {
         // Serialize settings with account changes; never arm against an identity read before the transaction.
         const accounts = await tx.$queryRaw<
             { vinted_user_id: bigint; domain: string; status: string }[]

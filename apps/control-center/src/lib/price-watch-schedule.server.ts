@@ -79,6 +79,13 @@ export async function lockPriceWatchUser(tx: Tx, userId: string) {
     await tx.$executeRaw`
         SELECT pg_advisory_xact_lock(hashtextextended(${`price-watch:${userId}`}, 0))
     `;
+    const user = await tx.user.findUnique({
+        where: { id: userId },
+        select: { banned_at: true },
+    });
+    if (!user || user.banned_at) {
+        throw new PriceWatchRuleError("Member access denied");
+    }
 }
 
 export async function lockPriceWatchCapacity(tx: Tx) {

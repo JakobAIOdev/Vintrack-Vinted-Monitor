@@ -23,70 +23,76 @@ export async function reconcileUserFreeProxyMonitorLimit(
     actorUserId: string | null,
 ) {
     const transitionKey = Date.now().toString();
-    const result = await withMonitorActivationLock(userId, async (tx) => {
-        const state = await getMonitorActivationState(userId, "free", tx);
-        if (state.freeProxyActiveLimit === null) {
-            return {
-                limit: null,
-                source: state.freeProxyLimitSource,
-                activeBefore: state.freeProxyActiveCount,
-                monitors: [] as FreeProxyLimitPausedMonitor[],
-            };
-        }
+    const result = await withMonitorActivationLock(
+        userId,
+        async (tx) => {
+            const state = await getMonitorActivationState(userId, "free", tx);
+            if (state.freeProxyActiveLimit === null) {
+                return {
+                    limit: null,
+                    source: state.freeProxyLimitSource,
+                    activeBefore: state.freeProxyActiveCount,
+                    monitors: [] as FreeProxyLimitPausedMonitor[],
+                };
+            }
 
-        const excess = Math.max(
-            state.freeProxyActiveCount - state.freeProxyActiveLimit,
-            0,
-        );
-        if (excess === 0) {
+            const excess = Math.max(
+                state.freeProxyActiveCount - state.freeProxyActiveLimit,
+                0,
+            );
+            if (excess === 0) {
+                return {
+                    limit: state.freeProxyActiveLimit,
+                    source: state.freeProxyLimitSource,
+                    activeBefore: state.freeProxyActiveCount,
+                    monitors: [] as FreeProxyLimitPausedMonitor[],
+                };
+            }
+
+            const monitors = await tx.monitors.findMany({
+                where: { userId, status: "active", proxy_source: "free" },
+                orderBy: [
+                    { created_at: { sort: "desc", nulls: "last" } },
+                    { id: "desc" },
+                ],
+                take: excess,
+                select: {
+                    id: true,
+                    name: true,
+                    userId: true,
+                    discord_webhook: true,
+                    webhook_active: true,
+                    telegram_active: true,
+                    notifications_enabled: true,
+                },
+            });
+
+            if (monitors.length > 0) {
+                await tx.monitors.updateMany({
+                    where: {
+                        id: { in: monitors.map((monitor) => monitor.id) },
+                    },
+                    data: { status: "paused" },
+                });
+                for (const monitor of monitors) {
+                    await enqueueMonitorStatusNotification(tx, monitor, {
+                        kind: "free_proxy_limit_pause",
+                        title: "Monitor paused",
+                        message: `The monitor ${monitor.name} was automatically paused because the running Free Proxy Pool monitor limit is ${state.freeProxyActiveLimit}.`,
+                        idempotencyKey: `free-proxy-limit:${monitor.id}:${scope}:${state.freeProxyActiveLimit}:${transitionKey}`,
+                    });
+                }
+            }
+
             return {
                 limit: state.freeProxyActiveLimit,
                 source: state.freeProxyLimitSource,
                 activeBefore: state.freeProxyActiveCount,
-                monitors: [] as FreeProxyLimitPausedMonitor[],
+                monitors,
             };
-        }
-
-        const monitors = await tx.monitors.findMany({
-            where: { userId, status: "active", proxy_source: "free" },
-            orderBy: [
-                { created_at: { sort: "desc", nulls: "last" } },
-                { id: "desc" },
-            ],
-            take: excess,
-            select: {
-                id: true,
-                name: true,
-                userId: true,
-                discord_webhook: true,
-                webhook_active: true,
-                telegram_active: true,
-                notifications_enabled: true,
-            },
-        });
-
-        if (monitors.length > 0) {
-            await tx.monitors.updateMany({
-                where: { id: { in: monitors.map((monitor) => monitor.id) } },
-                data: { status: "paused" },
-            });
-            for (const monitor of monitors) {
-                await enqueueMonitorStatusNotification(tx, monitor, {
-                    kind: "free_proxy_limit_pause",
-                    title: "Monitor paused",
-                    message: `The monitor ${monitor.name} was automatically paused because the running Free Proxy Pool monitor limit is ${state.freeProxyActiveLimit}.`,
-                    idempotencyKey: `free-proxy-limit:${monitor.id}:${scope}:${state.freeProxyActiveLimit}:${transitionKey}`,
-                });
-            }
-        }
-
-        return {
-            limit: state.freeProxyActiveLimit,
-            source: state.freeProxyLimitSource,
-            activeBefore: state.freeProxyActiveCount,
-            monitors,
-        };
-    });
+        },
+        { allowBanned: true },
+    );
 
     if (result.limit !== null && result.monitors.length > 0) {
         await logAuditEvent({

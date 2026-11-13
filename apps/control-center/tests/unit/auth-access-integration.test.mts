@@ -18,6 +18,7 @@ function harness(environment: Record<string, string | undefined> = {}) {
         ["oidc-owner", [{ provider: "oidc", providerAccountId: "owner-sub" }]],
         ["github-only", [{ provider: "github", providerAccountId: "123" }]],
     ]);
+    const bannedUsers = new Set<string>();
     let identityQueries = 0;
     let linkedUser = "owner";
     let extensionUpdates = 0;
@@ -29,7 +30,41 @@ function harness(environment: Record<string, string | undefined> = {}) {
         expires: new Date(Date.now() + 60000),
     });
     const db = {
+        user: {
+            findUnique: async ({ where }: { where: { id: string } }) =>
+                accounts.has(where.id)
+                    ? {
+                          banned_at: bannedUsers.has(where.id)
+                              ? new Date()
+                              : null,
+                      }
+                    : null,
+        },
         account: {
+            findUnique: async ({
+                where,
+            }: {
+                where: { provider_providerAccountId: access.AuthIdentity };
+            }) => {
+                const identity = where.provider_providerAccountId;
+                const entry = [...accounts].find(([, identities]) =>
+                    identities.some(
+                        (account) =>
+                            account.provider === identity.provider &&
+                            account.providerAccountId ===
+                                identity.providerAccountId,
+                    ),
+                );
+                return entry
+                    ? {
+                          user: {
+                              banned_at: bannedUsers.has(entry[0])
+                                  ? new Date()
+                                  : null,
+                          },
+                      }
+                    : null;
+            },
             findMany: async ({ where }: { where: { userId: string } }) => {
                 identityQueries++;
                 return accounts.get(where.userId) ?? [];
@@ -139,6 +174,7 @@ function harness(environment: Record<string, string | undefined> = {}) {
         accessServer,
         config: config!,
         accounts,
+        bannedUsers,
         identityQueries: () => identityQueries,
         extensionUpdates: () => extensionUpdates,
         setUser: (userId: string) => {
@@ -159,7 +195,7 @@ function harness(environment: Record<string, string | undefined> = {}) {
     };
 }
 
-test("default production login, sessions and extension tokens need no additional database queries", async () => {
+test("public login, sessions and extension tokens do not query identity allowlists", async () => {
     const h = harness({
         NODE_ENV: "production",
         AUTH_ALLOWED_DISCORD_IDS: "",
@@ -234,4 +270,35 @@ test("demo authentication cannot bypass an explicitly configured allowlist", asy
         AUTH_ALLOWED_DISCORD_IDS: "123",
     });
     assert.equal(await h.auth.auth(), null);
+});
+
+test("bans deny existing sessions, primary logins, GitHub linking and extension tokens", async () => {
+    for (const environment of [{}, { AUTH_ALLOWED_DISCORD_IDS: "123" }]) {
+        const h = harness(environment);
+        assert.ok(await h.config.adapter!.getSessionAndUser!("owner"));
+        assert.equal((await h.extensionRequest()).ok, true);
+        h.bannedUsers.add("owner");
+        assert.equal(await h.signIn("discord", "123"), false);
+        assert.equal(await h.config.adapter!.getSessionAndUser!("owner"), null);
+        assert.equal((await h.extensionRequest()).ok, false);
+        assert.match(
+            String(await h.signIn("github", "789")),
+            /session_missing/,
+        );
+        await assert.rejects(
+            async () =>
+                h.config.adapter!.createSession!({
+                    sessionToken: "new-session",
+                    userId: "owner",
+                    expires: new Date(Date.now() + 60000),
+                }),
+            /Access denied/,
+        );
+        h.bannedUsers.delete("owner");
+        assert.equal(await h.signIn("discord", "123"), true);
+        assert.equal(
+            await h.accessServer.isInstanceUserAllowed("missing-member"),
+            false,
+        );
+    }
 });

@@ -95,6 +95,12 @@ async function signedInUserId() {
 
 const adapter: Adapter = {
     ...prismaAdapter,
+    async createSession(session) {
+        if (!(await isInstanceUserAllowed(session.userId))) {
+            throw new Error("Access denied");
+        }
+        return db.session.create({ data: session });
+    },
     async getSessionAndUser(sessionToken) {
         const result = await prismaAdapter.getSessionAndUser?.(sessionToken);
         if (!result || !(await isInstanceUserAllowed(result.user.id)))
@@ -131,7 +137,18 @@ const authResult = NextAuth({
     callbacks: {
         async signIn({ user, account, profile }) {
             if (account?.provider !== "github") {
-                return isInstanceAccountAllowed(account);
+                if (!isInstanceAccountAllowed(account)) return false;
+                if (!account) return false;
+                const existingAccount = await db.account.findUnique({
+                    where: {
+                        provider_providerAccountId: {
+                            provider: account.provider,
+                            providerAccountId: account.providerAccountId,
+                        },
+                    },
+                    select: { user: { select: { banned_at: true } } },
+                });
+                return !existingAccount?.user.banned_at;
             }
             if (!/^\d+$/.test(account.providerAccountId)) return false;
             const githubId = BigInt(account.providerAccountId);

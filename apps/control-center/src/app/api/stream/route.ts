@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { isInstanceUserAllowed } from "@/lib/auth-access.server";
 import { db } from "@/lib/db";
 import { redisSubscriber, userItemChannel } from "@/lib/redis";
 import { buildSellerProfileUrl, getBannedSellerIds } from "@/lib/seller-bans";
@@ -46,7 +47,12 @@ export async function GET(req: NextRequest) {
     // reverse proxy closes the idle stream, and every reconnect repeats the
     // session and monitor lookups above. A comment line keeps it open and is
     // ignored by EventSource.
-    const heartbeat = setInterval(() => {
+    const heartbeat = setInterval(async () => {
+        try {
+            if (!(await isInstanceUserAllowed(userId))) return close();
+        } catch {
+            return close();
+        }
         writer.write(encoder.encode(": ping\n\n")).catch(() => close());
     }, STREAM_HEARTBEAT_MS);
     const close = () => {
@@ -59,8 +65,10 @@ export async function GET(req: NextRequest) {
 
     const unsubscribe = redisSubscriber().subscribe(
         userItemChannel(userId),
-        (message) => {
+        async (message) => {
             try {
+                if (closed) return;
+                if (!(await isInstanceUserAllowed(userId))) return close();
                 const parsed = JSON.parse(message);
                 const monitorId = Number(parsed.monitor_id);
                 const sellerId =

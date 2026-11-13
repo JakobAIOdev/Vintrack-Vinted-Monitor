@@ -61,6 +61,7 @@ export async function getFeatureAccessForUser(
             where: { id: userId },
             select: {
                 role: true,
+                banned_at: true,
                 ...(feature === "checkout_links"
                     ? { checkout_enabled: true }
                     : {}),
@@ -68,7 +69,11 @@ export async function getFeatureAccessForUser(
         }),
         loadFeaturePolicies(client),
     ]);
-    const access = resolveFeatureAccess(feature, user?.role, policies);
+    const access = resolveFeatureAccess(
+        feature,
+        user?.banned_at ? undefined : user?.role,
+        policies,
+    );
     if (
         access.allowed &&
         feature === "checkout_links" &&

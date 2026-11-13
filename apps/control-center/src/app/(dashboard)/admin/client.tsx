@@ -1,6 +1,9 @@
 "use client";
 
+import { AdminScrollArea } from "@/components/admin/admin-scroll-area";
+
 import { OwnProxyLimitCard } from "@/components/admin/own-proxy-limit-card";
+import { RegionDistributionPanel } from "@/components/admin/region-distribution";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -66,6 +69,7 @@ import {
     setRoleActiveMonitorLimit,
     setRoleFreeProxyMonitorLimit,
     setUserRole,
+    setMemberBanned,
     setUserActiveMonitorLimit,
     setUserFreeProxyMonitorLimit,
     getAdminActiveMonitors,
@@ -175,6 +179,7 @@ type AdminUserMetrics = {
 
 type AdminOverviewState = Awaited<ReturnType<typeof getAdminOverviewState>>;
 type UserRow = {
+    banned_at?: Date | null;
     id: string;
     name: string | null;
     email: string | null;
@@ -1289,6 +1294,8 @@ export function AdminClient({
     const [usersPerPage, setUsersPerPage] =
         useState<(typeof USER_PAGE_SIZES)[number]>(25);
     const [isStoppingMonitors, setIsStoppingMonitors] = useState(false);
+    const [isBanDialogOpen, setIsBanDialogOpen] = useState(false);
+    const [isSavingBan, setIsSavingBan] = useState(false);
     const [stoppingMonitorId, setStoppingMonitorId] = useState<number | null>(
         null,
     );
@@ -2057,6 +2064,7 @@ export function AdminClient({
         }));
         const hydratedUser = {
             ...user,
+            banned_at: details.banned_at,
             monitors,
             _count: { ...user._count, monitors: monitors.length },
             metrics: user.metrics,
@@ -2553,6 +2561,46 @@ export function AdminClient({
                     ? error.message
                     : "Failed to save Price Watch override",
             );
+        }
+    };
+
+    const handleMemberBan = async () => {
+        if (!selected) return;
+        setIsSavingBan(true);
+        const banned = !selected.banned_at;
+        try {
+            const result = await setMemberBanned(selected.id, banned);
+            const update = (user: UserRow): UserRow => ({
+                ...(banned ? markUserMonitorsStopped(user) : user),
+                banned_at: result.banned_at,
+            });
+            setUsers((current) =>
+                current.map((user) =>
+                    user.id === selected.id ? update(user) : user,
+                ),
+            );
+            setSelected((current) =>
+                current?.id === selected.id ? update(current) : current,
+            );
+            if (banned) {
+                setActiveMonitorRows((current) =>
+                    current.filter((monitor) => monitor.userId !== selected.id),
+                );
+            }
+            setIsBanDialogOpen(false);
+            toast.success(
+                banned
+                    ? "Member banned. Access revoked and background jobs stopped."
+                    : "Member unbanned. Monitors and Price Watches remain paused.",
+            );
+        } catch (error) {
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to update member access",
+            );
+        } finally {
+            setIsSavingBan(false);
         }
     };
 
@@ -3520,6 +3568,10 @@ export function AdminClient({
                             iconClassName="bg-amber-500/10 text-amber-600"
                         />
                     </div>
+                    <RegionDistributionPanel
+                        data={overviewState?.regionDistribution ?? null}
+                        loadFailed={overviewLoadFailed}
+                    />
                     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
                         <div className="border-border/60 bg-card flex h-full min-w-0 flex-col rounded-lg border p-4">
                             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -3704,7 +3756,10 @@ export function AdminClient({
                                             active monitor limit and override.
                                         </p>
                                     </div>
-                                    <div className="divide-y divide-amber-200 border-t border-amber-200 dark:divide-amber-500/20 dark:border-amber-500/20">
+                                    <AdminScrollArea
+                                        aria-label="Members at monitor capacity"
+                                        className="divide-y divide-amber-200 border-t border-amber-200 dark:divide-amber-500/20 dark:border-amber-500/20"
+                                    >
                                         {capacityUsers.map((user, index) => {
                                             const limit =
                                                 overviewState?.limits
@@ -3746,7 +3801,7 @@ export function AdminClient({
                                                 </button>
                                             );
                                         })}
-                                    </div>
+                                    </AdminScrollArea>
                                     {usersAtLimit > capacityUsers.length ? (
                                         <button
                                             type="button"
@@ -3863,7 +3918,10 @@ export function AdminClient({
                                     monitors.
                                 </p>
                             </div>
-                            <div className="divide-border/50 divide-y">
+                            <AdminScrollArea
+                                aria-label="Most active members"
+                                className="divide-border/50 divide-y"
+                            >
                                 {topUsers.map((user) => (
                                     <button
                                         key={user.id}
@@ -3889,7 +3947,7 @@ export function AdminClient({
                                         </div>
                                     </button>
                                 ))}
-                            </div>
+                            </AdminScrollArea>
                         </div>
 
                         <div className="border-border/60 bg-card overflow-hidden rounded-lg border">
@@ -3903,7 +3961,10 @@ export function AdminClient({
                                 </p>
                             </div>
                             {importantLogs.length > 0 ? (
-                                <div className="divide-border/50 divide-y">
+                                <AdminScrollArea
+                                    aria-label="Recent important events"
+                                    className="divide-border/50 divide-y"
+                                >
                                     {importantLogs.map((log) => (
                                         <div key={log.id} className="px-5 py-3">
                                             <div className="flex flex-wrap items-center gap-2">
@@ -3930,7 +3991,7 @@ export function AdminClient({
                                             </p>
                                         </div>
                                     ))}
-                                </div>
+                                </AdminScrollArea>
                             ) : (
                                 <div className="text-muted-foreground px-5 py-8 text-center text-sm">
                                     No important events right now.
@@ -4365,7 +4426,10 @@ export function AdminClient({
                                     </Badge>
                                 </div>
                                 {memberInsights.recentMembers.length > 0 ? (
-                                    <div className="bg-border/50 grid gap-px sm:grid-cols-2 xl:grid-cols-4">
+                                    <AdminScrollArea
+                                        aria-label="Newest members"
+                                        className="bg-border/50 grid gap-px sm:grid-cols-2 xl:grid-cols-4"
+                                    >
                                         {memberInsights.recentMembers.map(
                                             (member) => {
                                                 const memberLabel =
@@ -4428,7 +4492,7 @@ export function AdminClient({
                                                 );
                                             },
                                         )}
-                                    </div>
+                                    </AdminScrollArea>
                                 ) : (
                                     <div className="text-muted-foreground px-6 py-10 text-center text-sm">
                                         No recent members with a known signup
@@ -4780,7 +4844,10 @@ export function AdminClient({
                                 ) : null}
                             </div>
                         ) : filteredActiveMonitorMembers.length > 0 ? (
-                            <div className="divide-border/60 divide-y">
+                            <AdminScrollArea
+                                aria-label="Running monitors by member"
+                                className="divide-border/60 divide-y"
+                            >
                                 {filteredActiveMonitorMembers.map(
                                     ({ user, monitors }) => {
                                         const isExpanded =
@@ -5001,7 +5068,7 @@ export function AdminClient({
                                         );
                                     },
                                 )}
-                            </div>
+                            </AdminScrollArea>
                         ) : (
                             <div className="px-5 py-14 text-center">
                                 <div className="bg-muted text-muted-foreground mx-auto flex h-11 w-11 items-center justify-center rounded-full">
@@ -5069,9 +5136,12 @@ export function AdminClient({
                             />
                         </div>
                     </div>
-                    <div className="overflow-x-auto">
+                    <AdminScrollArea
+                        aria-label="Members table"
+                        className="overflow-x-auto"
+                    >
                         <table className="w-full min-w-[52rem] [&_th]:whitespace-nowrap">
-                            <thead className="bg-muted/30">
+                            <thead className="bg-card sticky top-0 z-10">
                                 <tr className="border-border border-b">
                                     <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
                                         User
@@ -5138,6 +5208,14 @@ export function AdminClient({
                                             </td>
                                             <td className="px-4 py-2.5">
                                                 {getRoleBadge(user.role)}
+                                                {user.banned_at ? (
+                                                    <Badge
+                                                        variant="destructive"
+                                                        className="ml-2"
+                                                    >
+                                                        Banned
+                                                    </Badge>
+                                                ) : null}
                                             </td>
                                             <td className="px-4 py-2.5 text-center">
                                                 <div className="flex flex-col items-center gap-1">
@@ -5284,7 +5362,7 @@ export function AdminClient({
                                 ) : null}
                             </tbody>
                         </table>
-                    </div>
+                    </AdminScrollArea>
                     <div className="border-border/60 flex flex-col gap-3 border-t px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
                         <div className="text-muted-foreground text-xs">
                             Showing {shownUserStart}-{shownUserEnd} of{" "}
@@ -5620,7 +5698,10 @@ export function AdminClient({
                                     parsing failure.
                                 </CardDescription>
                             </CardHeader>
-                            <CardContent className="divide-y p-0">
+                            <AdminScrollArea
+                                aria-label="Problematic targets"
+                                className="divide-y p-0"
+                            >
                                 {priceWatchPollingState.problems.length ? (
                                     priceWatchPollingState.problems.map(
                                         (problem) => (
@@ -5651,7 +5732,7 @@ export function AdminClient({
                                         No problematic active targets.
                                     </p>
                                 )}
-                            </CardContent>
+                            </AdminScrollArea>
                         </Card>
                         <Card className="py-0">
                             <CardHeader className="border-b p-5">
@@ -5663,7 +5744,10 @@ export function AdminClient({
                                     capacity.
                                 </CardDescription>
                             </CardHeader>
-                            <CardContent className="divide-y p-0">
+                            <AdminScrollArea
+                                aria-label="Problematic proxy groups"
+                                className="divide-y p-0"
+                            >
                                 {priceWatchPollingState.proxyProblems.length ? (
                                     priceWatchPollingState.proxyProblems.map(
                                         (problem) => (
@@ -5695,7 +5779,7 @@ export function AdminClient({
                                         No proxy groups need attention.
                                     </p>
                                 )}
-                            </CardContent>
+                            </AdminScrollArea>
                         </Card>
                     </div>
                 </div>
@@ -6359,9 +6443,12 @@ export function AdminClient({
                                 Loading admin logs...
                             </div>
                         ) : visibleAdminLogs.length > 0 ? (
-                            <div className="overflow-x-auto">
+                            <AdminScrollArea
+                                aria-label="Operation logs"
+                                className="overflow-x-auto"
+                            >
                                 <table className="w-full">
-                                    <thead className="bg-muted/30">
+                                    <thead className="bg-card sticky top-0 z-10">
                                         <tr className="border-border border-b">
                                             <th className="text-muted-foreground px-5 py-3 text-left text-[11px] font-medium tracking-wider uppercase">
                                                 Event
@@ -6443,7 +6530,7 @@ export function AdminClient({
                                         ))}
                                     </tbody>
                                 </table>
-                            </div>
+                            </AdminScrollArea>
                         ) : (
                             <div className="text-muted-foreground px-5 py-12 text-center text-sm">
                                 {normalizedLogSearch
@@ -8017,7 +8104,10 @@ export function AdminClient({
                                     </p>
                                 </div>
                             </div>
-                            <div className="divide-border/60 divide-y">
+                            <AdminScrollArea
+                                aria-label="Region health"
+                                className="divide-border/60 divide-y"
+                            >
                                 {displayedFreeProxyRegions.length > 0 ? (
                                     displayedFreeProxyRegions.map((region) => {
                                         const runtime =
@@ -8213,7 +8303,7 @@ export function AdminClient({
                                         them.
                                     </p>
                                 )}
-                            </div>
+                            </AdminScrollArea>
                         </div>
 
                         <div className="mt-4 flex flex-wrap gap-2">
@@ -8772,6 +8862,50 @@ export function AdminClient({
                 </DialogContent>
             </Dialog>
 
+            <Dialog
+                open={isBanDialogOpen}
+                onOpenChange={(open) => {
+                    if (!isSavingBan) setIsBanDialogOpen(open);
+                }}
+            >
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>
+                            {selected?.banned_at
+                                ? "Unban member?"
+                                : "Ban member?"}
+                        </DialogTitle>
+                        <DialogDescription>
+                            {selected?.banned_at
+                                ? `Restore Vintrack access for ${selected.name ?? "this member"}? They must sign in again. Monitors, Price Watches, and automations stay stopped.`
+                                : `Revoke Vintrack access for ${selected?.name ?? "this member"}? All sessions and extension access will be revoked, monitors and Price Watches paused, automations disabled, and queued alerts cancelled.`}
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button
+                            variant="outline"
+                            disabled={isSavingBan}
+                            onClick={() => setIsBanDialogOpen(false)}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            variant={
+                                selected?.banned_at ? "default" : "destructive"
+                            }
+                            disabled={isSavingBan}
+                            onClick={handleMemberBan}
+                        >
+                            {isSavingBan
+                                ? "Saving…"
+                                : selected?.banned_at
+                                  ? "Unban member"
+                                  : "Ban member"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
             <Dialog open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
                 <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
                     <DialogHeader>
@@ -8804,6 +8938,11 @@ export function AdminClient({
                                                 {selected.name ?? "Unknown"}
                                             </p>
                                             {getRoleBadge(selected.role)}
+                                            {selected.banned_at ? (
+                                                <Badge variant="destructive">
+                                                    Banned
+                                                </Badge>
+                                            ) : null}
                                             {selected.id === currentUserId ? (
                                                 <Badge
                                                     variant="outline"
@@ -8850,6 +8989,45 @@ export function AdminClient({
                                         Stop Running Monitors
                                     </Button>
                                 </div>
+                            </div>
+
+                            <div className="border-border/60 flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between">
+                                <div>
+                                    <p className="text-sm font-semibold">
+                                        Vintrack access
+                                    </p>
+                                    <p className="text-muted-foreground mt-1 text-xs">
+                                        {selected.banned_at
+                                            ? "This member is banned. Unbanning restores access; monitors, Price Watches, and automations stay stopped."
+                                            : "Banning revokes all sessions and extension access, pauses monitors and Price Watches, and disables automations and queued alerts."}
+                                    </p>
+                                    {selected.role === "admin" ? (
+                                        <p className="text-muted-foreground mt-1 text-xs">
+                                            Change the admin role before banning
+                                            this member.
+                                        </p>
+                                    ) : null}
+                                </div>
+                                <Button
+                                    variant={
+                                        selected.banned_at
+                                            ? "outline"
+                                            : "destructive"
+                                    }
+                                    size="sm"
+                                    disabled={
+                                        selected.id === currentUserId ||
+                                        (!selected.banned_at &&
+                                            selected.role === "admin") ||
+                                        isSavingBan ||
+                                        loadingUserDetailsId === selected.id
+                                    }
+                                    onClick={() => setIsBanDialogOpen(true)}
+                                >
+                                    {selected.banned_at
+                                        ? "Unban member"
+                                        : "Ban member"}
+                                </Button>
                             </div>
 
                             <div className="border-border/60 bg-card rounded-lg border px-4 py-4 sm:px-5">

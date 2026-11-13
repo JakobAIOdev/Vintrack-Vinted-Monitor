@@ -142,6 +142,14 @@ func (m *Manager) FeatureAccess(userID string, feature string) (FeatureAccess, e
 	return m.store.FeatureAccess(m.ctx, userID, feature)
 }
 
+// Check durable membership even when the session or browser token is cached.
+func (m *Manager) UserAllowed(userID string) (bool, error) {
+	if m.store == nil {
+		return true, nil
+	}
+	return m.store.UserAllowed(m.ctx, userID)
+}
+
 func (m *Manager) CheckoutConsentAccepted(userID string) (bool, error) {
 	if m.store == nil {
 		return false, fmt.Errorf("checkout consent storage unavailable")
@@ -199,6 +207,13 @@ func (m *Manager) migrateCachedSessionsToStore() {
 }
 
 func (m *Manager) Store(sess VintedSession) error {
+	allowed, err := m.UserAllowed(sess.UserID)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fmt.Errorf("member access denied")
+	}
 	if m.store != nil {
 		if err := m.store.Save(m.ctx, sess); err != nil {
 			return err
@@ -227,6 +242,10 @@ func (m *Manager) StoreIfCurrent(before VintedSession, updated VintedSession) (b
 }
 
 func (m *Manager) Get(userID string) (*VintedSession, error) {
+	allowed, err := m.UserAllowed(userID)
+	if err != nil || !allowed {
+		return nil, err
+	}
 	sess, err := m.getCached(userID)
 	if err != nil {
 		return nil, err
@@ -487,6 +506,10 @@ func (m *Manager) GetBrowserSyncRequest(code string) (*BrowserSyncRequest, error
 	if err := json.Unmarshal(data, &req); err != nil {
 		return nil, err
 	}
+	allowed, err := m.UserAllowed(req.UserID)
+	if err != nil || !allowed {
+		return nil, err
+	}
 
 	return &req, nil
 }
@@ -568,43 +591,32 @@ func (m *Manager) cacheBrowserLink(link BrowserLink) error {
 }
 
 func (m *Manager) GetBrowserLinkByToken(token string) (*BrowserLink, error) {
-	data, err := m.redis.Get(m.ctx, m.browserLinkTokenKey(token)).Bytes()
-	if err != nil && err != redis.Nil {
-		return nil, err
-	}
-	if err == nil {
-		var link BrowserLink
-		if err := json.Unmarshal(data, &link); err != nil {
+	// Durable revocation wins over a Redis entry, including after unbanning.
+	if m.store != nil {
+		link, err := m.store.GetBrowserLinkByTokenHash(m.ctx, browserLinkTokenHash(token))
+		if err != nil || link == nil {
 			return nil, err
 		}
-		// A link cached before durable storage existed is written through
-		// once. Links already marked persistent are not rewritten on every
-		// read; TouchBrowserLink persists the ones that are actually used.
-		if m.store != nil && !link.Persistent {
-			link.Persistent = true
-			if err := m.store.SaveBrowserLink(m.ctx, browserLinkTokenHash(token), link); err != nil {
-				return nil, err
-			}
-			if err := m.cacheBrowserLink(link); err != nil {
-				log.Printf("[session] failed to recache browser link for user %s: %v", link.UserID, err)
-			}
+		allowed, err := m.UserAllowed(link.UserID)
+		if err != nil || !allowed {
+			return nil, err
 		}
-		return &link, nil
+		link.Token = token
+		link.ExpiresAt = time.Now().UTC().Add(180 * 24 * time.Hour).Format(time.RFC3339)
+		return link, nil
 	}
-
-	if m.store == nil {
+	data, err := m.redis.Get(m.ctx, m.browserLinkTokenKey(token)).Bytes()
+	if err == redis.Nil {
 		return nil, nil
 	}
-	link, err := m.store.GetBrowserLinkByTokenHash(m.ctx, browserLinkTokenHash(token))
-	if err != nil || link == nil {
-		return link, err
+	if err != nil {
+		return nil, err
 	}
-	link.Token = token
-	link.ExpiresAt = time.Now().UTC().Add(180 * 24 * time.Hour).Format(time.RFC3339)
-	if err := m.cacheBrowserLink(*link); err != nil {
-		log.Printf("[session] failed to cache durable browser link for user %s: %v", link.UserID, err)
+	var link BrowserLink
+	if err := json.Unmarshal(data, &link); err != nil {
+		return nil, err
 	}
-	return link, nil
+	return &link, nil
 }
 
 func (m *Manager) TouchBrowserLink(token string) error {

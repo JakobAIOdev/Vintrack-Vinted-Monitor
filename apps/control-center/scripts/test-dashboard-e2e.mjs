@@ -11,6 +11,7 @@ const testFiles = [
     "control-center-ux.spec.ts",
     "feed.spec.ts",
     "admin.spec.ts",
+    "member-bans.spec.ts",
     "announcement.spec.ts",
     "maintenance.spec.ts",
     "inactive-member-policy.spec.ts",

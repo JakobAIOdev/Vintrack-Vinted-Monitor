@@ -50,6 +50,15 @@ func (s *Store) EnqueueAlertNotification(ctx context.Context, request model.Aler
 }
 
 func enqueueAlertNotificationTx(ctx context.Context, tx *sql.Tx, request model.AlertNotificationRequest) (bool, error) {
+	if request.UserID != "" {
+		var allowed bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM "User" WHERE id = $1 AND banned_at IS NULL)`, request.UserID).Scan(&allowed); err != nil {
+			return false, err
+		}
+		if !allowed {
+			return false, nil
+		}
+	}
 	payload, err := json.Marshal(request.Payload)
 	if err != nil {
 		return false, fmt.Errorf("marshal alert payload: %w", err)
@@ -145,6 +154,20 @@ func enqueueAlertNotificationTx(ctx context.Context, tx *sql.Tx, request model.A
 		}
 	}
 	return deliveryCount > 0, nil
+}
+
+// A queued in-memory claim may have been revoked since the batch was read.
+func (s *Store) AlertDeliveryAllowed(ctx context.Context, delivery model.AlertDelivery) (bool, error) {
+	var allowed bool
+	err := s.alertPool().QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM alert_deliveries delivery
+			JOIN alert_notifications notification ON notification.id = delivery.notification_id
+			LEFT JOIN "User" member ON member.id = notification.user_id
+			WHERE delivery.id = $1 AND delivery.claim_token = $2 AND delivery.status = 'processing'
+			  AND (notification.user_id IS NULL OR (member.id IS NOT NULL AND member.banned_at IS NULL))
+		)`, delivery.ID, delivery.ClaimToken).Scan(&allowed)
+	return allowed, err
 }
 
 func (s *Store) ClaimAlertDelivery(ctx context.Context, claimToken string) (*model.AlertDelivery, error) {

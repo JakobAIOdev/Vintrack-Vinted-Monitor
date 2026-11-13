@@ -1,5 +1,7 @@
 "use client";
 
+import { AdminScrollArea } from "@/components/admin/admin-scroll-area";
+
 import { useState, useTransition } from "react";
 import {
     Activity,
@@ -1014,7 +1016,10 @@ export function GithubRewardsAdminPanel({
                                 </Badge>
                             </div>
                         </CardHeader>
-                        <CardContent className="space-y-3 p-5">
+                        <AdminScrollArea
+                            aria-label="Review queue"
+                            className="space-y-3 p-5"
+                        >
                             {initialState.unmatched.length === 0 ? (
                                 <div className="flex items-center gap-3 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.06] p-3 text-sm">
                                     <CheckCircle2 className="h-4 w-4 text-emerald-600" />
@@ -1163,7 +1168,7 @@ export function GithubRewardsAdminPanel({
                                     </div>
                                 ))
                             )}
-                        </CardContent>
+                        </AdminScrollArea>
                     </Card>
                 </div>
             </div>
@@ -1194,7 +1199,10 @@ export function GithubRewardsAdminPanel({
                             </div>
                         </div>
                     </CardHeader>
-                    <CardContent className="p-5">
+                    <AdminScrollArea
+                        aria-label="Enforcement preview"
+                        className="p-5"
+                    >
                         {preview.result.affected.length === 0 ? (
                             <div className="flex items-center gap-2 py-2 text-sm text-emerald-700 dark:text-emerald-300">
                                 <CheckCircle2 className="h-4 w-4" />
@@ -1231,7 +1239,7 @@ export function GithubRewardsAdminPanel({
                                 ))}
                             </div>
                         )}
-                    </CardContent>
+                    </AdminScrollArea>
                 </Card>
             ) : null}
 
@@ -1248,7 +1256,10 @@ export function GithubRewardsAdminPanel({
                             <CircleDollarSign className="text-muted-foreground h-4 w-4" />
                         </div>
                     </CardHeader>
-                    <CardContent className="space-y-2 p-5">
+                    <AdminScrollArea
+                        aria-label="Donation history"
+                        className="space-y-2 p-5"
+                    >
                         {initialState.recentSponsorships.length === 0 ? (
                             <p className="text-muted-foreground rounded-xl border border-dashed p-6 text-center text-sm">
                                 No sponsorships recorded yet.
@@ -1371,7 +1382,7 @@ export function GithubRewardsAdminPanel({
                                     </details>
                                 ))
                         )}
-                    </CardContent>
+                    </AdminScrollArea>
                 </Card>
 
                 <Card className="border-border/70 gap-0 py-0 shadow-sm">
@@ -1386,7 +1397,10 @@ export function GithubRewardsAdminPanel({
                             <Activity className="text-muted-foreground h-4 w-4" />
                         </div>
                     </CardHeader>
-                    <CardContent className="space-y-5 p-5">
+                    <AdminScrollArea
+                        aria-label="Recent activity"
+                        className="space-y-5 p-5"
+                    >
                         <div>
                             <div className="mb-2 flex items-center gap-2">
                                 <Clock3 className="text-muted-foreground h-3.5 w-3.5" />
@@ -1488,7 +1502,7 @@ export function GithubRewardsAdminPanel({
                                 )}
                             </div>
                         </div>
-                    </CardContent>
+                    </AdminScrollArea>
                 </Card>
             </div>
 

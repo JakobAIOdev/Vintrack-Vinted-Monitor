@@ -224,6 +224,12 @@ Manage subsequent members through **Admin → Members**. Do not promote every
 user or use the development authentication bypass to obtain admin access on a
 public instance.
 
+To revoke a member's access, open their details under **Admin → Members** and
+choose **Ban member**. This revokes their sessions and extension access, pauses
+their monitors and Price Watches, disables account automations, and cancels
+queued alerts. **Unban member** restores sign-in access without restarting
+those jobs. Admin accounts must have their role changed before they can be banned.
+
 ### 6. Add proxies and create your first monitor
 
 For a predictable first test, open **Proxies**, create a personal proxy group,
