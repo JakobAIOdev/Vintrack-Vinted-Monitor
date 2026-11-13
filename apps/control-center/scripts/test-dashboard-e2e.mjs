@@ -4,6 +4,7 @@ const testFiles = [
     "dashboard.spec.ts",
     "discord-webhooks.spec.ts",
     "first-alert-star.spec.ts",
+    "guides.spec.ts",
     "proxy-validation.spec.ts",
     "account-updates.spec.ts",
     "account-automations.spec.ts",

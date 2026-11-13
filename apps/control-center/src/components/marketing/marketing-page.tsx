@@ -151,10 +151,7 @@ export function BreadcrumbJsonLd({
     path,
 }: {
     name: string;
-    path:
-        | "/vinted-alerts"
-        | "/vinted-price-tracker"
-        | "/self-hosted-vinted-monitor";
+    path: Parameters<typeof absoluteMarketingUrl>[0];
 }) {
     const jsonLd = {
         "@context": "https://schema.org",

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { MARKETING_PAGES } from "../../src/lib/seo";
 
 const marketingPages = [
     {
@@ -85,7 +86,7 @@ test.describe("public pages", () => {
         });
     }
 
-    test("publishes robots and a four-page sitemap when indexing is enabled", async ({
+    test("publishes robots and all public pages in the sitemap when indexing is enabled", async ({
         request,
     }) => {
         const robotsResponse = await request.get("/robots.txt");
@@ -103,7 +104,10 @@ test.describe("public pages", () => {
                 route === "/" ? "/</loc>" : `${route}</loc>`,
             );
         }
-        expect(sitemap.match(/<url>/g)).toHaveLength(4);
+        for (const route of MARKETING_PAGES) {
+            expect(sitemap).toContain(route === "/" ? "/</loc>" : `${route}</loc>`);
+        }
+        expect(sitemap.match(/<url>/g)).toHaveLength(MARKETING_PAGES.length);
     });
 
     test("login stays public but explicitly noindex", async ({ page }) => {

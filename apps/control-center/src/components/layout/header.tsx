@@ -405,6 +405,12 @@ export function Header({ onMenuClick, menuOpen = false }: HeaderProps) {
                 { label: "Edit Monitor" },
             );
         } else crumbs.push({ label: "Monitor Details" });
+    } else if (pathname.startsWith("/guide/")) {
+        const topic = pathname.split("/")[2].replaceAll("-", " ");
+        crumbs.push(
+            { label: "Guide", href: "/guide" },
+            { label: topic.charAt(0).toUpperCase() + topic.slice(1) },
+        );
     } else if (pathname.startsWith("/admin/")) {
         crumbs.push(
             { label: "Admin Panel", href: "/admin" },

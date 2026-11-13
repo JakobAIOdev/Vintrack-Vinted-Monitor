@@ -62,6 +62,12 @@ export function MarketingHeader() {
                     >
                         Self-host
                     </Link>
+                    <Link
+                        className="hover:text-foreground transition-colors"
+                        href="/guides"
+                    >
+                        Guides
+                    </Link>
                 </nav>
 
                 <div className="ml-auto flex items-center gap-2">
@@ -189,6 +195,12 @@ export function MarketingFooter() {
                             href="/self-hosted-vinted-monitor"
                         >
                             Self-hosting
+                        </Link>
+                        <Link
+                            className="text-muted-foreground hover:text-foreground block transition-colors"
+                            href="/guides"
+                        >
+                            Guides
                         </Link>
                     </div>
                     <div className="space-y-3">

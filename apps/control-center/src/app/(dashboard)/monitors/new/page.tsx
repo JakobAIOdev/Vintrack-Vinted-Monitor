@@ -1,5 +1,7 @@
 "use client";
 
+import { GuideHelpLink } from "@/components/guides/guide-help-link";
+
 import {
     OwnProxyUsageSummary,
     type OwnProxyUsage,
@@ -1227,6 +1229,9 @@ export default function NewMonitorPage() {
                                     : "Not configured"
                             }
                         >
+                            <GuideHelpLink href="/guide/notifications#discord">
+                                Discord and Telegram setup guide
+                            </GuideHelpLink>
                             <div className="space-y-2">
                                 <Label
                                     htmlFor="discord_webhook"

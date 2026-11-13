@@ -1,3 +1,4 @@
+import { GuideHelpLink } from "@/components/guides/guide-help-link";
 import { auth } from "@/auth";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -71,6 +72,7 @@ export default async function AccountPage({
                         Manage login providers, rewards, and the Vinted session
                         used by member tools.
                     </p>
+                    <GuideHelpLink href="/guide/account#link-account">Account linking guide</GuideHelpLink>
                     {checkoutFeatureDiscoverable(checkoutAccess) && (
                         <CheckoutFeatureShortcut linked={status.linked} />
                     )}

@@ -10,6 +10,12 @@ test("self-hosted defaults fail closed for search indexing", async ({
         /noindex, nofollow/,
     );
 
+    await page.goto("/guides/notifications");
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
+        "content",
+        /noindex, nofollow/,
+    );
+
     const robotsResponse = await request.get("/robots.txt");
     expect(robotsResponse.status()).toBe(200);
     const robots = await robotsResponse.text();
