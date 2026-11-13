@@ -82,7 +82,7 @@ export const DEFAULT_FREE_PROXY_POLICY: FreeProxyPolicy = {
     minActivePerRegion: 25,
     targetActivePerRegion: 50,
     maxLatencyMs: 2500,
-    starterRegions: "de,fr,it,es,nl,be,at",
+    starterRegions: "de,fr,it,es,nl,be,at,us",
     inventoryLimit: 30000,
     activeCandidateLimit: 10000,
     idleCandidateLimit: 5000,

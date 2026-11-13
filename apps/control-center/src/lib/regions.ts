@@ -58,6 +58,28 @@ export const REGIONS: Region[] = [
     { code: "us", label: "United States", flag: "🇺🇸", domain: "vinted.com", currencyCode: "USD" },
 ];
 
+// Markets the Account page offers for linking a Vinted account. The other
+// monitor regions have no localized account requests yet.
+const ACCOUNT_LINK_REGION_CODES = new Set([
+    "de",
+    "fr",
+    "it",
+    "es",
+    "nl",
+    "pl",
+    "pt",
+    "be",
+    "at",
+    "lu",
+    "uk",
+    "ie",
+    "us",
+]);
+
+export const ACCOUNT_LINK_REGIONS: Region[] = REGIONS.filter((region) =>
+    ACCOUNT_LINK_REGION_CODES.has(region.code),
+);
+
 const TIMEZONE_BY_REGION: Record<string, string> = {
     de: "Europe/Berlin",
     fr: "Europe/Paris",
