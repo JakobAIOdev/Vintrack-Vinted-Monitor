@@ -924,6 +924,25 @@ test.describe("Extension companion API", () => {
 });
 
 test.describe("account connections", () => {
+    test("offers the United States when linking a Vinted account", async ({
+        page,
+    }) => {
+        await page.goto("/account");
+        await page
+            .locator("summary")
+            .filter({ hasText: "Manual token link" })
+            .click();
+
+        const unitedStates = page.getByRole("button", {
+            name: /United States/,
+        });
+        await expect(unitedStates).toBeVisible();
+        // Regions without localized account requests stay unavailable.
+        await expect(
+            page.getByRole("button", { name: /Czech Republic/ }),
+        ).toHaveCount(0);
+    });
+
     test("keeps Vinted and GitHub in equal connection views", async ({
         page,
     }) => {

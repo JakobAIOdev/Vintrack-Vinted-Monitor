@@ -34,7 +34,7 @@ import {
     Cable,
     ExternalLink,
 } from "lucide-react";
-import { REGIONS } from "@/lib/regions";
+import { ACCOUNT_LINK_REGIONS, REGIONS } from "@/lib/regions";
 import { cn } from "@/lib/utils";
 import {
     linkVintedAccount,
@@ -983,7 +983,7 @@ export function AccountClient({
                                 no longer overwrite this setting.
                             </p>
                             <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-6">
-                                {REGIONS.slice(0, 12).map((region) => {
+                                {ACCOUNT_LINK_REGIONS.map((region) => {
                                     const isSelected =
                                         selectedRegion === region.code;
                                     return (
@@ -1185,7 +1185,7 @@ export function AccountClient({
                                     Region
                                 </Label>
                                 <div className="grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-6">
-                                    {REGIONS.slice(0, 12).map((region) => {
+                                    {ACCOUNT_LINK_REGIONS.map((region) => {
                                         const isSelected =
                                             selectedRegion === region.code;
                                         return (

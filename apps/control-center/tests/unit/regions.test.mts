@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
+    ACCOUNT_LINK_REGIONS,
     getRegionCurrencyCode,
     getRegionDomain,
     getRegionFlags,
@@ -92,9 +93,9 @@ test("every region has a unique code and domain and a usable timezone", () => {
     assert.equal(getRegionTimezone("us"), "America/New_York");
 });
 
-test("the account page keeps offering the same twelve linkable regions", () => {
+test("the account page offers the US next to the twelve earlier markets", () => {
     assert.deepEqual(
-        REGIONS.slice(0, 12).map((region) => region.code),
+        ACCOUNT_LINK_REGIONS.map((region) => region.code),
         [
             "de",
             "fr",
@@ -108,7 +109,12 @@ test("the account page keeps offering the same twelve linkable regions", () => {
             "lu",
             "uk",
             "ie",
+            "us",
         ],
+    );
+    assert.equal(
+        ACCOUNT_LINK_REGIONS.find((region) => region.code === "us")?.domain,
+        "vinted.com",
     );
 });
 
