@@ -88,10 +88,8 @@ test.describe("Regional monitor currencies", () => {
             categoryTree.categories.map((category) => category.label),
         ).toContain("Hobbies & collectibles");
 
-        // The shared free pool only covers its configured starter regions.
-        await page
-            .locator('select[name="proxy_group_id"]')
-            .selectOption("server");
+        // The US is a default starter region, so the preselected free pool
+        // accepts the monitor without any proxy setup.
         await page.getByLabel("Monitor Name").fill("US Nike sneakers");
         await page.getByRole("button", { name: "Create Monitor" }).click();
         await expect(page).toHaveURL(/\/monitors\/\d+$/);
@@ -104,6 +102,7 @@ test.describe("Regional monitor currencies", () => {
                     where: { id: monitorId },
                     select: {
                         region: true,
+                        proxy_source: true,
                         query: true,
                         price_min: true,
                         price_max: true,
@@ -115,6 +114,7 @@ test.describe("Regional monitor currencies", () => {
                 }),
             ).resolves.toEqual({
                 region: "us",
+                proxy_source: "free",
                 query: "nike",
                 price_min: 20,
                 price_max: 60,

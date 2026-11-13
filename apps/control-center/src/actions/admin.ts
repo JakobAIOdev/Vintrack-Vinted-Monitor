@@ -116,7 +116,7 @@ const FREE_PROXY_EMERGENCY_RECOVERY_KEY =
 const DEFAULT_FREE_PROXY_IMPORT_URL =
     "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/all-proxies.txt";
 const DEFAULT_FREE_PROXY_IMPORT_SOURCE = "iplocate_all";
-const DEFAULT_FREE_PROXY_STARTER_REGIONS = "de,fr,it,es,nl,be,at";
+const DEFAULT_FREE_PROXY_STARTER_REGIONS = "de,fr,it,es,nl,be,at,us";
 const DEFAULT_FREE_PROXY_MAX_POOL_SIZE = 5000;
 const DEFAULT_FREE_PROXY_FAILURE_THRESHOLD = 3;
 const DEFAULT_FREE_PROXY_QUARANTINE_MINUTES = 30;

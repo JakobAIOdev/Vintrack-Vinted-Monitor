@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"vintrack-worker/internal/database"
+	"vintrack-worker/internal/model"
 	"vintrack-worker/internal/proxy"
 	"vintrack-worker/internal/scraper"
 )
@@ -67,6 +68,22 @@ func TestFreeProxyValidationTimeout(t *testing.T) {
 				t.Fatalf("freeProxyValidationTimeout(%d) = %s, want %s", test.maxLatencyMs, got, test.want)
 			}
 		})
+	}
+}
+
+func TestDefaultFreeProxyStarterRegionsIncludeTheUnitedStates(t *testing.T) {
+	regions := configuredFreeProxyRegions(defaultFreeProxyStarterRegions)
+	if want := []string{"de", "fr", "it", "es", "nl", "be", "at", "us"}; !reflect.DeepEqual(regions, want) {
+		t.Fatalf("default starter regions = %v, want %v", regions, want)
+	}
+	for _, region := range regions {
+		// An unknown code would silently be validated against the German market.
+		if domain := model.RegionDomain(region); region != "de" && domain == model.RegionDomain("") {
+			t.Errorf("starter region %q has no marketplace domain", region)
+		}
+	}
+	if got := model.RegionDomain("us"); got != "www.vinted.com" {
+		t.Errorf("US starter proxies would be validated against %q", got)
 	}
 }
 
