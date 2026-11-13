@@ -57,6 +57,7 @@ model User {
   sessions                  Session[]
 
   monitors                     monitors[]
+  discord_webhooks             discord_webhooks[]
   member_brands                member_brands[]
   proxy_groups                 proxy_groups[]
   seller_bans                  seller_bans[]
@@ -236,6 +237,20 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+model discord_webhooks {
+  id         Int      @id @default(autoincrement())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String   @db.VarChar(255)
+  url        String   @db.Text
+  url_hash   String   @db.VarChar(64)
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @updatedAt @db.Timestamp(6)
+
+  @@unique([userId, url_hash])
+  @@index([userId, updated_at])
 }
 
 model monitors {

@@ -2,6 +2,7 @@
 
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
+import { rememberDiscordWebhook } from "@/lib/discord-webhooks.server";
 import { revalidatePath } from "next/cache";
 import { isValidDiscordWebhook } from "@/lib/validation";
 import { cancelPendingMonitorNotifications } from "@/lib/alert-outbox";
@@ -303,13 +304,14 @@ export async function updateMonitorWebhook(
 
     await db.$transaction(async (tx) => {
         await cancelPendingMonitorNotifications(tx, monitorId, "discord");
-        await tx.monitors.update({
+        const monitor = await tx.monitors.update({
             where: { id: monitorId, userId },
             data: {
                 discord_webhook: urlToSave,
                 webhook_active: Boolean(urlToSave && webhookActive),
             },
         });
+        await rememberDiscordWebhook(tx, userId, urlToSave, monitor.name);
     });
 
     revalidatePath("/dashboard");
@@ -432,6 +434,7 @@ export async function bulkUpdateMonitors(input: BulkMonitorUpdateInput) {
         where: { id: { in: monitorIds }, userId },
         select: {
             id: true,
+            name: true,
             query_delay_ms: true,
             quiet_hours_enabled: true,
             quiet_hours_mode: true,
@@ -576,6 +579,15 @@ export async function bulkUpdateMonitors(input: BulkMonitorUpdateInput) {
         });
         if (updated.count !== monitorIds.length) {
             throw new Error("Not all selected monitors could be updated");
+        }
+
+        if (discordMode === "replace") {
+            await rememberDiscordWebhook(
+                tx,
+                userId,
+                replacementWebhook,
+                existingMonitors[0].name,
+            );
         }
 
         return tx.monitors.findMany({

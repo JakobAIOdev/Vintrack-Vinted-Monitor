@@ -9,6 +9,7 @@ import { createMonitor, testDiscordWebhook } from "@/actions/monitor";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { SavedDiscordWebhookSelect } from "@/components/monitors/saved-discord-webhook-select";
 import { Label } from "@/components/ui/label";
 import { CategoryPicker } from "@/components/monitors/category-picker";
 import { BrandPicker } from "@/components/monitors/brand-picker";
@@ -1236,6 +1237,10 @@ export default function NewMonitorPage() {
                                         (optional)
                                     </span>
                                 </Label>
+                                <SavedDiscordWebhookSelect
+                                    value={webhookUrl}
+                                    onChange={setWebhookUrl}
+                                />
                                 <div className="flex gap-2">
                                     <Input
                                         name="discord_webhook"

@@ -54,6 +54,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { SavedDiscordWebhookSelect } from "@/components/monitors/saved-discord-webhook-select";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -2136,6 +2137,10 @@ export function DashboardClient({
                                         Discord webhook for all selected
                                         monitors
                                     </Label>
+                                    <SavedDiscordWebhookSelect
+                                        value={bulkWebhookUrl}
+                                        onChange={setBulkWebhookUrl}
+                                    />
                                     <Input
                                         id="bulk-webhook-url"
                                         type="url"
@@ -2793,6 +2798,11 @@ export function DashboardClient({
 
                         <div className="grid gap-2">
                             <Label htmlFor="webhook">Discord Webhook URL</Label>
+                            <SavedDiscordWebhookSelect
+                                key={selectedMonitor?.id}
+                                value={webhookInput}
+                                onChange={setWebhookInput}
+                            />
                             <div className="flex gap-2">
                                 <Input
                                     id="webhook"
