@@ -8,6 +8,7 @@ import (
 	"html"
 	"io"
 	"log"
+	"net"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -20,11 +21,10 @@ import (
 	http "github.com/bogdanfinn/fhttp"
 	"github.com/bogdanfinn/fhttp/cookiejar"
 	tls_client "github.com/bogdanfinn/tls-client"
-	"github.com/bogdanfinn/tls-client/profiles"
 )
 
-const defaultUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
-const defaultSecChUA = `"Google Chrome";v="146", "Chromium";v="146", "Not_A Brand";v="99"`
+const defaultUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+const defaultSecChUA = `"Google Chrome";v="152", "Chromium";v="152", "Not_A Brand";v="99"`
 const warmupReuseWindow = 10 * time.Minute
 const maxWarmupResponseBytes = 2 * 1024 * 1024
 const maxFilterSearchResponseBytes = 512 * 1024
@@ -50,6 +50,10 @@ type vintedHTTPClient interface {
 }
 
 func NewClient(sess *session.VintedSession) (*Client, error) {
+	return newClient(sess, nil)
+}
+
+func newClient(sess *session.VintedSession, extra []tls_client.HttpClientOption) (*Client, error) {
 	if sess == nil || !IsSupportedAccountDomain(sess.Domain) {
 		return nil, errors.New("unsupported Vinted domain")
 	}
@@ -60,9 +64,10 @@ func NewClient(sess *session.VintedSession) (*Client, error) {
 
 	options := []tls_client.HttpClientOption{
 		tls_client.WithTimeoutSeconds(15),
-		tls_client.WithClientProfile(profiles.Chrome_146),
+		tls_client.WithClientProfile(profileForUserAgent(sess.UserAgent)),
 		tls_client.WithCookieJar(jar),
 	}
+	options = append(options, extra...)
 
 	httpClient, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), options...)
 	if err != nil {
@@ -159,25 +164,23 @@ func authCookie(name, value, domain string) *http.Cookie {
 func (c *Client) apiHeaders() http.Header {
 	now := time.Now().UnixMilli()
 	h := http.Header{
-		"User-Agent":         {c.userAgent()},
-		"Accept":             {"application/json, text/plain, */*"},
-		"Accept-Language":    {"de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"},
-		"Cache-Control":      {"no-cache"},
-		"Pragma":             {"no-cache"},
-		"Locale":             {c.locale()},
-		"X-Platform":         {"web"},
-		"X-Portal":           {c.portal()},
-		"X-Debug-Info":       {"v4"},
-		"X-Local-Time":       {strconv.FormatInt(now, 10)},
-		"Origin":             {fmt.Sprintf("https://%s", c.session.Domain)},
-		"Referer":            {fmt.Sprintf("https://%s/", c.session.Domain)},
-		"Sec-Ch-Ua":          {defaultSecChUA},
-		"Sec-Ch-Ua-Mobile":   {"?0"},
-		"Sec-Ch-Ua-Platform": {`"macOS"`},
-		"Sec-Fetch-Dest":     {"empty"},
-		"Sec-Fetch-Mode":     {"cors"},
-		"Sec-Fetch-Site":     {"same-origin"},
+		"User-Agent":      {c.userAgent()},
+		"Accept":          {"application/json, text/plain, */*"},
+		"Accept-Language": {"de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"},
+		"Cache-Control":   {"no-cache"},
+		"Pragma":          {"no-cache"},
+		"Locale":          {c.locale()},
+		"X-Platform":      {"web"},
+		"X-Portal":        {c.portal()},
+		"X-Debug-Info":    {"v4"},
+		"X-Local-Time":    {strconv.FormatInt(now, 10)},
+		"Origin":          {fmt.Sprintf("https://%s", c.session.Domain)},
+		"Referer":         {fmt.Sprintf("https://%s/", c.session.Domain)},
+		"Sec-Fetch-Dest":  {"empty"},
+		"Sec-Fetch-Mode":  {"cors"},
+		"Sec-Fetch-Site":  {"same-origin"},
 	}
+	c.setClientHints(h)
 	if c.csrfToken != "" {
 		h.Set("X-Csrf-Token", c.csrfToken)
 	}
@@ -304,7 +307,7 @@ func (c *Client) warmUpPage(pagePath string, force bool) error {
 		return fmt.Errorf("warmup %s response exceeds %d bytes", pagePath, maxWarmupResponseBytes)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("warmup %s returned HTTP %d", pagePath, resp.StatusCode)
+		return vintedHTTPError("session warmup", resp.StatusCode, string(body))
 	}
 
 	csrfPatterns := []*regexp.Regexp{
@@ -344,7 +347,24 @@ func (c *Client) warmUpPage(pagePath string, force bool) error {
 	return nil
 }
 
+func hasBrowserCheckoutCookie(header string) bool {
+	for _, cookie := range parseCookieHeader(header) {
+		if cookie.Name == "datadome" && cookie.Value != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) canReuseWarmup() bool {
+	// A linked browser context is already warmed up. Replacing its CSRF/cookie
+	// continuity with a server homepage fetch after ten minutes can invalidate
+	// an otherwise valid session. Keep it until Vinted rejects or refreshes it;
+	// this does not extend the access token or cookie expiry.
+	if c.session.BrowserLinked && c.csrfToken != "" && c.session.UserAgent != "" &&
+		hasBrowserCheckoutCookie(c.session.CookieHeader) {
+		return true
+	}
 	warmedAt := strings.TrimSpace(c.session.WarmedAt)
 	if warmedAt == "" {
 		return false
@@ -1036,12 +1056,27 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 	if len(choices) > 0 {
 		preferences = choices[0]
 	}
+	return c.prepareCheckout(itemID, sellerID, save, preferences, false)
+}
+
+// ValidateCheckout runs the same full-checkout quote validation and checkpoints,
+// but cannot dispatch a payment request, even with saved auto-checkout enabled.
+func (c *Client) ValidateCheckout(itemID, sellerID int64, save func(session.CheckoutLink) error, preferences CheckoutPreferences) (*session.CheckoutLink, error) {
+	return c.prepareCheckout(itemID, sellerID, save, preferences, true)
+}
+
+func (c *Client) prepareCheckout(itemID, sellerID int64, save func(session.CheckoutLink) error, preferences CheckoutPreferences, stopBeforePayment bool) (*session.CheckoutLink, error) {
 	if !preferences.Valid() || (preferences.AutoCheckout != nil && !AutoCheckoutAllowed(c.session.Domain, preferences.Payment)) {
 		return nil, fmt.Errorf("invalid checkout preferences")
 	}
 	if itemID <= 0 || sellerID <= 0 || sellerID == c.session.VintedUserID || save == nil {
 		return nil, fmt.Errorf("invalid checkout target")
 	}
+	// A redirected mutation is a failure class of its own. Following it could
+	// replay the body and session headers to another host.
+	wasFollowing := c.httpClient.GetFollowRedirect()
+	c.httpClient.SetFollowRedirect(false)
+	defer c.httpClient.SetFollowRedirect(wasFollowing)
 	link := session.CheckoutLink{
 		ItemID: itemID, SellerID: sellerID, Domain: c.session.Domain,
 		Status: "transaction_creating", CreatedAt: time.Now().UTC().Format(time.RFC3339),
@@ -1108,6 +1143,8 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 		// The built checkout can be completed by its owner in Vinted. Do not
 		// recreate the transaction or retry the update on auth/challenge errors.
 		link.Status = "checkout_review_required"
+		link.ServerContextRejected = ContextRejected(updateErr)
+		link.RateLimited = UpstreamStatus(updateErr) == http.StatusTooManyRequests
 	} else {
 		if updated.CheckoutURL != "" {
 			link.CheckoutURL, err = c.validatedCheckoutURL(updated.CheckoutURL, build.PurchaseID, transactionID)
@@ -1127,12 +1164,20 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 		} else if updateErr == nil && preferences.Shipping == "pickup" && !updated.Selection.matchesPickupPoint(pickupPoint) {
 			link.AutoCheckoutReason = "Vinted could not confirm your saved pickup point and its shipping rate. Select a pickup point in Vinted and finish manually. No automatic payment was started."
 		}
-		if link.Status == "checkout_prepared" && updated.Selection.AutoAmountsVerified &&
+		if link.Status == "checkout_prepared" && updated.Selection.AddressVerified && updated.Selection.AutoAmountsVerified &&
 			updated.Selection.AutoCurrency == preferences.AutoCheckout.Currency &&
 			updated.Selection.AutoTotalMinor <= preferences.AutoCheckout.MaxTotalMinor &&
 			updated.Selection.Methods[preferences.Payment] != nil && updated.Checksum != "" &&
 			(preferences.Payment != "card" || (updated.Selection.CardVerified && !updated.Selection.CardSignalsRequired &&
 				(paymentChoice == nil || fmt.Sprint(paymentChoice["card_id"]) == fmt.Sprint(updated.Selection.Methods["card"]["card_id"])))) {
+			if stopBeforePayment {
+				link.Status = "payment_ready"
+				link.AutoCheckoutReason = "Checkout validated. No payment request was sent."
+				if err := save(link); err != nil {
+					return &link, err
+				}
+				return &link, nil
+			}
 			link.Status = "payment_starting"
 			link.AutoCheckoutReason = "A payment was started. Check Vinted before trying again."
 			if err := save(link); err != nil {
@@ -1144,6 +1189,16 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 			if paymentErr == nil {
 				link.Status = outcome.Status
 				link.AutoCheckoutReason = outcome.Reason
+			} else {
+				// Only an authentication, rate-limit or edge denial is a
+				// definite refusal. Any other answer stays "unknown": Vinted
+				// may be processing a payment. Nothing is ever sent again.
+				status := UpstreamStatus(paymentErr)
+				link.ServerContextRejected = ContextRejected(paymentErr)
+				link.RateLimited = status == http.StatusTooManyRequests
+				if !paymentMayBeProcessing(paymentErr) && (status == http.StatusUnauthorized || status == http.StatusTooManyRequests || link.ServerContextRejected) {
+					link.AutoCheckoutReason = fmt.Sprintf("Vinted refused the payment request (HTTP %d), so no payment was accepted. Review the checkout in Vinted; it will not be retried automatically.", status)
+				}
 			}
 			if preferences.Payment == "card" {
 				resume, _ := url.Parse(link.CheckoutURL)
@@ -1153,11 +1208,11 @@ func (c *Client) PrepareCheckout(itemID, sellerID int64, save func(session.Check
 				link.CheckoutURL = resume.String()
 			}
 			// Redirects can contain payment tokens. Persist only the checkpoint.
-			if err := save(link); err != nil {
-				return &link, err
-			}
+			// The caller still receives the redirect when the checkpoint fails:
+			// the payment was started and the member must be able to finish it.
+			err := save(link)
 			link.PaymentURL = outcome.PaymentURL
-			return &link, nil
+			return &link, err
 		}
 		link.Status = "checkout_review_required"
 	}
@@ -1421,7 +1476,7 @@ func (c *Client) createBuyTransaction(itemID, sellerID int64) (int64, error) {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("buy conversation request failed: %w", err)
+		return 0, newTransportError("buy conversation", err)
 	}
 	defer resp.Body.Close()
 
@@ -1495,7 +1550,7 @@ func (c *Client) buildPurchaseCheckout(itemID, transactionID int64, incogniaRequ
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("checkout build request failed: %w", err)
+		return nil, newTransportError("checkout build", err)
 	}
 	defer resp.Body.Close()
 
@@ -1554,7 +1609,7 @@ func (c *Client) updatePurchaseCheckout(purchaseID string, transactionID int64, 
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("checkout update request failed: %w", err)
+		return nil, newTransportError("checkout update", err)
 	}
 	defer resp.Body.Close()
 
@@ -1965,6 +2020,83 @@ type UpstreamHTTPError struct {
 	Code       string
 	Message    string
 	BodyIsHTML bool
+	// APIError means Vinted's application answered with its JSON error
+	// envelope. The request passed the edge; the refusal concerns this item.
+	APIError bool
+	// MessageCode is Vinted's error enum from that envelope, never free text.
+	MessageCode string
+}
+
+// TransportError means no HTTP answer arrived: the proxy or the network
+// failed. The underlying text can name proxy hosts and is never kept.
+type TransportError struct {
+	Step string
+	// BeforeSend is set when the connection to the proxy, or the tunnel
+	// through it, could not be established. No byte reached Vinted.
+	BeforeSend bool
+	// Kind is a fixed diagnostic class, never upstream or proxy text.
+	Kind string
+}
+
+func (e *TransportError) Error() string {
+	return e.Step + " request got no answer"
+}
+
+var proxyConnectStatus = regexp.MustCompile(`^Proxy responded with non 200 code: (\d{3})`)
+
+func newTransportError(step string, err error) *TransportError {
+	transport := &TransportError{Step: step, Kind: "no_answer"}
+	if err == nil {
+		return transport
+	}
+	// Classify by the innermost error only. Text quoted further out (for
+	// example debug data a peer attached to an HTTP/2 error) proves nothing.
+	inner := err
+	for next := errors.Unwrap(inner); next != nil; next = errors.Unwrap(inner) {
+		inner = next
+	}
+	text := inner.Error()
+	var op *net.OpError
+	var timeout interface{ Timeout() bool }
+	switch {
+	case strings.HasSuffix(text, "checkout proxy must resolve to a public address"):
+		transport.Kind, transport.BeforeSend = "proxy_address_not_public", true
+	case strings.HasPrefix(text, "Proxy responded with non 200 code"):
+		transport.Kind, transport.BeforeSend = "proxy_refused", true
+		if match := proxyConnectStatus.FindStringSubmatch(text); len(match) == 2 {
+			transport.Kind = "proxy_refused_" + match[1]
+		}
+	case errors.As(err, &op) && (op.Op == "dial" || op.Op == "proxyconnect" || op.Op == "socks connect"):
+		transport.Kind, transport.BeforeSend = "proxy_unreachable", true
+	case errors.As(err, &timeout) && timeout.Timeout():
+		transport.Kind = "timeout"
+	}
+	// The cause can name proxy hosts and credentials; only its class is kept.
+	log.Printf("[vinted] %s got no answer (%s)", step, transport.Kind)
+	return transport
+}
+
+// AccessTokenUserID reads the account id a Vinted web token was issued for.
+// It is a consistency hint only; Vinted remains the authority on validity.
+func AccessTokenUserID(token string) int64 {
+	id, _ := parseUserIDFromJWT(token)
+	return id
+}
+
+// ContextRejected reports a denial of the session context itself (a security
+// challenge or an edge 403), as opposed to an API refusal of one item.
+func ContextRejected(err error) bool {
+	var challenge *DataDomeChallengeError
+	if errors.As(err, &challenge) {
+		return true
+	}
+	var upstream *UpstreamHTTPError
+	return errors.As(err, &upstream) && upstream.StatusCode == http.StatusForbidden && !upstream.APIError
+}
+
+func paymentMayBeProcessing(err error) bool {
+	var payment *PaymentStateError
+	return errors.As(err, &payment) && payment.Code == "payment_already_processing"
 }
 
 func (e *UpstreamHTTPError) Error() string {
@@ -2005,7 +2137,10 @@ func CheckoutFailureStep(err error) string {
 	var auth *AuthError
 	var challenge *DataDomeChallengeError
 	var payment *PaymentStateError
+	var transport *TransportError
 	switch {
+	case errors.As(err, &transport):
+		step = transport.Step
 	case errors.As(err, &upstream):
 		step = upstream.Operation
 	case errors.As(err, &auth):
@@ -2096,14 +2231,56 @@ func vintedHTTPError(step string, statusCode int, body string) error {
 	if isPhoneRequired(body) {
 		return paymentStateError(step, statusCode, "phone_required", body)
 	}
-	if isDataDomeChallenge(body) {
+	if isDataDomeChallenge(statusCode, body) {
 		return &DataDomeChallengeError{
 			Step:       step,
 			StatusCode: statusCode,
 			CaptchaURL: extractCaptchaURL(body),
 		}
 	}
-	return &UpstreamHTTPError{Operation: step, StatusCode: statusCode}
+	upstream := &UpstreamHTTPError{Operation: step, StatusCode: statusCode, APIError: isVintedAPIError(body)}
+	if upstream.APIError {
+		// Vinted's own error enum, e.g. a numeric code and "access_denied".
+		// Free text and field values are never kept or logged.
+		upstream.Code, upstream.MessageCode = vintedAPIErrorCode(body)
+		log.Printf("[vinted] %s refused by Vinted: HTTP %d code=%s message_code=%s", step, statusCode, upstream.Code, upstream.MessageCode)
+	}
+	return upstream
+}
+
+var vintedMessageCode = regexp.MustCompile(`^[a-z0-9_.-]{1,64}$`)
+
+func vintedAPIErrorCode(body string) (string, string) {
+	var envelope struct {
+		Code        json.Number `json:"code"`
+		MessageCode string      `json:"message_code"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(body))
+	decoder.UseNumber()
+	if decoder.Decode(&envelope) != nil {
+		return "", ""
+	}
+	code := envelope.Code.String()
+	if _, err := strconv.Atoi(code); err != nil {
+		code = ""
+	}
+	messageCode := strings.ToLower(strings.TrimSpace(envelope.MessageCode))
+	if !vintedMessageCode.MatchString(messageCode) {
+		messageCode = ""
+	}
+	return code, messageCode
+}
+
+// Vinted's application errors are JSON objects carrying a numeric code and a
+// message_code. Edge and security denials are HTML or a bare captcha URL.
+func isVintedAPIError(body string) bool {
+	var envelope struct {
+		Code        *json.Number `json:"code"`
+		MessageCode string       `json:"message_code"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(body))
+	decoder.UseNumber()
+	return decoder.Decode(&envelope) == nil && envelope.Code != nil && envelope.MessageCode != ""
 }
 
 func paymentStateError(step string, statusCode int, code string, body string) *PaymentStateError {
@@ -2160,9 +2337,12 @@ func isPhoneRequired(body string) bool {
 	return strings.Contains(lower, "telefonnummer") && strings.Contains(lower, "erforderlich")
 }
 
-func isDataDomeChallenge(body string) bool {
+// A challenge names the captcha delivery host. Ordinary Vinted error pages
+// also load the DataDome script, so the bare word only counts on a 403.
+func isDataDomeChallenge(statusCode int, body string) bool {
 	lower := strings.ToLower(body)
-	return strings.Contains(lower, "captcha-delivery.com") || strings.Contains(lower, "datadome")
+	return strings.Contains(lower, "captcha-delivery.com") ||
+		(statusCode == http.StatusForbidden && strings.Contains(lower, "datadome"))
 }
 
 func extractCaptchaURL(body string) string {
@@ -2308,20 +2488,18 @@ func (c *Client) executeRefreshRequest() ([]byte, error) {
 		return nil, fmt.Errorf("create refresh request: %w", err)
 	}
 	req.Header = http.Header{
-		"User-Agent":         {c.userAgent()},
-		"Accept":             {"application/json, text/plain, */*"},
-		"Accept-Language":    {c.locale()},
-		"Cache-Control":      {"no-cache"},
-		"Pragma":             {"no-cache"},
-		"Origin":             {fmt.Sprintf("https://%s", c.session.Domain)},
-		"Referer":            {fmt.Sprintf("https://%s/session-refresh?ref_url=%%2F", c.session.Domain)},
-		"Sec-Ch-Ua":          {defaultSecChUA},
-		"Sec-Ch-Ua-Mobile":   {"?0"},
-		"Sec-Ch-Ua-Platform": {`"macOS"`},
-		"Sec-Fetch-Dest":     {"empty"},
-		"Sec-Fetch-Mode":     {"cors"},
-		"Sec-Fetch-Site":     {"same-origin"},
+		"User-Agent":      {c.userAgent()},
+		"Accept":          {"application/json, text/plain, */*"},
+		"Accept-Language": {c.locale()},
+		"Cache-Control":   {"no-cache"},
+		"Pragma":          {"no-cache"},
+		"Origin":          {fmt.Sprintf("https://%s", c.session.Domain)},
+		"Referer":         {fmt.Sprintf("https://%s/session-refresh?ref_url=%%2F", c.session.Domain)},
+		"Sec-Fetch-Dest":  {"empty"},
+		"Sec-Fetch-Mode":  {"cors"},
+		"Sec-Fetch-Site":  {"same-origin"},
 	}
+	c.setClientHints(req.Header)
 	if c.csrfToken != "" {
 		req.Header.Set("X-Csrf-Token", c.csrfToken)
 	}

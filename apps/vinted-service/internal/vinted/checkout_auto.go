@@ -92,8 +92,11 @@ func validPayPalPaymentURL(raw string) bool {
 	return u.Path == "/checkoutnow" || u.Path == "/webscr" || u.Path == "/cgi-bin/webscr"
 }
 
-// No refresh/retry, raw-response logs, persistent redirect tokens or payment
-// polling. Card authentication stays in Vinted; external card URLs are not used.
+// No refresh/retry, raw-response logs, durable redirect tokens or payment
+// polling. A PayPal approval link is handed to the member and may be kept
+// encrypted for a few minutes so the same member can reopen it; it never
+// enters durable results or history. Card authentication stays in Vinted;
+// external card URLs are not used.
 type checkoutPaymentOutcome struct {
 	Status, Reason, PaymentURL string
 }
@@ -146,7 +149,9 @@ func (c *Client) startCheckoutPayment(payment, purchaseID string, transactionID 
 	defer resp.Body.Close()
 	log.Printf("[vinted] checkout payment start -> %d", resp.StatusCode)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return checkoutPaymentOutcome{}, fmt.Errorf("payment outcome needs review")
+		// Classify the refusal like the earlier steps; the body is never kept.
+		refusal, _ := readCheckoutResponse(resp.Body)
+		return checkoutPaymentOutcome{}, vintedHTTPError("checkout payment", resp.StatusCode, strings.TrimSpace(string(refusal)))
 	}
 	data, err := readCheckoutResponse(resp.Body)
 	if err != nil {

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,20 @@ import (
 type Server struct {
 	sessions   *session.Manager
 	listenAddr string
+	httpServer *http.Server
+	// Request checkout always runs through the member's proxy. Tests replace
+	// the constructor with a synthetic transport; nil means the real one.
+	newCheckoutClient func(*session.VintedSession, string) (*vinted.Client, error)
+	// Development only: request checkout connects from this host instead of
+	// the member's proxy group. Never enabled by default.
+	checkoutDevDirect bool
+}
+
+// AllowDirectCheckoutForDevelopment makes request checkout skip the member's
+// proxy group and connect from this host. It exists for a single developer
+// whose service runs on the same network as their browser.
+func (s *Server) AllowDirectCheckoutForDevelopment() {
+	s.checkoutDevDirect = true
 }
 
 func NewServer(sessions *session.Manager, addr string) *Server {
@@ -71,18 +86,38 @@ func (s *Server) Start() error {
 
 	mux.HandleFunc("POST /api/account/refresh", s.handleRefreshToken)
 
+	mux.HandleFunc("POST /api/checkout-agent/pair-code", s.handleAgentPairCode)
+	mux.HandleFunc("POST /api/checkout-agent/pair", s.handleAgentPair)
+	mux.HandleFunc("GET /api/checkout-agent/status", s.handleAgentStatus)
+	mux.HandleFunc("POST /api/checkout-agent/revoke", s.handleAgentRevoke)
+	mux.HandleFunc("POST /api/checkout-agent/next", s.handleAgentNext)
+	mux.HandleFunc("POST /api/checkout-agent/checkpoint", s.handleAgentCheckpoint)
+	mux.HandleFunc("GET /api/checkout-agent/jobs/{id}", s.handleAgentJobStatus)
+	mux.HandleFunc("POST /api/items/checkout/agent", s.handleEnqueueAgentCheckout)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]string{"status": "ok"})
 	})
 
 	log.Printf("API server listening on %s", s.listenAddr)
-	server := &http.Server{
+	s.httpServer = &http.Server{
 		Addr:              s.listenAddr,
 		Handler:           s.withMiddleware(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
-	return server.ListenAndServe()
+	if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// Shutdown stops accepting requests and lets running ones finish. A checkout
+// that already sent a payment request must be able to record its outcome.
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.httpServer == nil {
+		return nil
+	}
+	return s.httpServer.Shutdown(ctx)
 }
 
 func featureForPath(path string) string {
@@ -500,6 +535,10 @@ func (s *Server) ValidateSessionForKeepAlive(sess *session.VintedSession) sessio
 	}
 	if err := client.WarmUp(); err != nil {
 		log.Printf("[keep-alive] warmup warning for user %s: %v", sess.UserID, err)
+		if vinted.UpstreamStatus(err) == http.StatusTooManyRequests || vinted.ContextRejected(err) {
+			// A denial is not followed by a second, identical request.
+			return session.KeepAliveDeferred
+		}
 	}
 	info, err := client.GetAccountInfo()
 	if err == nil {
@@ -513,6 +552,11 @@ func (s *Server) ValidateSessionForKeepAlive(sess *session.VintedSession) sessio
 	var authErr *vinted.AuthError
 	switch {
 	case status == http.StatusTooManyRequests:
+		return session.KeepAliveDeferred
+	case !errors.As(err, &authErr) && vinted.ContextRejected(err):
+		// A security challenge or edge denial answers this server's address,
+		// not the member's login. It must not invalidate the linked session
+		// that request checkout uses through the member's own proxy.
 		return session.KeepAliveDeferred
 	case status == http.StatusUnauthorized || status == http.StatusForbidden || errors.As(err, &authErr):
 		if serverSideTokenRefreshAllowed(sess) {
@@ -683,14 +727,55 @@ type browserSyncCompleteRequest struct {
 }
 
 type extensionSyncCompleteRequest struct {
-	LinkToken          string `json:"link_token"`
-	AccessToken        string `json:"access_token"`
-	RefreshToken       string `json:"refresh_token"`
-	UserAgent          string `json:"user_agent"`
-	Domain             string `json:"domain"`
-	AllowAccountSwitch bool   `json:"allow_account_switch"`
-	BrowserVintedID    int64  `json:"browser_vinted_id"`
-	BrowserVintedName  string `json:"browser_vinted_name"`
+	LinkToken          string                  `json:"link_token"`
+	AccessToken        string                  `json:"access_token"`
+	RefreshToken       string                  `json:"refresh_token"`
+	UserAgent          string                  `json:"user_agent"`
+	Domain             string                  `json:"domain"`
+	AllowAccountSwitch bool                    `json:"allow_account_switch"`
+	BrowserVintedID    int64                   `json:"browser_vinted_id"`
+	BrowserVintedName  string                  `json:"browser_vinted_name"`
+	CheckoutContext    *browserCheckoutContext `json:"checkout_context,omitempty"`
+}
+
+// redundantExtensionSyncWindow is how recently a session must have been
+// validated for an identical sync to be accepted without asking Vinted again.
+// It is longer than the keep-alive interval, so a healthy session is validated
+// by the keep-alive alone.
+const redundantExtensionSyncWindow = 20 * time.Minute
+
+// extensionSyncIsRedundant reports whether a sync carries nothing new: the
+// same account, domain, token and browser as the stored, active session that
+// was validated within the window. Anything that could change the session,
+// including a checkout context or an account switch, is not redundant.
+func extensionSyncIsRedundant(existing *session.VintedSession, req extensionSyncCompleteRequest, incomingDomain string, now time.Time) bool {
+	if existing == nil || !existing.BrowserLinked || existing.Status != "active" {
+		return false
+	}
+	if req.CheckoutContext != nil || req.AllowAccountSwitch {
+		return false
+	}
+	if req.AccessToken == "" || req.AccessToken != existing.AccessToken || incomingDomain != existing.Domain {
+		return false
+	}
+	if req.RefreshToken != "" && req.RefreshToken != existing.RefreshToken {
+		return false
+	}
+	if req.UserAgent != "" && req.UserAgent != existing.UserAgent {
+		return false
+	}
+	if req.BrowserVintedID > 0 && req.BrowserVintedID != existing.VintedUserID {
+		return false
+	}
+	if existing.VintedUserID <= 0 || accessTokenExpired(existing.AccessToken) {
+		return false
+	}
+	lastValid, err := time.Parse(time.RFC3339, existing.LastValidAt)
+	if err != nil {
+		return false
+	}
+	age := now.Sub(lastValid)
+	return age >= 0 && age <= redundantExtensionSyncWindow
 }
 
 func (s *Server) buildLinkedSession(userID string, req linkRequest) (*session.VintedSession, error) {
@@ -726,6 +811,15 @@ func (s *Server) buildLinkedSession(userID string, req linkRequest) (*session.Vi
 		accessToken == existingSession.AccessToken && domain == existingSession.Domain &&
 		(userAgent == "" || userAgent == existingSession.UserAgent) &&
 		(cookieHeader == "" || cookieHeader == existingSession.CookieHeader)
+	// The browser renews its access token on its own schedule. A renewed
+	// token for the same Vinted account, region and browser keeps the context
+	// the member already synced; another account or browser never inherits it.
+	if !sameContext && existingSession != nil && req.browserLinked && existingSession.BrowserLinked &&
+		accessToken != "" && cookieHeader == "" && domain == existingSession.Domain &&
+		(userAgent == "" || userAgent == existingSession.UserAgent) &&
+		existingSession.VintedUserID > 0 && vinted.AccessTokenUserID(accessToken) == existingSession.VintedUserID {
+		sameContext = true
+	}
 	if userAgent == "" && sameContext {
 		userAgent = strings.TrimSpace(existingSession.UserAgent)
 	}
@@ -1021,7 +1115,7 @@ func (s *Server) handleBrowserLinkCreate(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleExtensionSyncComplete(w http.ResponseWriter, r *http.Request) {
 	var req extensionSyncCompleteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&req); err != nil {
 		writeError(w, "invalid request body", 400)
 		return
 	}
@@ -1045,6 +1139,10 @@ func (s *Server) handleExtensionSyncComplete(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	if err := req.CheckoutContext.validate(req.UserAgent); err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	link, err := s.sessions.GetBrowserLinkByToken(req.LinkToken)
 	if err != nil {
 		writeError(w, "browser link fetch error", 500)
@@ -1080,6 +1178,27 @@ func (s *Server) handleExtensionSyncComplete(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
+	if extensionSyncIsRedundant(existingSession, req, incomingDomain, time.Now()) {
+		// The extension repeats its sync on a timer. When it delivers exactly
+		// the session that was validated a moment ago there is nothing to
+		// learn from Vinted, so the link is kept alive without a request.
+		if err := s.sessions.TouchBrowserLink(req.LinkToken); err != nil {
+			log.Printf("[extension-sync] failed to touch browser link for user %s: %v", link.UserID, err)
+		}
+		touched := *existingSession
+		touched.LastBrowserSync = time.Now().UTC().Format(time.RFC3339)
+		if _, err := s.sessions.StoreIfCurrent(*existingSession, touched); err != nil {
+			log.Printf("[extension-sync] failed to record sync time for user %s: %v", link.UserID, err)
+		}
+		writeJSON(w, 200, map[string]interface{}{
+			"status":      "completed",
+			"vinted_name": existingSession.VintedName,
+			"vinted_id":   existingSession.VintedUserID,
+			"domain":      existingSession.Domain,
+		})
+		return
+	}
+
 	sess, err := s.buildLinkedSession(link.UserID, linkRequest{browserLinked: true,
 		AccessToken:  req.AccessToken,
 		RefreshToken: req.RefreshToken,
@@ -1090,6 +1209,8 @@ func (s *Server) handleExtensionSyncComplete(w http.ResponseWriter, r *http.Requ
 		writeError(w, err.Error(), 400)
 		return
 	}
+
+	req.CheckoutContext.apply(sess)
 
 	client, err := vinted.NewClient(sess)
 	if err != nil {
@@ -1327,10 +1448,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"requires_browser_reauth": !sess.BrowserLinked && (sess.Status == "needs_browser_reauth" || sess.Status == "missing_refresh_token"),
 		"requires_browser_sync":   browserSyncRequired,
 		"has_browser_session":     sess.CookieHeader != "",
-		"browser_linked":          sess.BrowserLinked,
-		"browser_link_connected":  browserLinkConnected,
-		"last_browser_sync":       sess.LastBrowserSync,
-		"has_phone_number":        sess.PhoneNumber != "",
+		"server_checkout": map[string]interface{}{
+			"state":                       s.checkoutContextState(sess),
+			"automatic_payment_available": s.sessions.DurableCheckoutAvailable(),
+		},
+		"browser_linked":         sess.BrowserLinked,
+		"browser_link_connected": browserLinkConnected,
+		"last_browser_sync":      sess.LastBrowserSync,
+		"has_phone_number":       sess.PhoneNumber != "",
 	})
 }
 
@@ -1403,126 +1528,22 @@ func (s *Server) handleUnlike(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"status": "unliked", "item_id": req.ItemID})
 }
 
-type oneClickBuyRequest struct {
-	ItemID               int64                  `json:"item_id"`
-	SellerID             int64                  `json:"seller_id"`
-	IncogniaRequestToken string                 `json:"incognia_request_token"`
-	PickupType           int                    `json:"pickup_type"`
-	BrowserInfo          vinted.BrowserInfo     `json:"browser_info"`
-	PaymentMethod        map[string]interface{} `json:"payment_method"`
-	PhoneNumber          string                 `json:"phone_number"`
-}
-
+// Legacy request endpoints cannot bypass Full checkout consent, saved limits,
+// proxy selection, or durable payment claims. Use the authorized checkout route.
 func (s *Server) handleOneClickBuy(w http.ResponseWriter, r *http.Request) {
-	sess, client, ok := s.getSessionAndClient(r, w)
-	if !ok {
+	if getUserID(r) == "" {
+		writeError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-
-	var req oneClickBuyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid request body", 400)
-		return
-	}
-	if req.ItemID == 0 {
-		writeError(w, "item_id is required", 400)
-		return
-	}
-	if req.SellerID == 0 {
-		writeError(w, "seller_id is required", 400)
-		return
-	}
-
-	result, err := client.OneClickBuy(req.ItemID, vinted.OneClickBuyOptions{
-		SellerID:             req.SellerID,
-		IncogniaRequestToken: strings.TrimSpace(req.IncogniaRequestToken),
-		PickupType:           req.PickupType,
-		BrowserInfo:          req.BrowserInfo,
-		PaymentMethod:        req.PaymentMethod,
-		PhoneNumber:          firstNonEmpty(strings.TrimSpace(req.PhoneNumber), sess.PhoneNumber),
-	})
-	if err != nil {
-		var authErr *vinted.AuthError
-		if errors.As(err, &authErr) {
-			writeJSON(w, 401, map[string]interface{}{
-				"error":        "one-click buy failed: " + authErr.Error(),
-				"code":         "invalid_authentication_token",
-				"step":         authErr.Step,
-				"vinted_code":  authErr.VintedCode,
-				"vinted_error": authErr.Message,
-			})
-			return
-		}
-		var paymentMissingErr *vinted.PaymentURLMissingError
-		if errors.As(err, &paymentMissingErr) {
-			s.storeCheckoutLink(getUserID(r), sess, session.CheckoutLink{
-				ItemID:        req.ItemID,
-				SellerID:      req.SellerID,
-				TransactionID: paymentMissingErr.TransactionID,
-				PurchaseID:    paymentMissingErr.PurchaseID,
-				CheckoutURL:   paymentMissingErr.CheckoutURL,
-				Domain:        sess.Domain,
-				Status:        "payment_url_missing",
-				CreatedAt:     time.Now().UTC().Format(time.RFC3339),
-			})
-			writeJSON(w, 409, map[string]interface{}{
-				"error":        "one-click buy failed: " + paymentMissingErr.Error(),
-				"code":         "payment_url_missing",
-				"purchase_id":  paymentMissingErr.PurchaseID,
-				"checkout_url": paymentMissingErr.CheckoutURL,
-				"payment_raw":  paymentMissingErr.Raw,
-			})
-			return
-		}
-		var paymentStateErr *vinted.PaymentStateError
-		if errors.As(err, &paymentStateErr) {
-			writeJSON(w, 409, map[string]interface{}{
-				"error":        "one-click buy failed: " + paymentStateErr.Error(),
-				"code":         paymentStateErr.Code,
-				"step":         paymentStateErr.Step,
-				"vinted_code":  paymentStateErr.VintedCode,
-				"vinted_error": paymentStateErr.Message,
-				"payment_raw":  paymentStateErr.Raw,
-			})
-			return
-		}
-		var challengeErr *vinted.DataDomeChallengeError
-		if errors.As(err, &challengeErr) {
-			writeJSON(w, 409, map[string]interface{}{
-				"error":       "one-click buy failed: " + challengeErr.Error(),
-				"code":        "datadome_challenge",
-				"step":        challengeErr.Step,
-				"captcha_url": challengeErr.CaptchaURL,
-			})
-			return
-		}
-		writeError(w, "one-click buy failed: "+err.Error(), 502)
-		return
-	}
-
-	s.storeCheckoutLink(getUserID(r), sess, session.CheckoutLink{
-		ItemID:        result.ItemID,
-		SellerID:      result.SellerID,
-		TransactionID: result.TransactionID,
-		PurchaseID:    result.PurchaseID,
-		CheckoutURL:   result.CheckoutURL,
-		PaymentURL:    result.PaymentURL,
-		Domain:        sess.Domain,
-		Status:        result.Status,
-		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
-	})
-	s.persistIfRefreshed(sess, client)
-	writeJSON(w, 200, result)
+	writeJSON(w, http.StatusGone, map[string]string{"code": "FULL_CHECKOUT_REQUIRED", "error": "Use a monitored-item buy link with Full checkout enabled in Account. Legacy request checkout is no longer available."})
 }
 
 func (s *Server) handleBuyWarm(w http.ResponseWriter, r *http.Request) {
-	sess, client, ok := s.getSessionAndClient(r, w)
-	if !ok {
+	if getUserID(r) == "" {
+		writeError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-
-	s.persistIfRefreshed(sess, client)
-	writeJSON(w, 200, map[string]string{"status": "warmed"})
+	writeJSON(w, http.StatusGone, map[string]string{"code": "FULL_CHECKOUT_REQUIRED", "error": "Request warmup is handled only inside authorized Full checkout."})
 }
 
 func (s *Server) handleLikedItems(w http.ResponseWriter, r *http.Request) {
@@ -1590,8 +1611,13 @@ func (s *Server) handleStoreCheckoutLink(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if strings.TrimSpace(req.CheckoutURL) == "" && strings.TrimSpace(req.PaymentURL) == "" {
-		writeError(w, "checkout_url or payment_url is required", 400)
+	// History keeps only a checkout page of the linked Vinted domain. Provider
+	// payment links carry tokens and are never stored here.
+	req.PaymentURL = ""
+	req.CheckoutURL = strings.TrimSpace(req.CheckoutURL)
+	s.canonicalizeSessionDomain(sess)
+	if !validAgentCheckoutURL(req.CheckoutURL, sess.Domain) {
+		writeError(w, "a checkout_url of the linked Vinted domain is required", 400)
 		return
 	}
 

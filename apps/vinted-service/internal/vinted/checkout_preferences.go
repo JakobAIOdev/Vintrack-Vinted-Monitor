@@ -45,6 +45,10 @@ func (p CheckoutPreferences) Key() string {
 	return key
 }
 
+func (p CheckoutPreferences) FullCheckoutEnabled(domain string) bool {
+	return p.Valid() && p.AutoCheckout != nil && AutoCheckoutAllowed(domain, p.Payment)
+}
+
 var checkoutDomainPattern = regexp.MustCompile(`^www\.vinted\.(at|be|co\.uk|com|cz|de|dk|es|fi|fr|hr|hu|ie|it|lt|lu|nl|pl|pt|ro|se|sk)$`)
 
 func AutoCheckoutAllowed(domain, payment string) bool {

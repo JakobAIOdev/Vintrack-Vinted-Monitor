@@ -1034,3 +1034,19 @@ func TestGetNotificationsSanitizesHTMLForbiddenResponse(t *testing.T) {
 		}
 	}
 }
+
+func TestLinkedCheckoutContextDoesNotRequireHomepageAfterWarmupWindow(t *testing.T) {
+	c, transport := testClient()
+	c.session.BrowserLinked = true
+	c.session.UserAgent = "synthetic-browser"
+	c.session.CookieHeader = "datadome=synthetic-context; anon_id=synthetic-anon"
+	c.session.WarmedAt = time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339)
+	c.csrfToken = "synthetic-csrf"
+	if err := c.WarmUp(); err != nil || len(transport.requests) != 0 {
+		t.Fatal("native checkout context was replaced by server homepage warmup")
+	}
+	c.session.BrowserLinked = false
+	if c.canReuseWarmup() {
+		t.Fatal("ordinary stale warmup stopped expiring")
+	}
+}
