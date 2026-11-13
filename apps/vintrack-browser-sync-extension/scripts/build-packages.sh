@@ -13,6 +13,8 @@ COMMON_FILES=(
   companion.css
   companion.js
   content-script.js
+  inline.css
+  inline.js
   page-bridge.js
   popup.html
   popup.js

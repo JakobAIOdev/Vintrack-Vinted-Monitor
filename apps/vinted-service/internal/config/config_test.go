@@ -4,7 +4,7 @@ import "testing"
 
 func clearConfig(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"APP_ENV", "ENVIRONMENT", "NODE_ENV", "DATABASE_URL", "VINTED_SESSION_ENCRYPTION_KEY", "REDIS_ADDR", "REDIS_PASSWORD", "LISTEN_ADDR"} {
+	for _, key := range []string{"APP_ENV", "ENVIRONMENT", "NODE_ENV", "DATABASE_URL", "VINTED_SESSION_ENCRYPTION_KEY", "REDIS_ADDR", "REDIS_PASSWORD", "LISTEN_ADDR", "CHECKOUT_DEV_DIRECT_CONNECTION"} {
 		t.Setenv(key, "")
 	}
 }
@@ -33,5 +33,24 @@ func TestLoadRequiresEncryptionWithDatabase(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected missing encryption key to fail")
+	}
+}
+
+func TestDirectCheckoutIsOffByDefaultAndRefusedInProduction(t *testing.T) {
+	clearConfig(t)
+	cfg, err := Load()
+	if err != nil || cfg.CheckoutDevDirect {
+		t.Fatal("direct checkout must be off by default")
+	}
+	t.Setenv("CHECKOUT_DEV_DIRECT_CONNECTION", "true")
+	cfg, err = Load()
+	if err != nil || !cfg.CheckoutDevDirect {
+		t.Fatal("development opt-in was not honoured")
+	}
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("VINTED_SESSION_ENCRYPTION_KEY", "synthetic-key")
+	if _, err := Load(); err == nil {
+		t.Fatal("direct checkout was accepted in production")
 	}
 }

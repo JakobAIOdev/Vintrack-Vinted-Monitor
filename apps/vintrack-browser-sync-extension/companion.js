@@ -93,6 +93,68 @@
     }
   }
 
+  function isVintedHost(hostname) {
+    const host = String(hostname || "")
+      .trim()
+      .toLowerCase();
+    for (const domain of VINTED_DOMAINS) {
+      if (host === domain || host.endsWith(`.${domain}`)) return true;
+    }
+    return false;
+  }
+
+  // Preferences for the features drawn into Vinted pages. They live in
+  // extension storage and are read by both this panel and inline.js.
+  const INLINE_SETTINGS_KEY = "vintrackInlineSettings";
+  const INLINE_SEEN_KEY = "vintrackInlineSeen";
+  const INLINE_TOGGLES = [
+    [
+      "badges",
+      "Vintrack badges",
+      "Mark listings your monitors found or that have a Price Watch.",
+    ],
+    [
+      "seen",
+      "Seen marker and price memory",
+      "Dim listings you already opened and flag price drops since your last look. Stored only in this browser.",
+    ],
+    [
+      "itemPanel",
+      "Listing insights",
+      "Show the monitor, Price Watch and your price memory on item pages.",
+    ],
+    [
+      "toasts",
+      "Live find toasts",
+      "Show new monitor finds while you browse Vinted.",
+    ],
+  ];
+
+  function parseInlineKeywords(raw) {
+    const parts = Array.isArray(raw) ? raw : String(raw || "").split(/[,\n\r]/);
+    const keywords = [];
+    for (const part of parts) {
+      const keyword = String(part || "")
+        .trim()
+        .toLowerCase()
+        .slice(0, 60);
+      // A single character would match almost every listing.
+      if (keyword.length < 2 || keywords.includes(keyword)) continue;
+      keywords.push(keyword);
+      if (keywords.length >= 40) break;
+    }
+    return keywords;
+  }
+
+  function normalizeInlineSettings(raw) {
+    const value = raw && typeof raw === "object" ? raw : {};
+    const settings = {};
+    for (const [key] of INLINE_TOGGLES) settings[key] = value[key] !== false;
+    settings.mutedKeywords = parseInlineKeywords(value.mutedKeywords);
+    settings.highlightKeywords = parseInlineKeywords(value.highlightKeywords);
+    return settings;
+  }
+
   function shortcutLabel() {
     const platform = String(
       navigator.userAgentData?.platform ||
@@ -180,6 +242,7 @@
       ["overview", "Overview"],
       ["feed", "Feed"],
       ["watches", "Watches"],
+      ["inline", "On Vinted"],
     ]) {
       const button = element("button", "", label);
       button.type = "button";
@@ -208,8 +271,11 @@
     const watchesPanel = element("section");
     watchesPanel.dataset.panel = "watches";
     watchesPanel.hidden = true;
-    content.append(overviewPanel, feedPanel, watchesPanel);
-    for (const panel of [overviewPanel, feedPanel, watchesPanel]) {
+    const inlinePanel = element("section");
+    inlinePanel.dataset.panel = "inline";
+    inlinePanel.hidden = true;
+    content.append(overviewPanel, feedPanel, watchesPanel, inlinePanel);
+    for (const panel of [overviewPanel, feedPanel, watchesPanel, inlinePanel]) {
       panel.id = `${instanceId}-panel-${panel.dataset.panel}`;
       panel.setAttribute("role", "tabpanel");
       panel.setAttribute(
@@ -256,6 +322,9 @@
     let feedTimer = null;
     let feedBusy = false;
     let lastFeedUpdatedAt = null;
+    let inlineSettings = normalizeInlineSettings(null);
+    let inlineSeenCount = 0;
+    const localStorageArea = extensionApi?.storage?.local || null;
     let watchesError = "";
     let refreshing = false;
     let destroyed = false;
@@ -794,15 +863,24 @@
           element(
             "small",
             "",
-            `${watch.status} · ${watch.target?.availability || "pending"}`,
+            // Newer Vintrack servers describe the watch ("Sold", "Reserved").
+            watch.state?.label ||
+              `${watch.status} · ${watch.target?.availability || "pending"}`,
           ),
         );
         top.appendChild(copy);
         card.appendChild(top);
+        if (watch.state?.hint) {
+          card.appendChild(element("p", "vtc-muted", watch.state.hint));
+        }
         const actions = element("div", "vtc-watch-actions");
         addButton(
           actions,
-          watch.status === "active" ? "Pause" : "Resume",
+          watch.status === "active"
+            ? "Pause"
+            : watch.status === "stopped"
+              ? "Watch again"
+              : "Resume",
           "watch-status",
           {
             id: watch.id,
@@ -844,6 +922,132 @@
         secondary: true,
       });
       restoreFocus();
+    }
+
+    function keywordField(key, label, placeholder) {
+      const field = element("label", "vtc-field");
+      const input = element("input");
+      input.type = "text";
+      input.dataset.keywords = key;
+      input.placeholder = placeholder;
+      input.value = inlineSettings[key].join(", ");
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      field.append(element("span", "", label), input);
+      return field;
+    }
+
+    function renderInline() {
+      const restoreFocus = rememberPanelFocus(inlinePanel);
+      inlinePanel.replaceChildren();
+      if (!localStorageArea) {
+        inlinePanel.appendChild(
+          emptyState(
+            "Settings unavailable",
+            "Reload the extension to change what Vintrack shows on Vinted.",
+          ),
+        );
+        restoreFocus();
+        return;
+      }
+      if (state?.companionMode === "popup") {
+        inlinePanel.appendChild(
+          emptyState(
+            "Vinted integration is off",
+            "Turn on “Show actions inside Vinted” below to use these features.",
+          ),
+        );
+      }
+
+      const features = element("div", "vtc-card");
+      features.appendChild(element("span", "vtc-eyebrow", "ON VINTED PAGES"));
+      for (const [key, title, copy] of INLINE_TOGGLES) {
+        const row = element("label", "vtc-setting");
+        const text = element("span", "vtc-setting-copy");
+        text.append(element("strong", "", title), element("small", "", copy));
+        const input = element("input");
+        input.type = "checkbox";
+        input.dataset.setting = key;
+        input.checked = inlineSettings[key];
+        row.append(text, input);
+        features.appendChild(row);
+      }
+      inlinePanel.appendChild(features);
+
+      const keywords = element("div", "vtc-card");
+      keywords.append(
+        element("span", "vtc-eyebrow", "KEYWORDS"),
+        element(
+          "p",
+          "vtc-muted",
+          "Matched against the listing title and brand on Vinted. Separate words with commas.",
+        ),
+        keywordField(
+          "mutedKeywords",
+          "Fade out listings containing",
+          "replica, damaged",
+        ),
+        keywordField(
+          "highlightKeywords",
+          "Highlight listings containing",
+          "vintage, deadstock",
+        ),
+      );
+      inlinePanel.appendChild(keywords);
+
+      const history = element("div", "vtc-card");
+      history.append(
+        element("span", "vtc-eyebrow", "LOCAL HISTORY"),
+        element(
+          "p",
+          "vtc-muted",
+          inlineSeenCount === 1
+            ? "1 opened listing is remembered in this browser. It is never sent to Vintrack."
+            : `${inlineSeenCount} opened listings are remembered in this browser. They are never sent to Vintrack.`,
+        ),
+      );
+      const clear = addButton(
+        history,
+        "Clear seen history",
+        "inline-clear-seen",
+        { secondary: true },
+      );
+      clear.disabled = inlineSeenCount === 0;
+      inlinePanel.appendChild(history);
+      restoreFocus();
+    }
+
+    async function loadInlineSettings() {
+      if (!localStorageArea) {
+        renderInline();
+        return;
+      }
+      try {
+        const stored = await localStorageArea.get([
+          INLINE_SETTINGS_KEY,
+          INLINE_SEEN_KEY,
+        ]);
+        inlineSettings = normalizeInlineSettings(stored?.[INLINE_SETTINGS_KEY]);
+        const seen = stored?.[INLINE_SEEN_KEY];
+        inlineSeenCount =
+          seen && typeof seen === "object" ? Object.keys(seen).length : 0;
+      } catch {
+        // Keep the defaults; the panel stays usable.
+      }
+      if (!destroyed) renderInline();
+    }
+
+    async function saveInlineSettings(patch, message) {
+      const previous = inlineSettings;
+      inlineSettings = normalizeInlineSettings({ ...inlineSettings, ...patch });
+      try {
+        await localStorageArea.set({ [INLINE_SETTINGS_KEY]: inlineSettings });
+        if (message) showNotice(message, "ok");
+      } catch {
+        inlineSettings = previous;
+        showNotice("Could not save this setting.");
+      }
+      if (!destroyed) renderInline();
     }
 
     function setWatchBusy(value) {
@@ -957,6 +1161,7 @@
       renderOverview();
       renderFeed();
       renderWatches();
+      void loadInlineSettings();
       options.onStateChange?.(state);
       if (activeTab === "feed") startLiveFeed();
       if (activeTab === "watches" && state?.configured && !watchesLoaded)
@@ -1063,6 +1268,34 @@
         await loadWatches(false);
       } else if (action === "load-more") {
         await loadWatches(true);
+      } else if (action === "inline-clear-seen") {
+        if (
+          confirm(
+            "Clear the seen history? Vinted listings will no longer be marked as seen and remembered prices are removed.",
+          )
+        ) {
+          try {
+            await localStorageArea.remove(INLINE_SEEN_KEY);
+            inlineSeenCount = 0;
+            showNotice("Seen history cleared.", "ok");
+          } catch {
+            showNotice("Could not clear the seen history.");
+          }
+          renderInline();
+        }
+      }
+    });
+
+    root.addEventListener("change", (event) => {
+      const input = event.target;
+      if (!localStorageArea || !(input instanceof HTMLInputElement)) return;
+      if (input.dataset.setting) {
+        void saveInlineSettings({ [input.dataset.setting]: input.checked });
+      } else if (input.dataset.keywords) {
+        void saveInlineSettings(
+          { [input.dataset.keywords]: input.value },
+          "Keywords saved.",
+        );
       }
     });
 
@@ -1079,6 +1312,7 @@
         showNotice(response?.error || "Could not update companion mode.");
       } else {
         state.companionMode = mode;
+        renderInline();
         showNotice(
           mode === "inline"
             ? "Vintrack actions enabled inside Vinted."
@@ -1103,5 +1337,15 @@
     };
   }
 
-  globalThis.VintrackCompanion = { mount: mountCompanion };
+  globalThis.VintrackCompanion = {
+    mount: mountCompanion,
+    isVintedHost,
+    safeVintedUrl,
+    inline: {
+      settingsKey: INLINE_SETTINGS_KEY,
+      seenKey: INLINE_SEEN_KEY,
+      normalizeSettings: normalizeInlineSettings,
+      parseKeywords: parseInlineKeywords,
+    },
+  };
 })();

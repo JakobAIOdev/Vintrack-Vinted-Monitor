@@ -30,6 +30,7 @@ type VintedAccountStatus = {
     has_refresh_token?: boolean;
     requires_browser_reauth?: boolean;
     has_browser_session?: boolean;
+    server_checkout?: { state: string; automatic_payment_available: boolean };
     browser_linked?: boolean;
     last_browser_sync?: string;
     has_phone_number?: boolean;

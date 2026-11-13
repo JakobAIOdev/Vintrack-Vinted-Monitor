@@ -37,6 +37,7 @@ function harness(options = {}) {
     },
   ];
   const calls = [];
+  const cookieReads = [];
   const tabMutations = [];
   const tabMessages = [];
   const listeners = {};
@@ -67,6 +68,7 @@ function harness(options = {}) {
     },
     cookies: {
       async get(details) {
+        cookieReads.push(details.name);
         const host = new URL(details.url).hostname;
         const cookie =
           cookies.find(
@@ -189,6 +191,7 @@ function harness(options = {}) {
     context,
     storage,
     calls,
+    cookieReads,
     tabMutations,
     tabMessages,
     listeners,
@@ -657,4 +660,462 @@ test("runtime capabilities advertise desktop checkout without network requests",
     assert.equal(h.calls.length, 0);
     assert.equal(h.tabMessages.length, 0);
   }
+});
+
+
+test("ordinary token sync never reads or copies checkout-context cookies", async () => {
+  const h = harness({ cookies: [
+    {name:"access_token_web", domain:".vinted.de",storeId:"0",value:token(initialNow+3600000)},
+    {name:"datadome", domain:".vinted.de",storeId:"0",value:"synthetic-dd"},
+    {name:"_vinted_fr_session", domain:".vinted.de",storeId:"0",value:"synthetic-session"},
+    {name:"v_udt", domain:".vinted.de",storeId:"0",value:"synthetic-device"},
+  ] });
+  await h.context.performDomainSync("www.vinted.de");
+  assert.deepEqual(h.cookieReads, ["access_token_web"]);
+  assert.equal(JSON.parse(h.calls[0].init.body).checkout_context, undefined);
+});
+
+test("expanded checkout consent preserves Vinted session cookies without copying refresh credentials", async () => {
+  const h = harness({ cookies: [
+    {name:"access_token_web",domain:".vinted.de",storeId:"0",value:token(initialNow+3600000)},
+    {name:"datadome",domain:".vinted.de",storeId:"0",value:"synthetic-dd"},
+    {name:"anon_id",domain:".vinted.de",storeId:"0",value:"synthetic-anon"},
+    {name:"_vinted_fr_session",domain:".vinted.de",storeId:"0",value:"synthetic-session"},
+    {name:"v_udt",domain:".vinted.de",storeId:"0",value:"synthetic-device"},
+    {name:"refresh_token_web",domain:".vinted.de",storeId:"0",value:"synthetic-refresh"},
+  ], onTabRefresh: () => ({ok:true,accountId:42,csrfToken:"synthetic-csrf"}) });
+  h.context.ensureVintedBuyTab = async () => ({tabId:7});
+  const result = await h.context.performDomainSync("www.vinted.de", {includeCheckoutContext:true,checkoutContextConsent:2});
+  assert.equal(result.ok,true);
+  const body = JSON.parse(h.calls[0].init.body);
+  assert.deepEqual(body.checkout_context, {consent_version:2,cookies:{datadome:"synthetic-dd",anon_id:"synthetic-anon",_vinted_fr_session:"synthetic-session",v_udt:"synthetic-device"},csrf_token:"synthetic-csrf"});
+  assert.deepEqual(h.cookieReads,["access_token_web","datadome","anon_id","_vinted_fr_session","v_udt"]);
+  assert.equal(body.refresh_token,undefined);
+  for (const value of ["synthetic-session","synthetic-device","synthetic-refresh"]) assert.ok(!JSON.stringify(h.storage).includes(value));
+});
+
+test("explicit checkout sync sends only the allowed context to its configured origin and does not store it locally", async () => {
+  const h = harness({ cookies: [
+    {name:"access_token_web",domain:".vinted.de",storeId:"0",value:token(initialNow+3600000)},
+    {name:"datadome",domain:".vinted.de",storeId:"0",value:"synthetic-dd"},
+    {name:"anon_id",domain:".vinted.de",storeId:"0",value:"synthetic-anon"},
+    {name:"refresh_token_web",domain:".vinted.de",storeId:"0",value:"synthetic-refresh"},
+  ], onTabRefresh: () => ({ok:true,accountId:42,csrfToken:"synthetic-csrf"}) });
+  h.context.ensureVintedBuyTab = async () => ({tabId:7});
+  const first = await h.context.performDomainSync("www.vinted.de", {includeCheckoutContext:true});
+  assert.equal(first.ok, true);
+  const body = JSON.parse(h.calls[0].init.body);
+  assert.deepEqual(body.checkout_context, {consent_version:1,cookies:{datadome:"synthetic-dd",anon_id:"synthetic-anon"},csrf_token:"synthetic-csrf"});
+  assert.equal(body.refresh_token, undefined);
+  assert.deepEqual(h.cookieReads, ["access_token_web","datadome","anon_id"]);
+  assert.ok(!JSON.stringify(h.storage).includes("synthetic-dd"));
+  assert.ok(!JSON.stringify(h.storage).includes("synthetic-csrf"));
+  await h.context.performDomainSync("www.vinted.de", {includeCheckoutContext:true});
+  assert.equal(h.calls.length, 2, "a token receipt cannot suppress explicit context sync");
+});
+
+for (const options of [{accountId:99,csrfToken:"synthetic-csrf"},{accountId:42,csrfToken:""}]) {
+ test("checkout-context account or CSRF mismatch never leaves the browser", async () => {
+  const h = harness({cookies:[{name:"access_token_web",domain:".vinted.de",storeId:"0",value:token(initialNow+3600000)}],onTabRefresh:()=>({ok:true,...options})});
+  h.context.ensureVintedBuyTab=async()=>({tabId:7});
+  const result=await h.context.performDomainSync("www.vinted.de",{includeCheckoutContext:true});
+  assert.equal(result.ok,false);
+  assert.equal(h.calls.length,0);
+  assert.deepEqual(h.cookieReads,["access_token_web"]);
+ });
+}
+
+test("context capture requires both the configured sender and explicit context consent", async () => {
+ for (const sender of [{url:"https://evil.test"},{url:`${appOrigin}/account`}]) {
+  const h=harness();
+  const result=await new Promise(resolve=>h.listeners.message({type:"VINTRACK_EXTENSION_MANUAL_SYNC",payload:{preferredDomain:"www.vinted.de",includeCheckoutContext:true}},sender,resolve));
+  assert.equal(result.ok,false);
+  assert.equal(h.calls.length,0);
+  assert.equal(h.cookieReads.length,0);
+ }
+});
+
+// Background checkout-context sync after one explicit consent.
+const grantKey = "vintrackCheckoutContextGrant";
+const revokeType = "VINTRACK_EXTENSION_REVOKE_CHECKOUT_CONTEXT";
+const contextCookieNames = [
+  "access_token_web",
+  "datadome",
+  "anon_id",
+  "_vinted_fr_session",
+  "v_udt",
+];
+const fullContext = {
+  consent_version: 2,
+  cookies: {
+    datadome: "synthetic-dd",
+    anon_id: "synthetic-anon",
+    _vinted_fr_session: "synthetic-session",
+    v_udt: "synthetic-device",
+  },
+  csrf_token: "synthetic-csrf",
+};
+function contextCookies(domain = ".vinted.de", storeId = "0") {
+  return [
+    ["access_token_web", token(initialNow + 3_600_000)],
+    ["datadome", "synthetic-dd"],
+    ["anon_id", "synthetic-anon"],
+    ["_vinted_fr_session", "synthetic-session"],
+    ["v_udt", "synthetic-device"],
+    ["refresh_token_web", "synthetic-refresh"],
+  ].map(([name, value]) => ({ name, domain, storeId, value }));
+}
+function contextHarness(options = {}) {
+  return harness({
+    cookies: contextCookies(),
+    tabs: [{ id: 7, url: "https://www.vinted.de/", lastAccessed: 1 }],
+    onTabRefresh: (id, message) =>
+      message.type === "VINTRACK_GET_CHECKOUT_CONTEXT"
+        ? { ok: true, accountId: 42, csrfToken: "synthetic-csrf" }
+        : undefined,
+    ...options,
+  });
+}
+const storedGrant = (overrides = {}) => ({
+  consentVersion: 2,
+  appOrigin,
+  accountId: 42,
+  domain: "www.vinted.de",
+  grantedAt: "2026-10-02T12:00:00.000Z",
+  ...overrides,
+});
+const syncBodies = (h) =>
+  h.calls
+    .filter(({ url }) => url.startsWith(appOrigin))
+    .map(({ init }) => JSON.parse(init.body));
+const send = (h, message, sender = { url: `${appOrigin}/account` }) =>
+  new Promise((resolve) => h.listeners.message(message, sender, resolve));
+const allowCheckoutContext = (h, checkoutContextConsent = 2) => {
+  h.context.ensureVintedBuyTab = async () => ({ tabId: 7 });
+  return send(h, {
+    type: "VINTRACK_EXTENSION_MANUAL_SYNC",
+    payload: {
+      preferredDomain: "www.vinted.de",
+      includeCheckoutContext: true,
+      checkoutContextConsent,
+    },
+  });
+};
+
+test("without a grant an automatic sync next to an open Vinted tab stays token-only", async () => {
+  const h = contextHarness();
+  const results = await h.context.syncAndPersistAllDomains();
+  assert.equal(results[0].ok, true);
+  assert.equal(syncBodies(h).length, 1);
+  assert.equal(syncBodies(h)[0].checkout_context, undefined);
+  assert.deepEqual(h.cookieReads, ["access_token_web"]);
+  assert.deepEqual(h.tabMessages, []);
+  const status = await send(h, { type: "VINTRACK_EXTENSION_PING" });
+  assert.equal(status.checkoutContextBackgroundSync, false);
+});
+
+test("an explicit consented sync stores a grant without cookie, CSRF or token values", async () => {
+  const h = contextHarness();
+  const result = await allowCheckoutContext(h);
+  assert.equal(result.ok, true);
+  assert.equal(result.checkoutContextBackgroundSync, true);
+  assert.deepEqual(syncBodies(h)[0].checkout_context, fullContext);
+  const { grantedAt, ...grant } = h.storage[grantKey];
+  assert.deepEqual(grant, {
+    consentVersion: 2,
+    appOrigin,
+    accountId: 42,
+    domain: "www.vinted.de",
+  });
+  assert.ok(Number.isFinite(Date.parse(grantedAt)));
+  const persisted = JSON.stringify(h.storage);
+  for (const { value } of contextCookies())
+    assert.ok(!persisted.includes(value));
+  assert.ok(!persisted.includes("synthetic-csrf"));
+
+  const status = await send(h, { type: "VINTRACK_EXTENSION_PING" });
+  assert.equal(status.checkoutContextBackgroundSync, true);
+  for (const key of ["accountId", "domain", "grantedAt", grantKey])
+    assert.equal(key in status, false);
+});
+
+test("a failed or version 1 context sync never creates a background grant", async () => {
+  const refused = contextHarness({
+    fetch: async () => response(400, { error: "synthetic refusal" }),
+  });
+  assert.equal((await allowCheckoutContext(refused)).ok, false);
+  assert.equal(grantKey in refused.storage, false);
+
+  const legacy = contextHarness();
+  const result = await allowCheckoutContext(legacy, 1);
+  assert.equal(result.ok, true);
+  assert.equal(result.checkoutContextBackgroundSync, false);
+  assert.equal(grantKey in legacy.storage, false);
+});
+
+test("after the grant a renewed access token is synced with the version 2 context once", async () => {
+  const h = contextHarness();
+  await allowCheckoutContext(h);
+  await h.context.syncAndPersistAllDomains();
+  assert.equal(syncBodies(h).length, 1, "the unchanged token stays cached");
+
+  h.rotate();
+  h.cookieReads.length = 0;
+  const results = await h.context.syncAndPersistAllDomains();
+  assert.equal(results[0].ok, true);
+  const body = syncBodies(h)[1];
+  assert.deepEqual(body.checkout_context, fullContext);
+  assert.equal(body.browser_vinted_id, 42);
+  assert.equal(body.user_agent, "Synthetic test browser");
+  assert.equal(body.refresh_token, undefined);
+  assert.equal(body.cookie_header, undefined);
+  assert.deepEqual(h.cookieReads, contextCookieNames);
+  assert.deepEqual(h.tabMutations, []);
+
+  // The same token is not sent with context again; the server keeps its copy.
+  h.advance(600_001);
+  await h.context.syncAndPersistAllDomains();
+  assert.equal(syncBodies(h).length, 3);
+  assert.equal(syncBodies(h)[2].checkout_context, undefined);
+
+  const persisted = JSON.stringify(h.storage);
+  for (const value of [
+    "synthetic-dd",
+    "synthetic-anon",
+    "synthetic-session",
+    "synthetic-device",
+    "synthetic-refresh",
+    "synthetic-csrf",
+  ])
+    assert.ok(!persisted.includes(value));
+});
+
+test("Sync now without the explicit flag carries the context while the grant matches", async () => {
+  const h = contextHarness();
+  h.storage[grantKey] = storedGrant();
+  const result = await send(h, {
+    type: "VINTRACK_EXTENSION_MANUAL_SYNC",
+    payload: { preferredDomain: "www.vinted.de" },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.checkoutContextBackgroundSync, true);
+  assert.deepEqual(syncBodies(h)[0].checkout_context, fullContext);
+  assert.deepEqual(h.tabMutations, []);
+});
+
+test("a grant for another instance or account is not used and is cleared", async () => {
+  for (const overrides of [
+    { appOrigin: "http://localhost:3000" },
+    { accountId: 99 },
+  ]) {
+    const h = contextHarness();
+    h.storage[grantKey] = storedGrant(overrides);
+    const status = await send(h, { type: "VINTRACK_EXTENSION_PING" });
+    assert.equal(
+      status.checkoutContextBackgroundSync,
+      overrides.appOrigin === undefined,
+    );
+    const results = await h.context.syncAndPersistAllDomains();
+    assert.equal(results[0].ok, true);
+    assert.equal(syncBodies(h)[0].checkout_context, undefined);
+    assert.deepEqual(h.cookieReads, ["access_token_web"]);
+    assert.equal(grantKey in h.storage, false);
+  }
+});
+
+test("a grant for another region is not used and ends once the linked region differs", async () => {
+  const moved = contextHarness();
+  moved.storage[grantKey] = storedGrant({ domain: "www.vinted.fr" });
+  await moved.context.syncAndPersistAllDomains();
+  assert.equal(syncBodies(moved)[0].checkout_context, undefined);
+  assert.deepEqual(moved.cookieReads, ["access_token_web"]);
+  assert.equal(grantKey in moved.storage, false);
+
+  // A session the server ignores for another region leaves the grant alone.
+  const ignored = contextHarness({
+    cookies: contextCookies(".vinted.fr"),
+    tabs: [{ id: 8, url: "https://www.vinted.fr/" }],
+    fetch: async () =>
+      response(200, {
+        status: "ignored_domain",
+        domain: "www.vinted.de",
+        ignored_domain: "www.vinted.fr",
+      }),
+  });
+  ignored.storage[grantKey] = storedGrant();
+  const result = await ignored.context.performDomainSync("www.vinted.fr");
+  assert.equal(result.ok, false);
+  assert.equal(syncBodies(ignored)[0].checkout_context, undefined);
+  assert.deepEqual(ignored.cookieReads, ["access_token_web"]);
+  assert.deepEqual(ignored.storage[grantKey], storedGrant());
+});
+
+test("server account, region or removed-link answers end the grant", async () => {
+  for (const [status, body] of [
+    [200, { status: "ignored_account", domain: "www.vinted.de" }],
+    [200, { status: "ignored_domain", domain: "www.vinted.fr" }],
+    [409, { status: "browser_account_mismatch", domain: "www.vinted.de" }],
+    [200, { status: "completed", domain: "www.vinted.de", vinted_id: 99 }],
+    [404, { error: "browser link expired or not found" }],
+  ]) {
+    const h = contextHarness({ fetch: async () => response(status, body) });
+    h.storage[grantKey] = storedGrant();
+    await h.context.performDomainSync("www.vinted.de");
+    assert.equal(grantKey in h.storage, false, JSON.stringify(body));
+    assert.deepEqual(h.tabMutations, []);
+  }
+});
+
+test("a Vintrack outage keeps the grant", async () => {
+  for (const status of [404, 429, 502]) {
+    const h = contextHarness({
+      fetch: async () => response(status, { error: "Vintrack unavailable" }),
+    });
+    h.storage[grantKey] = storedGrant();
+    const result = await h.context.performDomainSync("www.vinted.de");
+    assert.equal(result.ok, false);
+    assert.deepEqual(h.storage[grantKey], storedGrant());
+  }
+});
+
+test("background context collection failures fall back to a successful token-only sync", async () => {
+  const withoutDatadome = contextCookies().filter(
+    ({ name }) => name !== "datadome",
+  );
+  const page = (payload) => ({
+    onTabRefresh: (id, message) =>
+      message.type === "VINTRACK_GET_CHECKOUT_CONTEXT" ? payload : undefined,
+  });
+  for (const [name, options] of [
+    ["no open Vinted tab", { tabs: [] }],
+    [
+      "tab still loading",
+      { tabs: [{ id: 7, url: "https://www.vinted.de/", status: "loading" }] },
+    ],
+    [
+      "private window tab",
+      { tabs: [{ id: 7, url: "https://www.vinted.de/", incognito: true }] },
+    ],
+    [
+      "tab of another region",
+      { tabs: [{ id: 7, url: "https://www.vinted.fr/" }] },
+    ],
+    ["page without CSRF token", page({ ok: false })],
+    [
+      "page signed in to another account",
+      page({ ok: true, accountId: 99, csrfToken: "synthetic-csrf" }),
+    ],
+    ["missing datadome cookie", { cookies: withoutDatadome }],
+    [
+      "Firefox without the technical data permission",
+      { firefox: true, cookies: contextCookies(".vinted.de", "firefox-default") },
+    ],
+  ]) {
+    const h = contextHarness(options);
+    h.storage[grantKey] = storedGrant();
+    const results = await h.context.syncAndPersistAllDomains();
+    assert.equal(results[0].ok, true, name);
+    assert.equal(syncBodies(h).length, 1, name);
+    assert.equal(syncBodies(h)[0].checkout_context, undefined, name);
+    assert.equal(h.storage.vintrackLastSyncStatus, "ok", name);
+    assert.deepEqual(h.tabMutations, [], name);
+    assert.deepEqual(h.storage[grantKey], storedGrant(), name);
+  }
+});
+
+test("a server refusal of the background context is retried as a token-only sync", async () => {
+  const h = contextHarness({
+    fetch: async (url, init) =>
+      JSON.parse(init.body).checkout_context
+        ? response(400, { error: "synthetic context refusal" })
+        : response(200, { status: "completed", domain: "www.vinted.de" }),
+  });
+  h.storage[grantKey] = storedGrant();
+  const results = await h.context.syncAndPersistAllDomains();
+  assert.equal(results[0].ok, true);
+  assert.deepEqual(
+    syncBodies(h).map((body) => Boolean(body.checkout_context)),
+    [true, false],
+  );
+  assert.equal(h.storage.vintrackLastSyncStatus, "ok");
+  assert.deepEqual(h.storage[grantKey], storedGrant());
+});
+
+test("the revoke message clears the grant and later syncs stay token-only", async () => {
+  const h = contextHarness();
+  h.storage[grantKey] = storedGrant();
+  const revoked = await send(h, { type: revokeType });
+  assert.equal(revoked.ok, true);
+  assert.equal(revoked.checkoutContextBackgroundSync, false);
+  assert.equal(grantKey in h.storage, false);
+  assert.equal(h.calls.length, 0);
+  await h.context.syncAndPersistAllDomains();
+  assert.equal(syncBodies(h)[0].checkout_context, undefined);
+  assert.deepEqual(h.cookieReads, ["access_token_web"]);
+  assert.deepEqual(h.tabMessages, []);
+});
+
+test("unauthorized senders can neither revoke nor create a background grant", async () => {
+  for (const sender of [
+    { url: "https://evil.test/account" },
+    { url: "http://localhost:3000/account" },
+    { url: "https://www.vinted.de/" },
+    { url: "chrome-extension://foreign/popup.html" },
+    {},
+  ]) {
+    const h = contextHarness();
+    h.storage[grantKey] = storedGrant();
+    const revoked = await send(h, { type: revokeType }, sender);
+    assert.equal(revoked.ok, false);
+    assert.equal(revoked.error, "Unauthorized extension sender");
+    assert.deepEqual(h.storage[grantKey], storedGrant());
+
+    delete h.storage[grantKey];
+    h.context.ensureVintedBuyTab = async () => ({ tabId: 7 });
+    const synced = await send(
+      h,
+      {
+        type: "VINTRACK_EXTENSION_MANUAL_SYNC",
+        payload: {
+          preferredDomain: "www.vinted.de",
+          includeCheckoutContext: true,
+          checkoutContextConsent: 2,
+        },
+      },
+      sender,
+    );
+    assert.equal(synced.ok, false);
+    assert.equal(grantKey in h.storage, false);
+    assert.equal(h.calls.length, 0);
+    assert.equal(h.cookieReads.length, 0);
+    assert.deepEqual(h.tabMessages, []);
+  }
+});
+
+test("connecting another link or clearing the extension ends the grant", async () => {
+  const relinked = contextHarness();
+  relinked.storage[grantKey] = storedGrant();
+  const connected = await send(relinked, {
+    type: "VINTRACK_EXTENSION_CONNECT",
+    payload: {
+      token: "another-synthetic-link",
+      appOrigin,
+      preferredDomain: "www.vinted.de",
+    },
+  });
+  assert.equal(connected.ok, true);
+  assert.equal(connected.checkoutContextBackgroundSync, false);
+  assert.equal(grantKey in relinked.storage, false);
+  assert.equal(syncBodies(relinked)[0].checkout_context, undefined);
+
+  const cleared = contextHarness();
+  cleared.storage[grantKey] = storedGrant();
+  const result = await send(
+    cleared,
+    { type: "VINTRACK_EXTENSION_CLEAR_LOCAL_STATE" },
+    { url: "chrome-extension://synthetic-own/popup.html" },
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.checkoutContextBackgroundSync, false);
+  assert.equal(grantKey in cleared.storage, false);
 });

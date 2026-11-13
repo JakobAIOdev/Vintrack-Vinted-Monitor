@@ -16,7 +16,10 @@ import (
 )
 
 const (
-	priceWatchClaimLease            = 30 * time.Second
+	priceWatchClaimLease = 30 * time.Second
+	// A sold or deleted listing is confirmed quickly instead of waiting a
+	// whole polling interval for the second look.
+	priceWatchGoneConfirmDelay      = time.Minute
 	priceWatchProxyAttempts         = 2
 	defaultPriceWatchInterval       = 2 * time.Minute
 	minimumPriceWatchInterval       = 30 * time.Second
@@ -277,12 +280,17 @@ func (e *Engine) processPriceWatchTarget(ctx context.Context, target model.Price
 
 	interval := time.Duration(target.PollIntervalSeconds) * time.Second
 	nextCheckAt := checkedAt.Add(priceWatchSuccessDelay(target.ID, interval))
-	if !page.Available {
-		stopped, recordErr := e.db.RecordPriceWatchUnavailable(ctx, target.ID, target.ClaimToken, checkedAt, nextCheckAt, "Vinted item is no longer available")
+	if page.Gone() {
+		reason, detail := priceWatchGoneReason(page.State)
+		confirmAt := checkedAt.Add(priceWatchGoneConfirmDelay)
+		if confirmAt.After(nextCheckAt) {
+			confirmAt = nextCheckAt
+		}
+		stopped, recordErr := e.db.RecordPriceWatchUnavailable(ctx, target.ID, target.ClaimToken, checkedAt, confirmAt, reason, detail)
 		if recordErr != nil {
-			log.Printf("price watch schedule=%d region=%s record unavailable: %v", target.ID, target.Region, recordErr)
+			log.Printf("price watch schedule=%d region=%s record %s: %v", target.ID, target.Region, reason, recordErr)
 		} else if stopped {
-			log.Printf("price watch schedule=%d region=%s stopped after three unavailable checks", target.ID, target.Region)
+			log.Printf("price watch schedule=%d region=%s stopped: %s", target.ID, target.Region, reason)
 		}
 		return
 	}
@@ -416,12 +424,31 @@ func shouldFallbackPriceWatchFetch(err error) bool {
 	}
 }
 
+// priceWatchGoneReason maps a listing that will not return to the reason
+// stored on the stopped watch.
+func priceWatchGoneReason(state string) (string, string) {
+	if state == PriceWatchItemDeleted {
+		return database.PriceWatchStopDeleted, "Vinted listing was removed"
+	}
+	return database.PriceWatchStopSold, "Vinted listing was sold"
+}
+
 func databasePriceWatchObservation(target model.PriceWatchTarget, page PriceWatchPage, checkedAt time.Time, nextCheckAt time.Time) database.PriceWatchObservation {
+	// A reserved or hidden listing still exists and can return to sale, so it
+	// keeps being watched under its own availability.
+	availability := database.PriceWatchAvailabilityActive
+	switch page.State {
+	case PriceWatchItemReserved:
+		availability = database.PriceWatchAvailabilityReserved
+	case PriceWatchItemHidden:
+		availability = database.PriceWatchAvailabilityHidden
+	}
 	return database.PriceWatchObservation{
 		ScheduleID: target.ID, TargetID: target.TargetID, ClaimToken: target.ClaimToken,
 		CanonicalURL: page.CanonicalURL, Title: page.Title, ImageURL: page.ImageURL,
 		PriceMinor: page.PriceMinor, CurrencyCode: page.CurrencyCode,
-		ObservedAt: checkedAt, NextCheckAt: nextCheckAt,
+		Availability: availability,
+		ObservedAt:   checkedAt, NextCheckAt: nextCheckAt,
 	}
 }
 

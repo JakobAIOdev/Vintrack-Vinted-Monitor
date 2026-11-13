@@ -301,6 +301,7 @@ func TestBuildVintedURL_Regions(t *testing.T) {
 		"ie": "api.vinted.ie",
 		"it": "api.vinted.it",
 		"nl": "api.vinted.nl",
+		"us": "api.www.vinted.com",
 	}
 
 	for region, expectedDomain := range regions {
@@ -311,6 +312,32 @@ func TestBuildVintedURL_Regions(t *testing.T) {
 				t.Errorf("Region %q: URL should contain %s, got: %s", region, expectedDomain, result)
 			}
 		})
+	}
+}
+
+func TestCatalogAPIHost(t *testing.T) {
+	for domain, want := range map[string]string{
+		"www.vinted.de":    "api.vinted.de",
+		"www.vinted.co.uk": "api.vinted.co.uk",
+		// The US web app calls api.www.vinted.com, not api.vinted.com.
+		"www.vinted.com": "api.www.vinted.com",
+	} {
+		if got := catalogAPIHost(domain); got != want {
+			t.Errorf("catalogAPIHost(%q) = %q, want %q", domain, got, want)
+		}
+	}
+}
+
+func TestBuildVintedURL_USRegionUsesDollarCatalog(t *testing.T) {
+	parsed, err := url.Parse(BuildVintedURL(model.Monitor{Query: "nike", Region: "us"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Host != "api.www.vinted.com" || parsed.Path != "/svc-catalogue/items" {
+		t.Fatalf("URL = %s, want the US catalogue endpoint", parsed)
+	}
+	if got := parsed.Query().Get("currency"); got != "USD" {
+		t.Fatalf("currency = %q, want USD", got)
 	}
 }
 

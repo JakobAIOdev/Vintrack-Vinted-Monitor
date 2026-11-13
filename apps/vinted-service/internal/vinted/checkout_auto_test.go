@@ -142,3 +142,20 @@ func TestAutoCheckoutCheckpointFailureAndUnsupportedRegionPreventPayment(t *test
 		t.Fatal("unsupported region accepted")
 	}
 }
+
+func TestAutoCheckoutRejectsIncompleteOrUnidentifiedShippingAddress(t *testing.T) {
+	for _, address := range []map[string]interface{}{
+		{"id": float64(55), "is_complete": false},
+		{"id": float64(0)},
+		{},
+	} {
+		quote := autoQuote(t)
+		checkoutMap(quote, "checkout", "components", "shipping_address")["address"] = address
+		client, transport := testClient(autoResults(t, quote)...)
+		client.session.Domain = "www.vinted.de"
+		link, err := client.PrepareCheckout(123, 456, func(session.CheckoutLink) error { return nil }, autoPreferences())
+		if err != nil || link.Status != "checkout_review_required" || len(transport.requests) != 3 {
+			t.Fatal("payment was allowed without a verified complete address")
+		}
+	}
+}

@@ -65,6 +65,35 @@ test("capability probes echo their own request ID without replacing runtime capa
   assert.equal(response.payload.checkoutCapabilities.automaticPayment, false);
 });
 
+test("content bridge forwards the checkout-context revoke only from the Vintrack app page", async () => {
+  const revokeType = "VINTRACK_EXTENSION_REVOKE_CHECKOUT_CONTEXT";
+  for (const [origin, hostname, forwarded] of [["http://localhost:3000", "localhost", true], [`https://${domain}`, domain, false], ["https://evil.test", "evil.test", false]]) {
+    const listeners = {};
+    const posts = [];
+    const sent = [];
+    const window = { location: { origin, hostname }, addEventListener(type, listener) { listeners[type] = listener; }, postMessage(message) { posts.push(message); } };
+    const document = { documentElement: { dataset: { vintrackThemeBridge: "ready" } }, head: { appendChild() {} }, createElement() { return { dataset: {}, remove() {} }; } };
+    const context = vm.createContext({ window, document, MutationObserver: class { observe() {} }, chrome: { runtime: {
+      getURL: path => `chrome-extension://synthetic/${path}`,
+      sendMessage(message) { sent.push(message); return message.type === revokeType ? { ok: true, checkoutContextBackgroundSync: false } : new Promise(() => {}); },
+      onMessage: { addListener() {} },
+    } } });
+    vm.runInContext(contentSource, context);
+    listeners.message({ source: {}, data: { type: revokeType } });
+    listeners.message({ source: window, data: { type: revokeType, payload: { unexpected: "synthetic" } } });
+    await new Promise(resolve => setImmediate(resolve));
+    const revokes = sent.filter(message => message.type === revokeType);
+    const results = posts.filter(message => message.type === `${revokeType}_RESULT`);
+    assert.equal(revokes.length, forwarded ? 1 : 0, origin);
+    assert.equal(results.length, forwarded ? 1 : 0, origin);
+    if (forwarded) {
+      assert.deepEqual(Object.keys(revokes[0]), ["type"]);
+      assert.equal(results[0].payload.ok, true);
+      assert.equal(results[0].payload.checkoutContextBackgroundSync, false);
+    }
+  }
+});
+
 test("content navigation correlates the native response and sends no checkout or payment request", async () => {
   let receive;
   const listeners = new Set();
@@ -101,7 +130,7 @@ function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paym
     readyState: pageState,
     cookie: "",
     scripts: [],
-    querySelector: () => null,
+    querySelector: () => options.csrfToken ? {content:options.csrfToken} : null,
     documentElement: { innerHTML: "" },
     addEventListener(type, handler) { documentListeners[type] = handler; },
     removeEventListener(type) { delete documentListeners[type]; },
@@ -114,8 +143,8 @@ function bridge(accountId = 42, checkoutResponses = [], buildResponse = {}, paym
     },
     localStorage: { length: 0 },
     sessionStorage: { length: 0 },
-    addEventListener() {},
-    postMessage() {},
+    addEventListener(_type, receive) { options.onMessage?.(receive); },
+    postMessage(message) { options.onPost?.(message); },
     setTimeout: (fn) => setTimeout(fn, 0),
     clearTimeout,
     next: options.router ? { appDir: true, router: options.router } : undefined,
@@ -1038,4 +1067,21 @@ test("a fast unready tab cannot beat a slower ready receiver", async () => {
   releaseReady({ ok: true, pageBridgeReady: true });
   assert.equal((await checkout).ready, true);
   assert.ok(!h.storage.vintrackCheckoutAttempts);
+});
+
+
+test("checkout context returns only an authenticated account and CSRF without any checkout mutation", async () => {
+ let receive; const posts=[];
+ const h=bridge(42,[],{},{},"complete",{csrfToken:"synthetic-csrf",onMessage:fn=>{receive=fn},onPost:value=>posts.push(value)});
+ const payload={requestId:"synthetic-context-request"};
+ receive({source:h.window,origin:"https://evil.test",data:{type:"VINTRACK_PAGE_CHECKOUT_CONTEXT_REQUEST",payload}});
+ assert.equal(h.requests.length,0);
+ receive({source:h.window,origin:`https://${domain}`,data:{type:"VINTRACK_PAGE_CHECKOUT_CONTEXT_REQUEST",payload}});
+ await new Promise(resolve=>setImmediate(resolve));
+ const response=posts.find(message=>message.type==="VINTRACK_PAGE_CHECKOUT_CONTEXT_RESPONSE");
+ assert.equal(response.payload.csrfToken,"synthetic-csrf");
+ assert.equal(response.payload.accountId,42);
+ assert.equal(h.requests.length,1);
+ assert.equal(h.requests[0].init.method,"GET");
+ assert.equal(response.payload.cookies,undefined);
 });

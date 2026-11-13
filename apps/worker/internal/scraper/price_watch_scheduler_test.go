@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"vintrack-worker/internal/database"
 	"vintrack-worker/internal/model"
 )
 
@@ -250,3 +251,61 @@ func TestPriceWatchPersonalCapacityScalesAndCapsPerGroup(t *testing.T) {
 }
 
 func intPointer(value int) *int { return &value }
+
+func TestPriceWatchGoneReasonSeparatesSoldFromDeleted(t *testing.T) {
+	if reason, detail := priceWatchGoneReason(PriceWatchItemSold); reason != database.PriceWatchStopSold || detail == "" {
+		t.Fatalf("sold reason = %q %q", reason, detail)
+	}
+	if reason, detail := priceWatchGoneReason(PriceWatchItemDeleted); reason != database.PriceWatchStopDeleted || detail == "" {
+		t.Fatalf("deleted reason = %q %q", reason, detail)
+	}
+}
+
+func TestPriceWatchObservationKeepsRecoverableListingsWatched(t *testing.T) {
+	target := model.PriceWatchTarget{ID: 7, TargetID: 9, ClaimToken: "claim"}
+	checkedAt := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
+	for state, availability := range map[string]string{
+		PriceWatchItemAvailable: database.PriceWatchAvailabilityActive,
+		PriceWatchItemReserved:  database.PriceWatchAvailabilityReserved,
+		PriceWatchItemHidden:    database.PriceWatchAvailabilityHidden,
+		"":                      database.PriceWatchAvailabilityActive,
+	} {
+		page := PriceWatchPage{PriceMinor: 1500, CurrencyCode: "EUR", State: state}
+		if page.Gone() {
+			t.Fatalf("state %q must not end a watch", state)
+		}
+		observation := databasePriceWatchObservation(target, page, checkedAt, checkedAt.Add(time.Minute))
+		if observation.Availability != availability || observation.PriceMinor != 1500 || observation.ScheduleID != 7 {
+			t.Fatalf("state %q observation = %+v, want availability %q", state, observation, availability)
+		}
+	}
+	for _, state := range []string{PriceWatchItemSold, PriceWatchItemDeleted} {
+		if !(PriceWatchPage{State: state}).Gone() {
+			t.Fatalf("state %q must end a watch", state)
+		}
+	}
+}
+
+func TestFetchPriceWatchRetriesAnotherClientAfterUnexpectedRedirect(t *testing.T) {
+	proxyOne := &Client{ProxyURL: "http://proxy-one.invalid:8080"}
+	proxyTwo := &Client{ProxyURL: "http://proxy-two.invalid:8080"}
+	calls := 0
+	page, err := fetchPriceWatchWithFallbacks(
+		context.Background(),
+		model.PriceWatchTarget{ID: 1},
+		time.Second,
+		priceWatchTransportProxy,
+		nil,
+		testPriceWatchPool(proxyOne, proxyTwo),
+		func(_ context.Context, _ *Client, _ model.PriceWatchTarget) (PriceWatchPage, error) {
+			calls++
+			if calls == 1 {
+				return PriceWatchPage{}, &PriceWatchFetchError{Code: "unexpected_redirect", StatusCode: 302}
+			}
+			return PriceWatchPage{PriceMinor: 1299, CurrencyCode: "EUR", Available: true, State: PriceWatchItemAvailable}, nil
+		},
+	)
+	if err != nil || page.PriceMinor != 1299 || calls != 2 {
+		t.Fatalf("redirect fallback = %+v, %v after %d calls", page, err, calls)
+	}
+}

@@ -66,8 +66,13 @@ function assertManifestOrigins(manifest, name) {
   );
   assert.deepEqual(
     manifest.content_scripts[0].js,
-    ["companion.js", "content-script.js"],
-    `${name} must load the shared companion before the content script`,
+    ["companion.js", "inline.js", "content-script.js"],
+    `${name} must load the shared companion before the inline and content scripts`,
+  );
+  assert.deepEqual(
+    manifest.content_scripts[0].css,
+    ["inline.css"],
+    `${name} must inject the inline stylesheet through the manifest`,
   );
   assert.deepEqual(
     sorted(manifest.web_accessible_resources[0].resources),
@@ -185,6 +190,7 @@ const contentScript = await readFile(
   "utf8",
 );
 const companion = await readFile(resolve(extensionDir, "companion.js"), "utf8");
+const inline = await readFile(resolve(extensionDir, "inline.js"), "utf8");
 const iconSvg = await readFile(
   resolve(extensionDir, "icons/vintrack.svg"),
   "utf8",
@@ -254,10 +260,36 @@ for (const messageType of [
   "VINTRACK_EXTENSION_MANUAL_SYNC",
   "VINTRACK_EXTENSION_BUY",
   "VINTRACK_EXTENSION_SET_THEME",
+  "VINTRACK_EXTENSION_REVOKE_CHECKOUT_CONTEXT",
 ]) {
   assert.ok(
     background.includes(messageType),
     `${messageType} handler is missing`,
+  );
+}
+assert.ok(
+  contentScript.includes('"VINTRACK_EXTENSION_REVOKE_CHECKOUT_CONTEXT"'),
+  "The dashboard must be able to turn background checkout-context sync off",
+);
+const backgroundContextSource = background.slice(
+  background.indexOf("async function findOpenCheckoutContextTab("),
+  background.indexOf("async function collectCheckoutContext("),
+);
+assert.ok(
+  backgroundContextSource.includes("VINTRACK_TAB_PING"),
+  "Background checkout-context sync must reuse an already open Vinted tab",
+);
+for (const forbidden of [
+  "tabs.create",
+  "tabs.update",
+  "tabs.reload",
+  "tabs.remove",
+  "windows.",
+  "ensureVintedBuyTab",
+]) {
+  assert.ok(
+    !backgroundContextSource.includes(forbidden),
+    `Background checkout-context sync must never call ${forbidden}`,
   );
 }
 assert.ok(
@@ -280,6 +312,35 @@ for (const messageType of [
     `${messageType} handler is missing`,
   );
 }
+for (const messageType of ["VINTRACK_INLINE_INDEX", "VINTRACK_INLINE_FEED"]) {
+  assert.ok(
+    background.includes(messageType) && inline.includes(messageType),
+    `${messageType} must be requested by inline.js and handled in the background`,
+  );
+}
+// Inline features decorate pages the member is already viewing. They must
+// not add traffic to Vinted or build markup from listing text.
+for (const forbidden of ["fetch(", "XMLHttpRequest", "innerHTML", "insertAdjacentHTML"]) {
+  assert.ok(
+    !inline.includes(forbidden),
+    `inline.js must not use ${forbidden}`,
+  );
+}
+assert.ok(
+  inline.includes('data-testid^="product-item-id-"') &&
+    inline.includes('[data-testid$="--overlay-link"]') &&
+    inline.includes('script[type="application/ld+json"]'),
+  "Inline features must use stable semantic Vinted anchors",
+);
+assert.ok(
+  !inline.includes("VINTRACK_EXTENSION_BUY") &&
+    !inline.includes("VINTRACK_COMPANION_WATCH_MUTATION"),
+  "Inline features must stay read-only",
+);
+assert.ok(
+  background.includes("...Object.values(INLINE_STORAGE_KEYS)"),
+  "Clearing extension state must also remove inline history and snapshots",
+);
 assert.ok(
   contentScript.includes('attachShadow({ mode: "closed" })'),
   "Inline companion must isolate its drawer in a closed Shadow DOM",
@@ -355,5 +416,6 @@ assert.ok(
 // Execute lifecycle regressions during the same validation used by CI/releases.
 await import("./session-refresh.test.mjs");
 await import("./checkout.test.mjs");
+await import("./inline.test.mjs");
 
 console.log(`Extension validation passed for v${chromeManifest.version}`);

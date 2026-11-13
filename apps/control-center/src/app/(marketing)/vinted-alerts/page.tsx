@@ -36,6 +36,10 @@ const faqItems = [
         answer: "You create a monitor with a Vinted market, search query, filters, interval, and proxy source. Vintrack checks that search and sends newly matched listings to the channels enabled for that monitor.",
     },
     {
+        question: "Which Vinted markets does Vintrack support?",
+        answer: "Monitors can watch Vinted in 20 EU countries, the United Kingdom, and the United States. Each monitor targets one market and shows prices in that market's currency, such as EUR, GBP, or USD.",
+    },
+    {
         question: "Can alerts go to both Discord and Telegram?",
         answer: "Yes. A monitor can deliver the same match to the live dashboard, a Discord webhook, and a connected Telegram chat. Each channel is configured independently.",
     },

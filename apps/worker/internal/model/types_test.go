@@ -29,6 +29,7 @@ func TestRegionDomain_AllKnownRegions(t *testing.T) {
 		"ee": "www.vinted.ee",
 		"lv": "www.vinted.lv",
 		"gr": "www.vinted.gr",
+		"us": "www.vinted.com",
 	}
 
 	for region, expectedDomain := range known {
@@ -58,6 +59,7 @@ func TestRegionDomain_EmptyString(t *testing.T) {
 func TestRegionCurrency(t *testing.T) {
 	for region, want := range map[string]string{
 		"de": "EUR", "uk": "GBP", "pl": "PLN", "cz": "CZK", "se": "SEK", "dk": "DKK", "ro": "RON", "hu": "HUF",
+		"us": "USD",
 	} {
 		if got := RegionCurrency(region); got != want {
 			t.Errorf("RegionCurrency(%q) = %q, want %q", region, got, want)

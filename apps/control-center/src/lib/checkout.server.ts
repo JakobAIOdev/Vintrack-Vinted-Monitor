@@ -70,6 +70,10 @@ export async function loadCheckoutTarget(
         itemUrl: `https://${domain}/items/${itemId}`,
         title: item.title || "Vinted item",
         price: item.price,
-        ...settings,
+        // Only the declared target fields reach the browser; the proxy group
+        // and the module switch stay on the server.
+        checkoutTransport: settings.checkoutTransport,
+        preferences: settings.preferences,
+        riskConsentVersion: settings.riskConsentVersion,
     };
 }

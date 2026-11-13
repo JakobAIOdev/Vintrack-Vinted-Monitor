@@ -958,6 +958,22 @@
       return;
     }
 
+    if (event.data.type === "VINTRACK_PAGE_CHECKOUT_CONTEXT_REQUEST") {
+      if (event.origin !== window.location.origin) return;
+      const requestId = event.data.payload?.requestId;
+      if (!requestId) return;
+      getBrowserAccount().then(account => {
+        const csrfToken = extractCsrfToken();
+        window.postMessage({ type: "VINTRACK_PAGE_CHECKOUT_CONTEXT_RESPONSE", payload:
+          account.ok && csrfToken ? { ok: true, accountId: account.accountId, csrfToken, requestId }
+          : { ok: false, error: "Sign in to Vinted before syncing checkout context.", requestId }
+        }, window.location.origin);
+      }).catch(() => window.postMessage({ type: "VINTRACK_PAGE_CHECKOUT_CONTEXT_RESPONSE", payload:
+        { ok: false, error: "Vinted checkout context is unavailable.", requestId }
+      }, window.location.origin));
+      return;
+    }
+
     if (event.data.type === "VINTRACK_PAGE_ACCOUNT_REQUEST") {
       const requestId = event.data.payload?.requestId || crypto.randomUUID();
       getBrowserAccount()

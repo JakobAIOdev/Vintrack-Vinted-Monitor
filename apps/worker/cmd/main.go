@@ -2297,8 +2297,12 @@ func freeProxyRegions(store *database.Store) ([]string, error) {
 	return freeProxyRegionsContext(context.Background(), store)
 }
 
+// defaultFreeProxyStarterRegions applies when no starter-region policy is
+// stored. It matches the control center's default policy.
+const defaultFreeProxyStarterRegions = "de,fr,it,es,nl,be,at,us"
+
 func freeProxyRegionsContext(ctx context.Context, store *database.Store) ([]string, error) {
-	starterRegionValue := "de,fr,it,es,nl,be,at"
+	starterRegionValue := defaultFreeProxyStarterRegions
 	if value, ok, settingErr := store.GetSettingValueContext(ctx, "free_proxy_starter_regions"); settingErr != nil {
 		return nil, settingErr
 	} else if ok {

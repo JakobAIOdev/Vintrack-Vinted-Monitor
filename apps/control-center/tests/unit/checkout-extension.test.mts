@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
-import * as checkout from "../../src/lib/checkout.ts";
-import * as consent from "../../src/lib/checkout-consent.ts";
 
 function compile(path: string, globals: Record<string, unknown> = {}) {
     const exports: Record<string, (...args: unknown[]) => Promise<unknown>> =
@@ -149,71 +147,155 @@ for (const [payload, expected] of [
     });
 }
 
-for (const state of [
-    "unavailable",
-    "unconfigured",
-    "outdated",
-    "unsupported-auto",
-] as const) {
-    test(`${state} detection never mutates server checkout or dispatches browser commands`, async () => {
-        const calls: RequestInit[] = [];
-        let commands = 0;
-        const modules: Record<string, unknown> = {
-            "@/lib/checkout": checkout,
-            "@/lib/checkout-consent": consent,
-            "@/lib/checkout-consent.client": {
-                requestCheckoutConsent: () => {
-                    throw new Error("unexpected consent");
+for (const accepted of [false, true]) {
+    test(`checkout context consent ${accepted ? "dispatches only the approved metadata" : "cancellation reads and sends nothing"}`, async () => {
+        const messages: unknown[] = [];
+        const client = compile("../../src/lib/vintrack-extension.ts", {
+            window: {
+                location: { origin: "https://vintrack.example.test" },
+                postMessage: (message: unknown, origin: string) => {
+                    assert.equal(origin, "https://vintrack.example.test");
+                    messages.push(JSON.parse(JSON.stringify(message)));
                 },
-            },
-            "@/lib/vintrack-extension": {
-                detectCheckoutExtension: async () => ({
-                    state: state === "unsupported-auto" ? "ready" : state,
-                    protocol: 8,
-                    automaticPayment: false,
-                }),
-                runBrowserBuyViaExtension: () => {
-                    commands++;
-                    throw new Error("unexpected checkout");
-                },
-            },
-        };
-        const client = compile("../../src/lib/open-checkout.ts", {
-            require: (name: string) => {
-                assert.ok(name in modules, name);
-                return modules[name];
-            },
-            performance: { now: () => 0 },
-            fetch: async (_url: string, init: RequestInit) => {
-                calls.push(init);
-                return {
-                    ok: true,
-                    json: async () => ({
-                        riskConsentVersion: 1,
-                        preferences:
-                            state === "unsupported-auto"
-                                ? {
-                                      shipping: "home",
-                                      payment: "paypal",
-                                      autoCheckout: {
-                                          currency: "EUR",
-                                          warningVersion: 1,
-                                          maxTotalMinor: 3000,
-                                      },
-                                  }
-                                : undefined,
-                    }),
-                };
             },
         });
-        await assert.rejects(
-            client.openItemCheckout(17, 123),
-            /extension/,
+        assert.equal(
+            await client.requestCheckoutContextSync("www.vinted.de", accepted),
+            accepted,
         );
-        assert.equal(calls.length, 1);
-        assert.ok(calls.every((call) => !call.method || call.method === "GET"));
-        assert.equal(commands, 0);
-        await assert.rejects(client.openItemCheckout(17, 123));
-        assert.equal(calls.length, 2);
+        assert.deepEqual(
+            messages,
+            accepted
+                ? [
+                      {
+                          type: "VINTRACK_EXTENSION_MANUAL_SYNC",
+                          payload: {
+                              preferredDomain: "www.vinted.de",
+                              includeCheckoutContext: true,
+                              checkoutContextConsent: 2,
+                          },
+                      },
+                  ]
+                : [],
+        );
     });
 }
+
+function revokeBridge() {
+    const timers = new Map<number, () => void>();
+    const listeners = new Set<(event: unknown) => void>();
+    const posts: unknown[] = [];
+    let id = 0;
+    const window = {
+        location: { origin: "https://vintrack.example.test" },
+        setTimeout(fn: () => void, delay: number) {
+            assert.equal(delay, 5000);
+            timers.set(++id, fn);
+            return id;
+        },
+        clearTimeout(key: number) {
+            timers.delete(key);
+        },
+        addEventListener(_type: string, listener: (event: unknown) => void) {
+            listeners.add(listener);
+        },
+        removeEventListener(_type: string, listener: (event: unknown) => void) {
+            listeners.delete(listener);
+        },
+        postMessage(message: unknown, origin: string) {
+            assert.equal(origin, window.location.origin);
+            posts.push(JSON.parse(JSON.stringify(message)));
+        },
+    };
+    const client = compile("../../src/lib/vintrack-extension.ts", { window });
+    return {
+        revoke: () => client.revokeCheckoutContextSync() as Promise<boolean>,
+        posts,
+        timers,
+        listeners,
+        reply(
+            payload: Record<string, unknown>,
+            overrides: Record<string, unknown> = {},
+        ) {
+            for (const listener of [...listeners])
+                listener({
+                    source: window,
+                    origin: window.location.origin,
+                    data: {
+                        type: "VINTRACK_EXTENSION_REVOKE_CHECKOUT_CONTEXT_RESULT",
+                        payload,
+                    },
+                    ...overrides,
+                });
+        },
+    };
+}
+
+test("background checkout context flag is read only from an explicit boolean", () => {
+    const client = compile(
+        "../../src/lib/vintrack-extension.ts",
+    ) as unknown as {
+        readCheckoutContextBackgroundSync(payload: unknown): boolean | null;
+    };
+    for (const [payload, expected] of [
+        [{ checkoutContextBackgroundSync: true }, true],
+        [{ checkoutContextBackgroundSync: false }, false],
+        [{ checkoutContextBackgroundSync: "true" }, null],
+        [{ checkoutContextBackgroundSync: 1 }, null],
+        [{ configured: true }, null],
+        [null, null],
+        [undefined, null],
+    ] as const) {
+        assert.equal(
+            client.readCheckoutContextBackgroundSync(payload),
+            expected,
+            JSON.stringify(payload),
+        );
+    }
+});
+
+test("checkout context revoke sends one bare message and resolves once the extension confirms", async () => {
+    const h = revokeBridge();
+    const result = h.revoke();
+    assert.deepEqual(h.posts, [
+        { type: "VINTRACK_EXTENSION_REVOKE_CHECKOUT_CONTEXT" },
+    ]);
+    const confirmed = { ok: true, checkoutContextBackgroundSync: false };
+    h.reply(confirmed, { source: {} });
+    h.reply(confirmed, { origin: "https://foreign.test" });
+    assert.equal(h.listeners.size, 1);
+    h.reply(confirmed);
+    assert.equal(await result, true);
+    assert.equal(h.listeners.size, 0);
+    assert.equal(h.timers.size, 0);
+});
+
+for (const [name, payload] of [
+    ["an unauthorized reply", { ok: false, error: "Unauthorized" }],
+    [
+        "a reply that still reports background sync",
+        { ok: true, checkoutContextBackgroundSync: true },
+    ],
+    ["a reply without the status flag", { ok: true }],
+] as const) {
+    test(`checkout context revoke is not confirmed by ${name}`, async () => {
+        const h = revokeBridge();
+        const result = h.revoke();
+        h.reply(payload);
+        assert.equal(await result, false);
+        assert.equal(h.listeners.size, 0);
+        assert.equal(h.timers.size, 0);
+    });
+}
+
+test("checkout context revoke gives up without an extension reply or a window", async () => {
+    const h = revokeBridge();
+    const result = h.revoke();
+    assert.equal(h.timers.size, 1);
+    for (const expire of [...h.timers.values()]) expire();
+    assert.equal(await result, false);
+    assert.equal(h.listeners.size, 0);
+
+    const server = compile("../../src/lib/vintrack-extension.ts");
+    assert.equal(await server.revokeCheckoutContextSync(), false);
+});

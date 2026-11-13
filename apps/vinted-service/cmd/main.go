@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"vintrack-vinted/internal/api"
 	"vintrack-vinted/internal/config"
@@ -31,6 +32,10 @@ func main() {
 	defer sessionMgr.Close()
 
 	server := api.NewServer(sessionMgr, cfg.ListenAddr)
+	if cfg.CheckoutDevDirect {
+		server.AllowDirectCheckoutForDevelopment()
+		log.Println("[checkout] DEVELOPMENT MODE: request checkout connects directly from this host and ignores member proxy groups (CHECKOUT_DEV_DIRECT_CONNECTION=true)")
+	}
 	go sessionMgr.StartKeepAlive(server.ValidateSessionForKeepAlive)
 	automationCtx, stopAutomations := context.WithCancel(context.Background())
 	defer stopAutomations()
@@ -48,4 +53,10 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	log.Println("Shutting down...")
+	// One checkout is at most a warmup plus four sequential 15 s requests.
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 75*time.Second)
+	defer cancelShutdown()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("Shutdown did not complete cleanly: %v", err)
+	}
 }

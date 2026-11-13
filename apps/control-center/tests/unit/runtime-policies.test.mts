@@ -1,10 +1,30 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { REGIONS } from "../../src/lib/regions.ts";
 import {
+    DEFAULT_FREE_PROXY_POLICY,
     parseFreeProxyPolicy,
     parseWorkerPolicy,
 } from "../../src/lib/runtime-policies.ts";
+
+test("the default starter pool covers the US and only known regions", () => {
+    const starterRegions = DEFAULT_FREE_PROXY_POLICY.starterRegions.split(",");
+    assert.deepEqual(starterRegions, [
+        "de",
+        "fr",
+        "it",
+        "es",
+        "nl",
+        "be",
+        "at",
+        "us",
+    ]);
+    const known = new Set(REGIONS.map((region) => region.code));
+    for (const region of starterRegions) {
+        assert.equal(known.has(region), true, region);
+    }
+});
 
 test("old worker policy documents receive seller TTL defaults", () => {
     const policy = parseWorkerPolicy(

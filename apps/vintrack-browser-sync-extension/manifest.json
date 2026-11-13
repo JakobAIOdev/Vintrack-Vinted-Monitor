@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Vintrack Browser Sync",
-    "version": "0.4.2",
+    "version": "0.4.3",
     "description": "Vintrack companion for linked sessions, monitors, feeds, and Price Watches.",
     "permissions": ["alarms", "cookies", "storage", "tabs"],
     "host_permissions": [
@@ -65,7 +65,8 @@
                 "https://*.vinted.se/*",
                 "https://*.vinted.sk/*"
             ],
-            "js": ["companion.js", "content-script.js"],
+            "js": ["companion.js", "inline.js", "content-script.js"],
+            "css": ["inline.css"],
             "run_at": "document_start"
         }
     ],

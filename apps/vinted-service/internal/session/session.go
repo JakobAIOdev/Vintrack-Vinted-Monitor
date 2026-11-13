@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -37,17 +38,21 @@ type VintedSession struct {
 }
 
 type CheckoutLink struct {
-	ItemID             int64  `json:"item_id"`
-	SellerID           int64  `json:"seller_id"`
-	TransactionID      int64  `json:"transaction_id"`
-	PurchaseID         string `json:"purchase_id,omitempty"`
-	CheckoutURL        string `json:"checkout_url,omitempty"`
-	PaymentURL         string `json:"payment_url,omitempty"`
-	Domain             string `json:"domain,omitempty"`
-	Status             string `json:"status"`
-	CreatedAt          string `json:"created_at"`
-	PreferencesKey     string `json:"preferences_key,omitempty"`
-	AutoCheckoutReason string `json:"auto_checkout_reason,omitempty"`
+	ItemID                int64  `json:"item_id"`
+	SellerID              int64  `json:"seller_id"`
+	TransactionID         int64  `json:"transaction_id"`
+	PurchaseID            string `json:"purchase_id,omitempty"`
+	CheckoutURL           string `json:"checkout_url,omitempty"`
+	PaymentURL            string `json:"payment_url,omitempty"`
+	Domain                string `json:"domain,omitempty"`
+	Status                string `json:"status"`
+	CreatedAt             string `json:"created_at"`
+	PreferencesKey        string `json:"preferences_key,omitempty"`
+	AutoCheckoutReason    string `json:"auto_checkout_reason,omitempty"`
+	ServerContextRejected bool   `json:"server_context_rejected,omitempty"`
+	// RateLimited reports a 429 from Vinted during this run. It is a signal
+	// for the caller only and is never stored or returned.
+	RateLimited bool `json:"-"`
 }
 
 type BrowserSyncRequest struct {
@@ -73,9 +78,11 @@ type BrowserLink struct {
 }
 
 type Manager struct {
-	redis *redis.Client
-	ctx   context.Context
-	store *persistentStore
+	redis               *redis.Client
+	ctx                 context.Context
+	store               *persistentStore
+	cipher              *tokenCipher
+	checkoutClaimsReady atomic.Bool
 }
 
 func NewManager(redisAddr, redisPassword, databaseURL, encryptionKey string) (*Manager, error) {
@@ -112,8 +119,17 @@ func NewManager(redisAddr, redisPassword, databaseURL, encryptionKey string) (*M
 	}
 
 	manager := &Manager{redis: client, ctx: ctx, store: store}
+	// Short-lived Redis handoffs use the same key as durable session rows.
+	if store != nil {
+		manager.cipher = store.cipher
+	} else if encryptionKey != "" {
+		manager.cipher, _ = newTokenCipher(encryptionKey)
+	}
 	if manager.store != nil {
 		manager.migrateCachedSessionsToStore()
+		if err := manager.migrateCheckoutPaymentClaims(); err != nil {
+			log.Printf("[checkout] durable payment migration unavailable; automatic payment disabled")
+		}
 	}
 
 	return manager, nil

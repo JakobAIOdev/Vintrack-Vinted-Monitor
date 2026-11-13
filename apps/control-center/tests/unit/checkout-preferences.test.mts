@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
 import * as checkout from "../../src/lib/checkout.ts";
+import * as proxyValidation from "../../src/lib/custom-proxy-validation.ts";
 
 test("GBP pickup settings preserve their exact limit and require card-specific consent", async () => {
     const preferences = {
@@ -75,6 +76,7 @@ function harness(
     anonymous = false,
     denied = false,
     consentDenied = false,
+    proxyOwned = true,
 ) {
     const writes: unknown[] = [];
     const modules: Record<string, unknown> = {
@@ -83,12 +85,14 @@ function harness(
                 anonymous ? null : { user: { id: "synthetic-member" } },
         },
         "@/lib/checkout": checkout,
+        "@/lib/custom-proxy-validation": proxyValidation,
         "@/lib/checkout-preferences.server": {
             loadCheckoutPreferences: async () =>
                 checkout.DEFAULT_CHECKOUT_PREFERENCES,
             loadCheckoutSettings: async () => ({
                 preferences: checkout.DEFAULT_CHECKOUT_PREFERENCES,
                 riskConsentVersion: 1,
+                checkoutTransport: "browser",
             }),
         },
         "@/lib/checkout-consent.server": {
@@ -118,6 +122,27 @@ function harness(
                     async updateMany(query: unknown) {
                         writes.push(query);
                         return { count: 1 };
+                    },
+                },
+                proxy_groups: {
+                    async findFirst(query: {
+                        where: { id: number; userId: string };
+                    }) {
+                        assert.equal(query.where.userId, "synthetic-member");
+                        return proxyOwned && query.where.id === 7
+                            ? { proxies: "http://proxy.example.com:8080" }
+                            : null;
+                    },
+                    async findMany(query: {
+                        where: { userId: string };
+                        select: unknown;
+                    }) {
+                        assert.equal(query.where.userId, "synthetic-member");
+                        assert.deepEqual(
+                            JSON.parse(JSON.stringify(query.select)),
+                            { id: true, name: true },
+                        );
+                        return [{ id: 7, name: "My checkout proxy" }];
                     },
                 },
             },
@@ -323,4 +348,82 @@ test("saved-card auto-checkout requires its own immediate-charge consent and lin
         checkout.isCheckoutPreferences({ ...preferences, payment: "wallet" }),
         false,
     );
+});
+
+test("changing checkout transport requires a separate automatic payment opt-in", async () => {
+    const h = harness("www.vinted.de");
+    const preferences = {
+        shipping: "home",
+        payment: "card",
+        autoCheckout: {
+            warningVersion: 2,
+            currency: "EUR",
+            maxTotalMinor: 3000,
+        },
+    };
+    assert.ok(
+        ((await h.save(preferences, "server")) as { error?: string }).error,
+    );
+    assert.equal(h.writes.length, 0);
+    assert.equal(
+        (
+            (await h.save(
+                { shipping: "home", payment: "card" },
+                "server",
+                7,
+            )) as {
+                success?: boolean;
+            }
+        ).success,
+        true,
+    );
+    const write = JSON.parse(JSON.stringify(h.writes[0]));
+    assert.equal(write.data.checkout_preferences.transport, "server");
+    assert.equal(write.data.checkout_preferences.proxyGroupId, 7);
+    assert.equal(
+        write.data.checkout_preferences.preferences.autoCheckout,
+        undefined,
+    );
+    assert.ok(
+        (
+            (await h.save(
+                { shipping: "home", payment: "card" },
+                "invalid",
+            )) as { error?: string }
+        ).error,
+    );
+    assert.equal(h.writes.length, 1);
+});
+
+test("request checkout requires an owned proxy and rejects malformed selections", async () => {
+    const preferences = { shipping: "home", payment: "card" };
+    for (const id of [undefined, null, 0, -1, 1.5, "7", 99]) {
+        const h = harness("www.vinted.de");
+        assert.ok(
+            ((await h.save(preferences, "server", id)) as { error?: string })
+                .error,
+        );
+        assert.equal(h.writes.length, 0);
+    }
+    const foreign = harness("www.vinted.de", false, false, false, false);
+    assert.ok(
+        ((await foreign.save(preferences, "server", 7)) as { error?: string })
+            .error,
+    );
+    assert.equal(foreign.writes.length, 0);
+    const browser = harness("www.vinted.de");
+    assert.equal(
+        ((await browser.save(preferences, "browser")) as { success?: boolean })
+            .success,
+        true,
+    );
+});
+
+test("checkout settings expose owned group names without credentials", async () => {
+    const h = harness("www.vinted.de");
+    const settings = JSON.parse(JSON.stringify(await h.load()));
+    assert.deepEqual(settings.proxyGroups, [
+        { id: 7, name: "My checkout proxy" },
+    ]);
+    assert.ok(!JSON.stringify(settings).includes("proxy.example.com"));
 });

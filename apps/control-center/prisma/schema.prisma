@@ -64,6 +64,8 @@ model User {
   telegram_connect_codes       telegram_connect_codes[]
   vinted_session               vinted_sessions?
   vinted_browser_link          vinted_browser_links?
+  checkout_agent_device        checkout_agent_devices?
+  checkout_agent_jobs          checkout_agent_jobs[]
   audit_events                 audit_events[]
   alert_events                 alert_events[]
   alert_notifications          alert_notifications[]
@@ -202,6 +204,19 @@ model checkout_notification_deliveries {
   delivered_at DateTime? @db.Timestamp(6)
 
   @@index([status, created_at])
+}
+
+// Permanent payment replay guard. Checkout results are application-encrypted.
+// Intentionally independent of member deletion and browser/session relinking.
+model checkout_payment_attempts {
+  vinted_user_id    BigInt
+  item_id          BigInt
+  owner_token      String   @db.VarChar(128)
+  result_ciphertext String? @db.Text
+  created_at       DateTime @default(now()) @db.Timestamp(6)
+  updated_at       DateTime @default(now()) @db.Timestamp(6)
+
+  @@id([vinted_user_id, item_id])
 }
 
 model feature_policies {
@@ -917,4 +932,31 @@ model vinted_browser_links {
   created_at   DateTime  @default(now()) @db.Timestamp(6)
   last_used_at DateTime? @db.Timestamp(6)
   updated_at   DateTime  @updatedAt @db.Timestamp(6)
+}
+
+model checkout_agent_devices {
+  userId String @id @map("user_id")
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id String @unique @db.VarChar(64)
+  token_hash String @unique @db.VarChar(64)
+  vinted_user_id BigInt
+  domain String @db.VarChar(255)
+  linked_at String @db.Text
+  expires_at DateTime @db.Timestamp(6)
+  last_seen_at DateTime? @db.Timestamp(6)
+}
+model checkout_agent_jobs {
+  id String @id @db.VarChar(64)
+  userId String @map("user_id")
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device_id String @db.VarChar(64)
+  scope_key String @db.VarChar(64)
+  request_ciphertext String @db.Text
+  result_ciphertext String? @db.Text
+  state String @default("pending") @db.VarChar(20)
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  claimed_at DateTime? @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+  @@unique([userId, scope_key])
+  @@index([device_id, state, created_at], map: "checkout_agent_jobs_pending_idx")
 }

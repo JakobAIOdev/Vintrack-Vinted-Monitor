@@ -7,6 +7,8 @@ import {
     checkoutPaymentAllowed,
     autoCheckoutAllowed,
     isCheckoutPreferences,
+    isCheckoutTransport,
+    type CheckoutTransport,
     type CheckoutPreferences,
 } from "@/lib/checkout";
 import {
@@ -16,6 +18,7 @@ import {
 import { guardCheckoutConsent } from "@/lib/checkout-consent.server";
 import { getFeatureAccessForUser } from "@/lib/features.server";
 import { revalidatePath } from "next/cache";
+import { validateProxyLine } from "@/lib/custom-proxy-validation";
 
 async function linkedAccount() {
     const session = await auth();
@@ -42,8 +45,14 @@ export async function getCheckoutPreferences() {
 
 export async function getCheckoutPreferenceSettings() {
     const account = await linkedAccount();
+    const proxyGroups = await db.proxy_groups.findMany({
+        where: { userId: account.userId },
+        select: { id: true, name: true },
+        orderBy: { id: "asc" },
+    });
     return {
         domain: account.domain,
+        proxyGroups,
         ...(await loadCheckoutSettings(
             account.userId,
             account.accountId,
@@ -54,7 +63,17 @@ export async function getCheckoutPreferenceSettings() {
 
 export async function saveCheckoutPreferences(
     preferences: CheckoutPreferences,
+    transport?: CheckoutTransport,
+    proxyGroupId?: number | null,
 ) {
+    if (
+        proxyGroupId !== undefined &&
+        proxyGroupId !== null &&
+        (!Number.isSafeInteger(proxyGroupId) || proxyGroupId <= 0)
+    )
+        return { error: "Invalid checkout proxy group." };
+    if (transport !== undefined && !isCheckoutTransport(transport))
+        return { error: "Invalid checkout transport." };
     if (!isCheckoutPreferences(preferences))
         return { error: "Invalid checkout preferences." };
     const account = await linkedAccount();
@@ -81,6 +100,40 @@ export async function saveCheckoutPreferences(
         return {
             error: "Accept the checkout risk warning before enabling auto-checkout.",
         };
+    const settings = await loadCheckoutSettings(
+        account.userId,
+        account.accountId,
+        account.domain,
+    );
+    const nextTransport = transport ?? settings.checkoutTransport ?? "browser";
+    const nextProxyGroupId =
+        proxyGroupId === undefined
+            ? (settings.checkoutProxyGroupId ?? null)
+            : proxyGroupId;
+    if (nextTransport === "server") {
+        const group = nextProxyGroupId
+            ? await db.proxy_groups.findFirst({
+                  where: { id: nextProxyGroupId, userId: account.userId },
+                  select: { proxies: true },
+              })
+            : null;
+        const firstProxy = group?.proxies
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .find(Boolean);
+        if (!firstProxy || !validateProxyLine(firstProxy))
+            return {
+                error: "Select one of your proxy groups with a valid first proxy for request checkout.",
+            };
+    }
+    if (
+        (nextTransport !== (settings.checkoutTransport ?? "browser") ||
+            nextProxyGroupId !== (settings.checkoutProxyGroupId ?? null)) &&
+        preferences.autoCheckout
+    )
+        return {
+            error: "Save the new checkout method or proxy with automatic payment off, then enable it separately.",
+        };
     const saved = await db.user.updateMany({
         where: { id: account.userId, checkout_enabled: true },
         data: {
@@ -88,6 +141,8 @@ export async function saveCheckoutPreferences(
                 accountId: account.accountId,
                 domain: account.domain,
                 preferences,
+                transport: nextTransport,
+                proxyGroupId: nextProxyGroupId,
             },
         },
     });

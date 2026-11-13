@@ -155,6 +155,36 @@ func TestCatalogAPIHeadersMatchMarketplaceWeb(t *testing.T) {
 	}
 }
 
+func TestCatalogAPIHeadersBindUSMarketplace(t *testing.T) {
+	headers := newCatalogAPIHeaders(model.RegionDomain("us"), "anon-synthetic")
+	for key, want := range map[string]string{
+		"Origin":          "https://www.vinted.com",
+		"Referer":         "https://www.vinted.com/",
+		"Accept-Language": "en-US,en;q=0.9",
+		"Locale":          "en-US",
+		"X-Anon-Id":       "anon-synthetic",
+	} {
+		if got := headers.Get(key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestValidateCatalogCurrencyRejectsForeignFeedForUS(t *testing.T) {
+	domain := model.RegionDomain("us")
+	items := []model.VintedItem{{
+		Price:          model.VintedPrice{Amount: "30.00", Currency: "USD"},
+		TotalItemPrice: &model.VintedPrice{Amount: "31.95", Currency: "USD"},
+	}}
+	if err := validateCatalogCurrency(domain, items); err != nil {
+		t.Fatalf("valid US catalog rejected: %v", err)
+	}
+	items[0].Price.Currency = "EUR"
+	if err := validateCatalogCurrency(domain, items); err == nil {
+		t.Fatal("expected US catalog with EUR prices to be rejected")
+	}
+}
+
 func TestSynchronizeCatalogCookiesCopiesMarketplaceSessionToAPIHost(t *testing.T) {
 	client, err := NewClientWithTimeout("", nil, time.Second)
 	if err != nil {

@@ -280,6 +280,25 @@ intervals can grow while capacity recovers. The dashboard may show the pool as
 recovering during this period. If no validated proxies remain, monitors wait and resume
 automatically when safe capacity returns.
 
+### Request checkout network
+
+Request checkout uses the first entry of the member's selected checkout proxy
+group for every step and accepts the same line formats as above. It never falls
+back to the server's own address. If that proxy cannot be reached, rejects its
+credentials or reports an unpaid plan, the buy link says so, nothing is sent to
+Vinted and the link can be used again.
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `CHECKOUT_DEV_DIRECT_CONNECTION` | Development only. `true` lets request checkout connect directly from the machine running `vinted-service` and ignore proxy groups. | `false` |
+| `APP_ENV` | Environment of `vinted-service`. Compose passes `production` unless you set another value. | `production` |
+
+Use the direct connection only on a private development machine, where the
+service shares the network of your signed-in browser. On a shared instance it
+would send every member's checkout from the same server address, so
+`vinted-service` refuses to start with it in production. To use it, set both
+`APP_ENV=development` and `CHECKOUT_DEV_DIRECT_CONNECTION=true`.
+
 ### Choosing a provider
 
 Vintrack does not require a specific proxy vendor. Match the provider's proxy
@@ -326,6 +345,18 @@ schedules use only the selected verified group and never fall back to server or
 direct traffic. Free public proxies are not used for Price Watch polling. Set
 `AUTH_URL` to the public HTTPS origin so Discord and Telegram alerts can
 link directly to the corresponding Price Watch.
+
+A watch ends on its own when its listing is gone. Two consecutive checks that
+find the listing sold or removed stop every watch on it and show **Sold** or
+**Removed** on the Price Watches page; the confirming check runs about a minute
+after the first. A failed request in between does not reset that count. A
+reserved or hidden listing still exists, so it stays watched and is labelled
+**Reserved** or **Hidden** until it returns to sale or is sold. A stopped watch
+can be resumed, which validates the listing again.
+
+When a watch ends this way, members who have notifications enabled for it get
+one Discord or Telegram message naming the reason, the last price seen and the
+listing link. It uses the same channels as the watch's price-drop alerts.
 
 ## Worker behavior
 

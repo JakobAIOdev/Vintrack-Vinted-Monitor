@@ -30,6 +30,7 @@ const STATUS_LOCALE_BY_REGION: Record<string, string> = {
     fi: "fi",
     si: "sl",
     gr: "el",
+    us: "en",
 };
 
 export const REGIONS: Region[] = [
@@ -54,7 +55,30 @@ export const REGIONS: Region[] = [
     { code: "hu", label: "Hungary", flag: "🇭🇺", domain: "vinted.hu", currencyCode: "HUF" },
     { code: "hr", label: "Croatia", flag: "🇭🇷", domain: "vinted.hr", currencyCode: "EUR" },
     { code: "fi", label: "Finland", flag: "🇫🇮", domain: "vinted.fi", currencyCode: "EUR" },
+    { code: "us", label: "United States", flag: "🇺🇸", domain: "vinted.com", currencyCode: "USD" },
 ];
+
+// Markets the Account page offers for linking a Vinted account. The other
+// monitor regions have no localized account requests yet.
+const ACCOUNT_LINK_REGION_CODES = new Set([
+    "de",
+    "fr",
+    "it",
+    "es",
+    "nl",
+    "pl",
+    "pt",
+    "be",
+    "at",
+    "lu",
+    "uk",
+    "ie",
+    "us",
+]);
+
+export const ACCOUNT_LINK_REGIONS: Region[] = REGIONS.filter((region) =>
+    ACCOUNT_LINK_REGION_CODES.has(region.code),
+);
 
 const TIMEZONE_BY_REGION: Record<string, string> = {
     de: "Europe/Berlin",
@@ -78,6 +102,8 @@ const TIMEZONE_BY_REGION: Record<string, string> = {
     hu: "Europe/Budapest",
     hr: "Europe/Zagreb",
     fi: "Europe/Helsinki",
+    // The US spans several zones; Eastern Time is only the preselected option.
+    us: "America/New_York",
 };
 
 const REGIONS_BY_CODE: Record<string, Region> = Object.create(null);

@@ -12,6 +12,10 @@ type Config struct {
 	DatabaseURL   string
 	EncryptionKey string
 	ListenAddr    string
+	// CheckoutDevDirect lets request checkout leave from this host without a
+	// member proxy. Development only: on a shared instance every member's
+	// checkout would use the same server address.
+	CheckoutDevDirect bool
 }
 
 func Load() (Config, error) {
@@ -28,6 +32,10 @@ func Load() (Config, error) {
 	}
 	if production && cfg.EncryptionKey == "" {
 		return Config{}, fmt.Errorf("VINTED_SESSION_ENCRYPTION_KEY is required in production")
+	}
+	cfg.CheckoutDevDirect = strings.EqualFold(strings.TrimSpace(os.Getenv("CHECKOUT_DEV_DIRECT_CONNECTION")), "true")
+	if production && cfg.CheckoutDevDirect {
+		return Config{}, fmt.Errorf("CHECKOUT_DEV_DIRECT_CONNECTION must not be enabled in production")
 	}
 	if cfg.DatabaseURL != "" && cfg.EncryptionKey == "" {
 		return Config{}, fmt.Errorf("VINTED_SESSION_ENCRYPTION_KEY is required when DATABASE_URL is configured")

@@ -6,6 +6,8 @@ import {
     isCheckoutPreferences,
     checkoutPaymentAllowed,
     autoCheckoutAllowed,
+    isCheckoutTransport,
+    type CheckoutTransport,
 } from "@/lib/checkout";
 import {
     checkoutRiskAccepted,
@@ -34,6 +36,26 @@ export async function loadCheckoutSettings(
         : null;
     const checkoutEnabled = user?.checkout_enabled === true;
     const stored = user?.checkout_preferences;
+    const checkoutTransport: CheckoutTransport =
+        stored &&
+        typeof stored === "object" &&
+        !Array.isArray(stored) &&
+        stored.accountId === accountId &&
+        stored.domain === domain &&
+        isCheckoutTransport(stored.transport)
+            ? stored.transport
+            : "browser";
+    const checkoutProxyGroupId =
+        stored &&
+        typeof stored === "object" &&
+        !Array.isArray(stored) &&
+        stored.accountId === accountId &&
+        stored.domain === domain &&
+        typeof stored.proxyGroupId === "number" &&
+        Number.isSafeInteger(stored.proxyGroupId) &&
+        stored.proxyGroupId > 0
+            ? stored.proxyGroupId
+            : null;
     if (
         stored &&
         typeof stored === "object" &&
@@ -45,6 +67,8 @@ export async function loadCheckoutSettings(
         if (!checkoutPaymentAllowed(domain, stored.preferences.payment))
             return {
                 checkoutEnabled,
+                checkoutTransport,
+                checkoutProxyGroupId,
                 riskConsentVersion,
                 preferences: {
                     shipping: stored.preferences.shipping,
@@ -57,6 +81,8 @@ export async function loadCheckoutSettings(
         )
             return {
                 checkoutEnabled,
+                checkoutTransport,
+                checkoutProxyGroupId,
                 riskConsentVersion,
                 preferences: {
                     shipping: stored.preferences.shipping,
@@ -65,6 +91,8 @@ export async function loadCheckoutSettings(
             };
         return {
             checkoutEnabled,
+            checkoutTransport,
+            checkoutProxyGroupId,
             riskConsentVersion,
             preferences: checkoutEnabled
                 ? stored.preferences
@@ -76,6 +104,8 @@ export async function loadCheckoutSettings(
     }
     return {
         checkoutEnabled,
+        checkoutTransport,
+        checkoutProxyGroupId,
         riskConsentVersion,
         preferences: DEFAULT_CHECKOUT_PREFERENCES,
     };

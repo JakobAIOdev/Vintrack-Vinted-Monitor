@@ -5,7 +5,7 @@ import {
 } from "@/lib/free-proxy-readiness";
 import { readFreeProxyPolicy } from "@/lib/runtime-policies.server";
 
-const DEFAULT_STARTER_REGIONS = "de,fr,it,es,nl,be,at";
+const DEFAULT_STARTER_REGIONS = "de,fr,it,es,nl,be,at,us";
 
 export type FreeProxyRegionHealth = {
     region: string;

@@ -34,7 +34,7 @@ import {
     Cable,
     ExternalLink,
 } from "lucide-react";
-import { REGIONS } from "@/lib/regions";
+import { ACCOUNT_LINK_REGIONS, REGIONS } from "@/lib/regions";
 import { cn } from "@/lib/utils";
 import {
     linkVintedAccount,
@@ -45,6 +45,11 @@ import {
     updateVintedDomain,
 } from "@/actions/account";
 import { toast } from "sonner";
+import {
+    readCheckoutContextBackgroundSync,
+    requestCheckoutContextSync,
+    revokeCheckoutContextSync,
+} from "@/lib/vintrack-extension";
 import { CheckoutPreferencesCard } from "@/components/account/checkout-preferences";
 
 export interface AccountStatus {
@@ -63,6 +68,7 @@ export interface AccountStatus {
     requires_browser_sync?: boolean;
     browser_link_connected?: boolean;
     has_browser_session?: boolean;
+    server_checkout?: { state: string; automatic_payment_available: boolean };
     browser_linked?: boolean;
     last_browser_sync?: string;
     has_phone_number?: boolean;
@@ -202,6 +208,68 @@ export function AccountClient({
     const [isUnlinkDialogOpen, setIsUnlinkDialogOpen] = useState(false);
     const [isPending, startTransition] = useTransition();
     const [isBrowserSyncStarting, setIsBrowserSyncStarting] = useState(false);
+    const [isCheckoutContextDialogOpen, setIsCheckoutContextDialogOpen] =
+        useState(false);
+    const [isCheckoutContextSyncing, setIsCheckoutContextSyncing] =
+        useState(false);
+    const [checkoutContextOrigin, setCheckoutContextOrigin] = useState("");
+    const [checkoutContextKeptInSync, setCheckoutContextKeptInSync] =
+        useState(false);
+    const [isCheckoutContextRevoking, setIsCheckoutContextRevoking] =
+        useState(false);
+
+    useEffect(() => {
+        // Every extension status reply says whether this browser keeps the
+        // checkout context in sync in the background.
+        const handleMessage = (event: MessageEvent) => {
+            if (
+                event.source !== window ||
+                event.origin !== window.location.origin ||
+                ![
+                    "VINTRACK_EXTENSION_READY",
+                    "VINTRACK_EXTENSION_CONNECT_RESULT",
+                    "VINTRACK_EXTENSION_MANUAL_SYNC_RESULT",
+                ].includes(event.data?.type)
+            ) {
+                return;
+            }
+            const keptInSync = readCheckoutContextBackgroundSync(
+                event.data.payload,
+            );
+            if (keptInSync !== null) {
+                setCheckoutContextKeptInSync(keptInSync);
+            }
+        };
+        window.addEventListener("message", handleMessage);
+        return () => window.removeEventListener("message", handleMessage);
+    }, []);
+
+    const handleCheckoutContextRevoke = async () => {
+        setIsCheckoutContextRevoking(true);
+        const revoked = await revokeCheckoutContextSync();
+        setIsCheckoutContextRevoking(false);
+        if (revoked) {
+            setCheckoutContextKeptInSync(false);
+            toast.success(
+                "This browser no longer keeps the checkout context in sync.",
+            );
+        } else {
+            toast.error(
+                "The extension did not confirm. Reload this page and try again.",
+            );
+        }
+    };
+
+    useEffect(() => {
+        if (!isCheckoutContextSyncing) return;
+        const timer = window.setTimeout(() => {
+            setIsCheckoutContextSyncing(false);
+            toast.error(
+                "Checkout context sync timed out. Reload your Vinted tab, then try syncing again.",
+            );
+        }, 30000);
+        return () => window.clearTimeout(timer);
+    }, [isCheckoutContextSyncing]);
 
     const selectedDomain =
         REGIONS.find((r) => r.code === selectedRegion)?.domain || "vinted.de";
@@ -317,6 +385,7 @@ export function AccountClient({
             }
 
             if (event.data.type === "VINTRACK_EXTENSION_MANUAL_SYNC_RESULT") {
+                setIsCheckoutContextSyncing(false);
                 const payload = event.data.payload as {
                     ok?: boolean;
                     error?: string;
@@ -554,6 +623,20 @@ export function AccountClient({
             },
             window.location.origin,
         );
+    };
+
+    const handleCheckoutContextSync = () => {
+        if (
+            !extensionVersion ||
+            compareExtensionVersions(extensionVersion, "0.4.3") < 0
+        ) {
+            toast.error(
+                "Update or reload the Vintrack extension to v0.4.3 before syncing server checkout context.",
+            );
+            return;
+        }
+        setCheckoutContextOrigin(window.location.origin);
+        setIsCheckoutContextDialogOpen(true);
     };
 
     const extensionUpdateRequired =
@@ -829,6 +912,69 @@ export function AccountClient({
                         ) : null}
                     </div>
 
+                    {status.linked ? (
+                        <div className="space-y-2 rounded-lg border p-4">
+                            <p className="text-sm font-medium">
+                                Server checkout session context
+                            </p>
+                            <p className="text-muted-foreground text-xs">
+                                Optional. Sends Vinted&apos;s datadome, anon_id,
+                                _vinted_fr_session and v_udt cookies, the CSRF
+                                token and your browser User-Agent to this
+                                Vintrack server, which stores them encrypted
+                                with your linked session. After you allow it
+                                once, this browser keeps sending them whenever
+                                it refreshes the Vinted session, until you turn
+                                it off, disconnect the extension, or switch
+                                account or region. This can help server requests
+                                use your existing session while the browser is
+                                closed; it does not guarantee checkout access or
+                                extend session expiry.
+                            </p>
+                            <p className="text-xs font-medium">
+                                {checkoutContextKeptInSync
+                                    ? "Kept in sync from this browser"
+                                    : "Not kept in sync"}
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={handleCheckoutContextSync}
+                                    disabled={
+                                        !extensionReady ||
+                                        extensionUpdateRequired ||
+                                        isCheckoutContextSyncing
+                                    }
+                                >
+                                    {isCheckoutContextSyncing
+                                        ? "Syncing checkout context…"
+                                        : "Sync server checkout context"}
+                                </Button>
+                                {checkoutContextKeptInSync ? (
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={handleCheckoutContextRevoke}
+                                        disabled={isCheckoutContextRevoking}
+                                    >
+                                        Stop keeping checkout context in sync
+                                    </Button>
+                                ) : null}
+                            </div>
+                            <p className="text-muted-foreground text-xs">
+                                Requires connected extension v0.4.3 or later;
+                                keeping it in sync needs the latest extension.
+                                Install or update it above if this button is
+                                disabled. Sync now copies these cookies only
+                                while the context is kept in sync. Turning it
+                                off stops further copies; the copy already
+                                stored stays with your linked session until you
+                                unlink the Vinted account.
+                            </p>
+                        </div>
+                    ) : null}
+
                     {browserSync?.syncedDomains?.length ? (
                         <p className="text-muted-foreground text-xs">
                             Synced domains:{" "}
@@ -983,7 +1129,7 @@ export function AccountClient({
                                 no longer overwrite this setting.
                             </p>
                             <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-6">
-                                {REGIONS.slice(0, 12).map((region) => {
+                                {ACCOUNT_LINK_REGIONS.map((region) => {
                                     const isSelected =
                                         selectedRegion === region.code;
                                     return (
@@ -1099,6 +1245,7 @@ export function AccountClient({
                 <CheckoutPreferencesCard
                     key={`${status.vinted_id}:${status.domain}`}
                     accountKey={`${status.vinted_id}:${status.domain}`}
+                    serverCheckout={status.server_checkout}
                 />
             )}
 
@@ -1185,7 +1332,7 @@ export function AccountClient({
                                     Region
                                 </Label>
                                 <div className="grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-6">
-                                    {REGIONS.slice(0, 12).map((region) => {
+                                    {ACCOUNT_LINK_REGIONS.map((region) => {
                                         const isSelected =
                                             selectedRegion === region.code;
                                         return (
@@ -1285,6 +1432,53 @@ export function AccountClient({
                 </Card>
             )}
 
+            <Dialog
+                open={isCheckoutContextDialogOpen}
+                onOpenChange={setIsCheckoutContextDialogOpen}
+            >
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Sync checkout session?</DialogTitle>
+                        <DialogDescription>
+                            Send Vinted&apos;s datadome, anon_id,
+                            _vinted_fr_session and v_udt cookies, the CSRF token
+                            and your browser User-Agent to this Vintrack
+                            instance. The session cookies keep checkout
+                            connected to your signed-in account. After you allow
+                            this once, this browser keeps sending them whenever
+                            it refreshes the Vinted session, until you turn it
+                            off on this page, disconnect the extension, or
+                            switch account or region. Vintrack stores them
+                            encrypted with your linked session. The browser
+                            refresh token and other cookies are not copied.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <p className="text-sm font-medium break-all">
+                        {checkoutContextOrigin}
+                    </p>
+                    <DialogFooter>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() =>
+                                setIsCheckoutContextDialogOpen(false)
+                            }
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            type="button"
+                            onClick={() => {
+                                setIsCheckoutContextDialogOpen(false);
+                                setIsCheckoutContextSyncing(true);
+                                requestCheckoutContextSync(targetDomain, true);
+                            }}
+                        >
+                            Allow checkout sync
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
             <Dialog
                 open={isUnlinkDialogOpen}
                 onOpenChange={(open) => {

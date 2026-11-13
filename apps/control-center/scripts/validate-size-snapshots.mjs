@@ -23,6 +23,7 @@ const regions = [
     "hu",
     "hr",
     "fi",
+    "us",
 ];
 
 const expectedGroupIds = new Set([

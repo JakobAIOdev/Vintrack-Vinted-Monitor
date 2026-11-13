@@ -345,6 +345,25 @@
     });
   }
 
+  function requestPageCheckoutContext() {
+    return new Promise((resolve) => {
+      const requestId = crypto.randomUUID();
+      const timeout = window.setTimeout(() => {
+        window.removeEventListener("message", receive);
+        resolve({ ok: false, error: "Vinted did not provide checkout context." });
+      }, 15000);
+      function receive(event) {
+        if (event.source !== window || event.origin !== window.location.origin ||
+            event.data?.type !== "VINTRACK_PAGE_CHECKOUT_CONTEXT_RESPONSE" || event.data.payload?.requestId !== requestId) return;
+        window.clearTimeout(timeout);
+        window.removeEventListener("message", receive);
+        resolve(event.data.payload);
+      }
+      window.addEventListener("message", receive);
+      post("VINTRACK_PAGE_CHECKOUT_CONTEXT_REQUEST", { requestId });
+    });
+  }
+
   let companionMode = "inline";
   let companionDrawerHost = null;
   let companionController = null;
@@ -650,7 +669,8 @@
     }
 
     const path = window.location.pathname.replace(/\/+$/, "") || "/";
-    if (path === "/catalog") {
+    // Search results live on /catalog, category pages on /catalog/<id>-<slug>.
+    if (path === "/catalog" || /^\/catalog\/[1-9]\d*(?:-[^/]*)?$/.test(path)) {
       const catalogTarget = catalogFilterRow();
       if (
         catalogTarget &&
@@ -859,6 +879,27 @@
       return;
     }
 
+    if (event.data.type === "VINTRACK_EXTENSION_REVOKE_CHECKOUT_CONTEXT") {
+      sendRuntimeMessage(
+        { type: "VINTRACK_EXTENSION_REVOKE_CHECKOUT_CONTEXT" },
+        (response, runtimeError) => {
+          post(
+            "VINTRACK_EXTENSION_REVOKE_CHECKOUT_CONTEXT_RESULT",
+            runtimeError
+              ? {
+                  ok: false,
+                  error: runtimeError.message || "Extension request failed",
+                }
+              : response || {
+                  ok: false,
+                  error: "Extension returned no result",
+                },
+          );
+        },
+      );
+      return;
+    }
+
     if (event.data.type === "VINTRACK_EXTENSION_BUY") {
       sendRuntimeMessage(
         {
@@ -948,6 +989,14 @@
             requestId: message.payload?.requestId,
           }),
         );
+      return true;
+    }
+
+    if (message?.type === "VINTRACK_GET_CHECKOUT_CONTEXT") {
+      ensurePageBridge();
+      waitForPageBridgeReady().then(() => requestPageCheckoutContext())
+        .then(response => sendResponseSafely(sendResponse, response))
+        .catch(() => sendResponseSafely(sendResponse, { ok: false, error: "Vinted checkout context is unavailable." }));
       return true;
     }
 

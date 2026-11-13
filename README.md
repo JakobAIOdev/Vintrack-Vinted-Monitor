@@ -60,6 +60,8 @@
 
 - **⚡ Fast monitoring** — run isolated regional catalog sessions with bounded
   attempts, delayed hedging, and Redis-backed deduplication.
+- **🗺️ EU, UK, and US markets** — monitor Vinted in 20 EU countries, the
+  United Kingdom, and the United States, each in its own currency.
 - **🎯 Precise filters** — target query, price, category, brand, color, size,
   condition, seller country, and Vinted market.
 - **🔔 Alerts where you are** — send rich matches to the live dashboard,

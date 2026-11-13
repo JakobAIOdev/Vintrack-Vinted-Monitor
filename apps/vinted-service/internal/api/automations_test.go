@@ -27,6 +27,23 @@ func TestAutomaticOfferUsesMinorUnitsAndListingLimit(t *testing.T) {
 	}
 }
 
+func TestAutomationRegionCurrencyMatchesMarketplace(t *testing.T) {
+	for region, want := range map[string]string{
+		"de": "EUR", "fr": "EUR", "uk": "GBP", "pl": "PLN", "us": "USD", "unknown": "EUR",
+	} {
+		if got := automationRegionCurrency(region); got != want {
+			t.Errorf("automationRegionCurrency(%q) = %q, want %q", region, got, want)
+		}
+	}
+	price, currency, valid := automaticOfferPrice(session.AutomationCandidate{Price: "30.00 USD", DiscountPercent: 10, MaxPriceMinor: 5000})
+	if !valid || price != "27.00" || currency != automationRegionCurrency("us") {
+		t.Fatalf("US offer = %s %s valid=%v", price, currency, valid)
+	}
+	if currency == automationRegionCurrency("de") {
+		t.Fatal("a USD listing must not pass the currency check of a EUR region")
+	}
+}
+
 func TestAutomaticMessageValidatesExpandedPayload(t *testing.T) {
 	c := session.AutomationCandidate{Template: "Hi {seller}, {title} for {price} {currency}? {url} ({monitor})", Seller: "seller", Title: "Jacket {seller}", Price: "25.00 EUR", URL: "https://example.invalid/item", MonitorName: "Jackets"}
 	got, valid := automaticMessage(c)

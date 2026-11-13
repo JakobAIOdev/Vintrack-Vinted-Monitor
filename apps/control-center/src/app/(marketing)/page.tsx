@@ -36,7 +36,7 @@ export function generateMetadata() {
     return buildMarketingMetadata({
         title: "Vintrack – Open-Source Vinted Monitor & Fast Alerts",
         description:
-            "Monitor new Vinted listings with precise filters, a live dashboard, Discord and Telegram alerts, price watches, or your own self-hosted stack.",
+            "Monitor new Vinted listings in the EU, UK, and US with precise filters, a live dashboard, Discord and Telegram alerts, price watches, or a self-hosted stack.",
         path: "/",
     });
 }
@@ -995,6 +995,10 @@ export default async function Home() {
                             </Button>
                         </div>
                         <div className="text-muted-foreground mt-6 flex flex-wrap gap-x-5 gap-y-2 text-xs">
+                            <span className="flex items-center gap-1.5">
+                                <Globe2 className="size-3.5" />
+                                Vinted markets in the EU, UK, and US
+                            </span>
                             <span className="flex items-center gap-1.5">
                                 <CheckCircle2 className="size-3.5" />
                                 No proxy purchase for ready regions
