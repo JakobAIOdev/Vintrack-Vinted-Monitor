@@ -280,6 +280,25 @@ intervals can grow while capacity recovers. The dashboard may show the pool as
 recovering during this period. If no validated proxies remain, monitors wait and resume
 automatically when safe capacity returns.
 
+### Request checkout network
+
+Request checkout uses the first entry of the member's selected checkout proxy
+group for every step and accepts the same line formats as above. It never falls
+back to the server's own address. If that proxy cannot be reached, rejects its
+credentials or reports an unpaid plan, the buy link says so, nothing is sent to
+Vinted and the link can be used again.
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `CHECKOUT_DEV_DIRECT_CONNECTION` | Development only. `true` lets request checkout connect directly from the machine running `vinted-service` and ignore proxy groups. | `false` |
+| `APP_ENV` | Environment of `vinted-service`. Compose passes `production` unless you set another value. | `production` |
+
+Use the direct connection only on a private development machine, where the
+service shares the network of your signed-in browser. On a shared instance it
+would send every member's checkout from the same server address, so
+`vinted-service` refuses to start with it in production. To use it, set both
+`APP_ENV=development` and `CHECKOUT_DEV_DIRECT_CONNECTION=true`.
+
 ### Choosing a provider
 
 Vintrack does not require a specific proxy vendor. Match the provider's proxy

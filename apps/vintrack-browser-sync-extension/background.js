@@ -15,6 +15,8 @@ const STORAGE_KEYS = {
   browserRefreshState: "vintrackBrowserRefreshState",
   syncedSessions: "vintrackSyncedSessions",
   syncReceipts: "vintrackSyncReceipts",
+  // Consent metadata only: version, instance, account id, domain and time.
+  checkoutContextGrant: "vintrackCheckoutContextGrant",
   checkoutLinks: "vintrackCheckoutLinks",
   checkoutAttempts: "vintrackCheckoutAttempts",
   theme: "vintrackTheme",
@@ -37,6 +39,7 @@ const BUY_TAB_READY_TIMEOUT_MS = 20000;
 const SYNC_REQUEST_TIMEOUT_MS = 15000;
 const PROACTIVE_BROWSER_REFRESH_MS = 2 * 60 * 1000;
 const SYNC_RECEIPT_TTL_MS = 10 * 60 * 1000;
+const CHECKOUT_CONTEXT_BACKGROUND_TIMEOUT_MS = 4000;
 const BROWSER_REFRESH_TIMEOUT_MS = 12000;
 const BROWSER_REFRESH_RETRY_MS = 60 * 1000;
 const BROWSER_REFRESH_MAX_RETRY_MS = 60 * 60 * 1000;
@@ -235,9 +238,11 @@ async function getConfig() {
     await extensionApi.storage.local.remove([
       STORAGE_KEYS.token,
       STORAGE_KEYS.appOrigin,
+      STORAGE_KEYS.checkoutContextGrant,
     ]);
     storage[STORAGE_KEYS.token] = "";
     storage[STORAGE_KEYS.appOrigin] = "";
+    delete storage[STORAGE_KEYS.checkoutContextGrant];
   } else if (
     normalizedOrigin &&
     normalizedOrigin !== storage[STORAGE_KEYS.appOrigin]
@@ -790,7 +795,112 @@ function formatRuntimeState(storage) {
       typeof storage.vintrackLastSyncError === "string"
         ? storage.vintrackLastSyncError
         : "",
+    // Boolean only: the grant's account and region stay inside the extension.
+    checkoutContextBackgroundSync: Boolean(
+      storage.browserLinkToken &&
+        storedCheckoutContextGrant(storage)?.appOrigin ===
+          storage.vintrackAppOrigin,
+    ),
   };
+}
+
+// The grant records that the member allowed checkout-context sync for one
+// Vintrack instance, Vinted account and region. It never holds cookie, CSRF
+// or token values.
+function storedCheckoutContextGrant(storage) {
+  const grant = storage?.[STORAGE_KEYS.checkoutContextGrant];
+  const accountId = Number(grant?.accountId || 0);
+  return grant?.consentVersion === 2 &&
+    typeof grant.appOrigin === "string" &&
+    grant.appOrigin &&
+    typeof grant.domain === "string" &&
+    grant.domain &&
+    Number.isSafeInteger(accountId) &&
+    accountId > 0
+    ? {
+        consentVersion: 2,
+        appOrigin: grant.appOrigin,
+        domain: grant.domain,
+        accountId,
+      }
+    : null;
+}
+
+async function clearCheckoutContextGrant() {
+  await extensionApi.storage.local.remove(STORAGE_KEYS.checkoutContextGrant);
+}
+
+async function settleWithin(promise, timeoutMs) {
+  let timeout;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timeout = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// Background context sync only reuses a ready Vinted tab that is already open
+// in the default cookie store. It never opens, reloads or focuses a tab.
+async function findOpenCheckoutContextTab(domain) {
+  const tabs = (await getOpenVintedTabs(domain))
+    .filter(
+      (tab) =>
+        typeof tab.id === "number" &&
+        !tab.discarded &&
+        !tab.incognito &&
+        tab.status !== "loading" &&
+        refreshDomain(domainFromUrl(tab.url || "")) === domain &&
+        (!tab.cookieStoreId || tab.cookieStoreId === "firefox-default"),
+    )
+    .sort(
+      (left, right) =>
+        Number(right.lastAccessed || 0) - Number(left.lastAccessed || 0),
+    )
+    .slice(0, 3);
+  for (const tab of tabs) {
+    try {
+      const response = await settleWithin(
+        extensionApi.tabs.sendMessage(tab.id, { type: "VINTRACK_TAB_PING" }),
+        1000,
+      );
+      if (response?.ok && response.pageBridgeReady !== false) return tab.id;
+    } catch {
+      // A disconnected tab cannot provide context; try the next one.
+    }
+  }
+  throw new Error("No ready Vinted tab is open for checkout context.");
+}
+
+async function collectCheckoutContext(domain, storeId, accessToken, consentVersion = 1, background = false) {
+  if (![1, 2].includes(consentVersion)) throw new Error("Explicit checkout context consent is required.");
+  const tabId = background
+    ? await findOpenCheckoutContextTab(domain)
+    : (await ensureVintedBuyTab(`https://${domain}/`)).tabId;
+  const pageRequest = extensionApi.tabs.sendMessage(tabId, { type: "VINTRACK_GET_CHECKOUT_CONTEXT" });
+  const page = await (background ? settleWithin(pageRequest, CHECKOUT_CONTEXT_BACKGROUND_TIMEOUT_MS) : pageRequest);
+  if (!page?.ok || !accessTokenIdentityIds(accessToken).includes(Number(page.accountId)) || typeof page.csrfToken !== "string" || !page.csrfToken) {
+    throw new Error("The Vinted page and linked session must use the same account.");
+  }
+  const datadome = await extensionApi.cookies.get(cookieLookupDetails(domain, "datadome", storeId));
+  const anonymous = await extensionApi.cookies.get(cookieLookupDetails(domain, "anon_id", storeId));
+  if (!datadome?.value) throw new Error("Open Vinted and complete its normal security check before syncing checkout context.");
+  const cookies = { datadome: datadome.value, ...(anonymous?.value ? { anon_id: anonymous.value } : {}) };
+  if (consentVersion === 2) {
+    for (const name of ["_vinted_fr_session", "v_udt"]) {
+      const cookie = await extensionApi.cookies.get(cookieLookupDetails(domain, name, storeId));
+      if (cookie?.value) cookies[name] = cookie.value;
+    }
+  }
+  return { accountId: page.accountId, payload: {
+    consent_version: consentVersion,
+    cookies,
+    csrf_token: page.csrfToken,
+  } };
 }
 
 async function performDomainSync(domain, options = {}) {
@@ -851,6 +961,7 @@ async function performDomainSync(domain, options = {}) {
   ).join("");
   const receipt = config[STORAGE_KEYS.syncReceipts]?.[receiptKey];
   if (
+    !options.includeCheckoutContext &&
     !allowAccountSwitch &&
     receipt?.fingerprint === fingerprint &&
     Date.now() - Number(receipt.syncedAt || 0) < SYNC_RECEIPT_TTL_MS
@@ -866,6 +977,60 @@ async function performDomainSync(domain, options = {}) {
 
   const endpoint = `${vintrackAppOrigin}/api/account/extension-sync/complete`;
   const userAgent = await userAgentForSync();
+  let checkoutContext;
+  if (options.includeCheckoutContext) {
+    if (!userAgent) return { ok: false, error: "Browser technical-data permission is required for checkout context." };
+    try { checkoutContext = await collectCheckoutContext(normalizedDomain, storeId, accessCookie.value, options.checkoutContextConsent ?? 1); }
+    catch (error) { return { ok: false, error: error instanceof Error ? error.message : "Checkout context could not be read." }; }
+  }
+
+  // After one explicit consent, automatic syncs for the same instance, account,
+  // region and default cookie store carry the context once per access token.
+  const grantDomain = refreshDomain(normalizedDomain) || normalizedDomain;
+  const grantStore =
+    !storeId || storeId === (isFirefoxExtension ? "firefox-default" : "0");
+  let grant = storedCheckoutContextGrant(config);
+  if (
+    grant &&
+    (grant.appOrigin !== vintrackAppOrigin ||
+      (grantStore &&
+        grant.domain === grantDomain &&
+        !accessTokenIdentityIds(accessCookie.value).includes(grant.accountId)))
+  ) {
+    // Another instance or another signed-in account ends the consent.
+    await clearCheckoutContextGrant();
+    grant = null;
+  }
+  let backgroundCheckoutContext = false;
+  if (
+    grant &&
+    !options.includeCheckoutContext &&
+    options.skipBackgroundCheckoutContext !== true &&
+    userAgent &&
+    grantStore &&
+    grant.domain === grantDomain &&
+    (allowAccountSwitch ||
+      receipt?.fingerprint !== fingerprint ||
+      receipt.checkoutContext !== true)
+  ) {
+    // Optional: any collection problem leaves an ordinary token-only sync.
+    try {
+      const collected = await collectCheckoutContext(
+        grantDomain,
+        storeId,
+        accessCookie.value,
+        grant.consentVersion,
+        true,
+      );
+      if (Number(collected.accountId) === grant.accountId) {
+        checkoutContext = collected;
+        backgroundCheckoutContext = true;
+      }
+    } catch {
+      checkoutContext = undefined;
+    }
+  }
+
   let response;
   let data = {};
 
@@ -887,8 +1052,9 @@ async function performDomainSync(domain, options = {}) {
           domain: normalizedDomain,
           user_agent: userAgent,
           allow_account_switch: allowAccountSwitch,
-          browser_vinted_id: browserVintedId,
+          browser_vinted_id: checkoutContext?.accountId || browserVintedId,
           browser_vinted_name: browserVintedName,
+          ...(checkoutContext ? { checkout_context: checkoutContext.payload } : {}),
         }),
         signal: controller.signal,
       });
@@ -924,7 +1090,26 @@ async function performDomainSync(domain, options = {}) {
     }
   }
 
+  if (backgroundCheckoutContext && response?.status === 400) {
+    // The server refused the optional context; the token sync must still run.
+    return performDomainSync(domain, {
+      ...options,
+      skipBackgroundCheckoutContext: true,
+    });
+  }
+
   if (!response?.ok) {
+    if (
+      grant &&
+      // The Vintrack link was removed, for example by unlinking the account.
+      ((response?.status === 404 &&
+        String(data.error || "").startsWith("browser link ")) ||
+        (grantStore &&
+          grant.domain === grantDomain &&
+          data.status === "browser_account_mismatch"))
+    ) {
+      await clearCheckoutContextGrant();
+    }
     return {
       ok: false,
       domain: normalizedDomain,
@@ -959,9 +1144,47 @@ async function performDomainSync(domain, options = {}) {
       [STORAGE_KEYS.browserRefreshState]: refreshState,
       [STORAGE_KEYS.syncReceipts]: {
         ...(allowAccountSwitch ? {} : latest[STORAGE_KEYS.syncReceipts] || {}),
-        [receiptKey]: { fingerprint, syncedAt: Date.now() },
+        [receiptKey]: {
+          fingerprint,
+          syncedAt: Date.now(),
+          // Marks that this access token already reached Vintrack with context.
+          ...(checkoutContext ||
+          (receipt?.fingerprint === fingerprint &&
+            receipt.checkoutContext === true)
+            ? { checkoutContext: true }
+            : {}),
+        },
       },
     });
+  }
+  const linkedDomain = sanitizeDomain(data.domain || normalizedDomain);
+  if (
+    completed &&
+    grantStore &&
+    options.includeCheckoutContext &&
+    checkoutContext?.payload.consent_version === 2
+  ) {
+    await extensionApi.storage.local.set({
+      [STORAGE_KEYS.checkoutContextGrant]: {
+        consentVersion: 2,
+        appOrigin: vintrackAppOrigin,
+        accountId: Number(checkoutContext.accountId),
+        domain: grantDomain,
+        grantedAt: new Date().toISOString(),
+      },
+    });
+  } else if (
+    grant &&
+    (completed
+      ? (refreshDomain(linkedDomain) || linkedDomain) !== grant.domain ||
+        (Number(data.vinted_id || 0) > 0 &&
+          Number(data.vinted_id) !== grant.accountId)
+      : grantStore &&
+        grant.domain === grantDomain &&
+        ["ignored_account", "ignored_domain"].includes(status))
+  ) {
+    // The linked account or region changed, so the consent no longer applies.
+    await clearCheckoutContextGrant();
   }
   return {
     ok: completed,
@@ -2285,6 +2508,17 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
+      const previousLink = await extensionApi.storage.local.get([
+        STORAGE_KEYS.token,
+        STORAGE_KEYS.appOrigin,
+      ]);
+      if (
+        previousLink[STORAGE_KEYS.token] !== token ||
+        previousLink[STORAGE_KEYS.appOrigin] !== appOrigin
+      ) {
+        // Checkout-context consent belongs to one link and one instance.
+        await clearCheckoutContextGrant();
+      }
       await extensionApi.storage.local.set({
         [STORAGE_KEYS.token]: token,
         [STORAGE_KEYS.appOrigin]: appOrigin,
@@ -2339,14 +2573,15 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const preferredDomain = String(
         message?.payload?.preferredDomain || "",
       ).trim();
-      const results = await syncAndPersistPreferredOrAllDomains(
-        preferredDomain,
-        {
-          bypassAutoRecoveryCooldown: true,
-          preferOpenTab: true,
-          allowAccountSwitch: true,
-        },
-      );
+      if (message?.payload?.includeCheckoutContext === true && ![1, 2].includes(message?.payload?.checkoutContextConsent)) {
+        sendResponse({ ok: false, error: "Explicit checkout context consent is required." });
+        return;
+      }
+      const results = message?.payload?.includeCheckoutContext === true
+        ? [await performDomainSync(preferredDomain, { includeCheckoutContext: true, checkoutContextConsent: message.payload.checkoutContextConsent })]
+        : await syncAndPersistPreferredOrAllDomains(preferredDomain, {
+            bypassAutoRecoveryCooldown: true, preferOpenTab: true, allowAccountSwitch: true,
+          });
       const config = await getConfig();
       const successful = results.some(isCompletedSyncResult);
       const failedResult = results.find((result) => !result.ok);
@@ -2359,6 +2594,24 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
             "Open a logged-in Vinted tab, then sync again.",
         results,
       });
+      return;
+    }
+
+    if (message?.type === "VINTRACK_EXTENSION_REVOKE_CHECKOUT_CONTEXT") {
+      const currentConfig = await getConfig();
+      const configuredOrigin = allowedAppOrigin(
+        currentConfig[STORAGE_KEYS.appOrigin],
+      );
+      if (
+        !isExtensionPageSender(sender) &&
+        !isAllowedAppSender(sender, configuredOrigin)
+      ) {
+        sendResponse({ ok: false, error: "Unauthorized extension sender" });
+        return;
+      }
+      await clearCheckoutContextGrant();
+      const config = await getConfig();
+      sendResponse({ ok: true, ...formatRuntimeState(config) });
       return;
     }
 

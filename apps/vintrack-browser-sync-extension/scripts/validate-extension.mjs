@@ -260,10 +260,36 @@ for (const messageType of [
   "VINTRACK_EXTENSION_MANUAL_SYNC",
   "VINTRACK_EXTENSION_BUY",
   "VINTRACK_EXTENSION_SET_THEME",
+  "VINTRACK_EXTENSION_REVOKE_CHECKOUT_CONTEXT",
 ]) {
   assert.ok(
     background.includes(messageType),
     `${messageType} handler is missing`,
+  );
+}
+assert.ok(
+  contentScript.includes('"VINTRACK_EXTENSION_REVOKE_CHECKOUT_CONTEXT"'),
+  "The dashboard must be able to turn background checkout-context sync off",
+);
+const backgroundContextSource = background.slice(
+  background.indexOf("async function findOpenCheckoutContextTab("),
+  background.indexOf("async function collectCheckoutContext("),
+);
+assert.ok(
+  backgroundContextSource.includes("VINTRACK_TAB_PING"),
+  "Background checkout-context sync must reuse an already open Vinted tab",
+);
+for (const forbidden of [
+  "tabs.create",
+  "tabs.update",
+  "tabs.reload",
+  "tabs.remove",
+  "windows.",
+  "ensureVintedBuyTab",
+]) {
+  assert.ok(
+    !backgroundContextSource.includes(forbidden),
+    `Background checkout-context sync must never call ${forbidden}`,
   );
 }
 assert.ok(
