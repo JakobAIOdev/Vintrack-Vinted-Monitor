@@ -1,6 +1,7 @@
 "use client";
 
 import { OwnProxyUsageSummary } from "@/components/monitors/own-proxy-usage";
+import { FirstAlertStarCard } from "@/components/monitors/first-alert-star-card";
 
 import {
     useState,
@@ -296,6 +297,7 @@ export function DashboardClient({
     memberBrandLabels,
     freePoolUsage,
     ownProxyActiveLimit,
+    firstAlertStarEnabled,
 }: {
     initialMonitors: Monitor[];
     userName: string;
@@ -309,6 +311,7 @@ export function DashboardClient({
     memberBrandLabels: Record<string, string>;
     freePoolUsage: FreePoolUsageSummary | null;
     ownProxyActiveLimit: number | null;
+    firstAlertStarEnabled: boolean;
 }) {
     const { maintenance } = useMonitorMaintenance();
     const maintenanceEnabled = maintenance.enabled;
@@ -1326,6 +1329,8 @@ export function DashboardClient({
                     </Button>
                 </div>
             </div>
+
+            {firstAlertStarEnabled && <FirstAlertStarCard />}
 
             <div
                 className="border-border/70 bg-card flex flex-wrap items-center gap-x-6 gap-y-3 rounded-xl border px-4 py-3 shadow-sm"

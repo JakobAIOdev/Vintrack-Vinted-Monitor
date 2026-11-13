@@ -33,6 +33,23 @@ monitors (`created_at DESC, id DESC`). Monitor settings and notification targets
 are retained. Dashboard links, status notifications, and audit events identify
 the affected monitors.
 
+### First-alert encouragement
+
+After the first successfully delivered item-match alert, eligible members can
+see a small, dismissible card in the monitor dashboard showing their current
+Free Pool allowance and the configured allowance after a star. It appears at
+most once per account, across devices, and does not interrupt monitoring.
+Opening GitHub or dismissing the card removes it; changing the rewards policy
+does not make it reappear.
+
+The card requires a linked, verified GitHub identity and a fresh check confirming
+that the member has not starred the repository. Unknown or disconnected GitHub
+accounts, existing stargazers, donors, exempt roles, and members with an admin
+override do not receive it. Members already at their Free Pool limit continue
+to use the existing limit prompt. GitHub verification failures suppress the
+card. The upgrade migration marks existing delivered alerts as already handled
+so active members do not receive a retrospective first-alert celebration.
+
 ## Login and safe account linking
 
 Set both `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` to enable GitHub. The callback

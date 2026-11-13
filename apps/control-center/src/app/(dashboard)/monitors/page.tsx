@@ -252,6 +252,12 @@ export default async function MonitorsPage() {
           }
         : null;
 
+    const showRewardAnnouncement = Boolean(
+        githubRewards.policy.announcementEnabled &&
+            !githubRewards.prompt &&
+            !announcementRecord?.shown_at,
+    );
+
     return (
         <div className="space-y-5">
             {ownPaused.length > 0 && (
@@ -270,14 +276,13 @@ export default async function MonitorsPage() {
                 showPrompt={Boolean(
                     githubRewards.prompt && !promptRecord?.shown_at,
                 )}
-                showAnnouncement={Boolean(
-                    githubRewards.policy.announcementEnabled &&
-                    !githubRewards.prompt &&
-                    !announcementRecord?.shown_at,
-                )}
+                showAnnouncement={showRewardAnnouncement}
                 pausedMonitors={pausedMonitors}
             />
             <DashboardClient
+                firstAlertStarEnabled={
+                    !githubRewards.prompt && !showRewardAnnouncement
+                }
                 ownProxyActiveLimit={effectiveMonitorLimits.ownProxyActiveLimit}
                 initialMonitors={monitors}
                 userName={session.user.name || "User"}
