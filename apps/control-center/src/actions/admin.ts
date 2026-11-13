@@ -77,6 +77,7 @@ import {
 } from "@/lib/runtime-policies";
 import { summarizeProxyRegions } from "@/lib/proxy-region-summary";
 import { parseFreeProxyCanarySnapshot } from "@/lib/free-proxy-readiness";
+import { changeMemberBan } from "@/lib/member-ban.server";
 
 const SERVER_PROXIES_SETTING_KEY = "server_proxies";
 const PRICE_WATCH_INTERVAL_SETTING_KEY = "price_watch_interval_seconds";
@@ -561,6 +562,12 @@ type AdminActiveMemberRow = {
     running_monitors: bigint;
 };
 
+type AdminRegionDistributionRow = {
+    region: string | null;
+    running_monitors: bigint;
+    running_members: bigint;
+};
+
 type AdminCapacityMemberRow = AdminActiveMemberRow & {
     active_limit: number | bigint;
     limit_source: "user" | "role" | "global";
@@ -758,6 +765,7 @@ async function loadAdminOverviewState() {
         capacityMemberRows,
         proxyRegions,
         memberSnapshot,
+        regionRows,
     ] = await Promise.all([
         db.$queryRaw<AdminOverviewSummaryRow[]>`
             WITH user_totals AS (
@@ -877,8 +885,19 @@ async function loadAdminOverviewState() {
         `,
         loadAdminProxyRegionSummary(),
         getCachedAdminMemberOverviewSnapshot(),
+        // GROUPING SETS keeps the overall member count distinct across markets.
+        db.$queryRaw<AdminRegionDistributionRow[]>`
+            SELECT
+                region,
+                COUNT(*)::bigint AS running_monitors,
+                COUNT(DISTINCT "userId")::bigint AS running_members
+            FROM monitors
+            WHERE status = 'active'
+            GROUP BY GROUPING SETS ((region), ())
+        `,
     ]);
     const summary = summaryRows[0];
+    const regionTotals = regionRows.find((row) => row.region === null);
     const checks = Number(summary?.checks_24h ?? 0);
     const successful = Number(summary?.successful_checks_24h ?? 0);
     return {
@@ -922,6 +941,17 @@ async function loadAdminOverviewState() {
         },
         memberSnapshot,
         proxyRegions,
+        regionDistribution: {
+            runningMonitors: Number(regionTotals?.running_monitors ?? 0),
+            runningMembers: Number(regionTotals?.running_members ?? 0),
+            regions: regionRows
+                .filter((row) => row.region !== null)
+                .map((row) => ({
+                    region: row.region!,
+                    runningMonitors: Number(row.running_monitors),
+                    runningMembers: Number(row.running_members),
+                })),
+        },
         topMembers: topMemberRows.map((row) => ({
             userId: row.user_id,
             name: row.name,
@@ -3302,6 +3332,7 @@ export async function getUsers() {
             email: true,
             image: true,
             role: true,
+            banned_at: true,
             _count: {
                 select: {
                     monitors: true,
@@ -3370,6 +3401,7 @@ export async function getAdminUsersPage(input?: {
                 email: true,
                 image: true,
                 role: true,
+                banned_at: true,
                 _count: {
                     select: {
                         monitors: true,
@@ -3456,6 +3488,7 @@ export async function getAdminUsersState() {
                 email: true,
                 image: true,
                 role: true,
+                banned_at: true,
                 _count: {
                     select: {
                         monitors: true,
@@ -3558,6 +3591,7 @@ export async function getAdminActiveMonitors() {
                     name: true,
                     email: true,
                     role: true,
+                    banned_at: true,
                     image: true,
                     _count: {
                         select: {
@@ -3584,6 +3618,7 @@ export async function getAdminUserDetails(userId: string) {
             where: { id: userId },
             select: {
                 id: true,
+                banned_at: true,
                 monitors: {
                     orderBy: [{ status: "asc" }, { created_at: "desc" }],
                     select: {
@@ -3619,6 +3654,7 @@ export async function getAdminUserDetails(userId: string) {
     return {
         // The webhook URL is a credential; the admin view only needs to know
         // whether one is configured.
+        banned_at: user.banned_at,
         monitors: user.monitors.map(({ discord_webhook, ...monitor }) => ({
             ...monitor,
             discord_configured: Boolean(discord_webhook),
@@ -3671,6 +3707,14 @@ export async function setUserRole(userId: string, role: string) {
             ...ownPaused.map((monitor) => monitor.id),
         ],
     };
+}
+
+export async function setMemberBanned(userId: string, banned: boolean) {
+    const adminUserId = await requireAdmin();
+    const result = await changeMemberBan(adminUserId, userId, banned);
+    revalidatePath("/admin", "layout");
+    revalidatePath("/dashboard");
+    return result;
 }
 
 export async function setGlobalOwnProxyMonitorLimit(value: string) {

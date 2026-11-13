@@ -46,6 +46,12 @@ type FeatureAccess struct {
 	Dependency string
 }
 
+func (s *persistentStore) UserAllowed(ctx context.Context, userID string) (bool, error) {
+	var allowed bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM "User" WHERE id = $1 AND banned_at IS NULL)`, userID).Scan(&allowed)
+	return allowed, err
+}
+
 // Keep this version in sync with control-center's CHECKOUT_RISK_WARNING_VERSION.
 const checkoutRiskWarningVersion = 1
 
@@ -66,7 +72,7 @@ func (s *persistentStore) FeatureAccess(ctx context.Context, userID string, feat
 		       policy.premium_enabled, policy.admin_enabled, member.checkout_enabled
 		FROM "User" member
 		INNER JOIN feature_policies policy ON policy.feature = $2
-		WHERE member.id = $1`, userID, feature,
+		WHERE member.id = $1 AND member.banned_at IS NULL`, userID, feature,
 	).Scan(&role, &enabled, &freeEnabled, &premiumEnabled, &adminEnabled, &checkoutEnabled)
 	if err == sql.ErrNoRows {
 		return FeatureAccess{Reason: "role_denied"}, nil
@@ -216,7 +222,7 @@ func (s *persistentStore) Get(ctx context.Context, userID string) (*VintedSessio
 }
 
 func (s *persistentStore) List(ctx context.Context) ([]VintedSession, error) {
-	rows, err := s.db.QueryContext(ctx, persistentSessionSelectSQL()+` ORDER BY updated_at DESC`)
+	rows, err := s.db.QueryContext(ctx, persistentSessionSelectSQL()+` WHERE EXISTS (SELECT 1 FROM "User" member WHERE member.id = user_id AND member.banned_at IS NULL) ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list durable sessions: %w", err)
 	}

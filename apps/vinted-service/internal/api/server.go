@@ -170,6 +170,17 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 		// No CORS headers: only the control center calls this service, server
 		// to server. X-User-ID is its sole identity check, so a browser page
 		// must never be able to send it cross-origin.
+		if userID := getUserID(r); userID != "" {
+			allowed, err := s.sessions.UserAllowed(userID)
+			if err != nil {
+				writeError(w, "member access unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if !allowed {
+				writeError(w, "member access denied", http.StatusForbidden)
+				return
+			}
+		}
 		if feature := featureForPath(r.URL.Path); feature != "" {
 			if userID := getUserID(r); userID != "" {
 				if !s.requireFeature(w, userID, feature) {

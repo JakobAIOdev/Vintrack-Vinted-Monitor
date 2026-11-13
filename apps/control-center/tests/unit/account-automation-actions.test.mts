@@ -52,6 +52,12 @@ function harness({
                 anonymous ? null : { user: { id: "synthetic-member" } },
         },
         "@/lib/db": { db },
+        "@/lib/monitor-limits": {
+            withMonitorActivationLock: async (
+                _: string,
+                fn: (tx: unknown) => Promise<unknown>,
+            ) => db.$transaction(fn),
+        },
         "@/lib/features.server": {
             getFeatureAccessForUser: async (_: string, userId: string) => {
                 assert.equal(userId, "synthetic-member");

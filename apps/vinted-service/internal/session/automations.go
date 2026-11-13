@@ -47,6 +47,7 @@ func (m *Manager) AutomationCandidates(ctx context.Context) ([]AutomationCandida
                COALESCE(i.seller_login,''), COALESCE(i.url,''), m.name, m.region, i.found_at
         FROM monitor_account_automations a
         JOIN monitors m ON m.id = a.monitor_id
+        JOIN "User" member ON member.id = m."userId" AND member.banned_at IS NULL
         JOIN items i ON i.monitor_id = m.id
         JOIN monitor_item_detections d ON d.monitor_id = m.id AND d.item_id = i.id
         JOIN vinted_sessions s ON s.user_id = m."userId" AND s.vinted_user_id = a.account_id AND s.domain = a.domain
@@ -101,6 +102,7 @@ func (m *Manager) ClaimAutomation(ctx context.Context, c AutomationCandidate) (i
 	err = tx.QueryRowContext(ctx, `
         SELECT a.revision FROM monitor_account_automations a
         JOIN monitors m ON m.id = a.monitor_id
+        JOIN "User" member ON member.id = m."userId" AND member.banned_at IS NULL
         JOIN vinted_sessions s ON s.user_id = m."userId"
         WHERE a.monitor_id = $1 AND a.kind = $2 AND a.enabled AND a.revision = $3
           AND a.account_id = $4 AND a.domain = $5 AND m."userId" = $6 AND m.status = 'active'
@@ -157,6 +159,7 @@ func (m *Manager) AutomationStillEnabled(ctx context.Context, c AutomationCandid
 	err := m.store.db.QueryRowContext(ctx, `SELECT EXISTS (
 		SELECT 1 FROM monitor_account_automations a
 		JOIN monitors m ON m.id = a.monitor_id
+        JOIN "User" member ON member.id = m."userId" AND member.banned_at IS NULL
 		JOIN vinted_sessions s ON s.user_id = m."userId"
 		WHERE a.monitor_id = $1 AND a.kind = $2 AND a.revision = $3 AND a.enabled
 		  AND m.status = 'active' AND m."userId" = $4

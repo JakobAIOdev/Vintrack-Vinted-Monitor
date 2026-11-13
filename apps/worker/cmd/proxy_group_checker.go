@@ -96,6 +96,8 @@ func runProxyGroupCheck(
 	store *database.Store,
 	job database.ProxyGroupCheckJob,
 ) (proxyGroupCheckSummary, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	manager := proxy.FromString(job.Proxies)
 	total := min(manager.Count(), job.Total, proxyGroupCheckMaximumSize)
 	if total < 1 {
@@ -110,6 +112,13 @@ func runProxyGroupCheck(
 		go func() {
 			defer workers.Done()
 			for candidate := range candidates {
+				accessCtx, cancelAccess := context.WithTimeout(ctx, 2*time.Second)
+				allowed, err := store.ProxyGroupCheckAllowed(accessCtx, job.ID)
+				cancelAccess()
+				if err != nil || !allowed {
+					cancel()
+					return
+				}
 				validationCtx, cancelValidation := context.WithTimeout(ctx, 8*time.Second)
 				validation, err := scraper.ValidateFreeProxy(
 					validationCtx,

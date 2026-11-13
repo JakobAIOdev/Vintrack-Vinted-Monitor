@@ -224,6 +224,12 @@ Manage subsequent members through **Admin → Members**. Do not promote every
 user or use the development authentication bypass to obtain admin access on a
 public instance.
 
+To revoke a member's access, open their details under **Admin → Members** and
+choose **Ban member**. This revokes their sessions and extension access, pauses
+their monitors and Price Watches, disables account automations, and cancels
+queued alerts. **Unban member** restores sign-in access without restarting
+those jobs. Admin accounts must have their role changed before they can be banned.
+
 ### 6. Add proxies and create your first monitor
 
 For a predictable first test, open **Proxies**, create a personal proxy group,
@@ -258,8 +264,13 @@ is not guaranteed to be ready on a fresh installation. See
 ### 7. Enable alerts and optional account linking
 
 For Discord alerts, create a webhook in a server/channel you manage and paste
-its URL into the monitor's notification dialog. Discord login credentials and
-Discord alert webhooks serve different purposes.
+its URL into the monitor's notification dialog. Vintrack remembers saved webhooks
+for your account, so you can select them when creating or editing monitors and
+Price Watches. Existing destinations are imported automatically on upgrade.
+The list shows the name of the first monitor or Price Watch that used each
+webhook and its Discord webhook ID. Deleting a monitor does not remove its saved
+webhook. Discord login credentials and Discord alert webhooks serve different
+purposes.
 
 For Telegram, first complete the operator's [bot and webhook setup](configuration.md#telegram),
 then use **Connect Telegram** in the dashboard. Select `Rich` or `Compact`

@@ -135,6 +135,9 @@ func TestDurableCheckoutClaimsAndRecoveryAgainstPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Exec(`DROP TABLE "User", feature_policies`)
+	if _, err := db.Exec(`ALTER TABLE "User" ADD COLUMN banned_at TIMESTAMP`); err != nil {
+		t.Fatal(err)
+	}
 	preferences := []byte(`{"shipping":"home","payment":"card","autoCheckout":{"warningVersion":2,"currency":"EUR","maxTotalMinor":3000}}`)
 	if allowed, err := m.CheckoutPaymentAuthorized(sess, preferences, "server"); err != nil || !allowed {
 		t.Fatal("matching saved consent was not authorized")

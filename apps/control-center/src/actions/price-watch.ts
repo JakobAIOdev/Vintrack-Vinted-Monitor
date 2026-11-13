@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
+import { rememberDiscordWebhook } from "@/lib/discord-webhooks.server";
 import { getFeatureAccessForUser } from "@/lib/features.server";
 import { getEffectivePriceWatchLimit } from "@/lib/monitor-limits";
 import { parsePriceWatchUrl } from "@/lib/price-watch";
@@ -205,6 +206,12 @@ export async function createPriceWatch(
                         claim_token: null,
                     },
                 });
+                await rememberDiscordWebhook(
+                    tx,
+                    userId,
+                    settings.value.discord_webhook,
+                    `Price Watch ${parsed.value.itemId}`,
+                );
                 return saved;
             },
             {
@@ -269,6 +276,12 @@ export async function updatePriceWatch(
                     ...(transportChanged ? { armed_at: null } : {}),
                 },
             });
+            await rememberDiscordWebhook(
+                tx,
+                userId,
+                settings.value.discord_webhook,
+                "Price Watch",
+            );
             await tx.price_watch_schedules.update({
                 where: { id: schedule.id },
                 data: { next_check_at: new Date() },

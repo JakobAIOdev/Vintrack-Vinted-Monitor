@@ -1,0 +1,1 @@
+ALTER TABLE "User" ADD COLUMN "banned_at" TIMESTAMP(6);

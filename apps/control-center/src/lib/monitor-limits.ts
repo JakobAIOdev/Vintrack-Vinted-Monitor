@@ -518,6 +518,7 @@ export function monitorActivationBlock(
 export async function withMonitorActivationLock<T>(
     userId: string,
     operation: (tx: Prisma.TransactionClient) => Promise<T>,
+    options: { allowBanned?: boolean } = {},
 ) {
     return db.$transaction(async (tx) => {
         await acquireGlobalMonitorActivationLock(tx);
@@ -526,6 +527,13 @@ export async function withMonitorActivationLock<T>(
                 hashtextextended(${userId}, 0)
             )::text AS lock_result
         `;
+        const user = await tx.user.findUnique({
+            where: { id: userId },
+            select: { banned_at: true },
+        });
+        if (!user || (user.banned_at && !options.allowBanned)) {
+            throw new Error("Member access denied");
+        }
         return operation(tx);
     });
 }

@@ -50,6 +50,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { SavedDiscordWebhookSelect } from "@/components/monitors/saved-discord-webhook-select";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -315,7 +316,7 @@ function SettingsFields({
                     <div>
                         <Label htmlFor={`${idPrefix}-discord`}>Discord</Label>
                         <p className="text-muted-foreground mt-1 text-xs">
-                            Use a webhook dedicated to this item.
+                            Choose a saved webhook or enter a new URL.
                         </p>
                     </div>
                     <Switch
@@ -327,6 +328,17 @@ function SettingsFields({
                         aria-label="Enable Discord"
                     />
                 </div>
+                <SavedDiscordWebhookSelect
+                    value={value.discordWebhook}
+                    onChange={(url) =>
+                        onChange({
+                            ...value,
+                            discordWebhook: url,
+                            webhookActive: value.webhookActive || Boolean(url),
+                        })
+                    }
+                    disabled={!value.notificationsEnabled}
+                />
                 <Input
                     id={`${idPrefix}-discord`}
                     value={value.discordWebhook}

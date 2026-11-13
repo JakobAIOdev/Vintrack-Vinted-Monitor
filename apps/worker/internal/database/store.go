@@ -162,11 +162,12 @@ func (s *Store) ClaimProxyGroupCheckJobContext(ctx context.Context, maximumSize 
 		WITH candidate AS (
 			SELECT id
 			FROM proxy_groups
-			WHERE proxy_check_status = 'pending'
+			WHERE (proxy_check_status = 'pending'
 			   OR (
 				proxy_check_status = 'running'
 				AND proxy_check_started_at < NOW() - INTERVAL '3 minutes'
-			   )
+			   ))
+			  AND EXISTS (SELECT 1 FROM "User" member WHERE member.id = proxy_groups."userId" AND member.banned_at IS NULL)
 			ORDER BY
 				CASE WHEN proxy_check_status = 'pending' THEN 0 ELSE 1 END,
 				proxy_check_requested_at ASC NULLS FIRST
@@ -231,6 +232,15 @@ func (s *Store) UpdateProxyGroupCheckProgressContext(
 		failed,
 	)
 	return err
+}
+
+func (s *Store) ProxyGroupCheckAllowed(ctx context.Context, id int) (bool, error) {
+	var allowed bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM proxy_groups pg JOIN "User" member ON member.id = pg."userId"
+		WHERE pg.id = $1 AND pg.proxy_check_status = 'running' AND member.banned_at IS NULL
+	)`, id).Scan(&allowed)
+	return allowed, err
 }
 
 func (s *Store) CompleteProxyGroupCheckJobContext(
@@ -3013,7 +3023,7 @@ func (s *Store) GetActiveMonitors() ([]model.Monitor, error) {
 		JOIN "User" u ON u.id = m."userId"
 		LEFT JOIN proxy_groups pg ON m.proxy_group_id = pg.id
 		LEFT JOIN telegram_connections tc ON tc."userId" = m."userId"
-		WHERE m.status = 'active'`)
+		WHERE m.status = 'active' AND u.banned_at IS NULL`)
 	if err != nil {
 		return nil, err
 	}
@@ -3042,7 +3052,7 @@ func (s *Store) GetMonitorByID(id int) (model.Monitor, error) {
 		JOIN "User" u ON u.id = m."userId"
 		LEFT JOIN proxy_groups pg ON m.proxy_group_id = pg.id
 		LEFT JOIN telegram_connections tc ON tc."userId" = m."userId"
-		WHERE m.id = $1`, id,
+		WHERE m.id = $1 AND u.banned_at IS NULL`, id,
 	).Scan(&m.ID, &m.UserID, &m.Name, &m.Query, &m.TitleOnly, &m.AntiKeywords, &m.QueryDelayMs, &m.QuietHoursEnabled, &m.QuietHoursStartMinute, &m.QuietHoursEndMinute, &m.QuietHoursMode, &m.QuietHoursDelayMs, &m.QuietHoursTimezone, &m.PriceMin, &m.PriceMax, &m.SizeID, &m.CatalogIDs, &m.BrandIDs, &m.ColorIDs, &m.StatusIDs, &m.VideoGamePlatformIDs, &m.VintedExtraParams, &m.Region, &m.AllowedCountries, &m.MinSellerRating, &m.MinSellerRatingCount, &m.Status, &m.DiscordWebhook, &m.WebhookActive, &m.TelegramChatID, &m.TelegramActive, &m.NotificationsEnabled, &m.DedupeMonitorAlerts, &m.TelegramMessageStyle, &m.DiscordMessageStyle, &m.ProxyGroupID, &m.ProxySource, &m.ProxyGroupName, &m.ProxyGroupLimitBytes, &m.ProxyGroupRxBytes, &m.ProxyGroupTxBytes, &m.ProxyGroupResetAt, &m.Proxies)
 	if err != nil {
 		return model.Monitor{}, err

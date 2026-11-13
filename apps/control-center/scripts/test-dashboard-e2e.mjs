@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 
 const testFiles = [
     "dashboard.spec.ts",
+    "discord-webhooks.spec.ts",
     "proxy-validation.spec.ts",
     "account-updates.spec.ts",
     "account-automations.spec.ts",
@@ -10,6 +11,7 @@ const testFiles = [
     "control-center-ux.spec.ts",
     "feed.spec.ts",
     "admin.spec.ts",
+    "member-bans.spec.ts",
     "announcement.spec.ts",
     "maintenance.spec.ts",
     "inactive-member-policy.spec.ts",

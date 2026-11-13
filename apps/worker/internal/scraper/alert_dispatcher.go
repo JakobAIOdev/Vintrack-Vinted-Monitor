@@ -135,6 +135,14 @@ func (e *Engine) runAlertMaintenance(interval time.Duration, label string, run f
 }
 
 func (e *Engine) processAlertDelivery(ctx context.Context, delivery model.AlertDelivery) error {
+	allowed, accessErr := e.db.AlertDeliveryAllowed(ctx, delivery)
+	if accessErr != nil {
+		return accessErr
+	}
+	if !allowed {
+		_, err := e.db.CancelAlertDelivery(ctx, delivery, "member_access_denied", "delivery claim or member access revoked")
+		return err
+	}
 	if !delivery.NotificationsEnabled || !delivery.ChannelEnabled {
 		_, err := e.db.CancelAlertDelivery(ctx, delivery, "notifications_disabled", "notification target is disabled")
 		return err

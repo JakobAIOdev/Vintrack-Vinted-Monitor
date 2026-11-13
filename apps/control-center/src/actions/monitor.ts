@@ -1,6 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
+import { rememberDiscordWebhook } from "@/lib/discord-webhooks.server";
 import { getFeatureAccessForUser } from "@/lib/features.server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -305,6 +306,8 @@ export async function createMonitor(
                 webhook_active: urlToSave ? true : false,
             },
         });
+
+        await rememberDiscordWebhook(tx, userId, urlToSave, normalizedName);
 
         await tx.user.update({
             where: { id: userId },
@@ -949,6 +952,7 @@ export async function updateMonitor(id: number, formData: FormData) {
                         : {}),
                 },
             });
+            await rememberDiscordWebhook(tx, userId, urlToSave, normalizedName);
             return pauseForOwnProxyLimit
                 ? "own-proxy-limit"
                 : pauseForFreeProxyLimit
@@ -1162,6 +1166,7 @@ export async function updateMonitorAndReturn(
                     : {}),
             },
         });
+        await rememberDiscordWebhook(tx, userId, urlToSave, normalizedName);
         if (rewardNotice) {
             await registerRewardPromptReached(
                 userId,

@@ -1,5 +1,7 @@
 "use client";
 
+import { AdminScrollArea } from "@/components/admin/admin-scroll-area";
+
 import { useState } from "react";
 import { Bell, RefreshCw, Send, Shield } from "lucide-react";
 import { toast } from "sonner";
@@ -400,9 +402,12 @@ export function CheckoutNotificationsAdminPanel({
                     selection and cannot add previously excluded details.
                 </p>
                 {state.recent.length ? (
-                    <div className="overflow-x-auto">
+                    <AdminScrollArea
+                        aria-label="Checkout delivery history"
+                        className="overflow-x-auto"
+                    >
                         <table className="w-full text-left text-xs">
-                            <thead className="text-muted-foreground">
+                            <thead className="text-muted-foreground bg-card sticky top-0 z-10">
                                 <tr>
                                     <th className="p-2">Time</th>
                                     <th className="p-2">Method / outcome</th>
@@ -443,7 +448,7 @@ export function CheckoutNotificationsAdminPanel({
                                 ))}
                             </tbody>
                         </table>
-                    </div>
+                    </AdminScrollArea>
                 ) : (
                     <p className="text-muted-foreground text-sm">
                         No checkout notifications yet.

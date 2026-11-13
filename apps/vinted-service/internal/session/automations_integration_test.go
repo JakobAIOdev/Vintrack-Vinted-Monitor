@@ -40,7 +40,7 @@ func automationTestManager(t *testing.T) *Manager {
 	}
 	t.Cleanup(func() { db.Close() })
 	fixture := `
- CREATE TABLE "User" (id TEXT PRIMARY KEY, role TEXT DEFAULT 'admin', checkout_enabled BOOLEAN DEFAULT false);
+ CREATE TABLE "User" (id TEXT PRIMARY KEY, role TEXT DEFAULT 'admin', banned_at TIMESTAMP, checkout_enabled BOOLEAN DEFAULT false);
  CREATE TABLE feature_policies(feature TEXT PRIMARY KEY, enabled BOOLEAN, free_enabled BOOLEAN, premium_enabled BOOLEAN, admin_enabled BOOLEAN, revision INTEGER, updated_at TIMESTAMP);
  CREATE TABLE monitors (id INTEGER PRIMARY KEY, "userId" TEXT, name TEXT, region TEXT, status TEXT);
  CREATE TABLE items (id BIGINT, monitor_id INTEGER, title TEXT, price TEXT, seller_id BIGINT, seller_login TEXT, url TEXT, found_at TIMESTAMP, PRIMARY KEY(id,monitor_id));
@@ -303,5 +303,35 @@ func TestThrottledAccountDoesNotCrowdOutOtherMembers(t *testing.T) {
 	candidates, err := m.AutomationCandidates(context.Background())
 	if err != nil || len(candidates) != 1 || candidates[0].UserID != "other-member" {
 		t.Fatalf("candidates=%+v err=%v", candidates, err)
+	}
+}
+
+func TestBannedMemberCannotClaimAutomation(t *testing.T) {
+	m := automationTestManager(t)
+	candidates, err := m.AutomationCandidates(m.ctx)
+	if err != nil || len(candidates) == 0 {
+		t.Fatalf("candidates: %v, %v", candidates, err)
+	}
+	if _, err := m.store.db.Exec(`UPDATE "User" SET banned_at = NOW() WHERE id = 'synthetic-member'`); err != nil {
+		t.Fatal(err)
+	}
+	allowed, err := m.UserAllowed("synthetic-member")
+	if err != nil || allowed {
+		t.Fatalf("banned member allowed: %v, %v", allowed, err)
+	}
+	remaining, err := m.AutomationCandidates(m.ctx)
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("banned candidates: %v, %v", remaining, err)
+	}
+	id, err := m.ClaimAutomation(m.ctx, candidates[0])
+	if err != nil || id != 0 {
+		t.Fatalf("claimed stale candidate: %v, %v", id, err)
+	}
+	if _, err := m.store.db.Exec(`UPDATE "User" SET banned_at = NULL WHERE id = 'synthetic-member'`); err != nil {
+		t.Fatal(err)
+	}
+	allowed, err = m.UserAllowed("synthetic-member")
+	if err != nil || !allowed {
+		t.Fatalf("unbanned member denied: %v, %v", allowed, err)
 	}
 }

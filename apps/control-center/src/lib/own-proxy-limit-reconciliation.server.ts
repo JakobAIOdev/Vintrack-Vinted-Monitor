@@ -9,53 +9,62 @@ export async function reconcileUserOwnProxyMonitorLimit(
     scope: string,
     actorUserId: string | null,
 ) {
-    return withMonitorActivationLock(userId, async (tx) => {
-        const activeCount = await tx.monitors.count({
-            where: { userId, status: "active", proxy_source: "group" },
-        });
-        if (activeCount === 0) return [];
-        const { ownProxyActiveLimit } = await getEffectiveMonitorLimits(
-            userId,
-            tx,
-        );
-        if (ownProxyActiveLimit === null || activeCount <= ownProxyActiveLimit)
-            return [];
-        // Keep the oldest monitors; unknown creation dates sort after known dates.
-        const excess = await tx.monitors.findMany({
-            where: { userId, status: "active", proxy_source: "group" },
-            orderBy: [
-                { created_at: { sort: "asc", nulls: "last" } },
-                { id: "asc" },
-            ],
-            skip: ownProxyActiveLimit,
-            select: { id: true, name: true },
-        });
-        await tx.monitors.updateMany({
-            where: {
-                id: { in: excess.map((monitor) => monitor.id) },
-                status: "active",
-            },
-            data: { status: "paused" },
-        });
-        // Audit and status changes commit together so retries cannot lose the explanation.
-        await tx.audit_events.create({
-            data: {
-                userId: actorUserId,
-                action: "member.own_proxy_limit_reconciled",
-                target_type: "user",
-                target_id: userId,
-                status: "success",
-                metadata: {
-                    scope,
-                    previousActiveCount: activeCount,
-                    newLimit: ownProxyActiveLimit,
-                    pausedMonitorIds: excess.map((monitor) => monitor.id),
-                    pausedMonitorNames: excess.map((monitor) => monitor.name),
+    return withMonitorActivationLock(
+        userId,
+        async (tx) => {
+            const activeCount = await tx.monitors.count({
+                where: { userId, status: "active", proxy_source: "group" },
+            });
+            if (activeCount === 0) return [];
+            const { ownProxyActiveLimit } = await getEffectiveMonitorLimits(
+                userId,
+                tx,
+            );
+            if (
+                ownProxyActiveLimit === null ||
+                activeCount <= ownProxyActiveLimit
+            )
+                return [];
+            // Keep the oldest monitors; unknown creation dates sort after known dates.
+            const excess = await tx.monitors.findMany({
+                where: { userId, status: "active", proxy_source: "group" },
+                orderBy: [
+                    { created_at: { sort: "asc", nulls: "last" } },
+                    { id: "asc" },
+                ],
+                skip: ownProxyActiveLimit,
+                select: { id: true, name: true },
+            });
+            await tx.monitors.updateMany({
+                where: {
+                    id: { in: excess.map((monitor) => monitor.id) },
+                    status: "active",
                 },
-            },
-        });
-        return excess;
-    });
+                data: { status: "paused" },
+            });
+            // Audit and status changes commit together so retries cannot lose the explanation.
+            await tx.audit_events.create({
+                data: {
+                    userId: actorUserId,
+                    action: "member.own_proxy_limit_reconciled",
+                    target_type: "user",
+                    target_id: userId,
+                    status: "success",
+                    metadata: {
+                        scope,
+                        previousActiveCount: activeCount,
+                        newLimit: ownProxyActiveLimit,
+                        pausedMonitorIds: excess.map((monitor) => monitor.id),
+                        pausedMonitorNames: excess.map(
+                            (monitor) => monitor.name,
+                        ),
+                    },
+                },
+            });
+            return excess;
+        },
+        { allowBanned: true },
+    );
 }
 
 export async function reconcileAllOwnProxyMonitorLimits(actorUserId: string) {

@@ -97,6 +97,7 @@ func (s *Store) ClaimPriceWatchTargets(ctx context.Context, claimToken string, l
 			  AND EXISTS (
 				SELECT 1 FROM price_watches watch
 				WHERE watch.schedule_id = schedule.id AND watch.status = 'active'
+				  AND EXISTS (SELECT 1 FROM "User" member WHERE member.id = watch.user_id AND member.banned_at IS NULL)
 			  )
 			ORDER BY schedule.next_check_at, schedule.id
 			LIMIT $1
@@ -129,6 +130,7 @@ func (s *Store) ClaimPriceWatchTargets(ctx context.Context, claimToken string, l
 			SELECT MIN(watch.poll_interval_seconds)::int AS poll_interval_seconds
 			FROM price_watches watch
 			WHERE watch.schedule_id = claimed.id AND watch.status = 'active'
+				  AND EXISTS (SELECT 1 FROM "User" member WHERE member.id = watch.user_id AND member.banned_at IS NULL)
 		) intervals ON intervals.poll_interval_seconds IS NOT NULL
 		ORDER BY claimed.next_check_at, claimed.id`,
 		limit, claimToken, fmt.Sprintf("%d milliseconds", lease.Milliseconds()),
@@ -357,7 +359,7 @@ func loadPriceWatchSubscribersTx(ctx context.Context, tx *sql.Tx, scheduleID int
 		FROM price_watches watch
 		JOIN "User" member ON member.id = watch.user_id
 		LEFT JOIN telegram_connections connection ON connection."userId" = watch.user_id
-		WHERE watch.schedule_id = $1 AND watch.status = 'active'
+		WHERE watch.schedule_id = $1 AND watch.status = 'active' AND member.banned_at IS NULL
 		ORDER BY watch.id
 		FOR UPDATE OF watch`, scheduleID)
 	if err != nil {
