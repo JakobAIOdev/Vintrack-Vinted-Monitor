@@ -159,8 +159,7 @@ export function CheckoutNotificationsAdminPanel({
                                 setSettings((current) => ({
                                     ...current,
                                     events: event.target.value as
-                                        | "all"
-                                        | "confirmed",
+                                        "all" | "confirmed",
                                 }))
                             }
                         >
