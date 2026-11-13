@@ -1,5 +1,7 @@
 "use client";
 
+import { GuideHelpLink } from "@/components/guides/guide-help-link";
+
 import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -588,6 +590,7 @@ export function PriceWatchesClient({
                         Track individual Vinted prices with shared or personal
                         proxies.
                     </p>
+                    <GuideHelpLink href="/guide/monitors#price-watches">Price Watch guide</GuideHelpLink>
                 </div>
                 <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
                     {inactiveCount > 0 && (

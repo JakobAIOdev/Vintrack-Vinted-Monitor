@@ -535,13 +535,31 @@ export function GithubRewardsAdminPanel({
                             <div className="grid gap-3 sm:grid-cols-3">
                                 {(
                                     [
-                                        { label: "Default", key: "priceWatchDefaultLimit", icon: ShieldCheck },
-                                        { label: "GitHub Star", key: "priceWatchStarLimit", icon: Star },
-                                        { label: "Sponsor", key: "priceWatchDonationLimit", icon: Heart },
+                                        {
+                                            label: "Default",
+                                            key: "priceWatchDefaultLimit",
+                                            icon: ShieldCheck,
+                                        },
+                                        {
+                                            label: "GitHub Star",
+                                            key: "priceWatchStarLimit",
+                                            icon: Star,
+                                        },
+                                        {
+                                            label: "Sponsor",
+                                            key: "priceWatchDonationLimit",
+                                            icon: Heart,
+                                        },
                                     ] as const
                                 ).map(({ label, key, icon: Icon }) => (
-                                    <div key={key} className="bg-muted/20 rounded-lg p-3">
-                                        <Label htmlFor={`reward-${key}`} className="flex items-center gap-2 text-xs">
+                                    <div
+                                        key={key}
+                                        className="bg-muted/20 rounded-lg p-3"
+                                    >
+                                        <Label
+                                            htmlFor={`reward-${key}`}
+                                            className="flex items-center gap-2 text-xs"
+                                        >
                                             <Icon className="h-3.5 w-3.5" />
                                             {label}
                                         </Label>
@@ -550,12 +568,16 @@ export function GithubRewardsAdminPanel({
                                                 id={`reward-${key}`}
                                                 type="number"
                                                 min={0}
-                                                disabled={!policy.priceWatchRewardsEnabled}
+                                                disabled={
+                                                    !policy.priceWatchRewardsEnabled
+                                                }
                                                 value={policy[key]}
                                                 onChange={(event) =>
                                                     setPolicy((current) => ({
                                                         ...current,
-                                                        [key]: Number(event.target.value),
+                                                        [key]: Number(
+                                                            event.target.value,
+                                                        ),
                                                     }))
                                                 }
                                                 className="pr-16 font-semibold tabular-nums"

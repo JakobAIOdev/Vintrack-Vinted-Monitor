@@ -1,11 +1,14 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
+import { PUBLIC_GUIDE_PATHS } from "@/lib/guides";
 
 export const MARKETING_PAGES = [
     "/",
     "/vinted-alerts",
     "/vinted-price-tracker",
     "/self-hosted-vinted-monitor",
+    "/guides",
+    ...PUBLIC_GUIDE_PATHS,
 ] as const;
 
 const FALLBACK_ORIGIN = "http://localhost:3000";

@@ -25,6 +25,11 @@ automatic admin and separate data; it is not a public hosting configuration.
    independently for Discord and Telegram.
 7. Watch results in the monitor view, live feed, Discord, or Telegram.
 
+Open **Guide** in the app for detailed, task-based instructions covering
+monitors, notification channels, Price Watches, account linking, and common
+problems. The same instructions are available without signing in in the
+[public Vintrack guides](https://vintrack.jakobaio.dev/guides).
+
 The public demo is shared, best-effort infrastructure. Free proxy health,
 latency, and region availability change over time. Use a personal proxy group
 for dedicated capacity.

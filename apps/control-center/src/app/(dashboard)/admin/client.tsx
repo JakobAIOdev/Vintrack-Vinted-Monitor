@@ -3364,7 +3364,7 @@ export function AdminClient({
                                             type="button"
                                             size="sm"
                                             variant="outline"
-                                            className="h-auto min-h-8 max-w-full whitespace-normal py-1.5"
+                                            className="h-auto min-h-8 max-w-full py-1.5 whitespace-normal"
                                             onClick={() =>
                                                 openMaintenanceDialog("update")
                                             }
@@ -3374,7 +3374,7 @@ export function AdminClient({
                                         <Button
                                             type="button"
                                             size="sm"
-                                            className="h-auto min-h-8 max-w-full whitespace-normal py-1.5"
+                                            className="h-auto min-h-8 max-w-full py-1.5 whitespace-normal"
                                             onClick={() =>
                                                 openMaintenanceDialog("disable")
                                             }
@@ -3387,7 +3387,7 @@ export function AdminClient({
                                         type="button"
                                         size="sm"
                                         variant="destructive"
-                                        className="h-auto min-h-8 max-w-full whitespace-normal py-1.5"
+                                        className="h-auto min-h-8 max-w-full py-1.5 whitespace-normal"
                                         onClick={() =>
                                             openMaintenanceDialog("enable")
                                         }
@@ -4754,7 +4754,7 @@ export function AdminClient({
                                 <Button
                                     type="button"
                                     size="sm"
-                                    className="h-auto min-h-8 max-w-full whitespace-normal py-1.5"
+                                    className="h-auto min-h-8 max-w-full py-1.5 whitespace-normal"
                                     variant="outline"
                                     onClick={refreshInactivePolicyPreview}
                                 >
@@ -4764,7 +4764,7 @@ export function AdminClient({
                                     type="button"
                                     size="sm"
                                     disabled={isSavingInactivePolicy}
-                                    className="h-auto min-h-8 max-w-full whitespace-normal py-1.5"
+                                    className="h-auto min-h-8 max-w-full py-1.5 whitespace-normal"
                                     onClick={handleSaveInactivePolicy}
                                 >
                                     {isSavingInactivePolicy

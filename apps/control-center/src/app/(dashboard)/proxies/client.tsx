@@ -1,5 +1,7 @@
 "use client";
 
+import { GuideHelpLink } from "@/components/guides/guide-help-link";
+
 import {
     createProxyGroup,
     deleteProxyGroup,
@@ -385,6 +387,7 @@ export function ProxiesClient({
                         Use the shared starter pool or manage dedicated proxy
                         groups.
                     </p>
+                    <GuideHelpLink href="/guide/monitors#proxies">Proxy setup guide</GuideHelpLink>
                 </div>
                 <Button
                     ref={createTriggerRef}
