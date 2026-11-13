@@ -17,6 +17,11 @@ func TestCheckoutLinkLeadsBothItemStylesOnlyWithHandoffURL(t *testing.T) {
 	for _, style := range []model.NotificationMessageStyle{model.NotificationMessageStyleCompact, model.NotificationMessageStyleRich} {
 		item := model.Item{URL: "https://www.vinted.de/items/123", CheckoutStartURL: "https://dashboard.example.test/checkout/17/123"}
 		payload := buildItemWebhookPayload(item, "Test monitor", "server", style)
+		rows := payload["components"].([]map[string]interface{})
+		buttons := rows[0]["components"].([]map[string]interface{})
+		if len(rows) != 1 || len(buttons) != 1 || buttons[0]["type"] != 2 || buttons[0]["style"] != 5 || buttons[0]["label"] != "Buy now" || buttons[0]["url"] != item.CheckoutStartURL {
+			t.Fatalf("%s missing checkout link button: %#v", style, rows)
+		}
 		description := payload["embeds"].([]map[string]interface{})[0]["description"].(string)
 		if !strings.HasPrefix(description, "**⚡ [Oneclick checkout]("+item.CheckoutStartURL+")**\n\n") {
 			t.Fatalf("%s checkout link must have its own first line: %q", style, description)
@@ -26,10 +31,40 @@ func TestCheckoutLinkLeadsBothItemStylesOnlyWithHandoffURL(t *testing.T) {
 		}
 		for _, checkoutURL := range []string{"", "javascript:alert(1)"} {
 			item.CheckoutStartURL = checkoutURL
-			encoded, _ := json.Marshal(buildItemWebhookPayload(item, "Test monitor", "server", style))
+			invalidPayload := buildItemWebhookPayload(item, "Test monitor", "server", style)
+			if _, ok := invalidPayload["components"]; ok {
+				t.Fatalf("%s button shown without valid handoff URL", style)
+			}
+			encoded, _ := json.Marshal(invalidPayload)
 			if strings.Contains(string(encoded), "Oneclick checkout") {
 				t.Fatalf("%s checkout link shown without valid handoff URL: %s", style, encoded)
 			}
+		}
+	}
+}
+
+func TestItemWebhookEnablesLinkComponents(t *testing.T) {
+	var withComponents, threadID string
+	webhookURL := withDiscordServer(t, func(w http.ResponseWriter, r *http.Request) {
+		withComponents = r.URL.Query().Get("with_components")
+		threadID = r.URL.Query().Get("thread_id")
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload["components"] == nil {
+			t.Errorf("checkout components missing: %v", err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	item := model.Item{CheckoutStartURL: "http://localhost:3000/checkout/17/123"}
+	for _, legacy := range []bool{false, true} {
+		if legacy {
+			if err := SendWebhook(webhookURL+"?thread_id=42", item, "Test", "group", model.NotificationMessageStyleRich); err != nil {
+				t.Fatal(err)
+			}
+		} else if result := SendWebhookAttempt(context.Background(), webhookURL+"?thread_id=42", item, "Test", "group", model.NotificationMessageStyleCompact); !result.Success {
+			t.Fatalf("item webhook failed: %#v", result)
+		}
+		if withComponents != "true" || threadID != "42" {
+			t.Fatalf("components disabled or thread lost: components=%q thread=%q", withComponents, threadID)
 		}
 	}
 }

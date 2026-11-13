@@ -23,7 +23,7 @@ var httpClient = httpclient.New(5 * time.Second)
 
 func SendWebhook(webhookURL string, item model.Item, monitorName string, proxySource string, style model.NotificationMessageStyle) error {
 	payload := buildItemWebhookPayload(item, monitorName, proxySource, style)
-	result := SendPayloadAttempt(context.Background(), webhookURL, payload)
+	result := SendPayloadAttempt(context.Background(), webhookURLWithComponents(webhookURL), payload)
 	if result.Success {
 		return nil
 	}
@@ -38,7 +38,7 @@ func SendWebhookAttempt(
 	proxySource string,
 	style model.NotificationMessageStyle,
 ) model.AlertDeliveryResult {
-	return SendPayloadAttempt(ctx, webhookURL, buildItemWebhookPayload(item, monitorName, proxySource, style))
+	return SendPayloadAttempt(ctx, webhookURLWithComponents(webhookURL), buildItemWebhookPayload(item, monitorName, proxySource, style))
 }
 
 func SendStatusAttempt(ctx context.Context, webhookURL string, title string, message string) model.AlertDeliveryResult {
@@ -227,10 +227,21 @@ func parseDiscordDuration(value string) time.Duration {
 }
 
 func buildItemWebhookPayload(item model.Item, monitorName string, proxySource string, style model.NotificationMessageStyle) map[string]interface{} {
+	var payload map[string]interface{}
 	if model.NormalizeNotificationMessageStyle(style) == model.NotificationMessageStyleCompact {
-		return buildCompactItemWebhookPayload(item, monitorName)
+		payload = buildCompactItemWebhookPayload(item, monitorName)
+	} else {
+		payload = buildRichItemWebhookPayload(item, monitorName, proxySource)
 	}
-	return buildRichItemWebhookPayload(item, monitorName, proxySource)
+	if isHTTPURL(item.CheckoutStartURL) {
+		payload["components"] = []map[string]interface{}{{
+			"type": 1,
+			"components": []map[string]interface{}{{
+				"type": 2, "style": 5, "label": "Buy now", "url": item.CheckoutStartURL,
+			}},
+		}}
+	}
+	return payload
 }
 
 func buildCompactItemWebhookPayload(item model.Item, monitorName string) map[string]interface{} {
