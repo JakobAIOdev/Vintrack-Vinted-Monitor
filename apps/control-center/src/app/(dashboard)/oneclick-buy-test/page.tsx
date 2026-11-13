@@ -1,11 +1,11 @@
 import { Metadata } from "next";
-import { OneClickBuyTestClient } from "./client";
+import { redirect } from "next/navigation";
 
 export const metadata: Metadata = {
-    title: "Experimental Buy Lab | Vintrack",
-    description: "Test the experimental Vinted PayPal checkout flow.",
+    title: "Full checkout setup | Vintrack",
+    description: "Configure Full checkout and its payment limit.",
 };
 
 export default function OneClickBuyTestPage() {
-    return <OneClickBuyTestClient />;
+    redirect("/account?connection=vinted#checkout-settings");
 }

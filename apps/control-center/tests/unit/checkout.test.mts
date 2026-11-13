@@ -94,12 +94,31 @@ test("checkout redirects stay on the linked Vinted checkout", () => {
 
 test("login only returns to a validated checkout handoff path", () => {
     assert.equal(checkoutReturnPath("/checkout/17/123"), "/checkout/17/123");
+    // A test link keeps its flag, so signing in cannot turn it into a buy link.
+    assert.equal(
+        checkoutReturnPath("/checkout/17/123?validate=1"),
+        "/checkout/17/123?validate=1",
+    );
     for (const raw of [
         "https://evil.test",
         "//evil.test",
         "/checkout/17/123?next=https://evil.test",
         "/checkout/0/123",
         "/checkout/17/123/../admin",
+        "/checkout/17/123?validate=0",
+        "/checkout/17/123?validate=1&next=https://evil.test",
+        "/checkout/17/123?validate=1&validate=1",
+        "/checkout/17/123?validate=1#fragment",
+        "/checkout/17/123?validate=1\n",
+        "/checkout/17/123?",
+        "/checkout/0/123?validate=1",
+        "/checkout/17/9007199254740993?validate=1",
+        ["/checkout/17/123", "/checkout/17/456"],
+        ["/checkout/17/123"],
+        ["https://evil.test"],
+        { toString: () => "/checkout/17/123" },
+        null,
+        17,
         undefined,
     ])
         assert.equal(checkoutReturnPath(raw), "/dashboard");

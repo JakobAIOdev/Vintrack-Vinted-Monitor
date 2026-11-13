@@ -56,6 +56,18 @@ export function checkoutDefaultCurrency(domain: string): CheckoutCurrency {
     return currencies[normalized || ""] || "EUR";
 }
 
+export type CheckoutTransport = "browser" | "server" | "agent";
+
+export function isCheckoutTransport(
+    value: unknown,
+): value is CheckoutTransport {
+    return value === "browser" || value === "server" || value === "agent";
+}
+
+export function isRequestCheckoutTransport(value: unknown) {
+    return value === "server" || value === "agent";
+}
+
 export type CheckoutTarget = {
     itemId: number;
     monitorId: number;
@@ -66,6 +78,7 @@ export type CheckoutTarget = {
     itemUrl: string;
     title: string;
     price: string | null;
+    checkoutTransport?: CheckoutTransport;
     preferences?: CheckoutPreferences;
     riskConsentVersion?: number | null;
 };
@@ -283,10 +296,14 @@ export function isCheckoutUrl(raw: unknown, domain: string): raw is string {
     }
 }
 
-// Only checkout destinations are accepted by the login return path.
-export function checkoutReturnPath(raw?: string) {
-    const match = raw?.match(/^\/checkout\/([1-9]\d*)\/([1-9]\d*)$/);
-    return match && parseCheckoutIds(match[1], match[2]) ? raw! : "/dashboard";
+// Only checkout destinations are accepted by the login return path. The test
+// flag is kept so a validation link cannot come back as a real purchase.
+export function checkoutReturnPath(raw?: unknown) {
+    if (typeof raw !== "string") return "/dashboard";
+    const match = raw.match(
+        /^\/checkout\/([1-9]\d*)\/([1-9]\d*)(?:\?validate=1)?$/,
+    );
+    return match && parseCheckoutIds(match[1], match[2]) ? raw : "/dashboard";
 }
 
 export function checkoutApiPath(monitorId: number, itemId: number) {

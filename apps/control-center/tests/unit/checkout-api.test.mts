@@ -17,22 +17,46 @@ function harness(
         unlinked?: boolean;
         upstreamUrl?: string;
         preferences?: unknown;
+        transport?: "browser" | "server" | "agent" | null;
+        agentJobId?: string;
         accountDomain?: string;
         upstreamPaymentUrl?: string;
         upstreamStatus?: string;
         browserAuthorized?: boolean;
         riskConsentVersion?: number;
         missingConsentDate?: boolean;
+        upstreamError?: { status: number; body?: unknown; text?: string };
+        upstreamFailure?: boolean;
     } = {},
 ) {
     const databaseCalls: unknown[] = [];
+    const afterTasks: (() => Promise<void>)[] = [];
     const serviceCalls: { url: string; init: RequestInit }[] = [];
     const db = {
         user: {
             async findUnique() {
                 return {
                     checkout_enabled: options.checkoutEnabled ?? true,
-                    checkout_preferences: options.preferences,
+                    checkout_preferences: {
+                        accountId: 42,
+                        domain: options.accountDomain || "www.vinted.de",
+                        preferences: {
+                            shipping: "home",
+                            payment: "card",
+                            autoCheckout: {
+                                warningVersion: 2,
+                                maxTotalMinor: 3000,
+                                currency: "EUR",
+                            },
+                        },
+                        ...(options.preferences &&
+                        typeof options.preferences === "object"
+                            ? options.preferences
+                            : {}),
+                        ...(options.transport === null
+                            ? {}
+                            : { transport: options.transport ?? "server" }),
+                    },
                     checkout_risk_version: options.riskConsentVersion ?? 1,
                     checkout_risk_accepted_at: options.missingConsentDate
                         ? null
@@ -107,7 +131,10 @@ function harness(
                       )
                     : null,
         },
-        "next/server": { NextResponse: { json: Response.json } },
+        "next/server": {
+            NextResponse: { json: Response.json },
+            after: (task: () => Promise<void>) => afterTasks.push(task),
+        },
     };
     function load(path: string) {
         const output = ts.transpileModule(
@@ -134,6 +161,16 @@ function harness(
             process: { env: { AUTH_URL: "https://vintrack.example.test" } },
             fetch: async (url: string, init: RequestInit) => {
                 serviceCalls.push({ url, init });
+                if (options.upstreamFailure)
+                    throw new TypeError("Failed to fetch");
+                if (options.upstreamError)
+                    return options.upstreamError.text === undefined
+                        ? Response.json(options.upstreamError.body, {
+                              status: options.upstreamError.status,
+                          })
+                        : new Response(options.upstreamError.text, {
+                              status: options.upstreamError.status,
+                          });
                 return Response.json({
                     checkout_url:
                         options.upstreamUrl ||
@@ -141,6 +178,7 @@ function harness(
                     status: options.upstreamStatus || "checkout_prepared",
                     payment_url: options.upstreamPaymentUrl,
                     browser_payment_authorized: options.browserAuthorized,
+                    job_id: options.agentJobId,
                 });
             },
         });
@@ -156,6 +194,7 @@ function harness(
     return {
         databaseCalls,
         serviceCalls,
+        afterTasks,
         async call(method = "GET", headers: HeadersInit = {}, itemId = "123") {
             const request = Object.assign(
                 new Request(
@@ -248,7 +287,15 @@ test("POST uses the authenticated identity and stored seller, including behind a
         seller_id: 456,
         account_id: 42,
         domain: "www.vinted.de",
-        preferences: { shipping: "home", payment: "wallet" },
+        preferences: {
+            shipping: "home",
+            payment: "card",
+            autoCheckout: {
+                warningVersion: 2,
+                maxTotalMinor: 3000,
+                currency: "EUR",
+            },
+        },
     });
 });
 
@@ -375,7 +422,9 @@ test("browser payment authorization is bound to current saved preferences and li
         JSON.parse(h.serviceCalls[0].init.body as string).browser_prepare_only,
         true,
     );
-    const normal = harness();
+    const normal = harness({
+        preferences: { preferences: { shipping: "home", payment: "wallet" } },
+    });
     assert.equal((await normal.call("POST", headers)).status, 400);
     assert.equal(normal.serviceCalls.length, 0);
 });
@@ -512,4 +561,325 @@ test("linked-account metadata loads while the authorized item lookup is still pe
     }
     assert.equal((await request).status, 200);
     assert.equal(h.serviceCalls.length, 0);
+});
+
+test("request checkout returns its authoritative target and defers notification work", async () => {
+    const h = harness();
+    const response = await h.call("POST");
+    const data = await response.json();
+    assert.equal(data.target.itemId, 123);
+    assert.equal(data.target.monitorId, 17);
+    assert.equal(data.target.riskConsentVersion, 1);
+    assert.equal(data.target.domain, "www.vinted.de");
+    assert.equal(h.afterTasks.length, 1);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+});
+
+test("consent denial returns a local preview before any checkout request", async () => {
+    const h = harness({ missingConsentDate: true });
+    const response = await h.call("POST");
+    const data = await response.json();
+    assert.equal(response.status, 403);
+    assert.equal(data.target.itemId, 123);
+    assert.equal(data.target.riskConsentVersion, null);
+    assert.equal(h.serviceCalls.length, 0);
+    assert.equal(h.afterTasks.length, 0);
+});
+
+test("validation explicitly stops before payment and never forwards a payment redirect or notification", async () => {
+    const h = harness({
+        preferences: storedAutoPreferences,
+        upstreamPaymentUrl:
+            "https://www.paypal.com/checkoutnow?token=synthetic",
+        upstreamStatus: "paypal_redirect_ready",
+    });
+    const response = await h.call("POST", {
+        "X-Vintrack-Checkout-Mode": "validate",
+    });
+    const data = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(data.stoppedBeforePayment, true);
+    assert.equal(data.paymentUrl, undefined);
+    assert.equal(h.afterTasks.length, 0);
+    assert.equal(h.serviceCalls.length, 1);
+    assert.equal(
+        JSON.parse(h.serviceCalls[0].init.body as string).stop_before_payment,
+        true,
+    );
+});
+
+test("unknown modes cannot silently start full checkout", async () => {
+    const h = harness({ preferences: storedAutoPreferences });
+    const response = await h.call("POST", {
+        "X-Vintrack-Checkout-Mode": "validat",
+    });
+    assert.equal(response.status, 400);
+    assert.equal(h.serviceCalls.length, 0);
+});
+
+test("browser remains the selected path without a server mutation", async () => {
+    const h = harness({ transport: "browser" });
+    const response = await h.call("POST");
+    const data = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(data.status, "browser_checkout_required");
+    assert.equal(data.target.checkoutTransport, "browser");
+    assert.equal(h.serviceCalls.length, 0);
+    assert.equal(h.afterTasks.length, 0);
+});
+
+test("request transports require Full checkout before any service call, including validation", async () => {
+    for (const transport of ["server", "agent"] as const) {
+        for (const headers of [
+            {},
+            { "X-Vintrack-Checkout-Mode": "validate" },
+        ] as Record<string, string>[]) {
+            const h = harness({
+                transport,
+                preferences: {
+                    preferences: { shipping: "home", payment: "card" },
+                },
+            });
+            const response = await h.call("POST", headers);
+            assert.equal(response.status, 409);
+            assert.equal(
+                (await response.json()).code,
+                "FULL_CHECKOUT_REQUIRED",
+            );
+            assert.equal(h.serviceCalls.length, 0);
+            assert.equal(h.afterTasks.length, 0);
+        }
+    }
+});
+
+test("an HTTP header cannot opt a member into experimental server checkout", async () => {
+    for (const mode of ["server", "validate"]) {
+        const h = harness({ transport: "browser" });
+        const response = await h.call("POST", {
+            "X-Vintrack-Checkout-Mode": mode,
+        });
+        assert.equal(response.status, 403);
+        assert.equal((await response.json()).code, "SERVER_CHECKOUT_DISABLED");
+        assert.equal(h.serviceCalls.length, 0);
+    }
+});
+
+test("existing accounts without a transport opt-in retain browser checkout", async () => {
+    const h = harness({ transport: null });
+    const response = await h.call("POST");
+    assert.equal((await response.json()).status, "browser_checkout_required");
+    assert.equal(h.serviceCalls.length, 0);
+});
+
+test("local-agent checkout queues only an authorized job and never prepares on the server", async () => {
+    const jobId = "a".repeat(64);
+    const h = harness({ transport: "agent", agentJobId: jobId });
+    const response = await h.call("POST");
+    assert.equal(response.status, 202);
+    assert.equal((await response.json()).jobId, jobId);
+    assert.equal(h.serviceCalls.length, 1);
+    assert.match(h.serviceCalls[0].url, /items\/checkout\/agent$/);
+    assert.equal(h.afterTasks.length, 0);
+    assert.equal(
+        JSON.parse(String(h.serviceCalls[0].init.body)).stop_before_payment,
+        false,
+    );
+});
+
+test("agent validation is queued with a mandatory payment stop", async () => {
+    const h = harness({ transport: "agent", agentJobId: "b".repeat(64) });
+    const response = await h.call("POST", {
+        "X-Vintrack-Checkout-Mode": "validate",
+    });
+    assert.equal(response.status, 202);
+    assert.equal(
+        JSON.parse(String(h.serviceCalls[0].init.body)).stop_before_payment,
+        true,
+    );
+});
+
+test("every answer of the checkout route is uncacheable, including errors", async () => {
+    const noStore = async (
+        options: Parameters<typeof harness>[0],
+        status: number,
+        method = "POST",
+        headers: HeadersInit = {},
+        itemId = "123",
+    ) => {
+        const response = await harness(options).call(method, headers, itemId);
+        assert.equal(response.status, status);
+        assert.equal(
+            response.headers.get("cache-control"),
+            "private, no-store",
+            `${method} ${status} ${JSON.stringify(options)}`,
+        );
+    };
+    for (const method of ["GET", "POST"]) {
+        await noStore({ anonymous: true }, 401, method);
+        await noStore({ denied: true }, 403, method);
+        await noStore({ missingItem: true }, 404, method);
+        await noStore({ unlinked: true }, 409, method);
+        await noStore({ checkoutEnabled: false }, 403, method);
+        await noStore({ missingConsentDate: true }, 403, method);
+        await noStore({}, 400, method, {}, "123junk");
+    }
+    await noStore({}, 403, "POST", { Origin: "https://evil.test" });
+    await noStore({}, 400, "POST", { "X-Vintrack-Checkout-Mode": "validat" });
+    await noStore({ transport: "browser" }, 403, "POST", {
+        "X-Vintrack-Checkout-Mode": "server",
+    });
+    await noStore({ transport: "browser" }, 200);
+    await noStore(
+        { preferences: { preferences: { shipping: "home", payment: "card" } } },
+        409,
+    );
+    await noStore({ upstreamUrl: "https://evil.test/checkout" }, 502);
+    await noStore({ upstreamFailure: true }, 502);
+    await noStore({ upstreamError: { status: 502, text: "<html>" } }, 502);
+    await noStore({ upstreamError: { status: 429, body: {} } }, 429);
+    await noStore({ transport: "agent", agentJobId: "a".repeat(64) }, 202);
+    await noStore({ transport: "agent", agentJobId: "invalid" }, 502);
+    await noStore(
+        { transport: "agent", upstreamError: { status: 503, body: {} } },
+        503,
+    );
+    await noStore({ transport: "agent" }, 409, "POST", {
+        "X-Vintrack-Checkout-Mode": "server",
+    });
+});
+
+test("a service failure forwards retryable only as a literal true", async () => {
+    const error =
+        "The proxy gave no answer. Nothing was started at Vinted; you can use this buy link again.";
+    const h = harness({
+        upstreamError: {
+            status: 502,
+            body: {
+                code: "checkout_network_failed",
+                error,
+                failed_step: "transaction",
+                retryable: true,
+            },
+        },
+    });
+    const response = await h.call("POST");
+    assert.equal(response.status, 502);
+    const data = await response.json();
+    assert.equal(data.error, error);
+    assert.equal(data.code, "checkout_network_failed");
+    assert.equal(data.failedStep, "transaction");
+    assert.equal(data.retryable, true);
+    assert.equal(data.target.itemId, 123);
+    assert.equal(h.serviceCalls.length, 1);
+    assert.equal(h.afterTasks.length, 0);
+    for (const retryable of [undefined, false, "true", 1, {}]) {
+        const other = harness({
+            upstreamError: {
+                status: 502,
+                body: {
+                    code: "vinted_redirected",
+                    error: "Vinted redirected the request.",
+                    failed_step: "payment",
+                    upstream_status: 502,
+                    retryable,
+                },
+            },
+        });
+        const body = await (await other.call("POST")).json();
+        assert.equal("retryable" in body, false);
+        assert.equal(body.code, "vinted_redirected");
+        assert.equal(body.failedStep, "payment");
+        assert.equal(body.upstreamStatus, 502);
+    }
+});
+
+test("a failed agent enqueue forwards the service code", async () => {
+    const h = harness({
+        transport: "agent",
+        upstreamError: {
+            status: 409,
+            body: { code: "agent_offline", error: "Start the local agent." },
+        },
+    });
+    const response = await h.call("POST");
+    assert.equal(response.status, 409);
+    const data = await response.json();
+    assert.equal(data.code, "agent_offline");
+    assert.equal(data.error, "Start the local agent.");
+    assert.equal(data.target.itemId, 123);
+});
+
+test("the target never exposes the checkout proxy group or the module switch", async () => {
+    const stored = {
+        proxyGroupId: 7,
+        preferences: autoPreferences,
+    };
+    const targetKeys = [
+        "accountId",
+        "accountName",
+        "checkoutTransport",
+        "domain",
+        "itemId",
+        "itemUrl",
+        "monitorId",
+        "preferences",
+        "price",
+        "riskConsentVersion",
+        "sellerId",
+        "title",
+    ];
+    const preview = await (
+        await harness({ preferences: stored }).call()
+    ).json();
+    assert.deepEqual(Object.keys(preview).sort(), targetKeys);
+    for (const options of [
+        { preferences: stored },
+        { preferences: stored, transport: "browser" as const },
+        { preferences: stored, missingConsentDate: true },
+        {
+            preferences: stored,
+            upstreamError: { status: 502, body: { error: "Synthetic" } },
+        },
+    ]) {
+        const h = harness(options);
+        const data = await (await h.call("POST")).json();
+        assert.deepEqual(Object.keys(data.target).sort(), targetKeys);
+        assert.doesNotMatch(
+            JSON.stringify(data),
+            /checkoutProxyGroupId|checkoutEnabled|proxyGroupId/,
+        );
+    }
+});
+
+test("a rejected Vinted session is not reported as a Vintrack sign-out", async () => {
+    const h = harness({
+        upstreamError: {
+            status: 401,
+            body: {
+                code: "invalid_authentication_token",
+                error: "Reconnect your Vinted account before preparing checkout.",
+                failed_step: "transaction",
+            },
+        },
+    });
+    const response = await h.call("POST");
+    // 401 is reserved for "not signed in to Vintrack".
+    assert.equal(response.status, 409);
+    const data = await response.json();
+    assert.equal(data.code, "invalid_authentication_token");
+    assert.equal(data.retryable, undefined);
+    assert.equal(data.target.itemId, 123);
+    assert.equal(h.serviceCalls.length, 1);
+});
+
+test("a lost call to the checkout service is reported as interrupted, never as a plain failure", async () => {
+    const h = harness({ upstreamFailure: true });
+    const response = await h.call("POST");
+    assert.equal(response.status, 502);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    const data = await response.json();
+    assert.equal(data.code, "checkout_interrupted");
+    assert.match(data.error, /purchase may already have been started/);
+    assert.equal(data.target.itemId, 123);
+    assert.equal(h.afterTasks.length, 0);
 });

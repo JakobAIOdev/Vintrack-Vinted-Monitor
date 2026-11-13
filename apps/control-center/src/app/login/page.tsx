@@ -57,7 +57,7 @@ const highlights = [
 export default async function LoginPage({
     searchParams,
 }: {
-    searchParams?: Promise<{ error?: string; returnTo?: string }>;
+    searchParams?: Promise<{ error?: string; returnTo?: string | string[] }>;
 }) {
     const session = await auth();
     const query = await searchParams;

@@ -16,8 +16,10 @@ import {
     checkoutDefaultCurrency,
     checkoutMaximumMinor,
     parseCheckoutAmount,
+    isRequestCheckoutTransport,
     type CheckoutCurrency,
     type CheckoutPreferences,
+    type CheckoutTransport,
 } from "@/lib/checkout";
 import {
     Card,
@@ -27,6 +29,7 @@ import {
     CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { LocalCheckoutAgentCard } from "@/components/account/local-checkout-agent";
 import { CheckoutCurrencyPicker } from "@/components/account/checkout-currency-picker";
 import { useRouter } from "next/navigation";
 import { Switch } from "@/components/ui/switch";
@@ -39,20 +42,36 @@ import { requestCheckoutConsent } from "@/lib/checkout-consent.client";
 
 export function CheckoutPreferencesCard({
     accountKey,
+    serverCheckout,
 }: {
     accountKey: string;
+    serverCheckout?: { state: string; automatic_payment_available: boolean };
 }) {
     const [preferences, setPreferences] = useState<CheckoutPreferences>(
         DEFAULT_CHECKOUT_PREFERENCES,
     );
     const router = useRouter();
     const [checkoutEnabled, setCheckoutEnabled] = useState(false);
+    const [transport, setTransport] = useState<CheckoutTransport>("browser");
+    const [savedTransport, setSavedTransport] =
+        useState<CheckoutTransport>("browser");
+    const [proxyGroups, setProxyGroups] = useState<
+        { id: number; name: string }[]
+    >([]);
+    const [proxyGroupId, setProxyGroupId] = useState<number | null>(null);
+    const [savedProxyGroupId, setSavedProxyGroupId] = useState<number | null>(
+        null,
+    );
     const [loaded, setLoaded] = useState(false);
     const [domain, setDomain] = useState("");
     const [autoEnabled, setAutoEnabled] = useState(false);
     const [savedPreferences, setSavedPreferences] =
         useState<CheckoutPreferences>(DEFAULT_CHECKOUT_PREFERENCES);
     const savedAutoEnabled = Boolean(savedPreferences.autoCheckout);
+    const requestMode = isRequestCheckoutTransport(transport);
+    const savedRequestMode = isRequestCheckoutTransport(savedTransport);
+    const savedBuyEnabled =
+        checkoutEnabled && (!savedRequestMode || savedAutoEnabled);
     const [warningAccepted, setWarningAccepted] = useState(false);
     const [maxTotal, setMaxTotal] = useState("");
     const [limitCurrency, setLimitCurrency] = useState<CheckoutCurrency>("EUR");
@@ -66,6 +85,11 @@ export function CheckoutPreferencesCard({
             .then((value) => {
                 if (!cancelled) {
                     setCheckoutEnabled(value.checkoutEnabled);
+                    setTransport(value.checkoutTransport);
+                    setSavedTransport(value.checkoutTransport);
+                    setProxyGroups(value.proxyGroups);
+                    setProxyGroupId(value.checkoutProxyGroupId);
+                    setSavedProxyGroupId(value.checkoutProxyGroupId);
                     setPreferences(value.preferences);
                     setRiskConsentVersion(value.riskConsentVersion);
                     setDomain(value.domain);
@@ -182,14 +206,12 @@ export function CheckoutPreferencesCard({
                                             : "Checkout module disabled.",
                                     );
                                 } catch (error) {
-                                    if (
-                                        !(
-                                            error instanceof Error &&
-                                            error.message.startsWith(
-                                                "Checkout cancelled.",
-                                            )
+                                    if (!(
+                                        error instanceof Error &&
+                                        error.message.startsWith(
+                                            "Checkout cancelled.",
                                         )
-                                    )
+                                    ))
                                         toast.error(
                                             "Checkout module setting could not be saved.",
                                         );
@@ -198,18 +220,136 @@ export function CheckoutPreferencesCard({
                         }}
                     />
                 </div>
+                <div className="space-y-3 rounded-md border p-4">
+                    <Label htmlFor="checkout-transport">Checkout method</Label>
+                    <select
+                        id="checkout-transport"
+                        className="border-input bg-background h-10 w-full rounded-md border px-3 text-sm"
+                        value={transport}
+                        disabled={!loaded || pending || !checkoutEnabled}
+                        onChange={(event) => {
+                            setTransport(
+                                event.target.value as CheckoutTransport,
+                            );
+                            setAutoEnabled(false);
+                            setWarningAccepted(false);
+                        }}
+                    >
+                        <option value="browser">
+                            Browser extension (current method)
+                        </option>
+                        <option value="agent">
+                            Full checkout via local agent
+                        </option>
+                        <option value="server">
+                            Full checkout via my proxy
+                        </option>
+                    </select>
+                    <p className="text-muted-foreground text-xs leading-5">
+                        {transport === "agent"
+                            ? "Uses your paired local agent and its network. Your computer must stay on; the agent performs the checkout HTTP requests without an open browser. Missing sessions, security checks and bank authentication still need your attention."
+                            : transport === "server"
+                              ? "Runs checkout through your selected proxy without an open Vinted browser or mobile extension. Discord and Telegram buy links use this method too. Sign in to Vintrack on your phone. Sync your Vinted session first; bank authentication or PayPal approval may still be required."
+                              : "Uses your connected extension and signed-in Vinted browser for checkout."}
+                    </p>
+                    {requestMode && (
+                        <p
+                            role="note"
+                            className="rounded-md bg-amber-500/10 p-3 text-sm leading-5"
+                        >
+                            Requests are available only as Full checkout. Save
+                            the method and proxy first, then explicitly enable
+                            automatic payment with a spending limit below. Until
+                            automatic payment is enabled and saved, buy links
+                            cannot run in request mode. Normal Oneclick uses the
+                            browser session method.
+                        </p>
+                    )}
+                    {transport === "server" && (
+                        <div className="space-y-2">
+                            <Label htmlFor="checkout-proxy-group">
+                                Checkout proxy group
+                            </Label>
+                            <select
+                                id="checkout-proxy-group"
+                                className="border-input bg-background h-10 w-full rounded-md border px-3 text-sm"
+                                value={proxyGroupId ?? ""}
+                                disabled={
+                                    !loaded || pending || !checkoutEnabled
+                                }
+                                onChange={(event) => {
+                                    setProxyGroupId(
+                                        event.target.value
+                                            ? Number(event.target.value)
+                                            : null,
+                                    );
+                                    setAutoEnabled(false);
+                                    setWarningAccepted(false);
+                                }}
+                            >
+                                <option value="">
+                                    Select your proxy group
+                                </option>
+                                {proxyGroups.map((group) => (
+                                    <option key={group.id} value={group.id}>
+                                        {group.name}
+                                    </option>
+                                ))}
+                            </select>
+                            <p className="text-muted-foreground text-xs leading-5">
+                                Uses the first proxy for every checkout step.
+                                Use a dedicated, trusted proxy with a stable IP;
+                                rotating gateways can interrupt your session.
+                                There is no automatic switch to another proxy or
+                                the server IP. Manage your groups in{" "}
+                                <a href="/proxies" className="underline">
+                                    Proxies
+                                </a>
+                                .
+                            </p>
+                        </div>
+                    )}
+                    {transport === "server" && (
+                        <p role="status" className="text-sm leading-5">
+                            {serverCheckout?.state === "ready"
+                                ? "Session context is available. Vinted verifies it when checkout starts."
+                                : serverCheckout?.state === "blocked"
+                                  ? "Vinted blocked request checkout for this session. Your browser may still work. Syncing again does not guarantee request access. You can select the browser session method."
+                                  : serverCheckout?.state === "reauth_required"
+                                    ? "Sign in to Vinted again, then sync checkout context."
+                                    : "Sync server checkout context above before starting server checkout."}
+                        </p>
+                    )}
+                    {(transport !== savedTransport ||
+                        proxyGroupId !== savedProxyGroupId) && (
+                        <p
+                            role="note"
+                            className="text-muted-foreground text-xs"
+                        >
+                            Save to change the checkout method or proxy.
+                            Automatic payment is turned off when either changes.
+                        </p>
+                    )}
+                </div>
+                {checkoutEnabled && transport === "agent" && (
+                    <LocalCheckoutAgentCard />
+                )}
                 <div
                     className="grid gap-3 sm:grid-cols-2"
                     aria-label="Saved checkout status"
                 >
                     <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2.5 text-sm">
-                        <span>Oneclick buy</span>
+                        <span>
+                            {savedRequestMode
+                                ? "Request Full checkout"
+                                : "Oneclick buy"}
+                        </span>
                         <Badge
-                            variant={checkoutEnabled ? "default" : "secondary"}
+                            variant={savedBuyEnabled ? "default" : "secondary"}
                         >
                             {!loaded
                                 ? "Loading…"
-                                : checkoutEnabled
+                                : savedBuyEnabled
                                   ? "Enabled"
                                   : "Disabled"}
                         </Badge>
@@ -336,8 +476,24 @@ export function CheckoutPreferencesCard({
                                         });
                                     }}
                                 >
-                                    {checkoutPaymentOptions(domain).map(
-                                        (payment) => (
+                                    {requestMode && !canAutoCheckout && (
+                                        <option
+                                            value={preferences.payment}
+                                            disabled
+                                        >
+                                            Choose a saved card or PayPal
+                                        </option>
+                                    )}
+                                    {checkoutPaymentOptions(domain)
+                                        .filter(
+                                            (payment) =>
+                                                !requestMode ||
+                                                autoCheckoutAllowed(
+                                                    domain,
+                                                    payment,
+                                                ),
+                                        )
+                                        .map((payment) => (
                                             <option
                                                 key={payment}
                                                 value={payment}
@@ -348,8 +504,7 @@ export function CheckoutPreferencesCard({
                                                     ]
                                                 }
                                             </option>
-                                        ),
-                                    )}
+                                        ))}
                                 </select>
                             </div>
                         </div>
@@ -371,7 +526,11 @@ export function CheckoutPreferencesCard({
                         </p>
                         <div className="border-border space-y-3 rounded-md border p-4">
                             <div className="flex items-center justify-between gap-3 text-sm">
-                                <p className="font-medium">Automatic payment</p>
+                                <p className="font-medium">
+                                    {requestMode
+                                        ? "Full checkout · automatic payment"
+                                        : "Automatic payment"}
+                                </p>
                                 <Badge
                                     variant={
                                         autoEnabled ? "outline" : "secondary"
@@ -402,7 +561,15 @@ export function CheckoutPreferencesCard({
                                         !loaded ||
                                         pending ||
                                         !checkoutEnabled ||
-                                        !canAutoCheckout
+                                        !canAutoCheckout ||
+                                        transport !== savedTransport ||
+                                        proxyGroupId !== savedProxyGroupId ||
+                                        (["server", "agent"].includes(
+                                            transport,
+                                        ) &&
+                                            serverCheckout?.automatic_payment_available !==
+                                                true &&
+                                            !autoEnabled)
                                     }
                                     onChange={(event) => {
                                         const enable = event.target.checked;
@@ -426,7 +593,10 @@ export function CheckoutPreferencesCard({
                                         });
                                     }}
                                 />
-                                Auto-checkout with{" "}
+                                {requestMode
+                                    ? "Full checkout"
+                                    : "Auto-checkout"}{" "}
+                                with{" "}
                                 {preferences.payment === "card"
                                     ? "my saved card"
                                     : "PayPal"}{" "}
@@ -552,6 +722,7 @@ export function CheckoutPreferencesCard({
                                 !loaded ||
                                 pending ||
                                 !checkoutEnabled ||
+                                (transport === "server" && !proxyGroupId) ||
                                 !validAutoCheckout
                             }
                             onClick={() =>
@@ -588,6 +759,8 @@ export function CheckoutPreferencesCard({
                                         const result =
                                             await saveCheckoutPreferences(
                                                 nextPreferences,
+                                                transport,
+                                                proxyGroupId,
                                             );
                                         if (result.error)
                                             toast.error(result.error);
@@ -595,6 +768,8 @@ export function CheckoutPreferencesCard({
                                             setSavedPreferences(
                                                 nextPreferences,
                                             );
+                                            setSavedTransport(transport);
+                                            setSavedProxyGroupId(proxyGroupId);
                                             toast.success(
                                                 "Checkout preferences saved.",
                                             );

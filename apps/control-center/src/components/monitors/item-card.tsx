@@ -24,7 +24,7 @@ import Link from "next/link";
 import { useVintedAccount } from "@/components/account-provider";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { openItemCheckout } from "@/lib/open-checkout";
+import { runItemCheckout } from "@/lib/open-checkout";
 import {
     Dialog,
     DialogContent,
@@ -279,12 +279,14 @@ function ItemCardComponent({
         if (buying) return;
         setBuying(true);
         try {
-            const message = await openItemCheckout(
+            const result = await runItemCheckout(
                 item.monitor_id,
                 Number(item.id),
             );
-            toast.success(
-                message ||
+            // The toast colour follows the outcome: a stopped or failed
+            // checkout must not look like a completed purchase.
+            toast[result.tone](
+                result.message ||
                     "Vinted checkout opened. Review the details and confirm your purchase on Vinted.",
             );
         } catch (error) {
@@ -408,8 +410,12 @@ function ItemCardComponent({
                                 onClick={handleBuy}
                                 disabled={buying || !checkoutEnabled}
                                 className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-white transition-colors hover:bg-white/15 hover:text-amber-300 disabled:cursor-not-allowed disabled:opacity-70"
-                                title={checkoutEnabled ? "Open Vinted checkout" : "Enable checkout in Account"}
-                                aria-label="Open Vinted checkout"
+                                title={
+                                    checkoutEnabled
+                                        ? "Buy now with your saved checkout settings"
+                                        : "Enable checkout in Account"
+                                }
+                                aria-label="Buy now"
                             >
                                 {buying ? (
                                     <Loader2 className="h-4 w-4 animate-spin" />

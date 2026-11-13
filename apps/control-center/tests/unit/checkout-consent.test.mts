@@ -227,14 +227,20 @@ test("legacy buy, warmup and saved-link endpoints enforce persisted consent befo
                         },
                     ),
                 );
-                assert.equal(response.status, accepted ? 200 : 403);
+                assert.equal(
+                    response.status,
+                    accepted ? (path.startsWith("buy") ? 410 : 200) : 403,
+                );
                 if (!accepted)
                     assert.equal(
                         (await response.json()).code,
                         "CHECKOUT_CONSENT_REQUIRED",
                     );
             }
-            assert.equal(forwards, accepted ? methods.length : 0);
+            assert.equal(
+                forwards,
+                accepted && !path.startsWith("buy") ? methods.length : 0,
+            );
         }
     }
 });

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+import * as proxyValidation from "../../src/lib/custom-proxy-validation.ts";
 import ts from "typescript";
 import * as features from "../../src/lib/features.ts";
 import * as checkout from "../../src/lib/checkout.ts";
@@ -17,6 +18,7 @@ function harness({
     const writes: unknown[] = [];
     const user = { role: "free", checkout_enabled: enabled };
     const modules: Record<string, unknown> = {
+        "@/lib/custom-proxy-validation": proxyValidation,
         "server-only": {},
         react: { cache: (fn: unknown) => fn },
         "@/lib/features": features,

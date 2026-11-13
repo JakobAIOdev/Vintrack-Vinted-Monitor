@@ -146,3 +146,69 @@ export async function runBrowserBuyViaExtension(
         );
     });
 }
+
+export function requestCheckoutContextSync(
+    domain: string,
+    consentGranted = false,
+): boolean {
+    if (consentGranted !== true) return false;
+    window.postMessage(
+        {
+            type: "VINTRACK_EXTENSION_MANUAL_SYNC",
+            payload: {
+                preferredDomain: domain,
+                includeCheckoutContext: true,
+                checkoutContextConsent: 2,
+            },
+        },
+        window.location.origin,
+    );
+    return true;
+}
+
+// The extension reports only whether it keeps the checkout context in sync
+// in the background. Extensions that predate this report no value.
+export function readCheckoutContextBackgroundSync(
+    payload: unknown,
+): boolean | null {
+    const value = (
+        payload as { checkoutContextBackgroundSync?: unknown } | null
+    )?.checkoutContextBackgroundSync;
+    return typeof value === "boolean" ? value : null;
+}
+
+// Resolves true only when the extension confirms that the consent is gone.
+export function revokeCheckoutContextSync(timeoutMs = 5000): Promise<boolean> {
+    if (typeof window === "undefined") return Promise.resolve(false);
+    return new Promise((resolve) => {
+        const timeout = window.setTimeout(() => {
+            window.removeEventListener("message", handleResponse);
+            resolve(false);
+        }, timeoutMs);
+
+        function handleResponse(event: MessageEvent) {
+            if (
+                event.source !== window ||
+                event.origin !== window.location.origin ||
+                event.data?.type !==
+                    "VINTRACK_EXTENSION_REVOKE_CHECKOUT_CONTEXT_RESULT"
+            ) {
+                return;
+            }
+
+            window.clearTimeout(timeout);
+            window.removeEventListener("message", handleResponse);
+            resolve(
+                event.data.payload?.ok === true &&
+                    readCheckoutContextBackgroundSync(event.data.payload) ===
+                        false,
+            );
+        }
+
+        window.addEventListener("message", handleResponse);
+        window.postMessage(
+            { type: "VINTRACK_EXTENSION_REVOKE_CHECKOUT_CONTEXT" },
+            window.location.origin,
+        );
+    });
+}
