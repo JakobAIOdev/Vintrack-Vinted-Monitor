@@ -128,7 +128,15 @@ test("shows monitor creation progress and preserves a draft after a failed submi
         release = resolve;
     });
     await page.route("**/monitors/new", async (route) => {
-        if (route.request().method() !== "POST") return route.continue();
+        const request = route.request();
+        const contentType = request.headers()["content-type"] ?? "";
+        // Server actions that load saved webhooks also POST to this page.
+        // Only the monitor's FormData submission belongs behind this gate.
+        if (
+            request.method() !== "POST" ||
+            !contentType.startsWith("multipart/form-data")
+        )
+            return route.continue();
         submissions++;
         await gate;
         await route.fulfill({
