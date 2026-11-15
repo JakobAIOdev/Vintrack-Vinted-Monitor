@@ -1505,6 +1505,7 @@ export default function NewMonitorPage() {
                                 size="sm"
                                 type="submit"
                                 className="w-full gap-1.5"
+                                aria-busy={isCreating}
                                 disabled={
                                     isCreating ||
                                     loading ||

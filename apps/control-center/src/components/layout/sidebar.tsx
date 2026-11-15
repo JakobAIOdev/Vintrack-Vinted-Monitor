@@ -162,7 +162,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                     onClick={onClose}
                     type="button"
                     aria-label="Close navigation"
-                    className="text-muted-foreground hover:text-sidebar-foreground flex size-7 items-center justify-center rounded-md transition-colors lg:hidden"
+                    className="ui-action text-muted-foreground hover:text-sidebar-foreground flex size-7 items-center justify-center rounded-md transition-colors lg:hidden"
                 >
                     <X className="h-5 w-5" />
                 </button>
@@ -378,9 +378,12 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                             href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor"
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium text-amber-700 transition-colors hover:bg-amber-50 hover:text-amber-800 dark:text-amber-500 dark:hover:bg-amber-500/12 dark:hover:text-amber-400"
+                            className="github-star-action flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium text-amber-700 transition-colors hover:bg-amber-50 hover:text-amber-800 dark:text-amber-500 dark:hover:bg-amber-500/12 dark:hover:text-amber-400"
                         >
-                            <Star className="h-4 w-4" />
+                            <Star
+                                aria-hidden="true"
+                                className="github-star-icon h-4 w-4"
+                            />
                             Star on GitHub
                         </a>
                         <a
@@ -429,7 +432,7 @@ export function Sidebar({ user, isOpen, onClose, features }: SidebarProps) {
                     </div>
                     <Link
                         href="/logout"
-                        className="text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground flex size-9 items-center justify-center rounded-lg transition-colors"
+                        className="ui-action text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground flex size-9 items-center justify-center rounded-lg transition-colors"
                         aria-label="Sign out"
                         title="Sign out"
                     >

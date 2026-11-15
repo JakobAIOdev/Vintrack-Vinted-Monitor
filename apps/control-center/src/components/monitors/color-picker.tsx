@@ -137,6 +137,7 @@ export function ColorPicker({ selected, onChange }: ColorPickerProps) {
                                 <button
                                     key={color.id}
                                     type="button"
+                                    aria-pressed={isSelected}
                                     onClick={() => toggle(color)}
                                     className={`hover:bg-muted flex w-full items-center justify-between px-3 py-1.5 text-left text-[13px] transition-colors ${
                                         isSelected

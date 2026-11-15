@@ -1,12 +1,6 @@
 "use client";
 
-import {
-    type ChangeEvent,
-    useEffect,
-    useMemo,
-    useRef,
-    useState,
-} from "react";
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, Search, X } from "lucide-react";
 import {
     matchesVideoGamePlatform,
@@ -24,16 +18,16 @@ interface PlatformPickerProps {
 
 const PLATFORM_CACHE_KEY = "vintrack.video-game-platform-cache.v1";
 
-function mergePlatforms(...groups: ReadonlyArray<ReadonlyArray<VideoGamePlatform>>) {
+function mergePlatforms(
+    ...groups: ReadonlyArray<ReadonlyArray<VideoGamePlatform>>
+) {
     const byId = new Map<string, VideoGamePlatform>();
     for (const group of groups) {
         for (const platform of group) {
             byId.set(platform.id, platform);
         }
     }
-    return [...byId.values()].sort((a, b) =>
-        a.label.localeCompare(b.label),
-    );
+    return [...byId.values()].sort((a, b) => a.label.localeCompare(b.label));
 }
 
 function platformIdsFromVintedUrl(value: string) {
@@ -64,12 +58,12 @@ export function PlatformPicker({
 }: PlatformPickerProps) {
     const [query, setQuery] = useState("");
     const [open, setOpen] = useState(false);
-    const [remotePlatforms, setRemotePlatforms] = useState<
-        VideoGamePlatform[]
-    >([]);
-    const [cachedPlatforms, setCachedPlatforms] = useState<
-        VideoGamePlatform[]
-    >([]);
+    const [remotePlatforms, setRemotePlatforms] = useState<VideoGamePlatform[]>(
+        [],
+    );
+    const [cachedPlatforms, setCachedPlatforms] = useState<VideoGamePlatform[]>(
+        [],
+    );
     const [loadingRemote, setLoadingRemote] = useState(false);
     const [remoteError, setRemoteError] = useState(false);
     const ref = useRef<HTMLDivElement>(null);
@@ -158,8 +152,8 @@ export function PlatformPicker({
                             ): platform is VideoGamePlatform =>
                                 typeof (platform as VideoGamePlatform)?.id ===
                                     "string" &&
-                                typeof (platform as VideoGamePlatform)?.label ===
-                                    "string",
+                                typeof (platform as VideoGamePlatform)
+                                    ?.label === "string",
                         ),
                     );
                 }
@@ -182,7 +176,12 @@ export function PlatformPicker({
     }, [catalogIds, localPlatforms, query, region]);
 
     const allPlatforms = useMemo(
-        () => mergePlatforms(VIDEO_GAME_PLATFORMS, cachedPlatforms, remotePlatforms),
+        () =>
+            mergePlatforms(
+                VIDEO_GAME_PLATFORMS,
+                cachedPlatforms,
+                remotePlatforms,
+            ),
         [cachedPlatforms, remotePlatforms],
     );
     const manualPlatform = useMemo(
@@ -217,10 +216,7 @@ export function PlatformPicker({
         setCachedPlatforms((current) => {
             const next = mergePlatforms(current, [platform]).slice(0, 200);
             try {
-                localStorage.setItem(
-                    PLATFORM_CACHE_KEY,
-                    JSON.stringify(next),
-                );
+                localStorage.setItem(PLATFORM_CACHE_KEY, JSON.stringify(next));
             } catch {}
             return next;
         });
@@ -309,6 +305,7 @@ export function PlatformPicker({
                                     <button
                                         key={platform.id}
                                         type="button"
+                                        aria-pressed={isSelected}
                                         onClick={() => toggle(platform)}
                                         className="hover:bg-muted flex w-full items-center justify-between px-3 py-1.5 text-left text-[13px] transition-colors"
                                     >

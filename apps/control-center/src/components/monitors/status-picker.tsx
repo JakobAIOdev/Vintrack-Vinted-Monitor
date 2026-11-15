@@ -32,8 +32,9 @@ export function StatusPicker({
                         <button
                             key={status.id}
                             type="button"
+                            aria-pressed={isSelected}
                             onClick={() => toggle(status.id)}
-                            className={`group rounded-xl border px-3 py-3 text-left transition-colors ${
+                            className={`selection-card group rounded-xl border px-3 py-3 text-left ${
                                 isSelected
                                     ? "border-primary bg-accent text-accent-foreground shadow-sm"
                                     : "border-input bg-background hover:border-border hover:bg-muted/50"
@@ -59,7 +60,9 @@ export function StatusPicker({
                                             : "border-input bg-background group-hover:border-primary/50 text-transparent",
                                     )}
                                 >
-                                    <Check className="h-3 w-3" />
+                                    {isSelected && (
+                                        <Check className="selection-indicator h-3 w-3" />
+                                    )}
                                 </span>
                             </div>
                         </button>

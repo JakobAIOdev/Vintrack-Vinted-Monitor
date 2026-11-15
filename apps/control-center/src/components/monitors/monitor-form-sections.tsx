@@ -76,7 +76,7 @@ export function FormSection({
     return (
         <details
             id={id}
-            className="group border-border/70 bg-background min-w-0 scroll-mt-20 rounded-lg border [overflow-wrap:anywhere]"
+            className="form-section group border-border/70 bg-background min-w-0 scroll-mt-20 rounded-lg border [overflow-wrap:anywhere]"
             open={isOpen}
             onToggle={(event) => setIsOpen(event.currentTarget.open)}
         >
@@ -126,7 +126,7 @@ export function FormSection({
             </summary>
             <div
                 className={cn(
-                    "border-border/60 border-t",
+                    "form-section-content border-border/60 border-t",
                     compact ? "space-y-4 p-3" : "space-y-5 px-4 py-4",
                 )}
             >

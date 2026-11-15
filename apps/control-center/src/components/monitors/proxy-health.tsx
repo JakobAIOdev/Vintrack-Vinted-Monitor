@@ -140,14 +140,34 @@ function runtimeStatusTitle(
     return details.join(" · ");
 }
 
+export function getMonitorStatusDescription(
+    status: string,
+    health?: MonitorHealth | null,
+) {
+    if (status === "active")
+        return runtimeStatusTitle(health, runtimePresentation(health));
+    switch (status) {
+        case "maintenance_paused":
+            return "Tracking is paused during maintenance. Resume this search once maintenance has finished.";
+        case "inactivity_paused":
+            return "Tracking was paused after inactivity. Resume this search when you are ready.";
+        case "error":
+            return "Tracking is paused because of a proxy error. Review the monitor's proxy settings before resuming.";
+        default:
+            return "This search is paused. Resume it to look for new listings.";
+    }
+}
+
 export function MonitorRuntimeStatus({
     health,
     compact = false,
     className,
+    indicator = "icon",
 }: {
     health?: MonitorHealth | null;
     compact?: boolean;
     className?: string;
+    indicator?: "icon" | "dot";
 }) {
     const presentation = runtimePresentation(health);
     const Icon = presentation.icon;
@@ -158,12 +178,21 @@ export function MonitorRuntimeStatus({
             data-runtime-state={resolveMonitorRuntimeState(health)}
             title={runtimeStatusTitle(health, presentation)}
             className={cn(
-                "inline-flex min-w-0 max-w-full items-center gap-1.5 text-[11px] leading-none font-medium",
+                "inline-flex max-w-full min-w-0 items-center gap-1.5 text-[11px] leading-none font-medium",
                 presentation.statusClass,
                 className,
             )}
         >
-            <Icon className={cn("size-3 shrink-0", presentation.iconClass)} />
+            {indicator === "dot" ? (
+                <span
+                    aria-hidden="true"
+                    className="size-1.5 shrink-0 rounded-full bg-current"
+                />
+            ) : (
+                <Icon
+                    className={cn("size-3 shrink-0", presentation.iconClass)}
+                />
+            )}
             <span className="truncate">
                 {compact ? presentation.compactLabel : presentation.label}
             </span>
@@ -176,11 +205,13 @@ export function MonitorLifecycleStatus({
     health,
     compact = false,
     className,
+    indicator = "icon",
 }: {
     status: string;
     health?: MonitorHealth | null;
     compact?: boolean;
     className?: string;
+    indicator?: "icon" | "dot";
 }) {
     if (status === "active") {
         return (
@@ -188,6 +219,7 @@ export function MonitorLifecycleStatus({
                 health={health}
                 compact={compact}
                 className={className}
+                indicator={indicator}
             />
         );
     }
@@ -224,12 +256,19 @@ export function MonitorLifecycleStatus({
         <span
             role="status"
             className={cn(
-                "inline-flex min-w-0 max-w-full items-center gap-1.5 text-[11px] leading-none font-medium",
+                "inline-flex max-w-full min-w-0 items-center gap-1.5 text-[11px] leading-none font-medium",
                 presentation.className,
                 className,
             )}
         >
-            <Icon className="size-3 shrink-0" />
+            {indicator === "dot" ? (
+                <span
+                    aria-hidden="true"
+                    className="size-1.5 shrink-0 rounded-full bg-current"
+                />
+            ) : (
+                <Icon className="size-3 shrink-0" />
+            )}
             <span className="truncate">{presentation.label}</span>
         </span>
     );
@@ -266,10 +305,6 @@ export function ProxyHealthCard({
     }, [fetchHealth]);
 
     return (
-        <MonitorRuntimeStatus
-            health={health}
-            compact
-            className={className}
-        />
+        <MonitorRuntimeStatus health={health} compact className={className} />
     );
 }

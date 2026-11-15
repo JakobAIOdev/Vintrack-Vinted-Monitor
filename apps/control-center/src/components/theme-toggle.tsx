@@ -18,7 +18,7 @@ export function ThemeToggle({ className, compact = false }: ThemeToggleProps) {
             type="button"
             onClick={() => setTheme(isDark ? "light" : "dark")}
             className={cn(
-                "border-border/70 bg-background/70 text-foreground hover:bg-accent hover:text-accent-foreground inline-flex items-center border shadow-sm backdrop-blur transition-colors",
+                "theme-toggle ui-action border-border/70 bg-background/70 text-foreground hover:bg-accent hover:text-accent-foreground inline-flex items-center border shadow-sm backdrop-blur transition-colors",
                 compact
                     ? "h-8 w-8 justify-center rounded-lg"
                     : "h-9 w-full justify-between rounded-xl px-3",
@@ -28,8 +28,14 @@ export function ThemeToggle({ className, compact = false }: ThemeToggleProps) {
             title="Toggle color theme"
         >
             <span className="flex items-center gap-2">
-                <SunMedium className="h-4 w-4 dark:hidden" />
-                <MoonStar className="hidden h-4 w-4 dark:block" />
+                <SunMedium
+                    aria-hidden="true"
+                    className="theme-sun h-4 w-4 dark:hidden"
+                />
+                <MoonStar
+                    aria-hidden="true"
+                    className="theme-moon hidden h-4 w-4 dark:block"
+                />
                 {!compact && (
                     <span className="text-xs font-medium">
                         <span className="dark:hidden">Light Mode</span>

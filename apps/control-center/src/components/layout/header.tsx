@@ -199,7 +199,7 @@ function NotificationBell() {
                             void fetchNotifications();
                         }
                     }}
-                    className="border-border/80 bg-background/70 text-foreground hover:border-border hover:bg-accent hover:text-accent-foreground relative inline-flex h-8 w-8 items-center justify-center rounded-lg border shadow-sm transition-colors"
+                    className="ui-action ui-icon-ring border-border/80 bg-background/70 text-foreground hover:border-border hover:bg-accent hover:text-accent-foreground relative inline-flex h-8 w-8 items-center justify-center rounded-lg border shadow-sm transition-colors"
                     aria-label="Open Vinted notifications"
                 >
                     <Bell className="h-4 w-4" />
@@ -232,7 +232,7 @@ function NotificationBell() {
                                 type="button"
                                 onClick={() => void fetchNotifications()}
                                 disabled={isLoading}
-                                className="text-muted-foreground hover:bg-accent hover:text-accent-foreground inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:opacity-60"
+                                className="ui-action text-muted-foreground hover:bg-accent hover:text-accent-foreground inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:opacity-60"
                                 aria-label="Refresh notifications"
                             >
                                 <RefreshCw
@@ -245,7 +245,7 @@ function NotificationBell() {
                             </button>
                             <Popover.Close
                                 aria-label="Close notifications"
-                                className="text-muted-foreground hover:bg-accent hover:text-foreground flex size-9 items-center justify-center rounded-lg"
+                                className="ui-action text-muted-foreground hover:bg-accent hover:text-foreground flex size-9 items-center justify-center rounded-lg"
                             >
                                 <X className="size-4" />
                             </Popover.Close>
@@ -264,7 +264,7 @@ function NotificationBell() {
                                 {Array.from({ length: 4 }).map((_, index) => (
                                     <div
                                         key={index}
-                                        className="bg-muted h-18 animate-pulse rounded-2xl"
+                                        className="ui-skeleton h-18 rounded-2xl"
                                     />
                                 ))}
                             </div>
@@ -436,7 +436,7 @@ export function Header({ onMenuClick, menuOpen = false }: HeaderProps) {
                     aria-label="Open navigation"
                     aria-controls="mobile-navigation"
                     aria-expanded={menuOpen}
-                    className="text-muted-foreground hover:bg-accent hover:text-accent-foreground -ml-1.5 rounded-md p-1.5 transition-colors lg:hidden"
+                    className="ui-action text-muted-foreground hover:bg-accent hover:text-accent-foreground -ml-1.5 rounded-md p-1.5 transition-colors lg:hidden"
                 >
                     <Menu className="h-5 w-5" />
                 </button>
@@ -479,7 +479,7 @@ export function Header({ onMenuClick, menuOpen = false }: HeaderProps) {
                     type="button"
                     onClick={() => void toggleSound()}
                     className={cn(
-                        "border-border/80 bg-background/70 hover:border-border hover:bg-accent hover:text-accent-foreground inline-flex h-8 w-8 items-center justify-center rounded-lg border shadow-sm transition-colors",
+                        "sound-toggle ui-action border-border/80 bg-background/70 hover:border-border hover:bg-accent hover:text-accent-foreground inline-flex h-8 w-8 items-center justify-center rounded-lg border shadow-sm transition-colors",
                         soundEnabled
                             ? soundReady
                                 ? "text-emerald-600 dark:text-emerald-400"
@@ -504,12 +504,21 @@ export function Header({ onMenuClick, menuOpen = false }: HeaderProps) {
                 >
                     {soundEnabled ? (
                         soundReady ? (
-                            <Volume2 className="h-4 w-4" />
+                            <Volume2
+                                aria-hidden="true"
+                                className="sound-icon h-4 w-4"
+                            />
                         ) : (
-                            <Volume1 className="h-4 w-4" />
+                            <Volume1
+                                aria-hidden="true"
+                                className="sound-icon h-4 w-4"
+                            />
                         )
                     ) : (
-                        <VolumeX className="h-4 w-4" />
+                        <VolumeX
+                            aria-hidden="true"
+                            className="sound-icon h-4 w-4"
+                        />
                     )}
                 </button>
                 <NotificationBell />
@@ -518,11 +527,15 @@ export function Header({ onMenuClick, menuOpen = false }: HeaderProps) {
                     href="https://github.com/JakobAIOdev/Vintrack-Vinted-Monitor"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="border-border/80 bg-card/70 text-muted-foreground hover:bg-accent hover:text-accent-foreground hidden items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors sm:flex"
+                    aria-label="Star on GitHub"
+                    className="github-star-action ui-action border-border/80 bg-card/70 text-muted-foreground hover:bg-accent hover:text-accent-foreground hidden items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors sm:flex"
                 >
-                    <Github className="h-3.5 w-3.5" />
+                    <Github aria-hidden="true" className="h-3.5 w-3.5" />
                     <span className="hidden md:inline">Star on GitHub</span>
-                    <Star className="h-3.5 w-3.5" />
+                    <Star
+                        aria-hidden="true"
+                        className="github-star-icon h-3.5 w-3.5"
+                    />
                 </a>
                 <span
                     role="status"

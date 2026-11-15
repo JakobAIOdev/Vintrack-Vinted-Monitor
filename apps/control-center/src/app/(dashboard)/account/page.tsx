@@ -1,14 +1,12 @@
 import { GuideHelpLink } from "@/components/guides/guide-help-link";
 import { auth } from "@/auth";
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { AccountStatus } from "./client";
 import { AccountClient } from "./client";
 import { getAccountStatus } from "@/actions/account";
 import { getMemberGithubRewardStatus } from "@/lib/github-rewards.server";
 import { GithubRewardStatusCard } from "@/components/github-reward-status-card";
-import { Github, ShoppingBag } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { AccountConnectionTabs } from "@/components/account/account-connection-tabs";
 import { CheckoutFeatureShortcut } from "@/components/account/checkout-feature-shortcut";
 import { checkoutFeatureDiscoverable } from "@/lib/account-updates";
 import { getFeatureAccessForUser } from "@/lib/features.server";
@@ -72,64 +70,25 @@ export default async function AccountPage({
                         Manage login providers, rewards, and the Vinted session
                         used by member tools.
                     </p>
-                    <GuideHelpLink href="/guide/account#link-account">Account linking guide</GuideHelpLink>
+                    <GuideHelpLink href="/guide/account#link-account">
+                        Account linking guide
+                    </GuideHelpLink>
                     {checkoutFeatureDiscoverable(checkoutAccess) && (
                         <CheckoutFeatureShortcut linked={status.linked} />
                     )}
                 </div>
             </header>
 
-            <nav
-                aria-label="Account connections"
-                className="border-border/70 bg-card flex w-fit max-w-full flex-wrap gap-0.5 rounded-md border p-0.5"
-            >
-                {[
-                    {
-                        id: "github",
-                        label: "GitHub Rewards",
-                        status: githubRewards.githubConnected
-                            ? "Connected"
-                            : "Not connected",
-                        icon: Github,
-                    },
-                    {
-                        id: "vinted",
-                        label: "Vinted",
-                        status: status.linked ? "Linked" : "Not linked",
-                        icon: ShoppingBag,
-                    },
-                ].map((connection) => {
-                    const Icon = connection.icon;
-                    const selected = activeConnection === connection.id;
-                    return (
-                        <Link
-                            key={connection.id}
-                            href={`/account?connection=${connection.id}`}
-                            scroll={false}
-                            aria-current={selected ? "page" : undefined}
-                            className={cn(
-                                "focus-visible:ring-ring flex min-h-9 flex-wrap items-center gap-2 rounded px-3 py-1.5 text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none",
-                                selected
-                                    ? "bg-primary text-primary-foreground"
-                                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                            )}
-                        >
-                            <Icon
-                                aria-hidden="true"
-                                className="size-3.5 shrink-0"
-                            />
-                            <span>{connection.label}</span>
-                            <span className="text-[11px] font-normal">
-                                · {connection.status}
-                            </span>
-                        </Link>
-                    );
-                })}
-            </nav>
+            <AccountConnectionTabs
+                active={activeConnection}
+                vintedLinked={status.linked}
+                githubConnected={githubRewards.githubConnected}
+            />
 
             <section
+                key={activeConnection}
                 id={`${activeConnection}-connection`}
-                className="min-w-0 scroll-mt-20 space-y-3"
+                className="account-connection-panel min-w-0 scroll-mt-20 space-y-3"
             >
                 <div>
                     <div>
