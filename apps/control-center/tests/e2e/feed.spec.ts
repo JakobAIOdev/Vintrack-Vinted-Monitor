@@ -153,6 +153,11 @@ test.describe("dashboard feed", () => {
         const search = page.getByRole("searchbox", {
             name: "Search feed items",
         });
+        await expect(search).toBeHidden();
+        await page
+            .getByRole("button", { name: "Search feed items", exact: true })
+            .click();
+        await expect(search).toBeFocused();
         await expect(cards).toHaveCount(2);
         await search.fill("e2e_seller_one");
         await expect(cards).toHaveCount(1);

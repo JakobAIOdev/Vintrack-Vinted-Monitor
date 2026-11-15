@@ -1,7 +1,5 @@
 function LoadingBlock({ className = "" }: { className?: string }) {
-    return (
-        <div className={`bg-muted/60 animate-pulse rounded-md ${className}`} />
-    );
+    return <div className={`ui-skeleton rounded-md ${className}`} />;
 }
 
 export default function AdminLoading() {

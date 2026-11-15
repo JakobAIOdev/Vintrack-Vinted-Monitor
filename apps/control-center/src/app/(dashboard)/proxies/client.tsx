@@ -387,7 +387,9 @@ export function ProxiesClient({
                         Use the shared starter pool or manage dedicated proxy
                         groups.
                     </p>
-                    <GuideHelpLink href="/guide/monitors#proxies">Proxy setup guide</GuideHelpLink>
+                    <GuideHelpLink href="/guide/monitors#proxies">
+                        Proxy setup guide
+                    </GuideHelpLink>
                 </div>
                 <Button
                     ref={createTriggerRef}
@@ -649,7 +651,7 @@ export function ProxiesClient({
                         <Button
                             onClick={() => setIsCreateOpen(true)}
                             size="sm"
-                            className="mt-4 gap-1.5"
+                            className="mt-4 h-auto min-h-8 max-w-full gap-1.5 whitespace-normal"
                             variant="outline"
                         >
                             <Plus className="h-4 w-4" /> Create your first group
@@ -958,7 +960,7 @@ export function ProxiesClient({
                                                         <Button
                                                             size="sm"
                                                             variant="outline"
-                                                            className="gap-1.5"
+                                                            className="h-auto min-h-8 max-w-full gap-1.5 whitespace-normal"
                                                             disabled={
                                                                 checkRunning ||
                                                                 startingCheckId ===
@@ -1173,7 +1175,7 @@ export function ProxiesClient({
                                                         )}
                                                 </div>
                                             </div>
-                                            <div className="border-border bg-background flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+                                            <div className="border-border bg-background flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2">
                                                 <p className="text-muted-foreground text-[12px]">
                                                     {group.bandwidthResetAt
                                                         ? `Last reset: ${new Date(group.bandwidthResetAt).toLocaleString()}`
@@ -1182,7 +1184,7 @@ export function ProxiesClient({
                                                 <Button
                                                     size="sm"
                                                     variant="outline"
-                                                    className="gap-1.5"
+                                                    className="h-auto min-h-8 max-w-full gap-1.5 whitespace-normal"
                                                     onClick={() =>
                                                         handleResetBandwidth(
                                                             group.id,

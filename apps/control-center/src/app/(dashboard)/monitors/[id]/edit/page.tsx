@@ -130,6 +130,8 @@ export default function EditMonitorPage() {
     const monitorId = Number(params.id);
     const returnTo =
         searchParams.get("from") === "dashboard" ? "dashboard" : "detail";
+    const backHref =
+        returnTo === "dashboard" ? "/dashboard" : `/monitors/${monitorId}`;
 
     const [monitor, setMonitor] = useState<MonitorData | null>(null);
     const [selectedSizes, setSelectedSizes] = useState<string[]>([]);
@@ -479,11 +481,23 @@ export default function EditMonitorPage() {
     return (
         <div className="mx-auto max-w-4xl space-y-6">
             <div className="flex items-center gap-3">
-                <Link href={`/monitors/${monitorId}`}>
-                    <Button variant="outline" size="icon" className="h-8 w-8">
-                        <ArrowLeft className="h-4 w-4" />
-                    </Button>
-                </Link>
+                <Button
+                    asChild
+                    variant="outline"
+                    size="icon"
+                    className="h-8 w-8"
+                >
+                    <Link
+                        href={backHref}
+                        aria-label={
+                            returnTo === "dashboard"
+                                ? "Back to dashboard"
+                                : "Back to monitor"
+                        }
+                    >
+                        <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+                    </Link>
+                </Button>
                 <div>
                     <h1 className="text-2xl font-semibold tracking-tight">
                         Edit Monitor
@@ -1283,21 +1297,13 @@ export default function EditMonitorPage() {
                             </Button>
 
                             <div className="flex flex-col gap-2 sm:flex-row">
-                                <Link
-                                    href={
-                                        returnTo === "dashboard"
-                                            ? "/dashboard"
-                                            : `/monitors/${monitorId}`
-                                    }
+                                <Button
+                                    asChild
+                                    variant="outline"
+                                    className="w-full sm:w-auto"
                                 >
-                                    <Button
-                                        type="button"
-                                        variant="outline"
-                                        className="w-full sm:w-auto"
-                                    >
-                                        Cancel
-                                    </Button>
-                                </Link>
+                                    <Link href={backHref}>Cancel</Link>
+                                </Button>
                                 <Button
                                     type="submit"
                                     className="w-full gap-1.5 sm:w-auto"

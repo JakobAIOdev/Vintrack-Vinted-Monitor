@@ -957,8 +957,8 @@ test.describe("account connections", () => {
         });
 
         const connectionLinks = connections.getByRole("link");
-        await expect(connectionLinks.nth(0)).toContainText("GitHub Rewards");
-        await expect(connectionLinks.nth(1)).toContainText("Vinted");
+        await expect(connectionLinks.nth(0)).toContainText("Vinted");
+        await expect(connectionLinks.nth(1)).toContainText("GitHub");
 
         await expect(vinted).toHaveAttribute("aria-current", "page");
         await expect(
@@ -1520,14 +1520,13 @@ test.describe("dashboard monitors", () => {
             .first();
 
         await expect(monitorCard).toBeVisible();
-        const runtimeStatus = monitorCard.getByRole("status");
+        const statusControl = monitorCard.getByRole("button", {
+            name: "Status for E2E Mock Feed",
+            exact: true,
+        });
+        const runtimeStatus = statusControl.getByRole("status");
         await expect(runtimeStatus).toBeVisible();
-        await expect(
-            monitorCard
-                .getByRole("heading", { name: "E2E Mock Feed" })
-                .locator("..")
-                .getByRole("status"),
-        ).toBeVisible();
+        await expect(statusControl).toHaveAttribute("aria-haspopup", "dialog");
         await expect(runtimeStatus).not.toHaveClass(/rounded-full|border/);
         await expect(runtimeStatus).toHaveAttribute(
             "data-runtime-state",

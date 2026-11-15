@@ -90,7 +90,8 @@ function ItemCardComponent({
     showMonitor = false,
     onSellerBanned,
 }: ItemCardProps) {
-    const { linked, checkoutEnabled, likedIds, addLike, removeLike } = useVintedAccount();
+    const { linked, checkoutEnabled, likedIds, addLike, removeLike } =
+        useVintedAccount();
     const liked = likedIds.has(Number(item.id));
     const [liking, setLiking] = useState(false);
     const [msgOpen, setMsgOpen] = useState(false);
@@ -353,7 +354,7 @@ function ItemCardComponent({
                         <img
                             src={item.image_url}
                             alt={item.title || "Item"}
-                            className="h-full w-full object-cover "
+                            className="h-full w-full object-cover"
                             loading="lazy"
                         />
                     </button>
@@ -387,13 +388,15 @@ function ItemCardComponent({
                             onClick={handleLike}
                             disabled={liking}
                             className={cn(
-                                "flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-white transition-colors",
+                                "ui-action flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-white transition-colors",
                                 liked
                                     ? "bg-red-500 text-white"
                                     : "hover:bg-white/15 hover:text-red-300",
                             )}
                             title={liked ? "Unlike" : "Like"}
                             aria-label={liked ? "Unlike item" : "Like item"}
+                            aria-pressed={liked}
+                            aria-busy={liking}
                         >
                             <Heart
                                 className={cn(
@@ -409,13 +412,14 @@ function ItemCardComponent({
                                 type="button"
                                 onClick={handleBuy}
                                 disabled={buying || !checkoutEnabled}
-                                className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-white transition-colors hover:bg-white/15 hover:text-amber-300 disabled:cursor-not-allowed disabled:opacity-70"
+                                className="ui-action flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-white transition-colors hover:bg-white/15 hover:text-amber-300 disabled:cursor-not-allowed disabled:opacity-70"
                                 title={
                                     checkoutEnabled
                                         ? "Buy now with your saved checkout settings"
                                         : "Enable checkout in Account"
                                 }
                                 aria-label="Buy now"
+                                aria-busy={buying}
                             >
                                 {buying ? (
                                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -430,7 +434,7 @@ function ItemCardComponent({
                                     e.preventDefault();
                                     setOfferOpen(true);
                                 }}
-                                className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-white transition-colors hover:bg-white/15 hover:text-emerald-300"
+                                className="ui-action flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-white transition-colors hover:bg-white/15 hover:text-emerald-300"
                                 title="Make an offer"
                                 aria-label="Make an offer"
                             >
@@ -443,7 +447,7 @@ function ItemCardComponent({
                                     e.preventDefault();
                                     setMsgOpen(true);
                                 }}
-                                className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-white transition-colors hover:bg-white/15 hover:text-sky-300"
+                                className="ui-action flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-white transition-colors hover:bg-white/15 hover:text-sky-300"
                                 title="Send message to seller"
                                 aria-label="Send message to seller"
                             >
@@ -460,9 +464,10 @@ function ItemCardComponent({
                                 setBanDialogOpen(true);
                             }}
                             disabled={banningSeller}
-                            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-white transition-colors hover:bg-red-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-70"
+                            className="ui-action flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-white transition-colors hover:bg-red-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-70"
                             title="Ban seller"
                             aria-label="Ban seller"
+                            aria-busy={banningSeller}
                         >
                             {banningSeller ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -937,25 +942,25 @@ ItemCard.displayName = "ItemCard";
 export function ItemCardSkeleton() {
     return (
         <div className="border-border/70 bg-card flex flex-col overflow-hidden rounded-lg border">
-            <div className="bg-muted aspect-4/5 animate-pulse" />
+            <div className="ui-skeleton aspect-4/5" />
             <div className="space-y-3 p-3.5">
                 <div className="flex items-start justify-between gap-4">
                     <div className="space-y-2">
-                        <div className="bg-muted h-4 w-32 animate-pulse rounded" />
-                        <div className="bg-muted h-4 w-24 animate-pulse rounded" />
+                        <div className="ui-skeleton h-4 w-32 rounded" />
+                        <div className="ui-skeleton h-4 w-24 rounded" />
                     </div>
-                    <div className="bg-muted h-5 w-12 animate-pulse rounded" />
+                    <div className="ui-skeleton h-5 w-12 rounded" />
                 </div>
                 <div className="flex gap-1.5 pt-1">
-                    <div className="bg-muted h-5 w-10 animate-pulse rounded" />
-                    <div className="bg-muted h-5 w-14 animate-pulse rounded" />
+                    <div className="ui-skeleton h-5 w-10 rounded" />
+                    <div className="ui-skeleton h-5 w-14 rounded" />
                 </div>
                 <div className="border-border/60 flex justify-between border-t pt-3">
-                    <div className="bg-muted h-3 w-20 animate-pulse rounded" />
-                    <div className="bg-muted h-3 w-10 animate-pulse rounded" />
+                    <div className="ui-skeleton h-3 w-20 rounded" />
+                    <div className="ui-skeleton h-3 w-10 rounded" />
                 </div>
             </div>
-            <div className="bg-muted/60 h-10 animate-pulse border-t" />
+            <div className="ui-skeleton h-10 border-t" />
         </div>
     );
 }

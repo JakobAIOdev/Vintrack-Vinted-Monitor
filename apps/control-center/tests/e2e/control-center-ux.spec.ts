@@ -73,6 +73,7 @@ test("opens monitor sections from shortcuts and reveals invalid required fields"
         name: "Monitor setup sections",
     });
     await shortcuts.getByRole("link", { name: "Filters", exact: true }).click();
+    await expect(page.locator("#monitor-filters")).toHaveCount(1);
     await expect(page.locator("#monitor-filters")).toHaveAttribute("open", "");
     await expect(page.locator("#monitor-filters > summary")).toBeFocused();
     await shortcuts.getByRole("link", { name: "Preview", exact: true }).click();
@@ -234,7 +235,8 @@ test("keeps new monitor and admin overview within a narrow viewport with enlarge
         await expect(
             page.getByRole("heading", {
                 level: 1,
-                name: path === "/monitors/new" ? "Create Monitor" : "Admin Panel",
+                name:
+                    path === "/monitors/new" ? "Create Monitor" : "Admin Panel",
                 exact: true,
             }),
         ).toBeVisible();
@@ -334,11 +336,20 @@ test("keeps account navigation compact and browser status readable in both theme
     }
 });
 
-test("searches monitor names, queries and regions without losing empty-state recovery", async ({
+test("expands the search button, filters monitors and restores focus when closed", async ({
     page,
 }) => {
     await openMonitors(page);
     const search = page.getByRole("searchbox", { name: "Search monitors" });
+    const trigger = page.getByRole("button", {
+        name: "Search monitors",
+        exact: true,
+    });
+    await expect(search).toBeHidden();
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    await expect(search).toBeFocused();
     await search.fill("FR wool");
     await expect(page.getByTestId("monitor-card")).toHaveCount(1);
     await expect(page.getByTestId("monitor-card")).toContainText(
@@ -362,12 +373,25 @@ test("searches monitor names, queries and regions without losing empty-state rec
     await expect(page.getByTestId("monitor-result-count")).toHaveText(
         "Showing 4 of 4 monitors",
     );
+    await search.fill("carhartt");
+    await search.press("Escape");
+    await expect(search).toBeHidden();
+    await expect(trigger).toBeFocused();
+    await expect(page.getByTestId("monitor-card")).toHaveCount(4);
+    await trigger.click();
+    await expect(search).toHaveValue("");
+    await page.getByRole("button", { name: "Close monitor search" }).click();
+    await expect(search).toBeHidden();
+    await expect(trigger).toBeFocused();
 });
 
 test("selects only visible monitors and makes hidden selections explicit", async ({
     page,
 }) => {
     await openMonitors(page);
+    await page
+        .getByRole("button", { name: "Search monitors", exact: true })
+        .click();
     await page
         .getByRole("searchbox", { name: "Search monitors" })
         .fill("workwear");
@@ -396,6 +420,141 @@ test("selects only visible monitors and makes hidden selections explicit", async
     await expect(
         page.getByRole("button", { name: "Bulk edit", exact: true }),
     ).toBeDisabled();
+});
+
+test("shows monitor status details and restores focus", async ({ page }) => {
+    await openMonitors(page);
+    const status = page.getByRole("button", {
+        name: "Status for Vintage outerwear",
+        exact: true,
+    });
+    await status.focus();
+    await page.keyboard.press("Enter");
+    const details = page.getByRole("dialog", {
+        name: "Status for Vintage outerwear",
+    });
+    await expect(details).toContainText(
+        "This search is paused. Resume it to look for new listings.",
+    );
+    await page.keyboard.press("Escape");
+    await expect(details).toBeHidden();
+    await expect(status).toBeFocused();
+});
+
+test("prevents repeated monitor starts and restores a failed action", async ({
+    page,
+}) => {
+    let submissions = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    await page.route("**/dashboard", async (route) => {
+        if (
+            route.request().method() !== "POST" ||
+            !route.request().postData()?.includes("990702")
+        )
+            return route.continue();
+        submissions++;
+        await gate;
+        await route.fulfill({
+            status: 503,
+            contentType: "text/plain",
+            body: "Synthetic service unavailable",
+        });
+    });
+    try {
+        await openMonitors(page);
+        const card = page
+            .getByTestId("monitor-card")
+            .filter({ hasText: "Vintage outerwear" });
+        await card.getByRole("button", { name: "Resume", exact: true }).click();
+        const pending = card.getByRole("button", {
+            name: "Starting…",
+            exact: true,
+        });
+        await expect(pending).toBeDisabled();
+        await expect(pending).toHaveAttribute("aria-busy", "true");
+        await pending.click({ force: true });
+        release();
+        await expect(
+            card.getByRole("button", { name: "Resume", exact: true }),
+        ).toBeEnabled();
+        await expect(card.getByRole("status")).toHaveText("Paused");
+        expect(submissions).toBe(1);
+    } finally {
+        release();
+    }
+});
+
+test("shows notification saving progress and recovers the previous preference", async ({
+    page,
+}) => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    await page.route("**/dashboard", async (route) => {
+        if (
+            route.request().method() !== "POST" ||
+            !route.request().postData()?.includes("990001")
+        )
+            return route.continue();
+        await gate;
+        await route.fulfill({
+            status: 503,
+            contentType: "text/plain",
+            body: "Synthetic service unavailable",
+        });
+    });
+    try {
+        await openMonitors(page);
+        const toggle = page.getByRole("switch", {
+            name: "Notifications for E2E Mock Feed",
+        });
+        await expect(toggle).toBeChecked();
+        await toggle.click();
+        await expect(toggle).toBeDisabled();
+        await expect(toggle).toHaveAttribute("aria-busy", "true");
+        await expect(toggle).not.toBeChecked();
+        release();
+        await expect(toggle).toBeEnabled();
+        await expect(toggle).toBeChecked();
+        await expect(toggle).toHaveAttribute("aria-busy", "false");
+    } finally {
+        release();
+    }
+});
+
+test("returns dashboard edits to the dashboard and detail edits to the monitor", async ({
+    page,
+}) => {
+    await openMonitors(page);
+    const edit = page
+        .getByTestId("monitor-card")
+        .filter({ hasText: "Carhartt workwear" })
+        .getByRole("link", { name: "Edit monitor", exact: true });
+    await edit.click();
+    const back = page.getByRole("link", {
+        name: "Back to dashboard",
+        exact: true,
+    });
+    await expect(back).toHaveAttribute("href", "/dashboard");
+    await back.click();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await edit.click();
+    await expect(
+        page.getByRole("link", { name: "Cancel", exact: true }),
+    ).toHaveAttribute("href", "/dashboard");
+    await page
+        .getByRole("button", { name: "Save Changes", exact: true })
+        .click();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await page.goto("/monitors/990701/edit");
+    await page
+        .getByRole("link", { name: "Back to monitor", exact: true })
+        .click();
+    await expect(page).toHaveURL(/\/monitors\/990701$/);
 });
 
 test("keeps mobile navigation out of the tab order until opened and restores focus", async ({
@@ -519,6 +678,9 @@ for (const theme of ["light", "dark"] as const) {
         );
         await openMonitors(page);
         await page.addStyleTag({ content: "html { font-size: 200%; }" });
+        await page
+            .getByRole("button", { name: "Search monitors", exact: true })
+            .click();
         const search = page.getByRole("searchbox", { name: "Search monitors" });
         await search.fill("carhartt");
         await expect(page.getByTestId("monitor-card")).toHaveCount(1);
@@ -527,7 +689,8 @@ for (const theme of ["light", "dark"] as const) {
         });
         await clear.scrollIntoViewIfNeeded();
         await expect(clear).toBeInViewport();
-        await clear.focus();
+        await search.press("Tab");
+        await expect(clear).toBeFocused();
         expect(
             await clear.evaluate((node) => getComputedStyle(node).outlineStyle),
         ).toBe("solid");
@@ -621,6 +784,9 @@ test("restores the compact topbar, original palette and working light mode toggl
     );
     expect((await page.locator("header").boundingBox())?.height).toBe(48);
     expect((await theme.boundingBox())?.height).toBe(32);
+    await page
+        .getByRole("button", { name: "Search monitors", exact: true })
+        .click();
     expect(
         (
             await page

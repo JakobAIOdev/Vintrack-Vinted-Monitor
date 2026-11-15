@@ -5,7 +5,7 @@ import Link from "next/link";
 import { AlertCircle, RotateCcw, Search, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { CompactSearch } from "@/components/compact-search";
+import { ExpandableSearch } from "@/components/expandable-search";
 import {
     ItemCard,
     ItemCardSkeleton,
@@ -234,40 +234,11 @@ export default function FeedPage() {
                     </p>
                 </div>
                 <div className="flex w-full flex-wrap items-center justify-start gap-2 sm:w-auto sm:justify-end">
-                    <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={handleResetFeed}
-                        disabled={loading || items.length === 0}
-                    >
-                        <RotateCcw className="h-3.5 w-3.5" />
-                        Reset feed
-                    </Button>
-                    <label className="border-input bg-card text-muted-foreground inline-flex h-8 items-center gap-2 rounded-md border px-2.5 text-xs">
-                        <Settings2 className="h-3.5 w-3.5" />
-                        <span className="sr-only">Live feed item limit</span>
-                        <select
-                            aria-label="Live feed item limit"
-                            value={itemCap}
-                            onChange={(event) =>
-                                handleItemCapChange(event.target.value)
-                            }
-                            className="text-foreground focus-visible:ring-ring h-6 cursor-pointer rounded bg-transparent pr-1 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none"
-                        >
-                            {LIVE_FEED_ITEM_CAP_OPTIONS.map((option) => (
-                                <option key={option} value={option}>
-                                    {option} items
-                                </option>
-                            ))}
-                        </select>
-                    </label>
                     <div
                         className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-medium ${liveBadgeClassName}`}
                     >
                         {hasActiveMonitors ? (
                             <span className="relative flex h-2 w-2">
-                                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
                                 <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
                             </span>
                         ) : (
@@ -280,16 +251,19 @@ export default function FeedPage() {
                 </div>
             </div>
 
-            {(items.length > 0 || hasFilters) && (
-                <section aria-label="Find feed items" className="space-y-2">
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                        <CompactSearch
+            <section
+                aria-label="Find feed items"
+                className="border-border/60 space-y-3 border-b pb-4"
+            >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex max-w-full min-w-0 flex-wrap items-center gap-2">
+                        <ExpandableSearch
                             value={search}
                             onChange={setSearch}
                             label="Search feed items"
                             clearLabel="Clear feed search"
+                            closeLabel="Close feed search"
                             placeholder="Search items, brands or sellers"
-                            className="sm:max-w-sm sm:flex-1"
                         />
                         <select
                             aria-label="Filter feed by monitor"
@@ -297,7 +271,7 @@ export default function FeedPage() {
                             onChange={(event) =>
                                 setMonitorFilter(event.target.value)
                             }
-                            className="border-input bg-card text-foreground focus-visible:ring-ring h-8 w-full min-w-0 rounded-md border px-2 text-xs focus-visible:ring-2 focus-visible:outline-none sm:w-52"
+                            className="border-input bg-card text-foreground hover:border-ring/50 focus-visible:ring-ring h-8 w-44 max-w-full min-w-0 cursor-pointer rounded-md border px-2 text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none"
                         >
                             <option value="all">All monitors</option>
                             {monitorFilter !== "all" &&
@@ -315,12 +289,64 @@ export default function FeedPage() {
                             ))}
                         </select>
                     </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="ui-icon-turn text-muted-foreground"
+                            onClick={handleResetFeed}
+                            disabled={loading || items.length === 0}
+                        >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            Reset feed
+                        </Button>
+                        <label className="relative inline-flex max-w-full min-w-0 items-center">
+                            <Settings2
+                                aria-hidden="true"
+                                className="text-muted-foreground pointer-events-none absolute left-2.5 size-3.5"
+                            />
+                            <span className="sr-only">
+                                Live feed item limit
+                            </span>
+                            <select
+                                aria-label="Live feed item limit"
+                                value={itemCap}
+                                onChange={(event) =>
+                                    handleItemCapChange(event.target.value)
+                                }
+                                className="border-input bg-card text-foreground hover:border-ring/50 focus-visible:ring-ring h-8 max-w-full min-w-0 cursor-pointer rounded-md border py-1 pl-8 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                            >
+                                {LIVE_FEED_ITEM_CAP_OPTIONS.map((option) => (
+                                    <option key={option} value={option}>
+                                        {option} items
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+                    </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
                     <p role="status" className="text-muted-foreground text-xs">
                         {filteredItems.length} of {items.length} items · latest
                         first
                     </p>
-                </section>
-            )}
+                    {hasFilters && (
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="text-muted-foreground h-7 px-2 text-xs"
+                            onClick={() => {
+                                setSearch("");
+                                setMonitorFilter("all");
+                            }}
+                        >
+                            Clear filters
+                        </Button>
+                    )}
+                </div>
+            </section>
 
             {feedError && (
                 <div
@@ -349,7 +375,10 @@ export default function FeedPage() {
                 </div>
             )}
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+            <div
+                aria-busy={loading}
+                className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"
+            >
                 {loading && items.length === 0
                     ? [...Array(8)].map((_, i) => <ItemCardSkeleton key={i} />)
                     : filteredItems.map((item) => (

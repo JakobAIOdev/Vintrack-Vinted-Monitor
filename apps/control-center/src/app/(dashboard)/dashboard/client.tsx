@@ -1,5 +1,12 @@
 "use client";
 
+import {
+    MonitorCardStatus,
+    MonitorEditLink,
+    MonitorRunButton,
+    type MonitorRunAction,
+} from "@/components/monitors/monitor-card-controls";
+import { MonitorSearchWidget } from "@/components/monitors/monitor-search-widget";
 import { OwnProxyUsageSummary } from "@/components/monitors/own-proxy-usage";
 import { FirstAlertStarCard } from "@/components/monitors/first-alert-star-card";
 
@@ -9,11 +16,13 @@ import {
     useEffect,
     useCallback,
     useTransition,
+    useRef,
 } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
     Bell,
+    BellOff,
     PauseCircle,
     PlayCircle,
     Plus,
@@ -28,7 +37,6 @@ import {
     ArrowRight,
     Globe,
     Zap,
-    Pencil,
     Send,
     Search,
     SlidersHorizontal,
@@ -41,7 +49,6 @@ import {
     ListChecks,
     Loader2,
     RefreshCw,
-    X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -114,10 +121,7 @@ import {
 } from "@/components/maintenance/create-monitor-link";
 import { FreePoolLimitDialog } from "@/components/free-pool-limit-dialog";
 import type { MonitorActivationBlock } from "@/lib/monitor-limits";
-import {
-    MonitorLifecycleStatus,
-    type MonitorHealth,
-} from "@/components/monitors/proxy-health";
+import { type MonitorHealth } from "@/components/monitors/proxy-health";
 
 export type Monitor = {
     id: number;
@@ -352,6 +356,10 @@ export function DashboardClient({
     const [notificationToggleIds, setNotificationToggleIds] = useState<
         Set<number>
     >(new Set());
+    const monitorToggleIds = useRef(new Set<number>());
+    const [monitorRunActions, setMonitorRunActions] = useState<
+        ReadonlyMap<number, MonitorRunAction>
+    >(() => new Map());
     const [bulkApplyQueryDelay, setBulkApplyQueryDelay] = useState(false);
     const [bulkQueryDelayMs, setBulkQueryDelayMs] = useState("1500");
     const [bulkApplyQuietHours, setBulkApplyQuietHours] = useState(false);
@@ -855,9 +863,17 @@ export function DashboardClient({
     };
 
     const handleToggle = async (id: number, currentStatus: string) => {
+        const currentMonitor = monitors.find((monitor) => monitor.id === id);
+        if (!currentMonitor || monitorToggleIds.current.has(id)) return;
+        monitorToggleIds.current.add(id);
+        setMonitorRunActions((current) =>
+            new Map(current).set(
+                id,
+                currentStatus === "active" ? "pause" : "start",
+            ),
+        );
         const newStatus = currentStatus === "active" ? "paused" : "active";
         const actionText = newStatus === "active" ? "Resumed" : "Paused";
-        const currentMonitor = monitors.find((monitor) => monitor.id === id);
         const optimisticDemoExpiry =
             newStatus === "active" && currentMonitor?.demo_expires_at
                 ? new Date(Date.now() + DEMO_MONITOR_DURATION_MS).toISOString()
@@ -879,14 +895,26 @@ export function DashboardClient({
         );
 
         const toastId = toast.loading("Updating...");
+        const rollbackStatus = () => {
+            setMonitors((current) =>
+                current.map((monitor) =>
+                    monitor.id === id &&
+                    monitor.status_changed_at === statusChangedAt
+                        ? {
+                              ...monitor,
+                              status: currentMonitor.status,
+                              status_changed_at:
+                                  currentMonitor.status_changed_at,
+                              demo_expires_at: currentMonitor.demo_expires_at,
+                          }
+                        : monitor,
+                ),
+            );
+        };
         try {
             const result = await toggleMonitor(id, currentStatus);
             if (!result.success) {
-                setMonitors((prev) =>
-                    prev.map((m) =>
-                        m.id === id && currentMonitor ? currentMonitor : m,
-                    ),
-                );
+                rollbackStatus();
                 toast.dismiss(toastId);
                 if (result.block?.code === "free_proxy_limit") {
                     setActivationBlock(result.block);
@@ -915,17 +943,20 @@ export function DashboardClient({
                 { id: toastId },
             );
         } catch (error) {
-            setMonitors((prev) =>
-                prev.map((m) =>
-                    m.id === id && currentMonitor ? currentMonitor : m,
-                ),
-            );
+            rollbackStatus();
             toast.error(
                 error instanceof Error
                     ? error.message
                     : "Failed to update monitor",
                 { id: toastId },
             );
+        } finally {
+            monitorToggleIds.current.delete(id);
+            setMonitorRunActions((current) => {
+                const next = new Map(current);
+                next.delete(id);
+                return next;
+            });
         }
     };
 
@@ -1242,7 +1273,7 @@ export function DashboardClient({
                                 href={telegramConnectCode.botLink}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="border-input bg-background text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors"
+                                className="ui-action border-input bg-background text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors"
                                 title="Open Telegram"
                             >
                                 <ExternalLink className="h-3.5 w-3.5" />
@@ -1315,6 +1346,7 @@ export function DashboardClient({
                         onClick={() => setIsSettingsOpen(true)}
                         title="Dashboard settings"
                         aria-label="Dashboard settings"
+                        className="ui-icon-turn"
                     >
                         <Settings className="h-3.5 w-3.5" />
                     </Button>
@@ -1345,9 +1377,6 @@ export function DashboardClient({
                 </div>
                 <div className="flex items-center gap-2 text-sm">
                     <span className="relative flex h-2 w-2">
-                        {activeCount > 0 && (
-                            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                        )}
                         <span
                             className={cn(
                                 "relative inline-flex h-2 w-2 rounded-full",
@@ -1404,66 +1433,15 @@ export function DashboardClient({
             </div>
 
             {monitors.length > 0 && (
-                <section aria-label="Find monitors" className="space-y-2">
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="relative w-full min-w-0 sm:max-w-sm sm:flex-1">
-                            <Search
-                                aria-hidden="true"
-                                className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2"
-                            />
-                            <Input
-                                type="search"
-                                aria-label="Search monitors"
-                                placeholder="Search monitors"
-                                value={monitorSearch}
-                                onChange={(event) =>
-                                    setMonitorSearch(event.target.value)
-                                }
-                                className="bg-card h-8 pr-8 pl-8 text-sm shadow-none [&::-webkit-search-cancel-button]:appearance-none"
-                            />
-                            {monitorSearch && (
-                                <button
-                                    type="button"
-                                    aria-label="Clear monitor search"
-                                    onClick={() => setMonitorSearch("")}
-                                    className="text-muted-foreground hover:bg-accent hover:text-foreground absolute top-0 right-0 flex size-8 items-center justify-center rounded-r-md"
-                                >
-                                    <X aria-hidden="true" className="size-4" />
-                                </button>
-                            )}
-                        </div>
-                        <div
-                            role="group"
-                            aria-label="Filter monitors by status"
-                            className="border-border/70 bg-card flex flex-wrap gap-0.5 self-start rounded-md border p-0.5 sm:shrink-0"
-                        >
-                            {(
-                                [
-                                    ["all", "All", monitors.length],
-                                    ["active", "Active", activeCount],
-                                    ["paused", "Paused", pausedCount],
-                                ] as const
-                            ).map(([scope, label, count]) => (
-                                <button
-                                    key={scope}
-                                    type="button"
-                                    aria-pressed={monitorScope === scope}
-                                    onClick={() => setMonitorScope(scope)}
-                                    className={cn(
-                                        "flex min-h-8 flex-1 items-center justify-center gap-1.5 rounded px-3 py-1 text-[13px] font-medium transition-colors",
-                                        monitorScope === scope
-                                            ? "bg-primary text-primary-foreground"
-                                            : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                                    )}
-                                >
-                                    {label}
-                                    <span className="text-xs tabular-nums">
-                                        {count}
-                                    </span>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
+                <MonitorSearchWidget
+                    query={monitorSearch}
+                    onQueryChange={setMonitorSearch}
+                    scope={monitorScope}
+                    onScopeChange={setMonitorScope}
+                    totalCount={monitors.length}
+                    activeCount={activeCount}
+                    pausedCount={pausedCount}
+                >
                     {monitors.length > 0 && (
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                             <Checkbox
@@ -1533,7 +1511,7 @@ export function DashboardClient({
                             </Button>
                         </div>
                     )}
-                </section>
+                </MonitorSearchWidget>
             )}
 
             {monitors.length === 0 ? (
@@ -1614,64 +1592,47 @@ export function DashboardClient({
                             <Card
                                 key={m.id}
                                 data-testid="monitor-card"
-                                className={`group hover:border-foreground/20 h-full overflow-hidden rounded-lg py-0 shadow-none transition-colors ${
+                                className={`monitor-card group hover:border-foreground/20 h-full overflow-hidden rounded-lg py-0 shadow-none transition-colors ${
                                     selectedMonitorIdSet.has(m.id)
-                                        ? "border-primary/45 bg-primary/[0.025] ring-primary/10 ring-2"
+                                        ? "border-primary/70 bg-primary/[0.025] ring-primary/15 ring-2"
                                         : "border-border/70 bg-card"
                                 }`}
                             >
                                 <CardContent className="flex h-full flex-1 flex-col p-0">
-                                    <div className="flex items-start justify-between gap-3 p-4 pb-3">
-                                        <Checkbox
-                                            checked={selectedMonitorIdSet.has(
-                                                m.id,
-                                            )}
-                                            onCheckedChange={() =>
-                                                toggleMonitorSelection(m.id)
-                                            }
-                                            aria-label={`Select ${m.name}`}
-                                            className="mt-0.5"
-                                        />
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex min-w-0 items-center gap-2.5">
-                                                <h3
-                                                    className="text-foreground min-w-0 flex-1 truncate text-[15px] font-semibold"
-                                                    title={m.name}
-                                                >
-                                                    {m.name}
-                                                </h3>
-                                                <MonitorLifecycleStatus
-                                                    status={m.status}
-                                                    health={healthMap[m.id]}
-                                                    compact
-                                                    className="shrink-0"
-                                                />
-                                            </div>
-                                            {m.demo_expires_at && (
-                                                <div className="mt-1.5 flex items-center">
-                                                    <Badge
-                                                        variant="outline"
-                                                        className="border-amber-500/25 bg-amber-500/10 text-[10px] font-medium text-amber-700 dark:text-amber-300"
-                                                    >
-                                                        <Clock3 className="size-3" />
-                                                        {getDemoMonitorLabel(
-                                                            m,
-                                                            demoNow,
-                                                        )}
-                                                    </Badge>
-                                                </div>
-                                            )}
-                                        </div>
-                                        <div className="flex shrink-0 items-center">
-                                            <Link
-                                                href={`/monitors/${m.id}/edit?from=dashboard`}
-                                                className="text-muted-foreground hover:bg-accent hover:text-accent-foreground flex size-8 items-center justify-center rounded-md transition-colors"
-                                                title="Edit monitor"
-                                                aria-label="Edit monitor"
+                                    <div className="p-4 pb-3">
+                                        <div className="flex items-start gap-3">
+                                            <Checkbox
+                                                checked={selectedMonitorIdSet.has(
+                                                    m.id,
+                                                )}
+                                                onCheckedChange={() =>
+                                                    toggleMonitorSelection(m.id)
+                                                }
+                                                aria-label={`Select ${m.name}`}
+                                                className="mt-1.5"
+                                            />
+                                            <h3
+                                                className="text-foreground min-w-0 flex-1 truncate pt-1 text-[15px] font-semibold"
+                                                title={m.name}
                                             >
-                                                <Pencil className="h-3.5 w-3.5" />
-                                            </Link>
+                                                {m.name}
+                                            </h3>
+                                            <MonitorEditLink monitorId={m.id} />
                                         </div>
+                                        {m.demo_expires_at && (
+                                            <div className="mt-1.5 pl-7">
+                                                <Badge
+                                                    variant="outline"
+                                                    className="border-amber-500/25 bg-amber-500/10 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+                                                >
+                                                    <Clock3 className="size-3" />
+                                                    {getDemoMonitorLabel(
+                                                        m,
+                                                        demoNow,
+                                                    )}
+                                                </Badge>
+                                            </div>
+                                        )}
                                     </div>
 
                                     <div className="px-4 pb-3">
@@ -1859,7 +1820,7 @@ export function DashboardClient({
                                     <div className="border-border/60 flex items-center justify-between gap-3 border-t px-4 py-3">
                                         <div className="flex min-w-0 items-center gap-2.5">
                                             <div
-                                                className={`flex size-8 shrink-0 items-center justify-center rounded-md ${
+                                                className={`flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors duration-200 ${
                                                     hasActiveNotificationChannel(
                                                         m,
                                                     ) && m.notifications_enabled
@@ -1867,14 +1828,42 @@ export function DashboardClient({
                                                         : "bg-muted text-muted-foreground"
                                                 }`}
                                             >
-                                                <Bell className="size-3.5" />
+                                                {notificationToggleIds.has(
+                                                    m.id,
+                                                ) ? (
+                                                    <Loader2
+                                                        aria-hidden="true"
+                                                        className="size-3.5 animate-spin"
+                                                    />
+                                                ) : m.notifications_enabled ? (
+                                                    <Bell
+                                                        aria-hidden="true"
+                                                        className="size-3.5"
+                                                    />
+                                                ) : (
+                                                    <BellOff
+                                                        aria-hidden="true"
+                                                        className="size-3.5"
+                                                    />
+                                                )}
                                             </div>
                                             <div className="min-w-0">
                                                 {hasActiveNotificationChannel(
                                                     m,
                                                 ) ? (
                                                     <>
-                                                        <p className="text-foreground text-xs font-medium">
+                                                        <p
+                                                            role="status"
+                                                            className="text-foreground text-xs font-medium"
+                                                        >
+                                                            {notificationToggleIds.has(
+                                                                m.id,
+                                                            ) && (
+                                                                <span className="sr-only">
+                                                                    Saving alert
+                                                                    preference.{" "}
+                                                                </span>
+                                                            )}
                                                             {m.notifications_enabled
                                                                 ? "Alerts on"
                                                                 : "Alerts muted"}
@@ -1908,7 +1897,19 @@ export function DashboardClient({
                                                 m,
                                             ) && (
                                                 <Switch
-                                                    size="sm"
+                                                    className="monitor-notification-switch"
+                                                    aria-busy={notificationToggleIds.has(
+                                                        m.id,
+                                                    )}
+                                                    title={
+                                                        notificationToggleIds.has(
+                                                            m.id,
+                                                        )
+                                                            ? "Saving alert preference…"
+                                                            : m.notifications_enabled
+                                                              ? "Mute alerts"
+                                                              : "Enable alerts"
+                                                    }
                                                     checked={
                                                         m.notifications_enabled
                                                     }
@@ -1931,7 +1932,7 @@ export function DashboardClient({
                                                 onClick={() =>
                                                     openWebhookDialog(m)
                                                 }
-                                                className="text-muted-foreground hover:bg-accent hover:text-accent-foreground flex size-8 items-center justify-center rounded-md transition-colors"
+                                                className="ui-action text-muted-foreground hover:bg-accent hover:text-accent-foreground flex size-8 items-center justify-center rounded-md transition-colors"
                                                 title="Configure notifications"
                                                 aria-label={`Configure notifications for ${m.name}`}
                                             >
@@ -1941,48 +1942,37 @@ export function DashboardClient({
                                     </div>
 
                                     <div className="border-border/60 bg-muted/10 flex flex-wrap items-center gap-2 border-t px-3 py-2.5">
-                                        <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            onClick={() =>
-                                                handleToggle(m.id, m.status)
-                                            }
-                                            disabled={
-                                                maintenanceEnabled &&
-                                                m.status !== "active"
-                                            }
-                                            title={
-                                                maintenanceEnabled &&
-                                                m.status !== "active"
-                                                    ? "Paused for maintenance"
-                                                    : undefined
-                                            }
-                                            className={`h-8 px-3 text-xs font-medium ${
-                                                m.status === "active"
-                                                    ? "text-amber-700 hover:bg-amber-50 hover:text-amber-800 dark:text-amber-400 dark:hover:bg-amber-500/10 dark:hover:text-amber-300"
-                                                    : "text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-500/10 dark:hover:text-emerald-300"
-                                            }`}
-                                        >
-                                            {m.status === "active" ? (
-                                                <>
-                                                    <PauseCircle className="h-3.5 w-3.5" />
-                                                    Pause
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <PlayCircle className="h-3.5 w-3.5" />
-                                                    {maintenanceEnabled
-                                                        ? "Paused for maintenance"
-                                                        : "Resume"}
-                                                </>
-                                            )}
-                                        </Button>
+                                        <div className="inline-flex max-w-full flex-wrap items-center gap-x-3 gap-y-1">
+                                            <MonitorRunButton
+                                                active={m.status === "active"}
+                                                pendingAction={monitorRunActions.get(
+                                                    m.id,
+                                                )}
+                                                maintenance={maintenanceEnabled}
+                                                onClick={() =>
+                                                    void handleToggle(
+                                                        m.id,
+                                                        m.status,
+                                                    )
+                                                }
+                                            />
+                                            <div className="border-border/70 max-w-full border-l pl-3">
+                                                <MonitorCardStatus
+                                                    name={m.name}
+                                                    status={m.status}
+                                                    health={healthMap[m.id]}
+                                                    pendingAction={monitorRunActions.get(
+                                                        m.id,
+                                                    )}
+                                                />
+                                            </div>
+                                        </div>
                                         <div className="flex-1" />
                                         <Button
                                             asChild
                                             variant="ghost"
                                             size="sm"
-                                            className="text-muted-foreground hover:text-foreground h-auto min-h-8 gap-1 px-3 text-xs font-medium"
+                                            className="ui-icon-shift text-muted-foreground hover:text-foreground h-auto min-h-8 gap-1 px-3 text-xs font-medium"
                                         >
                                             <Link href={`/monitors/${m.id}`}>
                                                 View monitor
