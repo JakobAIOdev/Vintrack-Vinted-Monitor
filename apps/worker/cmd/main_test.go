@@ -672,6 +672,7 @@ func TestFreeProxySourcePrefersKnownURLProvider(t *testing.T) {
 		databaySOCKS4ListURL:                   "databay:socks4",
 		databaySOCKS5ListURL:                   "databay:socks5",
 		monosansProxyListURL:                   "monosans",
+		verifiedHTTPSListURL:                   "proxy-scraper:https",
 	}
 
 	for importURL, want := range tests {

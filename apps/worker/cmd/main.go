@@ -45,15 +45,17 @@ var (
 
 const (
 	proxyScrapeFallbackURL = "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text"
-	proxiflyHTTPListURL    = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt"
-	proxiflyHTTPSListURL   = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/https/data.txt"
-	proxiflySOCKS4ListURL  = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks4/data.txt"
-	proxiflySOCKS5ListURL  = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt"
-	proxiflyCountryBaseURL = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/countries/"
+	// Branch aliases on third-party CDNs can lag far behind the live lists.
+	proxiflyHTTPListURL    = "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt"
+	proxiflyHTTPSListURL   = "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/https/data.txt"
+	proxiflySOCKS4ListURL  = "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks4/data.txt"
+	proxiflySOCKS5ListURL  = "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt"
+	proxiflyCountryBaseURL = "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/"
 	databayHTTPListURL     = "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/http.txt"
 	databaySOCKS4ListURL   = "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/socks4.txt"
 	databaySOCKS5ListURL   = "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/socks5.txt"
 	monosansProxyListURL   = "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt"
+	verifiedHTTPSListURL   = "https://raw.githubusercontent.com/maximilianfeix/free-proxy-list/main/https.txt"
 )
 
 const (
@@ -873,6 +875,7 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 	}
 	protocolCounts := make(map[string]int)
 	sourceCounts := make(map[string]int)
+	regionCounts := make(map[string]int)
 	log.Printf(
 		"free proxy check started: cycle budget %d across %d regions (wave size %d, timeout %s)",
 		totalBudget,
@@ -951,15 +954,18 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 				return
 			}
 			groupBudget := 0
+			regionLimits := make(map[string]int, len(groupRegions))
 			for _, region := range groupRegions {
 				groupBudget += remainingByRegion[region]
+				regionLimits[region] = min(remainingByRegion[region], freeProxyRegionConcurrency(region, perRegionConcurrency, time.Now()))
 			}
 			limit = min(limit, groupBudget)
-			candidates, claimErr := store.ClaimFreeProxiesDueForCheck(
+			candidates, claimErr := store.ClaimFreeProxiesDueForCheckWithRegionLimits(
 				cycleCtx,
 				groupRegions,
 				limit,
 				bootstrap,
+				regionLimits,
 			)
 			if claimErr != nil {
 				if cycleCtx.Err() != nil {
@@ -996,6 +1002,7 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 		for _, candidate := range candidates {
 			protocolCounts[candidate.Protocol]++
 			sourceCounts[candidate.Source]++
+			regionCounts[candidate.Region]++
 		}
 
 		wave := validateFreeProxyWave(
@@ -1058,7 +1065,7 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 	)
 
 	log.Printf(
-		"free proxy check completed: %d waves, %d checked, %d passed, %d failed, %d canceled, %d persistence failures in %s (errors %v, stages %v, protocols %v, sources %v)",
+		"free proxy check completed: %d waves, %d checked, %d passed, %d failed, %d canceled, %d persistence failures in %s (errors %v, stages %v, protocols %v, sources %v, regions %v)",
 		waves,
 		total.Checked,
 		total.Passed,
@@ -1070,6 +1077,7 @@ func checkFreeProxies(ctx context.Context, store *database.Store) {
 		stageCounts,
 		protocolCounts,
 		sourceCounts,
+		regionCounts,
 	)
 }
 
@@ -2386,6 +2394,7 @@ func freeProxyImportURLsContext(ctx context.Context, store *database.Store, impo
 		databaySOCKS5ListURL,
 		databaySOCKS4ListURL,
 		monosansProxyListURL,
+		verifiedHTTPSListURL,
 	} {
 		if seen[sourceURL] {
 			continue
@@ -2430,6 +2439,9 @@ func freeProxySourceContext(ctx context.Context, store *database.Store, importUR
 	}
 	if strings.Contains(importURL, "monosans/proxy-list") {
 		return "monosans"
+	}
+	if strings.Contains(importURL, "maximilianfeix/free-proxy-list") {
+		return "proxy-scraper:https"
 	}
 	if source, err := settingStringContext(ctx, store, "free_proxy_import_source", ""); err == nil && source != "" {
 		if strings.HasPrefix(source, "iplocate") {

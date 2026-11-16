@@ -1483,6 +1483,7 @@ func (s *Store) UpsertFreeProxiesContext(ctx context.Context, proxies []FreeProx
 						OR EXCLUDED.source LIKE 'proxifly%'
 						OR EXCLUDED.source LIKE 'monosans%'
 						OR EXCLUDED.source LIKE 'databay%'
+						OR EXCLUDED.source LIKE 'proxy-scraper%'
 					  )
 					THEN ARRAY(
 						SELECT DISTINCT source_name
@@ -1499,6 +1500,7 @@ func (s *Store) UpsertFreeProxiesContext(ctx context.Context, proxies []FreeProx
 						OR EXCLUDED.source LIKE 'proxifly%'
 						OR EXCLUDED.source LIKE 'monosans%'
 						OR EXCLUDED.source LIKE 'databay%'
+						OR EXCLUDED.source LIKE 'proxy-scraper%'
 					  )
 					  AND (
 						free_proxies.last_error LIKE 'invalid config:%'
@@ -1516,6 +1518,7 @@ func (s *Store) UpsertFreeProxiesContext(ctx context.Context, proxies []FreeProx
 						OR EXCLUDED.source LIKE 'proxifly%'
 						OR EXCLUDED.source LIKE 'monosans%'
 						OR EXCLUDED.source LIKE 'databay%'
+						OR EXCLUDED.source LIKE 'proxy-scraper%'
 					  )
 					  AND (
 						free_proxies.last_error LIKE 'invalid config:%'
@@ -1562,6 +1565,7 @@ func (s *Store) UpsertFreeProxiesContext(ctx context.Context, proxies []FreeProx
 				OR fp.source LIKE 'proxifly%'
 				OR fp.source LIKE 'monosans%'
 				OR fp.source LIKE 'databay%'
+				OR fp.source LIKE 'proxy-scraper%'
 			  )
 			  AND (
 				(fph.status IN ('dead', 'cooldown') AND fph.last_error LIKE 'invalid config:%')
@@ -1693,6 +1697,9 @@ func (s *Store) PruneUnselectedFreeProxiesContext(ctx context.Context, keepProxy
 	}
 	// Never-working imports expire after a day off-feed. A historical success
 	// extends retention to seven days, but must not reserve inventory forever.
+	// A refreshed feed can drop an old, repeatedly failed candidate that a
+	// stale CDN kept publishing. Allow that never-working entry to make room
+	// immediately; young, untested and previously successful entries stay protected.
 	result, err := s.db.ExecContext(ctx, `
 		WITH stale AS (
 			SELECT fp.id
@@ -1703,11 +1710,21 @@ func (s *Store) PruneUnselectedFreeProxiesContext(ctx context.Context, keepProxy
 					OR fp.source LIKE 'proxifly%'
 					OR fp.source LIKE 'monosans%'
 					OR fp.source LIKE 'databay%'
+					OR fp.source LIKE 'proxy-scraper%'
 			  )
 			  AND NOT (fp.proxy_url = ANY($1))
 			  AND fp.status <> 'disabled'
 			  AND (fp.check_claimed_until IS NULL OR fp.check_claimed_until <= NOW())
-			  AND fp.last_seen_at < NOW() - INTERVAL '24 hours'
+			  AND (
+				fp.last_seen_at < NOW() - INTERVAL '24 hours'
+				OR (
+					fp.last_seen_at IS NOT NULL
+					AND fp.created_at < NOW() - INTERVAL '24 hours'
+					AND fp.failure_count >= 3
+					AND fp.success_count = 0
+					AND fp.last_success_at IS NULL
+				)
+			  )
 			  AND (
 				(
 					fp.success_count = 0
@@ -1961,6 +1978,21 @@ func (s *Store) GetFreeProxiesDueForCheck(regions []string, limit int, bootstrap
 }
 
 func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []string, limit int, bootstrap bool) ([]FreeProxyCandidate, error) {
+	return s.ClaimFreeProxiesDueForCheckWithRegionLimits(ctx, regions, limit, bootstrap, nil)
+}
+
+// ClaimFreeProxiesDueForCheckWithRegionLimits bounds the whole wave, including
+// all priority lanes, to each region's available validator slots and budget.
+// A class-wide limit alone can queue most of a wave behind one regional
+// semaphore while other regions' validators sit idle.
+func (s *Store) ClaimFreeProxiesDueForCheckWithRegionLimits(ctx context.Context, regions []string, limit int, bootstrap bool, regionLimits map[string]int) ([]FreeProxyCandidate, error) {
+	var remainingByRegion map[string]int
+	if regionLimits != nil {
+		remainingByRegion = make(map[string]int, len(regionLimits))
+		for region, count := range regionLimits {
+			remainingByRegion[region] = max(0, count)
+		}
+	}
 	if limit <= 0 {
 		limit = 200
 	}
@@ -1974,6 +2006,19 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 	defer tx.Rollback()
 
 	claim := func(lane string, claimLimit int) ([]FreeProxyCandidate, error) {
+		var regionalBudget any
+		if remainingByRegion != nil {
+			totalRemaining := 0
+			for _, region := range regions {
+				totalRemaining += remainingByRegion[region]
+			}
+			claimLimit = min(claimLimit, totalRemaining)
+			encoded, err := json.Marshal(remainingByRegion)
+			if err != nil {
+				return nil, err
+			}
+			regionalBudget = string(encoded)
+		}
 		if claimLimit <= 0 {
 			return nil, nil
 		}
@@ -2054,6 +2099,7 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 				 AND source_stats.source = source_choice.source
 				 AND source_stats.protocol = fp.protocol
 				WHERE fph.region = ANY($1)
+				  AND ($5::jsonb IS NULL OR COALESCE(($5::jsonb ->> fph.region)::int, 0) > 0)
 				  AND fp.status <> 'disabled'
 				  AND (fp.quarantined_until IS NULL OR fp.quarantined_until <= NOW())
 				  AND (
@@ -2096,7 +2142,13 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 							last_checked_at ASC NULLS FIRST,
 							score DESC,
 							hourly_order
-					) AS group_rank,
+					) AS group_rank
+				FROM proxy_ranked
+				CROSS JOIN source_summary
+				WHERE proxy_rank = 1
+			), region_ranked AS (
+				SELECT
+					ranked.*,
 					ROW_NUMBER() OVER (
 						PARTITION BY region
 						ORDER BY
@@ -2108,16 +2160,15 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 							score DESC,
 							hourly_order
 					) AS region_rank
-				FROM proxy_ranked
-				CROSS JOIN source_summary
-				WHERE proxy_rank = 1
+				FROM ranked
+				WHERE source_count < 2
+				   OR source_rank <= GREATEST(1, CEIL($2::numeric / 2))
 			), due AS (
 				SELECT fph.id, fp.id AS proxy_id, ranked.source
-				FROM ranked
+				FROM region_ranked ranked
 				JOIN free_proxy_health fph ON fph.id = ranked.id
 				JOIN free_proxies fp ON fp.id = ranked.proxy_id
-				WHERE ranked.source_count < 2
-				   OR ranked.source_rank <= GREATEST(1, CEIL($2::numeric / 2))
+				WHERE ($5::jsonb IS NULL OR ranked.region_rank <= COALESCE(($5::jsonb ->> ranked.region)::int, 0))
 				ORDER BY
 					ranked.priority,
 					ranked.region_rank,
@@ -2165,6 +2216,7 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 			claimLimit,
 			bootstrap,
 			lane,
+			regionalBudget,
 		)
 		if queryErr != nil {
 			return nil, queryErr
@@ -2186,7 +2238,15 @@ func (s *Store) ClaimFreeProxiesDueForCheck(ctx context.Context, regions []strin
 			}
 			candidates = append(candidates, candidate)
 		}
-		return candidates, rows.Err()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		if remainingByRegion != nil {
+			for _, candidate := range candidates {
+				remainingByRegion[candidate.Region]--
+			}
+		}
+		return candidates, nil
 	}
 
 	proxies := make([]FreeProxyCandidate, 0, limit)
