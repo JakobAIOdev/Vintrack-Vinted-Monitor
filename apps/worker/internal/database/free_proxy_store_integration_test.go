@@ -153,7 +153,7 @@ func TestDiverseActiveFreeProxiesPreferIndependentNetworks(t *testing.T) {
 	}
 }
 
-func TestMatureFreeProxyRecoveryIncludesStaleButNeverServesIt(t *testing.T) {
+func TestFreeProxyMatureRecoveryIncludesOnlyStaleAndNeverServesIt(t *testing.T) {
 	databaseURL := os.Getenv("FREE_PROXY_STORE_INTEGRATION_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("FREE_PROXY_STORE_INTEGRATION_DATABASE_URL is not set")

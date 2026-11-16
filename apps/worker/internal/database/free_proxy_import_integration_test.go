@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestVerifiedFeedImportsExpireWhenNoLongerPublished(t *testing.T) {
+func TestFreeProxyVerifiedFeedImportsExpireWhenNoLongerPublished(t *testing.T) {
 	store := freeProxyImportTestStore(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
