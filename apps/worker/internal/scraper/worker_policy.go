@@ -46,9 +46,7 @@ func (e *Engine) applyFreeProxyPacingPolicy(freePolicy freeProxyPacingPolicy) {
 	for region, pacer := range e.freePacers {
 		limited := e.freeProxy != nil && e.freeProxy.Snapshot(region).State == "limited"
 		policy := freePolicy.forPool(region, limited)
-		pacer.mu.Lock()
-		pacer.policy = policy
-		pacer.mu.Unlock()
+		pacer.applyPolicy(policy)
 		if !policy.applies(region) {
 			delete(e.freePacers, region)
 		}
