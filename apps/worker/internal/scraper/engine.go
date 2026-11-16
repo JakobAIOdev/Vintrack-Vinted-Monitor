@@ -163,9 +163,7 @@ func (e *Engine) freeProxyPacer(region string, limited bool) *freeProxyRegionPac
 		return nil
 	}
 	if pacer := e.freePacers[region]; pacer != nil {
-		pacer.mu.Lock()
-		pacer.policy = policy
-		pacer.mu.Unlock()
+		pacer.applyPolicy(policy)
 		return pacer
 	}
 	pacer := newFreeProxyRegionPacer(region, policy)
@@ -677,8 +675,6 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			}
 			perProxyRate, _ := pacer.limits()
 			pool.SetMaxRequestsPerSecond(perProxyRate)
-		} else if proxySource == "free" {
-			pool.SetMaxRequestsPerSecond(0)
 		}
 		var admittedPrimary *Client
 		if pacer != nil {
