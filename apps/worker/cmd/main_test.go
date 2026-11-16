@@ -270,7 +270,7 @@ func TestFreeProxyRegionWorkClassPrioritizesReadinessBeforeReserve(t *testing.T)
 		want   freeProxyRegionWorkClass
 	}{
 		{name: "used recovery", active: 8, target: 100, used: true, want: freeProxyRegionWorkRecovery},
-		{name: "idle recovery", active: 0, target: 10, used: false, want: freeProxyRegionWorkRecovery},
+		{name: "idle recovery", active: 0, target: 10, used: false, want: freeProxyRegionWorkIdle},
 		{name: "used keepalive", active: 50, target: 50, used: true, want: freeProxyRegionWorkKeepalive},
 		{name: "reserve refill", active: 13, target: 100, used: true, want: freeProxyRegionWorkKeepalive},
 		{name: "idle maintenance", active: 10, target: 10, want: freeProxyRegionWorkIdle},
@@ -290,6 +290,23 @@ func TestFreeProxyRegionWorkClassPrioritizesReadinessBeforeReserve(t *testing.T)
 				)
 			}
 		})
+	}
+}
+
+func TestFreeProxyColdUnusedRegionsKeepBackgroundBudget(t *testing.T) {
+	groups := [3][]string{}
+	for index := range 13 {
+		used := index < 11
+		active := 0
+		if index >= 6 && used {
+			active = 20
+		}
+		class := freeProxyRegionWorkClassFor(active, 50, 10, used)
+		groups[class] = append(groups[class], fmt.Sprintf("budget-region-%d", index))
+	}
+	recovery, keepalive, idle := freeProxyWaveSlotsForRegions(64, 12, groups)
+	if idle == 0 || idle > 8 || recovery <= keepalive || recovery+keepalive+idle != 64 {
+		t.Fatalf("cold unused regions consumed live recovery budget: recovery=%d keepalive=%d idle=%d", recovery, keepalive, idle)
 	}
 }
 

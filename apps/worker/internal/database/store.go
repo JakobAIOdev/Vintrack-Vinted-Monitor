@@ -1086,11 +1086,11 @@ func (s *Store) GetDiverseActiveFreeProxiesContext(
 	return s.getDiverseMatureFreeProxiesContext(ctx, region, limit, true)
 }
 
-// GetDiverseMatureFreeProxiesForRevalidationContext returns the same
-// high-confidence, source-balanced cohort as the serving query, but also
-// includes entries whose 20-minute serving freshness elapsed. This is used
-// only as input to a new validation request; callers must never publish these
-// proxies before that request succeeds and refreshes last_success_at.
+// GetDiverseMatureFreeProxiesForRevalidationContext returns only mature entries
+// whose 20-minute serving freshness elapsed. Rechecking fresh entries on each
+// recovery tick repeatedly cold-starts the small working cohort. Recovered
+// entries must leave this lane immediately and return to the normal schedule.
+// Callers must never publish stale proxies before a new validation succeeds.
 func (s *Store) GetDiverseMatureFreeProxiesForRevalidationContext(
 	ctx context.Context,
 	region string,
@@ -1132,7 +1132,10 @@ func (s *Store) getDiverseMatureFreeProxiesContext(
 			  AND fph.success_streak >= 2
 			  AND fph.failure_streak = 0
 			  AND fph.score >= $3
-			  AND (NOT $4 OR fph.last_success_at >= NOW() - INTERVAL '20 minutes')
+			  AND CASE WHEN $4
+				THEN fph.last_success_at >= NOW() - INTERVAL '20 minutes'
+				ELSE fph.last_success_at < NOW() - INTERVAL '20 minutes'
+			  END
 			  AND fp.status <> 'disabled'
 			  AND (fp.quarantined_until IS NULL OR fp.quarantined_until <= NOW())
 		), network_ranked AS (
@@ -1237,7 +1240,7 @@ func (s *Store) TryClaimActiveFreeProxyForCanaryContext(
 }
 
 // TryClaimMatureFreeProxyForRevalidationContext reserves a previously mature
-// proxy even when its serving freshness elapsed. It is intentionally paired
+// proxy only when its serving freshness elapsed. It is intentionally paired
 // with GetDiverseMatureFreeProxiesForRevalidationContext: the proxy remains
 // unavailable to monitors until RecordFreeProxySuccessContext refreshes it.
 func (s *Store) TryClaimMatureFreeProxyForRevalidationContext(
@@ -1283,7 +1286,10 @@ func (s *Store) tryClaimMatureFreeProxyForCanaryContext(
 				  AND fph.status = 'active'
 				  AND fph.success_streak >= 2
 				  AND fph.failure_streak = 0
-				  AND (NOT $4 OR fph.last_success_at >= NOW() - INTERVAL '20 minutes')
+				  AND CASE WHEN $4
+					THEN fph.last_success_at >= NOW() - INTERVAL '20 minutes'
+					ELSE fph.last_success_at < NOW() - INTERVAL '20 minutes'
+				  END
 			  )
 			FOR UPDATE OF fp SKIP LOCKED
 		)

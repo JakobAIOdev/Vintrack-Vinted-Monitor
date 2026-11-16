@@ -248,6 +248,16 @@ func TestMatureFreeProxyRecoveryIncludesStaleButNeverServesIt(t *testing.T) {
 	if err := store.ReleaseFreeProxyCanaryClaimContext(ctx, proxyURL, claimedUntil); err != nil {
 		t.Fatalf("release stale recovery claim: %v", err)
 	}
+	if err := store.RecordFreeProxySuccessContext(ctx, proxyURL, region, 250); err != nil {
+		t.Fatalf("refresh recovered proxy: %v", err)
+	}
+	recovery, err = store.GetDiverseMatureFreeProxiesForRevalidationContext(ctx, region, 10)
+	if err != nil || len(recovery) != 0 {
+		t.Fatalf("freshly recovered proxy must leave stale recovery cohort: count=%d err=%v", len(recovery), err)
+	}
+	if _, claimed, err := store.TryClaimMatureFreeProxyForRevalidationContext(ctx, proxyURL, region, time.Minute); err != nil || claimed {
+		t.Fatalf("stale recovery re-claimed fresh capacity: claimed=%t err=%v", claimed, err)
+	}
 }
 
 func TestDiverseActiveFreeProxiesCapsEachSourceAtHalf(t *testing.T) {

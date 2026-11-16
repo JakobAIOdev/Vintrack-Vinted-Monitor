@@ -1221,17 +1221,17 @@ const (
 	freeProxyRegionWorkIdle
 )
 
-// Recovery capacity goes to regions below serving readiness. A running pool
-// refilling its larger reserve must not compete at the same priority as an
-// unavailable one. Cold configured regions still retain a recovery lane.
+// Recovery capacity goes to used regions below serving readiness. Refilling a
+// running pool's reserve has lower priority. Unused configured regions retain
+// the background lane even when cold, so they cannot crowd out live monitors.
 func freeProxyRegionWorkClassFor(activeCount int, target int, minimum int, used bool) freeProxyRegionWorkClass {
+	if !used {
+		return freeProxyRegionWorkIdle
+	}
 	if activeCount < max(1, min(target, minimum)) {
 		return freeProxyRegionWorkRecovery
 	}
-	if used {
-		return freeProxyRegionWorkKeepalive
-	}
-	return freeProxyRegionWorkIdle
+	return freeProxyRegionWorkKeepalive
 }
 
 // Cap claims at the slots each region can actually use. Otherwise a single
