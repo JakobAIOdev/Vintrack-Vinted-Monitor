@@ -108,3 +108,52 @@ func TestFreeProxyRegionSlotsApplyAfterSourceDiversity(t *testing.T) {
 		t.Fatalf("source diversity consumed regional slots without claims: %v", counts)
 	}
 }
+
+func TestFreeProxyFreshGlobalSuccessGetsRegionalRecoverySlotAfterBackoff(t *testing.T) {
+	for _, coolingDown := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cooling_down=%t", coolingDown), func(t *testing.T) {
+			store, db, ctx := freeProxyMaintainerTestStore(t)
+			if _, err := db.ExecContext(ctx, `
+				WITH seeded AS (
+					INSERT INTO free_proxies (proxy_url, host, port, protocol, source, success_count, last_success_at)
+					SELECT 'http://history-' || n || '.invalid:80', 'history-' || n || '.invalid',
+						80, 'http', 'regional-fanout', 1000, NOW()-INTERVAL '70 days'
+					FROM generate_series(1, 20) n RETURNING id
+				)
+				INSERT INTO free_proxy_health (proxy_id, region, status, score, success_count, failure_count,
+					last_checked_at, last_success_at, next_check_at, candidate_window_token)
+				SELECT id, 'de', 'cooldown', 90, 1000, 3, NOW()-INTERVAL '1 hour',
+					NOW()-INTERVAL '70 days', NOW()-INTERVAL '1 second',
+					FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint FROM seeded;
+				WITH fresh AS (
+					INSERT INTO free_proxies (proxy_url, host, port, protocol, source, success_count, last_success_at)
+					VALUES ('http://fresh-global.invalid:80', 'fresh-global.invalid', 80, 'http',
+						'regional-fanout', 2, NOW()-INTERVAL '30 seconds') RETURNING id
+				)
+				INSERT INTO free_proxy_health (proxy_id, region, status, score, success_count, failure_count,
+					last_checked_at, last_success_at, next_check_at, candidate_window_token)
+				SELECT id, 'de', 'cooldown', 40, 1, 10, NOW()-INTERVAL '10 minutes',
+					NOW()-INTERVAL '1 day', NOW()-INTERVAL '1 second',
+					FLOOR(EXTRACT(EPOCH FROM NOW()) / 3600)::bigint FROM fresh;`); err != nil {
+				t.Fatal(err)
+			}
+			if coolingDown {
+				if _, err := db.ExecContext(ctx, `UPDATE free_proxy_health SET next_check_at=NOW()+INTERVAL '30 minutes'
+					WHERE proxy_id=(SELECT id FROM free_proxies WHERE proxy_url='http://fresh-global.invalid:80')`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			candidates, err := store.ClaimFreeProxiesDueForCheck(ctx, []string{"de"}, 5, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, candidate := range candidates {
+				found = found || candidate.ProxyURL == "http://fresh-global.invalid:80"
+			}
+			if found == coolingDown {
+				t.Fatalf("fresh global success selected=%t with regional cooldown=%t", found, coolingDown)
+			}
+		})
+	}
+}

@@ -2120,7 +2120,15 @@ func (s *Store) ClaimFreeProxiesDueForCheckWithRegionLimits(ctx context.Context,
 					WHEN 'promotion' THEN fph.status = 'pending' AND fph.success_streak = 1 AND fph.failure_streak = 0
 					WHEN 'explore' THEN fph.last_checked_at IS NULL AND NOT source_choice.region_affine
 					WHEN 'region_affine' THEN fph.success_count = 0 AND source_choice.region_affine
-					WHEN 'fanout' THEN fph.success_count = 0 AND fp.success_count > 0 AND NOT source_choice.region_affine
+					WHEN 'fanout' THEN fp.success_count > 0
+						AND fp.last_success_at >= NOW() - INTERVAL '20 minutes'
+						AND (
+							(fph.success_count = 0 AND NOT source_choice.region_affine)
+							OR (
+								fph.success_count > 0 AND fph.status <> 'active'
+								AND fp.last_success_at > COALESCE(fph.last_checked_at, 'epoch'::timestamp)
+							)
+						)
 					WHEN 'keepalive' THEN fph.success_count > 0
 					ELSE TRUE
 				  END
