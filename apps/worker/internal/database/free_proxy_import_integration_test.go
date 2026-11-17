@@ -9,6 +9,23 @@ import (
 	"time"
 )
 
+func TestFreeProxyVerifiedFeedImportsExpireWhenNoLongerPublished(t *testing.T) {
+	store := freeProxyImportTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO free_proxies (proxy_url, source, last_seen_at)
+		VALUES ('http://expired-verified-feed.invalid:80', 'proxy-scraper:https', NOW()-INTERVAL '2 days'),
+		       ('http://current-verified-feed.invalid:80', 'proxy-scraper:https', NOW()),
+		       ('http://manual-verified-feed.invalid:80', 'manual', NOW()-INTERVAL '2 days')`); err != nil {
+		t.Fatal(err)
+	}
+	pruned, err := store.PruneUnselectedFreeProxiesContext(ctx, []string{"http://current-verified-feed.invalid:80"})
+	if err != nil || pruned != 1 {
+		t.Fatalf("verified feed cleanup = %d, %v; want only expired import removed", pruned, err)
+	}
+}
+
 // Temporary tables shadow any existing application tables. One connection
 // keeps every store query in this isolated session; no shared rows are touched.
 func freeProxyImportTestStore(t *testing.T) *Store {
@@ -42,6 +59,7 @@ func freeProxyImportTestStore(t *testing.T) *Store {
 			last_error TEXT,
 			last_error_code TEXT,
 			last_seen_at TIMESTAMP DEFAULT NOW() - INTERVAL '2 days',
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			quarantined_until TIMESTAMP,
 			check_claimed_until TIMESTAMP,
 			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -77,6 +95,38 @@ func freeProxyImportTestStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	return &Store{db: db}
+}
+
+func TestPruneFreeProxyImportReplacesOldFailuresDroppedByFreshFeeds(t *testing.T) {
+	store := freeProxyImportTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO free_proxies (proxy_url, created_at, last_seen_at, failure_count)
+		SELECT 'http://' || name || '.invalid:80', NOW()-INTERVAL '2 days',
+			NOW()-INTERVAL '5 minutes', 3
+		FROM unnest(ARRAY['old-failed', 'current-feed', 'young', 'unproven',
+			'previous-success', 'regional-success', 'claimed', 'disabled', 'manual', 'unknown-freshness']) name;
+		UPDATE free_proxies SET created_at=NOW() WHERE proxy_url='http://young.invalid:80';
+		UPDATE free_proxies SET failure_count=0 WHERE proxy_url='http://unproven.invalid:80';
+		UPDATE free_proxies SET success_count=1, last_success_at=NOW()-INTERVAL '1 hour'
+			WHERE proxy_url='http://previous-success.invalid:80';
+		INSERT INTO free_proxy_health (proxy_id, region, last_success_at)
+			SELECT id, 'de', NOW()-INTERVAL '1 hour' FROM free_proxies WHERE proxy_url='http://regional-success.invalid:80';
+		UPDATE free_proxies SET check_claimed_until=NOW()+INTERVAL '1 minute' WHERE proxy_url='http://claimed.invalid:80';
+		UPDATE free_proxies SET status='disabled' WHERE proxy_url='http://disabled.invalid:80';
+		UPDATE free_proxies SET source='manual' WHERE proxy_url='http://manual.invalid:80';
+		UPDATE free_proxies SET last_seen_at=NULL WHERE proxy_url='http://unknown-freshness.invalid:80';`); err != nil {
+		t.Fatal(err)
+	}
+	pruned, err := store.PruneUnselectedFreeProxiesContext(ctx, []string{"http://current-feed.invalid:80"})
+	if err != nil || pruned != 1 {
+		t.Fatalf("off-feed repeated failure cleanup = %d, %v; want one old never-working candidate removed", pruned, err)
+	}
+	var removed bool
+	if err := store.db.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM free_proxies WHERE proxy_url='http://old-failed.invalid:80')`).Scan(&removed); err != nil || !removed {
+		t.Fatalf("wrong candidate removed: old failure gone=%t err=%v", removed, err)
+	}
 }
 
 func TestPruneFreeProxyImportReclaimsStaleUntestedWithoutRemovingProtectedProxies(t *testing.T) {

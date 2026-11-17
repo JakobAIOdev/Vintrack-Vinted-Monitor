@@ -273,11 +273,16 @@ Shared public proxies are volatile and should not be treated as guaranteed
 capacity. Configure imports, regions, thresholds, and pool availability in the
 admin settings, and use owned capacity for sustained deployments.
 
+Shared pools always enforce their configured per-proxy catalog request limit,
+including when a pool is ready. The default is one request every two seconds per
+proxy. Adaptive pacing can reduce this budget when enabled; disabling it keeps
+the fixed request limit in place.
+
 When a shared pool drops below its normal capacity threshold, existing monitors
-continue in a limited mode using only independently validated proxies. Catalog
-requests are paced at no more than one every two seconds per proxy, so search
-intervals can grow while capacity recovers. The dashboard may show the pool as
-recovering during this period. If no validated proxies remain, monitors wait and resume
+continue in a limited mode using only independently validated proxies, at no more
+than one catalog request every two seconds per proxy. Search intervals can grow
+while capacity recovers. The dashboard may show the pool as recovering during
+this period. If no validated proxies remain, monitors wait and resume
 automatically when safe capacity returns.
 
 ### Request checkout network

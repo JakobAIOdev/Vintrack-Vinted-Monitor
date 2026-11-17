@@ -113,8 +113,8 @@ func TestLimitedFreePoolForcesBoundedPacingWithoutChangingNormalPolicy(t *testin
 	if !limited.applies("uk") || limited.applies("de") || limited.MaxRequestsPerProxySecond != 0.5 || limited.MaxAdmissionDelayMS != 30_000 {
 		t.Fatalf("unsafe limited policy: %+v", limited)
 	}
-	if policy.Enabled || policy.forPool("uk", false).applies("uk") {
-		t.Fatal("limited operation changed the configured normal policy")
+	if policy.Enabled || !policy.forPool("uk", false).applies("uk") || policy.forPool("uk", false).Enabled {
+		t.Fatal("ready pool must retain base admission without enabling adaptive pacing")
 	}
 	policy.MaxRequestsPerProxySecond = 0.1
 	if got := policy.forPool("uk", true).MaxRequestsPerProxySecond; got != 0.1 {
@@ -122,13 +122,21 @@ func TestLimitedFreePoolForcesBoundedPacingWithoutChangingNormalPolicy(t *testin
 	}
 }
 
-func TestLimitedFreePoolPacerReturnsToNormalAfterRecovery(t *testing.T) {
-	engine := &Engine{freePacers: make(map[string]*freeProxyRegionPacer)}
-	if engine.freeProxyPacer("uk", true) == nil {
+func TestFreeProxyRecoveredPoolRetainsConfiguredAdmission(t *testing.T) {
+	engine := &Engine{freePacers: make(map[string]*freeProxyRegionPacer), freePacingPolicy: freeProxyPacingPolicy{
+		MaxRequestsPerProxySecond: 0.5, MaxAdmissionDelayMS: 1500,
+	}}
+	limited := engine.freeProxyPacer("uk", true)
+	if limited == nil {
 		t.Fatal("limited pool did not install admission control")
 	}
-	if engine.freeProxyPacer("uk", false) != nil || len(engine.freePacers) != 0 {
-		t.Fatal("recovered pool retained automatic limited-mode pacing")
+	limited.capacityFactor = 0.125
+	ready := engine.freeProxyPacer("uk", false)
+	if ready == nil || ready != limited {
+		t.Fatal("recovered pool discarded its admission queue")
+	}
+	if rate, delay := ready.limits(); rate != 0.5 || delay != 1500*time.Millisecond || ready.capacityFactor != 1 || ready.policy.Enabled {
+		t.Fatalf("ready pool lost base limits or retained disabled adaptive pressure: rate=%v delay=%s factor=%v", rate, delay, ready.capacityFactor)
 	}
 }
 
@@ -143,8 +151,22 @@ func TestWorkerPolicyRefreshCannotDisableLimitedPoolAdmissionControl(t *testing.
 	}
 	pools.Publish("uk", "http://limited.invalid:80", "ready", 10, "", 2)
 	engine.applyFreeProxyPacingPolicy(freeProxyPacingPolicy{})
-	if len(engine.freePacers) != 0 {
-		t.Fatal("normal operation retained forced pacing after policy refresh")
+	if engine.freePacers["uk"] != pacer {
+		t.Fatal("policy refresh removed base admission from recovered pool")
+	}
+	if rate, _ := pacer.limits(); rate != 0.5 || pacer.policy.Enabled {
+		t.Fatal("ready pool must retain default rate while adaptive pacing is disabled")
+	}
+}
+
+func TestFreeProxyBaseAdmissionDoesNotEnableAdaptiveController(t *testing.T) {
+	policy := freeProxyPacingPolicy{MaxRequestsPerProxySecond: 0.5, MaxAdmissionDelayMS: 1500}.forPool("pl", false)
+	pacer := newFreeProxyRegionPacer("pl", policy)
+	pacer.windowStarted = time.Now().Add(-61 * time.Second)
+	pacer.outcomes, pacer.successes = 100, 80
+	pacer.rotateLocked(time.Now(), 10)
+	if pacer.capacityFactor != 1 {
+		t.Fatal("mandatory base admission unexpectedly enabled adaptive throttling")
 	}
 }
 

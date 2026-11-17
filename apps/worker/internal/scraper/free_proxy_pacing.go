@@ -18,13 +18,18 @@ type freeProxyPacingPolicy struct {
 	Regions                   []string `json:"adaptiveRegions"`
 	MaxRequestsPerProxySecond float64  `json:"maxRequestsPerProxySecond"`
 	MaxAdmissionDelayMS       int      `json:"maxAdmissionDelayMs"`
+	admissionRegion           string
 }
 
 func (p freeProxyPacingPolicy) forPool(region string, limited bool) freeProxyPacingPolicy {
+	// The adaptive controller is optional; a shared pool's configured rate
+	// limit is not. Reaching readiness must not turn admission off.
+	p.admissionRegion = strings.ToLower(strings.TrimSpace(region))
+	if p.MaxRequestsPerProxySecond <= 0 {
+		p.MaxRequestsPerProxySecond = 0.5
+	}
 	if limited {
-		p.Enabled = true
-		p.Regions = []string{region}
-		if p.MaxRequestsPerProxySecond <= 0 || p.MaxRequestsPerProxySecond > 0.5 {
+		if p.MaxRequestsPerProxySecond > 0.5 {
 			p.MaxRequestsPerProxySecond = 0.5
 		}
 		// Queue a small cohort fairly instead of repeatedly rejecting the same
@@ -55,6 +60,11 @@ func loadFreeProxyPacingPolicy(store *database.Store) freeProxyPacingPolicy {
 }
 
 func (p freeProxyPacingPolicy) applies(region string) bool {
+	region = strings.ToLower(strings.TrimSpace(region))
+	return (region != "" && region == p.admissionRegion) || p.adapts(region)
+}
+
+func (p freeProxyPacingPolicy) adapts(region string) bool {
 	if !p.Enabled {
 		return false
 	}
@@ -141,6 +151,16 @@ func newFreeProxyRegionPacer(region string, policy freeProxyPacingPolicy) *freeP
 	return &freeProxyRegionPacer{
 		region: region, policy: policy, windowStarted: time.Now(), capacityFactor: 1,
 		monitorNext: make(map[int]time.Time),
+	}
+}
+
+func (p *freeProxyRegionPacer) applyPolicy(policy freeProxyPacingPolicy) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.policy = policy
+	if !policy.adapts(p.region) {
+		p.capacityFactor = 1
+		p.healthyWindows = 0
 	}
 }
 
@@ -247,8 +267,13 @@ func (p *freeProxyRegionPacer) rotateLocked(now time.Time, clients int) {
 	if now.Sub(p.windowStarted) < time.Minute {
 		return
 	}
+	adaptive := p.policy.adapts(p.region)
+	if !adaptive {
+		p.capacityFactor = 1
+		p.healthyWindows = 0
+	}
 	p.lastWindow = p.snapshotLocked(now, clients)
-	if p.outcomes == 0 {
+	if !adaptive || p.outcomes == 0 {
 		p.healthyWindows = 0
 		p.resetWindowLocked(now)
 		return
