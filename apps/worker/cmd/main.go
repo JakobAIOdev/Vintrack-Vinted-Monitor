@@ -559,6 +559,10 @@ func refreshFreeProxyRegion(
 		activeCount,
 		minActive,
 	)
+	if previous.State != state {
+		log.Printf("free proxy serving state changed for %s: %s -> %s (mature %d, minimum %d, reason %s)",
+			region, previous.State, state, activeCount, minActive, reason)
+	}
 	if !serving && state != "limited" {
 		freeProxyPools.Publish(region, "", state, activeCount, reason, readyObservations)
 		freeProxyRefreshState.forgetRegion(region)

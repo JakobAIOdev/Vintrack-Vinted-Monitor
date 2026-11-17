@@ -2675,8 +2675,14 @@ func (s *Store) RecordFreeProxyFailureStageContext(
 		errorCode == "vinted_401" ||
 		errorCode == "vinted_403" ||
 		errorCode == "vinted_429"
-	globalTransportFailure := errorCode == "proxy_handshake" || errorCode == "invalid_config"
-	regionalTransportFailure := errorCode == "connect" ||
+	// SOCKS/CONNECT errors can describe an unreachable destination or a
+	// transient connection reset, even while the same exit serves other
+	// regions. Only an explicit proxy authentication rejection or invalid
+	// configuration is sufficient evidence for an immediate global ban.
+	globalTransportFailure := errorCode == "invalid_config" ||
+		(errorCode == "proxy_handshake" && statusCode == 407)
+	regionalTransportFailure := (errorCode == "proxy_handshake" && !globalTransportFailure) ||
+		errorCode == "connect" ||
 		errorCode == "timeout" ||
 		errorCode == "tls" ||
 		errorCode == "transport"
@@ -2694,7 +2700,7 @@ func (s *Store) RecordFreeProxyFailureStageContext(
 				WHERE fp.proxy_url = $1
 				  AND other.region <> $2
 				  AND other.last_failure_at >= NOW() - INTERVAL '15 minutes'
-				  AND other.last_error_code IN ('connect', 'timeout', 'tls', 'transport')
+				  AND other.last_error_code IN ('connect', 'timeout', 'tls', 'transport', 'proxy_handshake')
 			) AND NOT EXISTS (
 				SELECT 1
 				FROM free_proxy_health healthy
