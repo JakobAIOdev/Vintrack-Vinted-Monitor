@@ -11,9 +11,11 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"vintrack-worker/internal/httpclient"
@@ -156,7 +158,7 @@ func SendItemAttempt(
 			photoPayload["reply_markup"] = keyboard
 		}
 		result := sendAttempt(ctx, "sendPhoto", photoPayload)
-		if result.Success || result.Retryable || result.ReasonCode == "invalid_destination" {
+		if result.Success || result.Retryable || result.ReasonCode == "invalid_destination" || result.ReasonCode == "delivery_unknown" {
 			return result
 		}
 	}
@@ -214,7 +216,7 @@ func SendPriceDropAttempt(
 			photoPayload["reply_markup"] = keyboard
 		}
 		result := sendAttempt(ctx, "sendPhoto", photoPayload)
-		if result.Success || result.Retryable || result.ReasonCode == "invalid_destination" {
+		if result.Success || result.Retryable || result.ReasonCode == "invalid_destination" || result.ReasonCode == "delivery_unknown" {
 			return result
 		}
 	}
@@ -283,8 +285,23 @@ func sendAttempt(ctx context.Context, method string, payload map[string]interfac
 			Detail:     "telegram send budget was not available before the attempt deadline",
 		}
 	}
+	// A timeout does not prove that Telegram rejected the message. Once a
+	// connection has been handed to the transport, it may have sent the POST
+	// even if no response arrives. Only retry transport failures observed
+	// before that point; missing trace evidence is treated as uncertain too.
+	var connectionAttempted, connectionAcquired atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		GetConn: func(string) { connectionAttempted.Store(true) },
+		GotConn: func(httptrace.GotConnInfo) { connectionAcquired.Store(true) },
+	}))
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		if !connectionAttempted.Load() || connectionAcquired.Load() {
+			return model.AlertDeliveryResult{
+				ReasonCode: "delivery_unknown",
+				Detail:     "telegram delivery is unconfirmed; automatic retry suppressed because the message may already have been sent",
+			}
+		}
 		reason := "network_error"
 		var netErr net.Error
 		if ctx.Err() != nil || (errors.As(err, &netErr) && netErr.Timeout()) {
