@@ -41,6 +41,7 @@ const primaryProviders: Provider[] = oidcConfigured
               id: "oidc",
               name: oidcName,
               type: "oidc",
+              checks: ["pkce", "state"],
               issuer: oidcIssuer!,
               clientId: oidcClientId!,
               clientSecret: oidcClientSecret!,
