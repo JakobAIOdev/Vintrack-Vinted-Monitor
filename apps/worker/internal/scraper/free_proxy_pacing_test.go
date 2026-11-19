@@ -17,18 +17,19 @@ func TestFreeProxyPacerHalvesCapacityOnPressure(t *testing.T) {
 	pacer.admitted = 100
 	pacer.outcomes = 100
 	pacer.successes = 89
+	pacer.rateLimited = 11
 	pacer.rotateLocked(time.Now(), 50)
 	if pacer.capacityFactor != 0.5 {
 		t.Fatalf("capacity factor = %v, want 0.5", pacer.capacityFactor)
 	}
 }
 
-func TestFreeProxyPacerRecoversAfterFiveHealthyWindows(t *testing.T) {
+func TestFreeProxyPacerRecoversAfterHealthyWindow(t *testing.T) {
 	pacer := newFreeProxyRegionPacer("fr", freeProxyPacingPolicy{
 		Enabled: true, Regions: []string{"fr"}, MaxRequestsPerProxySecond: 0.5, MaxAdmissionDelayMS: 10,
 	})
 	pacer.capacityFactor = 0.5
-	for range 5 {
+	for range 1 {
 		pacer.windowStarted = time.Now().Add(-61 * time.Second)
 		pacer.requested = 100
 		pacer.admitted = 100
@@ -76,7 +77,7 @@ func TestFreeProxyPacerKeepsPerMonitorAdmissionFair(t *testing.T) {
 	}
 }
 
-func TestFreeProxyPacerTreatsBelowNinetyFivePercentAsPressure(t *testing.T) {
+func TestFreeProxyPacerDoesNotThrottleOnTransportFailures(t *testing.T) {
 	pacer := newFreeProxyRegionPacer("uk", freeProxyPacingPolicy{
 		Enabled: true, Regions: []string{"uk"}, MaxRequestsPerProxySecond: 0.5, MaxAdmissionDelayMS: 10,
 	})
@@ -86,8 +87,31 @@ func TestFreeProxyPacerTreatsBelowNinetyFivePercentAsPressure(t *testing.T) {
 	pacer.outcomes = 100
 	pacer.successes = 94
 	pacer.rotateLocked(time.Now(), 50)
-	if pacer.capacityFactor != 0.5 {
-		t.Fatalf("capacity factor at 94%% success = %v, want 0.5", pacer.capacityFactor)
+	if pacer.capacityFactor != 1 {
+		t.Fatalf("transport failures throttled healthy exits: capacity factor = %v, want 1", pacer.capacityFactor)
+	}
+}
+
+func TestFreeProxyPacerSparseRateLimitDoesNotThrottleWholeRegion(t *testing.T) {
+	pacer := newFreeProxyRegionPacer("pl", freeProxyPacingPolicy{Enabled: true, Regions: []string{"pl"}, MaxRequestsPerProxySecond: 0.5})
+	pacer.windowStarted = time.Now().Add(-time.Minute)
+	pacer.outcomes, pacer.successes, pacer.rateLimited = 4, 3, 1
+	pacer.rotateLocked(time.Now(), 10)
+	if pacer.capacityFactor != 1 {
+		t.Fatalf("one rate-limited exit throttled the whole region: %v", pacer.capacityFactor)
+	}
+}
+
+func TestFreeProxyPacerRestoresLowTrafficRegionWithoutRateLimits(t *testing.T) {
+	pacer := newFreeProxyRegionPacer("pl", freeProxyPacingPolicy{Enabled: true, Regions: []string{"pl"}, MaxRequestsPerProxySecond: 0.5})
+	pacer.capacityFactor = 0.0625
+	for range 4 {
+		pacer.windowStarted = time.Now().Add(-time.Minute)
+		pacer.outcomes, pacer.successes = 1, 1
+		pacer.rotateLocked(time.Now(), 10)
+	}
+	if pacer.capacityFactor != 1 {
+		t.Fatalf("healthy low-traffic region stayed throttled: %v", pacer.capacityFactor)
 	}
 }
 

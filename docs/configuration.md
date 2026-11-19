@@ -282,6 +282,12 @@ Within each monitor worker, regional catalog and seller pools share this budget
 for the same proxy, including background requests. Additional sessions and pool
 recreation do not create extra admission capacity.
 
+Adaptive reductions respond to regional HTTP 429 pressure with at least twenty
+observed requests in the window. Transport failures and isolated rate limits
+continue to cool down the affected clients without throttling the entire region.
+Active windows without rate limits gradually restore the regional budget, while
+the shared per-proxy limit remains enforced.
+
 When a shared pool drops below its normal capacity threshold, existing monitors
 continue in a limited mode using only independently validated proxies, at no more
 than one catalog request every two seconds per proxy. Search intervals can grow
