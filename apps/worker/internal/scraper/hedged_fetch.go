@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -91,8 +92,12 @@ func (e *Engine) fetchCatalogHedgedWithPrimary(ctx context.Context, pool *Client
 	timer := time.NewTimer(hedgeDelay)
 	defer timer.Stop()
 	hedgeTimer := timer.C
+	if !allowHedge {
+		timer.Stop()
+		hedgeTimer = nil
+	}
 	rearmHedge := func() {
-		if launched >= maxAttempts {
+		if !allowHedge || launched >= maxAttempts {
 			hedgeTimer = nil
 			return
 		}
@@ -100,11 +105,11 @@ func (e *Engine) fetchCatalogHedgedWithPrimary(ctx context.Context, pool *Client
 		hedgeTimer = timer.C
 	}
 
-	launchNext := func() bool {
-		if !allowHedge {
+	launchNext := func(sequentialRetry bool) bool {
+		if !allowHedge && !sequentialRetry {
 			return false
 		}
-		if launched >= maxAttempts {
+		if launched >= maxAttempts || ctx.Err() != nil {
 			return false
 		}
 		next := pool.AcquireExcluding(attempted)
@@ -130,12 +135,16 @@ func (e *Engine) fetchCatalogHedgedWithPrimary(ctx context.Context, pool *Client
 				result.attempts = attempts
 				return result
 			}
-			if launchNext() && hedgeTimer == nil {
+			// Pressure disables speculative parallel work, not a bounded retry
+			// after the sole in-flight request failed. Every replacement still
+			// passes the pool's shared admission budget and original deadline.
+			sequentialRetry := completed == launched && retryableCatalogTransportResult(result)
+			if launchNext(sequentialRetry) && hedgeTimer == nil {
 				rearmHedge()
 			}
 		case <-hedgeTimer:
 			hedgeTimer = nil
-			if launchNext() {
+			if launchNext(false) {
 				rearmHedge()
 			}
 		case <-ctx.Done():
@@ -149,6 +158,14 @@ func (e *Engine) fetchCatalogHedgedWithPrimary(ctx context.Context, pool *Client
 
 	last.attempts = attempts
 	return last
+}
+
+func retryableCatalogTransportResult(result catalogFetchResult) bool {
+	if result.status >= 500 && result.status < 600 {
+		return true
+	}
+	return result.status == 0 && result.err != nil &&
+		!errors.Is(result.err, context.Canceled) && !isProxyAuthenticationError(result.err)
 }
 
 func acquireCatalogPrimary(ctx context.Context, pool *ClientPool, excluded map[*Client]bool) (*Client, error) {
