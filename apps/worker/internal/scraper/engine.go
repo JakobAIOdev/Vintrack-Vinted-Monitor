@@ -56,6 +56,7 @@ type Engine struct {
 	freePacingPolicy       freeProxyPacingPolicy
 	freePacersMu           sync.Mutex
 	freePacers             map[string]*freeProxyRegionPacer
+	freeProxyAdmission     sharedProxyAdmission
 	jobsCtx                context.Context
 	jobsCancel             context.CancelFunc
 	alertJobs              chan alertJob
@@ -249,6 +250,9 @@ func (e *Engine) GetOrCreateEnricher(pm *proxy.Manager, domain string, proxyKey 
 	log.Printf("Creating new seller enricher for %s (source: %s)", domain, proxyLabel)
 	sellerPoolSize := configuredSellerPoolSize(proxyLabel)
 	s = NewSellerEnricher(pm, e.db, domain, sellerPoolSize, trafficRecorder)
+	if strings.HasPrefix(proxyLabel, "free") {
+		s.pool.sharedAdmission = &e.freeProxyAdmission
+	}
 	configureSellerClientPool(s.pool, proxyLabel)
 	s.configureCacheTTLs(e.workerPolicySnapshot())
 	e.enrichers[key] = s
@@ -325,6 +329,7 @@ func (e *Engine) GetOrCreatePoolSizedWithTimeout(pm *proxy.Manager, domain strin
 	log.Printf("Creating new client pool for %s (source: %s)", domain, proxyLabel)
 	pool = NewClientPoolWithTimeout(pm, domain, poolSize, trafficRecorder, requestTimeout)
 	if strings.HasPrefix(proxyLabel, "free") {
+		pool.sharedAdmission = &e.freeProxyAdmission
 		pool.SetMaxInFlightPerClient(freeProxyMaxInFlightPerClient)
 		pool.SetQuarantineFailureThreshold(3)
 	}

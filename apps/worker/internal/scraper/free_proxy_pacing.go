@@ -128,8 +128,9 @@ func (e *Engine) freeProxyRuntimeMetricsHeartbeat() {
 			metrics = metrics[:50]
 		}
 		payload, err := json.Marshal(map[string]any{
-			"updatedAt": time.Now().UTC().Format(time.RFC3339Nano),
-			"regions":   metrics,
+			"updatedAt":       time.Now().UTC().Format(time.RFC3339Nano),
+			"regions":         metrics,
+			"sharedAdmission": e.freeProxyAdmission.snapshot(),
 		})
 		if err == nil {
 			writeCtx, cancel := context.WithTimeout(e.jobsCtx, 3*time.Second)

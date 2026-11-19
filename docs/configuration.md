@@ -278,6 +278,10 @@ including when a pool is ready. The default is one request every two seconds per
 proxy. Adaptive pacing can reduce this budget when enabled; disabling it keeps
 the fixed request limit in place.
 
+Within each monitor worker, regional catalog and seller pools share this budget
+for the same proxy, including background requests. Additional sessions and pool
+recreation do not create extra admission capacity.
+
 When a shared pool drops below its normal capacity threshold, existing monitors
 continue in a limited mode using only independently validated proxies, at no more
 than one catalog request every two seconds per proxy. Search intervals can grow
