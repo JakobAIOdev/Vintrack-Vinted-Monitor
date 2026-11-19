@@ -84,7 +84,6 @@ type freeProxyRegionPacer struct {
 	windowStarted  time.Time
 	nextAdmission  time.Time
 	monitorNext    map[int]time.Time
-	waiters        []*freeProxyAdmissionWaiter
 	requested      uint64
 	admitted       uint64
 	successes      uint64
@@ -164,85 +163,62 @@ func (p *freeProxyRegionPacer) applyPolicy(policy freeProxyPacingPolicy) {
 	}
 }
 
-type freeProxyAdmissionWaiter struct{ queued bool }
-
 func (p *freeProxyRegionPacer) admit(ctx context.Context, monitorID int, desiredInterval time.Duration, clients int) (time.Duration, bool) {
-	started := time.Now()
-	if ctx.Err() != nil {
-		return 0, false
-	}
+	now := time.Now()
 	p.mu.Lock()
-	p.rotateLocked(started, clients)
+	p.rotateLocked(now, clients)
 	p.requested++
-	maxDelay := time.Duration(p.policy.MaxAdmissionDelayMS) * time.Millisecond
-	if len(p.waiters) >= maxPoolAdmissionWaiters {
-		p.poolWaits++
-		p.mu.Unlock()
-		return 0, false
+	if p.monitorNext == nil {
+		p.monitorNext = make(map[int]time.Time)
 	}
-	waiter := &freeProxyAdmissionWaiter{queued: true}
-	p.waiters = append(p.waiters, waiter)
-	p.mu.Unlock()
-	defer func() {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		for i, w := range p.waiters {
-			if w == waiter {
-				copy(p.waiters[i:], p.waiters[i+1:])
-				p.waiters[len(p.waiters)-1] = nil
-				p.waiters = p.waiters[:len(p.waiters)-1]
-				return
-			}
-		}
-	}()
-	deadline := started.Add(maxDelay)
-	for {
-		if ctx.Err() != nil {
-			return time.Since(started), false
-		}
-		now := time.Now()
-		p.mu.Lock()
-		p.rotateLocked(now, clients)
-		if p.monitorNext == nil {
-			p.monitorNext = make(map[int]time.Time)
-		}
-		eligibleAt := p.nextAdmission
-		if ready := p.monitorNext[monitorID]; ready.After(eligibleAt) {
-			eligibleAt = ready
-		}
-		// A monitor whose own search interval has not elapsed must not hold the
-		// regional queue in front of monitors that are already eligible.
-		if p.waiters[0] == waiter && p.monitorNext[monitorID].After(now) && len(p.waiters) > 1 {
-			copy(p.waiters, p.waiters[1:])
-			p.waiters[len(p.waiters)-1] = waiter
-		}
-		if p.waiters[0] == waiter && !eligibleAt.After(now) {
-			rate := math.Max(0.05, float64(max(1, clients))*p.policy.MaxRequestsPerProxySecond*p.capacityFactor)
-			spacing := time.Duration(float64(time.Second) / rate)
-			p.nextAdmission = now.Add(spacing)
-			desiredInterval = max(desiredInterval, spacing)
-			p.monitorNext[monitorID] = now.Add(desiredInterval)
-			p.admitted++
-			waited := now.Sub(started)
-			p.recordAdmissionLocked(waited)
-			p.mu.Unlock()
-			return waited, true
-		}
-		if maxDelay <= 0 || !now.Before(deadline) {
-			p.poolWaits++
-			waited := now.Sub(started)
-			p.recordAdmissionLocked(waited)
-			p.mu.Unlock()
-			return waited, false
-		}
+	rate := math.Max(0.05, float64(max(1, clients))*p.policy.MaxRequestsPerProxySecond*p.capacityFactor)
+	spacing := time.Duration(float64(time.Second) / rate)
+	eligibleAt := p.nextAdmission
+	if monitorReadyAt := p.monitorNext[monitorID]; monitorReadyAt.After(eligibleAt) {
+		eligibleAt = monitorReadyAt
+	}
+	wait := time.Duration(0)
+	if eligibleAt.After(now) {
+		wait = eligibleAt.Sub(now)
+	}
+	maxDelay := time.Duration(p.policy.MaxAdmissionDelayMS) * time.Millisecond
+	if wait > maxDelay {
+		p.poolWaits++
+		p.recordAdmissionLocked(maxDelay)
 		p.mu.Unlock()
-		timer := time.NewTimer(min(10*time.Millisecond, time.Until(deadline)))
+		if maxDelay <= 0 {
+			return 0, false
+		}
+		timer := time.NewTimer(maxDelay)
+		defer timer.Stop()
 		select {
 		case <-ctx.Done():
-			timer.Stop()
-			return time.Since(started), false
+			return maxDelay, false
 		case <-timer.C:
+			return maxDelay, false
 		}
+	}
+	grantedAt := now.Add(wait)
+	p.nextAdmission = grantedAt.Add(spacing)
+	if desiredInterval < spacing {
+		desiredInterval = spacing
+	}
+	if desiredInterval > 0 {
+		p.monitorNext[monitorID] = grantedAt.Add(desiredInterval)
+	}
+	p.admitted++
+	p.recordAdmissionLocked(wait)
+	p.mu.Unlock()
+	if wait <= 0 {
+		return 0, true
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return wait, false
+	case <-timer.C:
+		return wait, true
 	}
 }
 
