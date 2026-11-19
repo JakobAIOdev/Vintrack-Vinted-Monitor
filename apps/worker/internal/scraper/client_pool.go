@@ -59,15 +59,10 @@ type ClientPool struct {
 	maxInFlight          int
 	maxRequestsPerSecond float64
 	sharedAdmission      *sharedProxyAdmission
-	admissionWaiters     []*poolAdmissionWaiter
 	quarantineAfter      int
 	now                  func() time.Time
 	lastNoReplacementLog time.Time
 }
-
-type poolAdmissionWaiter struct{ queued bool }
-
-const maxPoolAdmissionWaiters = 4096
 
 // noHealthyReplacementLogInterval bounds how often Replace() logs its
 // failure per pool. When a regional proxy pool is fully exhausted, every
@@ -161,15 +156,8 @@ func (p *ClientPool) Acquire(exclude *Client) *Client {
 }
 
 func (p *ClientPool) AcquireExcluding(excluded map[*Client]bool) *Client {
-	return p.acquireExcludingForWaiter(excluded, nil)
-}
-
-func (p *ClientPool) acquireExcludingForWaiter(excluded map[*Client]bool, waiter *poolAdmissionWaiter) *Client {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.admissionWaiters) > 0 && p.admissionWaiters[0] != waiter {
-		return nil
-	}
 
 	now := p.currentTime()
 	p.clearExpiredQuarantinesLocked(now)
@@ -221,23 +209,8 @@ func (p *ClientPool) SetMaxRequestsPerSecond(rate float64) {
 func (p *ClientPool) AcquireWithAdmission(ctx context.Context, excluded map[*Client]bool, maxDelay time.Duration) (*Client, time.Duration, error) {
 	started := time.Now()
 	deadline := started.Add(maxDelay)
-	if err := ctx.Err(); err != nil {
-		return nil, 0, err
-	}
-	p.mu.Lock()
-	if len(p.admissionWaiters) >= maxPoolAdmissionWaiters {
-		p.mu.Unlock()
-		return nil, 0, &proxyPoolWaitError{RetryAt: deadline, ErrorCode: "proxy_admission_wait", ProxyLabel: "free"}
-	}
-	waiter := &poolAdmissionWaiter{queued: true}
-	p.admissionWaiters = append(p.admissionWaiters, waiter)
-	p.mu.Unlock()
-	defer p.removeAdmissionWaiter(waiter)
 	for {
-		if err := ctx.Err(); err != nil {
-			return nil, time.Since(started), err
-		}
-		if client := p.acquireExcludingForWaiter(excluded, waiter); client != nil {
+		if client := p.AcquireExcluding(excluded); client != nil {
 			return client, time.Since(started), nil
 		}
 		if waitErr := p.WaitError(); waitErr != nil {
@@ -258,19 +231,6 @@ func (p *ClientPool) AcquireWithAdmission(ctx context.Context, excluded map[*Cli
 	}
 }
 
-func (p *ClientPool) removeAdmissionWaiter(waiter *poolAdmissionWaiter) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for i, queued := range p.admissionWaiters {
-		if queued == waiter {
-			copy(p.admissionWaiters[i:], p.admissionWaiters[i+1:])
-			p.admissionWaiters[len(p.admissionWaiters)-1] = nil
-			p.admissionWaiters = p.admissionWaiters[:len(p.admissionWaiters)-1]
-			return
-		}
-	}
-}
-
 // AcquireRoundRobin spreads low-rate background traffic over all available
 // sessions while still respecting health cooldowns. Latency-sensitive catalog
 // traffic should continue to use Acquire.
@@ -279,9 +239,6 @@ func (p *ClientPool) AcquireRoundRobin() *Client {
 	defer p.mu.Unlock()
 
 	if len(p.states) == 0 {
-		return nil
-	}
-	if len(p.admissionWaiters) > 0 {
 		return nil
 	}
 	now := p.currentTime()

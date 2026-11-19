@@ -281,8 +281,6 @@ the fixed request limit in place.
 Within each monitor worker, regional catalog and seller pools share this budget
 for the same proxy, including background requests. Additional sessions and pool
 recreation do not create extra admission capacity.
-Queued monitor requests in a catalog pool are served in arrival order;
-background requests do not overtake them.
 
 Adaptive reductions respond to regional HTTP 429 pressure with at least twenty
 observed requests in the window. Transport failures and isolated rate limits
