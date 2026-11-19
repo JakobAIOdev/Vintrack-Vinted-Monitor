@@ -289,8 +289,8 @@ Active windows without rate limits gradually restore the regional budget, while
 the shared per-proxy limit remains enforced.
 
 Capacity pressure disables speculative parallel catalog fetches. A completed
-transport failure can still try another currently available exit within the
-original deadline and shared request budget. Access-denied, authentication and
+transport failure can still try another exit, waiting briefly for an available
+admission slot within the original deadline and shared request budget. Access-denied, authentication and
 rate-limit responses do not enable this sequential retry.
 
 When a shared pool drops below its normal capacity threshold, existing monitors

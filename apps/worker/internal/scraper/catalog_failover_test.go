@@ -96,6 +96,40 @@ func TestFreeProxySequentialFailoverRespectsSharedBudget(t *testing.T) {
 	}
 }
 
+func TestFreeProxySequentialFailoverWaitsForNextEligibleSlot(t *testing.T) {
+	t.Setenv("CATALOG_MAX_ATTEMPTS", "2")
+	f := &catalogFailoverFetcher{err: errors.New("connection refused")}
+	p := catalogFailoverPool()
+	now := time.Now()
+	p.sharedAdmission.next = map[string]sharedProxyAdmissionEntry{
+		p.states[1].client.ProxyURL: {next: now.Add(30 * time.Millisecond), admittedAt: now.Add(-1970 * time.Millisecond)},
+	}
+	e := &Engine{fetcher: f}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	r := e.fetchCatalogHedgedWithCapacity(ctx, p, "https://example.invalid/catalog", "example.invalid", time.Hour, false)
+	if r.err != nil || r.status != 200 || f.calls.Load() != 2 {
+		t.Fatalf("eligible retry was lost: calls=%d result=%d/%v", f.calls.Load(), r.status, r.err)
+	}
+	if p.sharedAdmission.snapshot().MinimumIntervalMS < 2000 {
+		t.Fatal("waiting retry bypassed the shared exit interval")
+	}
+}
+
+func TestFreeProxySequentialAdmissionWaitDoesNotExtendDeadline(t *testing.T) {
+	f := &catalogFailoverFetcher{err: errors.New("connection refused")}
+	p := catalogFailoverPool()
+	p.sharedAdmission.acquire(p.states[1].client.ProxyURL, time.Now())
+	e := &Engine{fetcher: f}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	r := e.fetchCatalogHedgedWithCapacity(ctx, p, "https://example.invalid/catalog", "example.invalid", time.Hour, false)
+	if r.err == nil || f.calls.Load() != 1 || time.Since(started) > 200*time.Millisecond {
+		t.Fatalf("retry exceeded deadline: calls=%d elapsed=%s err=%v", f.calls.Load(), time.Since(started), r.err)
+	}
+}
+
 func TestFreeProxySequentialFailoverStopsOnAccessAndRateLimitResponses(t *testing.T) {
 	for _, status := range []int{401, 403, 407, 429} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {

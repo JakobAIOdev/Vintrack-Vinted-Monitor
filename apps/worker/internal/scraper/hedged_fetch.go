@@ -113,6 +113,15 @@ func (e *Engine) fetchCatalogHedgedWithPrimary(ctx context.Context, pool *Client
 			return false
 		}
 		next := pool.AcquireExcluding(attempted)
+		if next == nil && sequentialRetry {
+			wait := 250 * time.Millisecond
+			if deadline, ok := ctx.Deadline(); ok {
+				wait = min(wait, time.Until(deadline))
+			}
+			if wait > 0 {
+				next, _, _ = pool.AcquireWithAdmission(ctx, attempted, wait)
+			}
+		}
 		if next == nil {
 			return false
 		}
