@@ -56,10 +56,6 @@ const (
 	databaySOCKS5ListURL   = "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/socks5.txt"
 	monosansProxyListURL   = "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt"
 	verifiedHTTPSListURL   = "https://raw.githubusercontent.com/maximilianfeix/free-proxy-list/main/https.txt"
-	dahonoHTTPListURL      = "https://raw.githubusercontent.com/Dahono-com/free-proxy-list/main/proxies/http.txt"
-	dahonoHTTPSListURL     = "https://raw.githubusercontent.com/Dahono-com/free-proxy-list/main/proxies/https.txt"
-	dahonoSOCKS4ListURL    = "https://raw.githubusercontent.com/Dahono-com/free-proxy-list/main/proxies/socks4.txt"
-	dahonoSOCKS5ListURL    = "https://raw.githubusercontent.com/Dahono-com/free-proxy-list/main/proxies/socks5.txt"
 )
 
 const (
@@ -2403,10 +2399,6 @@ func freeProxyImportURLsContext(ctx context.Context, store *database.Store, impo
 		databaySOCKS4ListURL,
 		monosansProxyListURL,
 		verifiedHTTPSListURL,
-		dahonoHTTPListURL,
-		dahonoHTTPSListURL,
-		dahonoSOCKS4ListURL,
-		dahonoSOCKS5ListURL,
 	} {
 		if seen[sourceURL] {
 			continue
@@ -2454,20 +2446,6 @@ func freeProxySourceContext(ctx context.Context, store *database.Store, importUR
 	}
 	if strings.Contains(importURL, "maximilianfeix/free-proxy-list") {
 		return "proxy-scraper:https"
-	}
-	if strings.Contains(importURL, "Dahono-com/free-proxy-list") {
-		switch {
-		case strings.Contains(importURL, "/http.txt"):
-			return "dahono:http"
-		case strings.Contains(importURL, "/https.txt"):
-			return "dahono:https"
-		case strings.Contains(importURL, "/socks4.txt"):
-			return "dahono:socks4"
-		case strings.Contains(importURL, "/socks5.txt"):
-			return "dahono:socks5"
-		default:
-			return "dahono"
-		}
 	}
 	if source, err := settingStringContext(ctx, store, "free_proxy_import_source", ""); err == nil && source != "" {
 		if strings.HasPrefix(source, "iplocate") {
