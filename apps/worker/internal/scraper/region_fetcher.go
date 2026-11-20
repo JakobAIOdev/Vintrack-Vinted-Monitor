@@ -774,7 +774,7 @@ func (s *SellerEnricher) fetchAPIBody(ctx context.Context, client *Client, targe
 		}
 		req.Header = newAPIHeaders(domain)
 
-		resp, err := client.HttpClient.Do(req)
+		resp, err := client.do(req)
 		if err != nil {
 			client.FlushTrackedTraffic()
 			return nil, 0, err
