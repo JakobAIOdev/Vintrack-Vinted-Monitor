@@ -221,7 +221,7 @@ func probeBareItemID(ctx context.Context, client *Client, domain string, itemID 
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Pragma", "no-cache")
 
-	resp, err := client.HttpClient.Do(req)
+	resp, err := client.do(req)
 	if err != nil {
 		client.FlushTrackedTraffic()
 		return preindexProbeResult{outcome: "error", err: err, duration: time.Since(startedAt)}

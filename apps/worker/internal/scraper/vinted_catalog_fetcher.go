@@ -27,13 +27,7 @@ func (VintedCatalogFetcher) FetchCatalog(ctx context.Context, client *Client, ap
 		return nil, 0, fmt.Errorf("live catalog fetcher requires a client")
 	}
 
-	if err := client.EnsureWarmContext(ctx, domain); err != nil {
-		return nil, statusCodeFromError(err), fmt.Errorf("warmup %s via %s: %w", domain, client.ProxyLabel(), err)
-	}
-
-	// Captured before the attempt so a rejected session is only discarded by
-	// the first request that saw it rejected.
-	generation := client.warmGeneration(domain)
+	var generation uint64
 	return fetchCatalogWithSessionRetry(
 		func() error {
 			client.resetWarmIfGeneration(domain, generation)
@@ -43,7 +37,25 @@ func (VintedCatalogFetcher) FetchCatalog(ctx context.Context, client *Client, ap
 			return nil
 		},
 		func() ([]model.VintedItem, int, error) {
-			return fetchCatalogAttempt(ctx, client, apiURL, domain)
+			for {
+				if err := client.EnsureWarmContext(ctx, domain); err != nil {
+					return nil, statusCodeFromError(err), fmt.Errorf("warmup %s via %s: %w", domain, client.ProxyLabel(), err)
+				}
+				client.sessionMu.RLock()
+				client.warmedMu.Lock()
+				warmed := client.warmed[domain]
+				generation = client.warmGenerations[domain]
+				client.warmedMu.Unlock()
+				if !warmed {
+					client.sessionMu.RUnlock()
+					continue
+				}
+				// Pin the jar until this response is consumed. A reset may
+				// invalidate the generation, but cannot replace its cookies yet.
+				items, status, err := fetchCatalogAttempt(ctx, client, apiURL, domain)
+				client.sessionMu.RUnlock()
+				return items, status, err
+			}
 		},
 	)
 }
@@ -63,10 +75,8 @@ func fetchCatalogWithSessionRetry(
 }
 
 func fetchCatalogAttempt(ctx context.Context, client *Client, initialURL string, domain string) ([]model.VintedItem, int, error) {
-	if !client.CatalogReady(domain) {
-		return nil, 0, fmt.Errorf("catalog cookie session unavailable for %s", domain)
-	}
-
+	// The caller verified readiness while pinning this session. A concurrent
+	// reset can now invalidate its flags without changing this attempt's jar.
 	reqURL := initialURL
 	for redirects := 0; redirects < 3; redirects++ {
 		req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)

@@ -97,7 +97,7 @@ func fetchPriceWatchPage(ctx context.Context, client *Client, target model.Price
 		req.Header = newWarmupHeaders(expectedHost)
 		req.Header.Set("Referer", fmt.Sprintf("https://%s/", expectedHost))
 
-		resp, err := client.HttpClient.Do(req)
+		resp, err := client.do(req)
 		if err != nil {
 			client.FlushTrackedTraffic()
 			code := "network_error"

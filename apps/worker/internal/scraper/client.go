@@ -205,11 +205,15 @@ type Client struct {
 	trackerMu       sync.Mutex
 	lastTxBytes     int64
 	lastRxBytes     int64
-	warmedMu        sync.Mutex
-	warmed          map[string]bool
-	catalogReady    map[string]bool
-	warmFlights     map[string]*warmFlight
-	warmGenerations map[string]uint64
+	// Session changes wait for requests using the old jar to finish. Warmup
+	// holds the exclusive lock; ordinary requests may still run concurrently.
+	sessionMu           sync.RWMutex
+	warmedMu            sync.Mutex
+	warmed              map[string]bool
+	catalogReady        map[string]bool
+	warmFlights         map[string]*warmFlight
+	warmGenerations     map[string]uint64
+	sessionResetPending bool
 	// warmUp replaces the network warmup in tests.
 	warmUp func(ctx context.Context, domain string) error
 }
@@ -449,6 +453,51 @@ func (c *Client) WarmUpRegion(domain string) error {
 }
 
 func (c *Client) WarmUpRegionContext(ctx context.Context, domain string) error {
+	c.sessionMu.Lock()
+	defer c.sessionMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	c.warmedMu.Lock()
+	if c.sessionResetPending {
+		if c.HttpClient != nil {
+			c.HttpClient.SetCookieJar(tls_client.NewCookieJar())
+			c.HttpClient.CloseIdleConnections()
+		}
+		c.sessionResetPending = false
+	}
+	if c.warmGenerations == nil {
+		c.warmGenerations = make(map[string]uint64)
+	}
+	// Register the replacement before network work so late rejections cannot
+	// discard it, and resets during warmup can invalidate its result.
+	c.warmGenerations[domain]++
+	generation := c.warmGenerations[domain]
+	c.warmedMu.Unlock()
+
+	var err error
+	if c.warmUp != nil {
+		err = c.warmUp(ctx, domain)
+	} else {
+		err = c.warmUpRegionContext(ctx, domain)
+	}
+	c.warmedMu.Lock()
+	if err == nil && c.warmGenerations[domain] == generation {
+		if c.warmed == nil {
+			c.warmed = make(map[string]bool)
+		}
+		if c.catalogReady == nil {
+			c.catalogReady = make(map[string]bool)
+		}
+		c.warmed[domain] = true
+		c.catalogReady[domain] = true
+	}
+	c.warmedMu.Unlock()
+	return err
+}
+
+func (c *Client) warmUpRegionContext(ctx context.Context, domain string) error {
 	// The regional help page establishes the anonymous cookie session without
 	// downloading the substantially larger marketplace homepage. Fall back only
 	// when that route is unsupported; retrying transport or access failures via
@@ -519,9 +568,6 @@ func (c *Client) warmUpRegionURLContext(ctx context.Context, domain string, init
 		resp.Body.Close()
 		c.FlushTrackedTraffic()
 		c.synchronizeCatalogCookies(domain)
-		c.warmedMu.Lock()
-		c.catalogReady[domain] = true
-		c.warmedMu.Unlock()
 		return nil
 	}
 
@@ -567,6 +613,9 @@ func (c *Client) EnsureWarm(domain string) error {
 // request count and overwrite each other's cookies.
 func (c *Client) EnsureWarmContext(ctx context.Context, domain string) error {
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		c.warmedMu.Lock()
 		if c.warmed[domain] {
 			c.warmedMu.Unlock()
@@ -574,7 +623,12 @@ func (c *Client) EnsureWarmContext(ctx context.Context, domain string) error {
 		}
 		flight := c.warmFlights[domain]
 		if flight == nil {
-			return c.leadWarmupLocked(ctx, domain)
+			if err := c.leadWarmupLocked(ctx, domain); err != nil {
+				return err
+			}
+			// A pool report can invalidate a session during warmup. Its result
+			// must not mark that rejected generation ready for new requests.
+			continue
 		}
 		c.warmedMu.Unlock()
 
@@ -609,24 +663,9 @@ func (c *Client) leadWarmupLocked(ctx context.Context, domain string) error {
 	c.warmFlights[domain] = flight
 	c.warmedMu.Unlock()
 
-	var err error
-	if c.warmUp != nil {
-		err = c.warmUp(ctx, domain)
-	} else {
-		err = c.WarmUpRegionContext(ctx, domain)
-	}
+	err := c.WarmUpRegionContext(ctx, domain)
 
 	c.warmedMu.Lock()
-	if err == nil {
-		if c.warmed == nil {
-			c.warmed = make(map[string]bool)
-		}
-		if c.warmGenerations == nil {
-			c.warmGenerations = make(map[string]uint64)
-		}
-		c.warmed[domain] = true
-		c.warmGenerations[domain]++
-	}
 	delete(c.warmFlights, domain)
 	c.warmedMu.Unlock()
 
@@ -637,9 +676,27 @@ func (c *Client) leadWarmupLocked(ctx context.Context, domain string) error {
 
 func (c *Client) ResetWarm(domain string) {
 	c.warmedMu.Lock()
-	delete(c.warmed, domain)
-	delete(c.catalogReady, domain)
+	c.discardSessionLocked(domain)
 	c.warmedMu.Unlock()
+}
+
+// discardSessionLocked invalidates immediately, including while a replacement
+// is warming. The next warmup swaps the jar only after old requests have drained,
+// so late Set-Cookie responses cannot contaminate the replacement session.
+// A jar belongs to the whole client, so invalidate every domain it warmed.
+func (c *Client) discardSessionLocked(domain string) {
+	clear(c.warmed)
+	clear(c.catalogReady)
+	if c.warmGenerations == nil {
+		c.warmGenerations = make(map[string]uint64)
+	}
+	c.warmGenerations[domain]++
+	for otherDomain := range c.warmGenerations {
+		if otherDomain != domain {
+			c.warmGenerations[otherDomain]++
+		}
+	}
+	c.sessionResetPending = true
 }
 
 // warmGeneration identifies the session a request is about to use.
@@ -655,10 +712,21 @@ func (c *Client) warmGeneration(domain string) uint64 {
 func (c *Client) resetWarmIfGeneration(domain string, generation uint64) {
 	c.warmedMu.Lock()
 	if c.warmGenerations[domain] == generation {
-		delete(c.warmed, domain)
-		delete(c.catalogReady, domain)
+		c.discardSessionLocked(domain)
 	}
 	c.warmedMu.Unlock()
+}
+
+// do protects jar access and response cookie writes through receipt of headers.
+// Catalog attempts hold sessionMu for their entire attempt instead, so their
+// readiness check, generation and anonymous headers all use the same session.
+func (c *Client) do(req *http.Request) (*http.Response, error) {
+	c.sessionMu.RLock()
+	defer c.sessionMu.RUnlock()
+	if err := req.Context().Err(); err != nil {
+		return nil, err
+	}
+	return c.HttpClient.Do(req)
 }
 
 func (c *Client) CatalogReady(domain string) bool {
