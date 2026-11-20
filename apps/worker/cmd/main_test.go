@@ -690,6 +690,10 @@ func TestFreeProxySourcePrefersKnownURLProvider(t *testing.T) {
 		databaySOCKS5ListURL:                   "databay:socks5",
 		monosansProxyListURL:                   "monosans",
 		verifiedHTTPSListURL:                   "proxy-scraper:https",
+		dahonoHTTPListURL:                      "dahono:http",
+		dahonoHTTPSListURL:                     "dahono:https",
+		dahonoSOCKS4ListURL:                    "dahono:socks4",
+		dahonoSOCKS5ListURL:                    "dahono:socks5",
 	}
 
 	for importURL, want := range tests {
@@ -708,6 +712,10 @@ func TestDefaultSchemeForImportURL(t *testing.T) {
 		proxiflyHTTPSListURL:  "https",
 		proxiflySOCKS4ListURL: "socks4",
 		proxiflySOCKS5ListURL: "socks5",
+		dahonoHTTPListURL:     "http",
+		dahonoHTTPSListURL:    "https",
+		dahonoSOCKS4ListURL:   "socks4",
+		dahonoSOCKS5ListURL:   "socks5",
 	}
 
 	for importURL, want := range tests {
