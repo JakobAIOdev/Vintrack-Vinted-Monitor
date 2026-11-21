@@ -43,6 +43,7 @@ func (e *Engine) applyWorkerPolicy(policy workerPolicy) {
 func (e *Engine) applyFreeProxyPacingPolicy(freePolicy freeProxyPacingPolicy) {
 	e.freePacersMu.Lock()
 	e.freePacingPolicy = freePolicy
+	e.freeProxyAdmission.setRate(freePolicy.MaxRequestsPerProxySecond)
 	for region, pacer := range e.freePacers {
 		limited := e.freeProxy != nil && e.freeProxy.Snapshot(region).State == "limited"
 		policy := freePolicy.forPool(region, limited)

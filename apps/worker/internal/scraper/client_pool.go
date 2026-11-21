@@ -58,6 +58,7 @@ type ClientPool struct {
 	resizing             bool
 	maxInFlight          int
 	maxRequestsPerSecond float64
+	sharedAdmission      *sharedProxyAdmission
 	quarantineAfter      int
 	now                  func() time.Time
 	lastNoReplacementLog time.Time
@@ -167,6 +168,7 @@ func (p *ClientPool) AcquireExcluding(excluded map[*Client]bool) *Client {
 			state.retiring ||
 			state.cooldownUntil.After(now) ||
 			(p.maxRequestsPerSecond > 0 && state.nextAdmission.After(now)) ||
+			!p.sharedAdmission.available(state.client.ProxyURL, now) ||
 			state.replacing ||
 			(p.maxInFlight > 0 && state.inFlight >= p.maxInFlight) ||
 			p.proxyIsQuarantinedLocked(state.client.ProxyURL, now) {
@@ -183,6 +185,9 @@ func (p *ClientPool) AcquireExcluding(excluded map[*Client]bool) *Client {
 		}
 	}
 	if best == nil {
+		return nil
+	}
+	if !p.sharedAdmission.acquire(best.client.ProxyURL, now) {
 		return nil
 	}
 	best.inFlight++
@@ -243,12 +248,19 @@ func (p *ClientPool) AcquireRoundRobin() *Client {
 		state := p.states[index]
 		if state.retiring ||
 			state.cooldownUntil.After(now) ||
+			(p.maxRequestsPerSecond > 0 && state.nextAdmission.After(now)) ||
 			state.replacing ||
 			(p.maxInFlight > 0 && state.inFlight >= p.maxInFlight) ||
 			p.proxyIsQuarantinedLocked(state.client.ProxyURL, now) {
 			continue
 		}
+		if !p.sharedAdmission.acquire(state.client.ProxyURL, now) {
+			continue
+		}
 		state.inFlight++
+		if p.maxRequestsPerSecond > 0 {
+			state.nextAdmission = now.Add(time.Duration(float64(time.Second) / p.maxRequestsPerSecond))
+		}
 		p.index = (index + 1) % len(p.states)
 		return state.client
 	}

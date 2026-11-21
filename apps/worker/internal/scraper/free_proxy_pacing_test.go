@@ -17,18 +17,19 @@ func TestFreeProxyPacerHalvesCapacityOnPressure(t *testing.T) {
 	pacer.admitted = 100
 	pacer.outcomes = 100
 	pacer.successes = 89
+	pacer.rateLimited = 11
 	pacer.rotateLocked(time.Now(), 50)
 	if pacer.capacityFactor != 0.5 {
 		t.Fatalf("capacity factor = %v, want 0.5", pacer.capacityFactor)
 	}
 }
 
-func TestFreeProxyPacerRecoversAfterFiveHealthyWindows(t *testing.T) {
+func TestFreeProxyPacerRecoversAfterHealthyWindow(t *testing.T) {
 	pacer := newFreeProxyRegionPacer("fr", freeProxyPacingPolicy{
 		Enabled: true, Regions: []string{"fr"}, MaxRequestsPerProxySecond: 0.5, MaxAdmissionDelayMS: 10,
 	})
 	pacer.capacityFactor = 0.5
-	for range 5 {
+	for range 1 {
 		pacer.windowStarted = time.Now().Add(-61 * time.Second)
 		pacer.requested = 100
 		pacer.admitted = 100
@@ -76,7 +77,7 @@ func TestFreeProxyPacerKeepsPerMonitorAdmissionFair(t *testing.T) {
 	}
 }
 
-func TestFreeProxyPacerTreatsBelowNinetyFivePercentAsPressure(t *testing.T) {
+func TestFreeProxyPacerDoesNotThrottleOnTransportFailures(t *testing.T) {
 	pacer := newFreeProxyRegionPacer("uk", freeProxyPacingPolicy{
 		Enabled: true, Regions: []string{"uk"}, MaxRequestsPerProxySecond: 0.5, MaxAdmissionDelayMS: 10,
 	})
@@ -86,8 +87,31 @@ func TestFreeProxyPacerTreatsBelowNinetyFivePercentAsPressure(t *testing.T) {
 	pacer.outcomes = 100
 	pacer.successes = 94
 	pacer.rotateLocked(time.Now(), 50)
-	if pacer.capacityFactor != 0.5 {
-		t.Fatalf("capacity factor at 94%% success = %v, want 0.5", pacer.capacityFactor)
+	if pacer.capacityFactor != 1 {
+		t.Fatalf("transport failures throttled healthy exits: capacity factor = %v, want 1", pacer.capacityFactor)
+	}
+}
+
+func TestFreeProxyPacerSparseRateLimitDoesNotThrottleWholeRegion(t *testing.T) {
+	pacer := newFreeProxyRegionPacer("pl", freeProxyPacingPolicy{Enabled: true, Regions: []string{"pl"}, MaxRequestsPerProxySecond: 0.5})
+	pacer.windowStarted = time.Now().Add(-time.Minute)
+	pacer.outcomes, pacer.successes, pacer.rateLimited = 4, 3, 1
+	pacer.rotateLocked(time.Now(), 10)
+	if pacer.capacityFactor != 1 {
+		t.Fatalf("one rate-limited exit throttled the whole region: %v", pacer.capacityFactor)
+	}
+}
+
+func TestFreeProxyPacerRestoresLowTrafficRegionWithoutRateLimits(t *testing.T) {
+	pacer := newFreeProxyRegionPacer("pl", freeProxyPacingPolicy{Enabled: true, Regions: []string{"pl"}, MaxRequestsPerProxySecond: 0.5})
+	pacer.capacityFactor = 0.0625
+	for range 4 {
+		pacer.windowStarted = time.Now().Add(-time.Minute)
+		pacer.outcomes, pacer.successes = 1, 1
+		pacer.rotateLocked(time.Now(), 10)
+	}
+	if pacer.capacityFactor != 1 {
+		t.Fatalf("healthy low-traffic region stayed throttled: %v", pacer.capacityFactor)
 	}
 }
 
@@ -110,7 +134,7 @@ func TestFreeProxyRuntimeMetricsKeepLastCompletedWindowWhileIdle(t *testing.T) {
 func TestLimitedFreePoolForcesBoundedPacingWithoutChangingNormalPolicy(t *testing.T) {
 	policy := freeProxyPacingPolicy{MaxRequestsPerProxySecond: 2, MaxAdmissionDelayMS: 1500}
 	limited := policy.forPool("uk", true)
-	if !limited.applies("uk") || limited.applies("de") || limited.MaxRequestsPerProxySecond != 0.5 || limited.MaxAdmissionDelayMS != 30_000 {
+	if !limited.applies("uk") || limited.applies("de") || limited.MaxRequestsPerProxySecond != 0.5 || limited.MaxAdmissionDelayMS != maxFreeProxyAdmissionDelayMS {
 		t.Fatalf("unsafe limited policy: %+v", limited)
 	}
 	if policy.Enabled || !policy.forPool("uk", false).applies("uk") || policy.forPool("uk", false).Enabled {
@@ -146,7 +170,7 @@ func TestWorkerPolicyRefreshCannotDisableLimitedPoolAdmissionControl(t *testing.
 	engine := &Engine{freeProxy: pools, freePacers: make(map[string]*freeProxyRegionPacer)}
 	pacer := engine.freeProxyPacer("uk", true)
 	engine.applyFreeProxyPacingPolicy(freeProxyPacingPolicy{})
-	if rate, delay := pacer.limits(); rate != 0.5 || delay != 30*time.Second || engine.freePacers["uk"] != pacer {
+	if rate, delay := pacer.limits(); rate != 0.5 || delay != time.Duration(maxFreeProxyAdmissionDelayMS)*time.Millisecond || engine.freePacers["uk"] != pacer {
 		t.Fatalf("policy refresh disabled safe limited operation: rate=%v delay=%s", rate, delay)
 	}
 	pools.Publish("uk", "http://limited.invalid:80", "ready", 10, "", 2)
@@ -170,22 +194,55 @@ func TestFreeProxyBaseAdmissionDoesNotEnableAdaptiveController(t *testing.T) {
 	}
 }
 
-func TestLimitedFreePoolCanQueueBeyondNormalAdmissionDeadline(t *testing.T) {
-	pacer := newFreeProxyRegionPacer("uk", freeProxyPacingPolicy{}.forPool("uk", true))
-	pacer.nextAdmission = time.Now().Add(1600 * time.Millisecond)
+func TestFreeProxyAdmissionWaitIsCappedForReadyAndLimitedPools(t *testing.T) {
+	for _, limited := range []bool{false, true} {
+		policy := freeProxyPacingPolicy{
+			MaxRequestsPerProxySecond: 0.5,
+			MaxAdmissionDelayMS:       30_000,
+		}.forPool("uk", limited)
+		if policy.MaxAdmissionDelayMS != maxFreeProxyAdmissionDelayMS {
+			t.Fatalf("limited=%v max admission delay=%d, want %d", limited, policy.MaxAdmissionDelayMS, maxFreeProxyAdmissionDelayMS)
+		}
+	}
+}
+
+func TestLimitedFreePoolSkipsLongAdmissionWait(t *testing.T) {
+	pacer := newFreeProxyRegionPacer("uk", freeProxyPacingPolicy{
+		MaxRequestsPerProxySecond: 0.5,
+		MaxAdmissionDelayMS:       30_000,
+	}.forPool("uk", true))
+	pacer.nextAdmission = time.Now().Add(2 * time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	started := time.Now()
 	wait, admitted := pacer.admit(ctx, 1, time.Second, 8)
-	if !admitted || wait < 1500*time.Millisecond || wait > 30*time.Second {
-		t.Fatalf("bounded limited-mode queue rejected a monitor: wait=%s admitted=%v", wait, admitted)
+	if admitted || wait < time.Duration(maxFreeProxyAdmissionDelayMS)*time.Millisecond || time.Since(started) > 2*time.Second {
+		t.Fatalf("long queue result admitted=%v wait=%s elapsed=%s", admitted, wait, time.Since(started))
+	}
+	if pacer.admitted != 0 {
+		t.Fatalf("long queue reserved %d requests, want no reservation", pacer.admitted)
 	}
 
 	pacer.nextAdmission = time.Now().Add(10 * time.Second)
 	canceledCtx, stop := context.WithCancel(context.Background())
 	stop()
-	started := time.Now()
+	started = time.Now()
 	if _, admitted := pacer.admit(canceledCtx, 2, time.Second, 8); admitted || time.Since(started) > 200*time.Millisecond {
 		t.Fatal("stopping a monitor remained blocked behind the admission queue")
+	}
+}
+
+func TestLimitedFreePoolAdmitsWhenSlotFitsWaitBudget(t *testing.T) {
+	pacer := newFreeProxyRegionPacer("uk", freeProxyPacingPolicy{
+		MaxRequestsPerProxySecond: 0.5,
+		MaxAdmissionDelayMS:       30_000,
+	}.forPool("uk", true))
+	pacer.nextAdmission = time.Now().Add(200 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	wait, admitted := pacer.admit(ctx, 1, time.Second, 8)
+	if !admitted || wait > 500*time.Millisecond {
+		t.Fatalf("nearby slot was rejected: admitted=%v wait=%s", admitted, wait)
 	}
 }
 

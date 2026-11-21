@@ -21,6 +21,8 @@ type freeProxyPacingPolicy struct {
 	admissionRegion           string
 }
 
+const maxFreeProxyAdmissionDelayMS = 1500
+
 func (p freeProxyPacingPolicy) forPool(region string, limited bool) freeProxyPacingPolicy {
 	// The adaptive controller is optional; a shared pool's configured rate
 	// limit is not. Reaching readiness must not turn admission off.
@@ -28,14 +30,16 @@ func (p freeProxyPacingPolicy) forPool(region string, limited bool) freeProxyPac
 	if p.MaxRequestsPerProxySecond <= 0 {
 		p.MaxRequestsPerProxySecond = 0.5
 	}
+	if p.MaxAdmissionDelayMS > maxFreeProxyAdmissionDelayMS {
+		p.MaxAdmissionDelayMS = maxFreeProxyAdmissionDelayMS
+	}
 	if limited {
 		if p.MaxRequestsPerProxySecond > 0.5 {
 			p.MaxRequestsPerProxySecond = 0.5
 		}
-		// Queue a small cohort fairly instead of repeatedly rejecting the same
-		// monitors at the normal short admission deadline. All waits remain
-		// bounded and cancel immediately when the monitor stops.
-		p.MaxAdmissionDelayMS = 30_000
+		if p.MaxAdmissionDelayMS == 0 {
+			p.MaxAdmissionDelayMS = maxFreeProxyAdmissionDelayMS
+		}
 	}
 	return p
 }
@@ -92,7 +96,6 @@ type freeProxyRegionPacer struct {
 	poolWaits      uint64
 	admissionMS    []int64
 	capacityFactor float64
-	healthyWindows int
 	lastWindow     freeProxyRuntimeRegionMetric
 }
 
@@ -128,8 +131,9 @@ func (e *Engine) freeProxyRuntimeMetricsHeartbeat() {
 			metrics = metrics[:50]
 		}
 		payload, err := json.Marshal(map[string]any{
-			"updatedAt": time.Now().UTC().Format(time.RFC3339Nano),
-			"regions":   metrics,
+			"updatedAt":       time.Now().UTC().Format(time.RFC3339Nano),
+			"regions":         metrics,
+			"sharedAdmission": e.freeProxyAdmission.snapshot(),
 		})
 		if err == nil {
 			writeCtx, cancel := context.WithTimeout(e.jobsCtx, 3*time.Second)
@@ -160,7 +164,6 @@ func (p *freeProxyRegionPacer) applyPolicy(policy freeProxyPacingPolicy) {
 	p.policy = policy
 	if !policy.adapts(p.region) {
 		p.capacityFactor = 1
-		p.healthyWindows = 0
 	}
 }
 
@@ -270,32 +273,26 @@ func (p *freeProxyRegionPacer) rotateLocked(now time.Time, clients int) {
 	adaptive := p.policy.adapts(p.region)
 	if !adaptive {
 		p.capacityFactor = 1
-		p.healthyWindows = 0
 	}
 	p.lastWindow = p.snapshotLocked(now, clients)
 	if !adaptive || p.outcomes == 0 {
-		p.healthyWindows = 0
 		p.resetWindowLocked(now)
 		return
 	}
 	attempts := max(uint64(1), p.outcomes)
-	successRate := float64(p.successes) / float64(attempts)
 	rateLimitedRate := float64(p.rateLimited) / float64(attempts)
-	// Demand above the admission budget is not evidence of a slower proxy.
-	// Halving capacity because callers wait creates a self-reinforcing stall.
-	unhealthy := rateLimitedRate >= 0.05 || successRate < 0.95
-	healthy := successRate >= 0.95 && rateLimitedRate < 0.01
+	// Transport failures retire/cool individual clients; they are not evidence
+	// that every healthy exit is over its request budget. Only sufficiently
+	// sampled upstream rate limits justify reducing the whole region. Sparse
+	// 429s still receive the individual client's normal backoff immediately.
+	unhealthy := p.outcomes >= 20 && rateLimitedRate >= 0.05
 	if unhealthy {
 		p.capacityFactor = math.Max(0.0625, p.capacityFactor/2)
-		p.healthyWindows = 0
-	} else if healthy {
-		p.healthyWindows++
-		if p.healthyWindows >= 5 {
-			p.capacityFactor = math.Min(1, p.capacityFactor*2)
-			p.healthyWindows = 0
-		}
-	} else {
-		p.healthyWindows = 0
+	} else if p.rateLimited == 0 {
+		// Restore one step per active rate-limit-free window. Requiring five
+		// windows per step stranded small cohorts for twenty minutes or more;
+		// the shared per-exit limiter remains a hard upper bound throughout.
+		p.capacityFactor = math.Min(1, p.capacityFactor*2)
 	}
 	p.resetWindowLocked(now)
 }
