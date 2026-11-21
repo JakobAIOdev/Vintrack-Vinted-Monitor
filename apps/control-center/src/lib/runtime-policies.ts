@@ -4,6 +4,8 @@ export const RUNTIME_POLICY_KEYS = {
     worker: "policy.worker",
 } as const;
 
+export const MAX_FREE_PROXY_ADMISSION_DELAY_MS = 1500;
+
 export type VersionedPolicy = {
     version: 1;
     revision: number;
@@ -93,7 +95,7 @@ export const DEFAULT_FREE_PROXY_POLICY: FreeProxyPolicy = {
     adaptivePacingEnabled: false,
     adaptiveRegions: ["de", "fr"],
     maxRequestsPerProxySecond: 0.5,
-    maxAdmissionDelayMs: 1500,
+    maxAdmissionDelayMs: MAX_FREE_PROXY_ADMISSION_DELAY_MS,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -217,6 +219,10 @@ export function parseFreeProxyPolicy(value: string | null | undefined) {
             typeof policy.starterRegions !== "string"
         )
             return null;
+        policy.maxAdmissionDelayMs = Math.min(
+            Number(policy.maxAdmissionDelayMs),
+            MAX_FREE_PROXY_ADMISSION_DELAY_MS,
+        );
         return policy as FreeProxyPolicy;
     });
 }

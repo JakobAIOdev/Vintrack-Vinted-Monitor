@@ -21,6 +21,8 @@ type freeProxyPacingPolicy struct {
 	admissionRegion           string
 }
 
+const maxFreeProxyAdmissionDelayMS = 1500
+
 func (p freeProxyPacingPolicy) forPool(region string, limited bool) freeProxyPacingPolicy {
 	// The adaptive controller is optional; a shared pool's configured rate
 	// limit is not. Reaching readiness must not turn admission off.
@@ -28,14 +30,16 @@ func (p freeProxyPacingPolicy) forPool(region string, limited bool) freeProxyPac
 	if p.MaxRequestsPerProxySecond <= 0 {
 		p.MaxRequestsPerProxySecond = 0.5
 	}
+	if p.MaxAdmissionDelayMS > maxFreeProxyAdmissionDelayMS {
+		p.MaxAdmissionDelayMS = maxFreeProxyAdmissionDelayMS
+	}
 	if limited {
 		if p.MaxRequestsPerProxySecond > 0.5 {
 			p.MaxRequestsPerProxySecond = 0.5
 		}
-		// Queue a small cohort fairly instead of repeatedly rejecting the same
-		// monitors at the normal short admission deadline. All waits remain
-		// bounded and cancel immediately when the monitor stops.
-		p.MaxAdmissionDelayMS = 30_000
+		if p.MaxAdmissionDelayMS == 0 {
+			p.MaxAdmissionDelayMS = maxFreeProxyAdmissionDelayMS
+		}
 	}
 	return p
 }

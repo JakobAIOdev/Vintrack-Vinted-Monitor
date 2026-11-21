@@ -103,7 +103,10 @@ import {
     type PriceWatchPollingAdminState,
 } from "@/actions/admin";
 import { getRegionCurrencyCode, getRegionLabel, REGIONS } from "@/lib/regions";
-import type { WorkerPolicy } from "@/lib/runtime-policies";
+import {
+    MAX_FREE_PROXY_ADMISSION_DELAY_MS,
+    type WorkerPolicy,
+} from "@/lib/runtime-policies";
 import type { DeploymentConfigDiagnostics } from "@/lib/deployment-config";
 import { getProxyErrorDetails } from "@/lib/proxy-errors";
 import { ADMIN_SECTION_ROUTES, type AdminSection } from "@/lib/admin-sections";
@@ -8047,7 +8050,7 @@ export function AdminClient({
                                                 id="free-proxy-admission-delay"
                                                 type="number"
                                                 min={0}
-                                                max={30000}
+                                                max={MAX_FREE_PROXY_ADMISSION_DELAY_MS}
                                                 value={
                                                     freeProxySettings.maxAdmissionDelayMs
                                                 }

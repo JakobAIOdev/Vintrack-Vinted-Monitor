@@ -71,6 +71,16 @@ test("old free proxy policy documents receive disabled canary defaults", () => {
     assert.equal(policy?.maxAdmissionDelayMs, 1500);
 });
 
+test("free proxy admission delays are capped to prevent long monitor queues", () => {
+    const policy = parseFreeProxyPolicy(
+        JSON.stringify({
+            ...DEFAULT_FREE_PROXY_POLICY,
+            maxAdmissionDelayMs: 30_000,
+        }),
+    );
+    assert.equal(policy?.maxAdmissionDelayMs, 1500);
+});
+
 test("new policy documents retain explicit adaptive and TTL values", () => {
     const worker = parseWorkerPolicy(
         JSON.stringify({

@@ -542,6 +542,7 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 	runtimeState := "starting"
 	stateSince := time.Now().UTC()
 	lastSuccessAt := time.Time{}
+	lastPoolWaitReportedAt := time.Time{}
 	setRuntimeState := func(next string) {
 		if next != "" && next != runtimeState {
 			runtimeState = next
@@ -573,6 +574,15 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			h.RetryAt = retryAt.UTC().Format(time.RFC3339)
 		}
 		e.db.UpdateMonitorHealth(h)
+	}
+
+	reportPoolWait := func(message string, retryAt time.Time) {
+		if runtimeState == "waiting_for_pool" && time.Since(lastPoolWaitReportedAt) < 30*time.Second {
+			return
+		}
+		setRuntimeState("waiting_for_pool")
+		reportHealth(message, proxyErrorPoolWaiting, "waiting_for_proxy", retryAt, "")
+		lastPoolWaitReportedAt = time.Now()
 	}
 
 	defer e.db.ClearMonitorHealth(m.ID)
@@ -674,7 +684,12 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			pacer = e.freeProxyPacer(m.Region, limited)
 		}
 		if pacer != nil {
-			if _, admitted := pacer.admit(ctx, m.ID, monitorQueryInterval(m, time.Now()), pool.Size()); !admitted {
+			wait, admitted := pacer.admit(ctx, m.ID, monitorQueryInterval(m, time.Now()), pool.Size())
+			if !admitted {
+				reportPoolWait(
+					"free proxy region is at its request capacity; retrying next cycle",
+					time.Now().Add(max(wait, monitorQueryInterval(m, time.Now()))),
+				)
 				sleepMonitorCycle(ctx, cycleStart, monitorQueryInterval(m, time.Now()))
 				continue
 			}
@@ -685,13 +700,18 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		if pacer != nil {
 			_, maxAdmissionDelay := pacer.limits()
 			var admissionErr error
-			admittedPrimary, _, admissionErr = pool.AcquireWithAdmission(
+			var admissionWait time.Duration
+			admittedPrimary, admissionWait, admissionErr = pool.AcquireWithAdmission(
 				ctx,
 				nil,
 				maxAdmissionDelay,
 			)
 			if admissionErr != nil {
 				pacer.recordPoolWait()
+				reportPoolWait(
+					"free proxy clients are busy; retrying next cycle",
+					time.Now().Add(max(admissionWait, monitorQueryInterval(m, time.Now()))),
+				)
 				sleepMonitorCycle(ctx, cycleStart, monitorQueryInterval(m, time.Now()))
 				continue
 			}
