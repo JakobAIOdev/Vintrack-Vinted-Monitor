@@ -70,6 +70,7 @@ import {
 } from "@/lib/runtime-policies.server";
 import {
     policyPayload,
+    MAX_FREE_PROXY_ADMISSION_DELAY_MS,
     RUNTIME_POLICY_KEYS,
     type FreeProxyPolicy,
     type PriceWatchPolicy,
@@ -2377,7 +2378,7 @@ async function getFreeProxySettings(): Promise<FreeProxySettings> {
         adaptivePacingEnabled: false,
         adaptiveRegions: ["de", "fr"],
         maxRequestsPerProxySecond: 0.5,
-        maxAdmissionDelayMs: 1500,
+        maxAdmissionDelayMs: MAX_FREE_PROXY_ADMISSION_DELAY_MS,
     };
 }
 
@@ -3103,9 +3104,9 @@ export async function updateFreeProxySettings(formData: FormData) {
     );
     const maxAdmissionDelayMs = parsePositiveIntSetting(
         formData.get("maxAdmissionDelayMs") as string | undefined,
-        1500,
+        MAX_FREE_PROXY_ADMISSION_DELAY_MS,
         0,
-        30000,
+        MAX_FREE_PROXY_ADMISSION_DELAY_MS,
     );
     const starterRegionsValue = formData.get("starterRegions");
     const starterRegions = (
