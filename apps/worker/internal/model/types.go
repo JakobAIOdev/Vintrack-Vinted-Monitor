@@ -75,7 +75,6 @@ type Monitor struct {
 	ServerProxyVersion    uint64
 	FreeProxyVersion      uint64
 	SuppressStartupNotice bool
-	ResumeAfterQuietHours bool
 	CreatedAt             time.Time
 }
 

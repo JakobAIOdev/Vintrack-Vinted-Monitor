@@ -169,7 +169,4 @@ func TestPrepareMonitorResumeSkipsOnlyStartupBehavior(t *testing.T) {
 	if !monitor.SuppressStartupNotice {
 		t.Fatal("quiet-hours resume did not suppress the duplicate startup notice")
 	}
-	if !monitor.ResumeAfterQuietHours {
-		t.Fatal("quiet-hours resume did not enable immediate item notifications")
-	}
 }

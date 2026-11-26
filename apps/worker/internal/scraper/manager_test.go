@@ -30,8 +30,8 @@ func TestMaintenanceEndIsTreatedAsSilentResume(t *testing.T) {
 	if maintenanceJustEnded {
 		prepareMonitorResume(&monitor)
 	}
-	if !monitor.SuppressStartupNotice || !monitor.ResumeAfterQuietHours {
-		t.Fatal("expected maintenance resume to suppress startup notices and preserve catch-up behavior")
+	if !monitor.SuppressStartupNotice {
+		t.Fatal("expected maintenance resume to suppress startup notices")
 	}
 }
 

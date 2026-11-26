@@ -314,6 +314,15 @@ jobs:
     if: needs.changes.outputs.worker == 'true'
 
     services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
       postgres:
         image: postgres:15-alpine
         env:
@@ -358,6 +367,12 @@ jobs:
             docker exec -i "${{ job.services.postgres.id }}" psql -U postgres -d vintrack_worker_test -v ON_ERROR_STOP=1 < "$migration" > /dev/null
           done
           go test -race ./internal/database ./cmd -run '^Test(FreeProxy|DiverseActiveFreeProxies|MonitorRunStatsFlush)' -count=1
+
+      - name: Test durable catalog baselines across worker restarts
+        env:
+          MONITOR_ITEM_INTEGRATION_DATABASE_URL: postgresql://postgres:vintrack_test@localhost:5432/vintrack_worker_test?sslmode=disable
+          REDIS_INTEGRATION_ADDR: localhost:6379
+        run: go test -race ./internal/database ./internal/scraper -run '^Test(MonitorCatalogBaselines|MonitorTaskRejectsHistoricalCatalogPages|MonitorTaskKeepsMutedBaselineAfterRestart|MonitorTaskRetriesBaselinePersistence)$' -count=1
 
   vinted-service-tests:
     name: Go Tests (apps/vinted-service)
