@@ -254,7 +254,6 @@ func (m *Manager) RuntimeCounts() (monitorTasks int, discoveryTasks int) {
 
 func prepareMonitorResume(monitor *model.Monitor) {
 	monitor.SuppressStartupNotice = true
-	monitor.ResumeAfterQuietHours = true
 }
 
 func (m *Manager) StopAll() {

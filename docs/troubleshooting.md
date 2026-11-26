@@ -189,6 +189,24 @@ The shared free pool is intentionally health-gated and can be unavailable for a
 region. Use a personal proxy group for dedicated capacity. Do not reduce
 validation thresholds blindly; inspect regional health and worker logs first.
 
+## Old catalog items appear after a worker restart
+
+The worker stores each search's original muted baseline in PostgreSQL, so
+restarting it or losing Redis's seen-item cache does not alert that baseline
+again. Each comma-separated search keeps its own fixed boundary; newer items
+can still be caught up after a pause or restart.
+
+When upgrading from a version without durable baselines, each existing search
+establishes a muted baseline on its first nonempty successful scan. That scan
+does not send alerts, including for items published during the preceding
+downtime. Later restarts reuse the saved boundary. A new search or changed
+catalog filters establish a new baseline.
+
+Apply database migrations before starting the updated worker. If its logs
+report `load catalog baselines` or `persist catalog baseline`, resolve the
+database error; the worker waits for durable storage before processing that
+search.
+
 ## Catalog requests return 401
 
 A regional Vinted catalog session may need an initial homepage request to
