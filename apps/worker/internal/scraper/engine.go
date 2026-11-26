@@ -519,19 +519,19 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		monitorQueries = []string{""}
 	}
 	queryURLs := make([]string, len(monitorQueries))
+	queryKeys := make([]string, len(monitorQueries))
 	for index, query := range monitorQueries {
 		queryURLs[index] = BuildVintedURLForQuery(m, query)
+		queryKeys[index] = catalogBaselineKey(queryURLs[index])
 	}
 	interval := monitorQueryInterval(m, time.Now())
 	maxConsecutiveErrors := getEnvInt("MAX_CONSECUTIVE_ERRORS", 20)
 	timeoutDuration := catalogTimeoutForProxySource(proxySource)
 	consecutiveErrors := 0
 	checks := 0
-	initializedQueries, resumeQueries := initialQueryTracking(
-		len(monitorQueries),
-		m.ResumeAfterQuietHours,
-	)
 	queryBaselines := make([]catalogBaseline, len(monitorQueries))
+	var initializedQueries, resumeQueries []bool
+	baselinesLoaded := false
 	var totalErrors int64
 	localSeen := make(map[int64]time.Time, 128)
 	waitingForProxy := initialProxyWait
@@ -596,6 +596,21 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 			log.Printf("[%d] stopped gracefully", m.ID)
 			return
 		default:
+		}
+		if !baselinesLoaded {
+			persisted, err := e.db.SyncMonitorCatalogBaselines(ctx, m.ID, queryKeys)
+			if err != nil {
+				log.Printf("[%d] load catalog baselines: %v", m.ID, err)
+				setRuntimeState("degraded")
+				reportHealth("Could not load catalog baselines", "baseline_storage", "", time.Time{}, "")
+				sleepMonitorCycle(ctx, cycleStart, time.Second)
+				continue
+			}
+			for index, key := range queryKeys {
+				queryBaselines[index].itemID = persisted[key]
+			}
+			initializedQueries, resumeQueries = initialQueryTracking(queryBaselines)
+			baselinesLoaded = true
 		}
 		if proxySource == "free" {
 			if pool != nil {
@@ -898,19 +913,43 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		// look empty or lower the boundary. Empty pages leave startup muted
 		// until there is an actual baseline, even after many successful polls.
 		if !initializedQueries[queryIndex] && len(result.items) > 0 {
-			queryBaselines[queryIndex].seed(result.items)
-			seedIDs := markInitialBaseline(result.items, localSeen, time.Now())
+			// Retain the first page's boundary while retrying a failed write.
+			// Never mark initialization complete without durable storage.
+			if queryBaselines[queryIndex].itemID == 0 {
+				queryBaselines[queryIndex].seed(result.items)
+			}
+			boundary, err := e.db.EstablishMonitorCatalogBaseline(ctx, m.ID, queryKeys[queryIndex], queryBaselines[queryIndex].itemID)
+			if err != nil {
+				log.Printf("[%d] persist catalog baseline (query=%d): %v", m.ID, queryIndex, err)
+				setRuntimeState("degraded")
+				reportHealth("Could not persist catalog baseline", "baseline_storage", "", time.Time{}, "")
+				sleepMonitorCycle(ctx, cycleStart, time.Second)
+				continue
+			}
+			queryBaselines[queryIndex].itemID = boundary
+			baselineItems := make([]model.VintedItem, 0, len(result.items))
+			for _, item := range result.items {
+				if !queryBaselines[queryIndex].allows(item) {
+					baselineItems = append(baselineItems, item)
+				}
+			}
+			seedIDs := markInitialBaseline(baselineItems, localSeen, time.Now())
 			e.db.MarkItemsSeen(m.ID, seedIDs)
-			log.Printf("[%d] initial scan established a muted baseline with %d items (query=%d, item_id=%d)", m.ID, len(result.items), queryIndex, queryBaselines[queryIndex].itemID)
+			log.Printf("[%d] initial scan established a muted baseline with %d items (query=%d, item_id=%d)", m.ID, len(baselineItems), queryIndex, boundary)
 			initializedQueries[queryIndex] = true
-			recordCatalogCycle(len(items), 0)
-			e.db.RecordMonitorRun(model.MonitorRun{
-				MonitorID: m.ID, Status: "success", StatusCode: 200,
-				DurationMS: int(time.Since(cycleStart).Milliseconds()), ItemCount: len(items),
-				ProxySource: proxySource, FetchSource: "canonical", Region: m.Region,
-			})
-			sleepMonitorCycle(ctx, cycleStart, monitorQueryInterval(m, time.Now()))
-			continue
+			if len(baselineItems) == len(result.items) {
+				recordCatalogCycle(len(items), 0)
+				e.db.RecordMonitorRun(model.MonitorRun{
+					MonitorID: m.ID, Status: "success", StatusCode: 200,
+					DurationMS: int(time.Since(cycleStart).Milliseconds()), ItemCount: len(items),
+					ProxySource: proxySource, FetchSource: "canonical", Region: m.Region,
+				})
+				sleepMonitorCycle(ctx, cycleStart, monitorQueryInterval(m, time.Now()))
+				continue
+			}
+			// A storage retry may have fetched newer results in the meantime.
+			// Catch those up instead of silently adding them to the baseline.
+			resumeQueries[queryIndex] = true
 		}
 		if len(items) == 0 {
 			if checks%10 == 0 {
@@ -929,15 +968,17 @@ func (e *Engine) MonitorTask(ctx context.Context, m model.Monitor) {
 		now := time.Now()
 		newItems := make([]model.VintedItem, 0)
 		if resumeQueries[queryIndex] {
-			// Preserve the intentional quiet-hours catch-up on the first page;
-			// subsequent pages use its fixed boundary and durable deduplication.
-			queryBaselines[queryIndex].seed(result.items)
-			itemIDs := make([]int64, len(items))
-			for index, item := range items {
-				itemIDs[index] = item.ID
+			// Catch up above the original durable boundary, even when Redis's
+			// muted baseline buckets have expired or Redis is unavailable.
+			for _, item := range items {
 				localSeen[item.ID] = now
 			}
-			newItems = filterNewItems(items, e.db.BatchIsNew(m.ID, itemIDs))
+			candidates, _ := queryBaselines[queryIndex].filter(items)
+			itemIDs := make([]int64, len(candidates))
+			for index, item := range candidates {
+				itemIDs[index] = item.ID
+			}
+			newItems = filterNewItems(candidates, e.db.BatchIsNew(m.ID, itemIDs))
 			resumeQueries[queryIndex] = false
 			log.Printf(
 				"[%d] quiet-hours resume scan found %d unseen items out of %d",
@@ -1230,11 +1271,11 @@ func markInitialBaseline(items []model.VintedItem, localSeen map[int64]time.Time
 	return itemIDs
 }
 
-func initialQueryTracking(queryCount int, resumeAfterQuietHours bool) ([]bool, []bool) {
-	initialized := make([]bool, queryCount)
-	resumeQueries := make([]bool, queryCount)
-	if resumeAfterQuietHours {
-		for index := range initialized {
+func initialQueryTracking(baselines []catalogBaseline) ([]bool, []bool) {
+	initialized := make([]bool, len(baselines))
+	resumeQueries := make([]bool, len(baselines))
+	for index, baseline := range baselines {
+		if baseline.itemID > 0 {
 			initialized[index] = true
 			resumeQueries[index] = true
 		}

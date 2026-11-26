@@ -48,6 +48,31 @@ func TestCatalogBaselinesKeepQueryBoundariesIndependent(t *testing.T) {
 	}
 }
 
+func TestCatalogBaselineKeyTracksSearchIdentity(t *testing.T) {
+	monitor := model.Monitor{Region: "pl", Query: "camera,photo"}
+	camera := catalogBaselineKey(BuildVintedURLForQuery(monitor, "camera"))
+	photo := catalogBaselineKey(BuildVintedURLForQuery(monitor, "photo"))
+	if camera == photo {
+		t.Fatal("search alternatives share a baseline key")
+	}
+	t.Setenv("VINTED_PER_PAGE", "96")
+	monitor.Query = "photo,camera"
+	monitor.NotificationsEnabled = true
+	if got := catalogBaselineKey(BuildVintedURLForQuery(monitor, "camera")); got != camera {
+		t.Fatal("reordering queries or changing page size/notifications reset the baseline")
+	}
+	monitor.Region = "de"
+	if got := catalogBaselineKey(BuildVintedURLForQuery(monitor, "camera")); got == camera {
+		t.Fatal("different region reused the baseline")
+	}
+	monitor.Region = "pl"
+	price := 50
+	monitor.PriceMax = &price
+	if got := catalogBaselineKey(BuildVintedURLForQuery(monitor, "camera")); got == camera {
+		t.Fatal("different catalog filters reused the baseline")
+	}
+}
+
 func TestDiscoveryBackfillRejectsIDsBelowStartupBoundary(t *testing.T) {
 	scan := discoveryScan{seen: make(map[int64]time.Time)}
 	var detected []int64

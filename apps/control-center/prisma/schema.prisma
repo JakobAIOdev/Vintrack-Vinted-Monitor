@@ -304,9 +304,19 @@ model monitors {
   proxy_incidents     monitor_proxy_incidents[]
   item_detections     monitor_item_detections[]
   account_automations monitor_account_automations[]
+  catalog_baselines   monitor_catalog_baselines[]
 
   @@index([userId])
   @@index([status, userId])
+}
+
+model monitor_catalog_baselines {
+  monitor_id Int
+  query_key  String   @db.VarChar(64)
+  item_id    BigInt
+  monitor    monitors @relation(fields: [monitor_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@id([monitor_id, query_key])
 }
 
 model monitor_account_automations {

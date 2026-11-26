@@ -296,7 +296,7 @@ func TestMarkInitialBaselineOnlyRecordsSeenIDs(t *testing.T) {
 }
 
 func TestInitialQueryTrackingKeepsFreshStartsMuted(t *testing.T) {
-	initialized, resumeQueries := initialQueryTracking(2, false)
+	initialized, resumeQueries := initialQueryTracking(make([]catalogBaseline, 2))
 	for index := range initialized {
 		if initialized[index] || resumeQueries[index] {
 			t.Fatalf("query %d unexpectedly initialized for a fresh start", index)
@@ -304,8 +304,8 @@ func TestInitialQueryTrackingKeepsFreshStartsMuted(t *testing.T) {
 	}
 }
 
-func TestInitialQueryTrackingResumesQuietHoursWithoutInitialMute(t *testing.T) {
-	initialized, resumeQueries := initialQueryTracking(2, true)
+func TestInitialQueryTrackingResumesPersistedQueriesWithoutInitialMute(t *testing.T) {
+	initialized, resumeQueries := initialQueryTracking([]catalogBaseline{{itemID: 1000}, {itemID: 2000}})
 	for index := range initialized {
 		if !initialized[index] || !resumeQueries[index] {
 			t.Fatalf("query %d did not resume in notification mode", index)
@@ -317,6 +317,13 @@ func TestInitialQueryTrackingResumesQuietHoursWithoutInitialMute(t *testing.T) {
 	processItems := filterNewItems(items, newMap)
 	if len(processItems) != 1 || processItems[0].ID != 2 {
 		t.Fatalf("resume scan items = %#v, want only unseen item 2", processItems)
+	}
+}
+
+func TestInitialQueryTrackingMutesOnlyQueriesMissingDurableBaseline(t *testing.T) {
+	initialized, resumeQueries := initialQueryTracking([]catalogBaseline{{itemID: 1000}, {}})
+	if !initialized[0] || !resumeQueries[0] || initialized[1] || resumeQueries[1] {
+		t.Fatalf("initialized=%v resume=%v, want [true false] for both", initialized, resumeQueries)
 	}
 }
 
