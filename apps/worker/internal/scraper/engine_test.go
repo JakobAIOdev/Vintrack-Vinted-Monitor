@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"fmt"
 	"net/http/httptest"
 	"reflect"
 	"testing"
@@ -15,6 +16,25 @@ func TestFreeProxyMonitorNeverAutoStopsForTransientPoolFailures(t *testing.T) {
 	}
 	if !shouldAutoStopMonitor("server", 20, 20) {
 		t.Fatal("non-free monitor should retain the configured auto-stop behavior")
+	}
+}
+
+func TestAdmissionPacingDoesNotReportPoolUnavailable(t *testing.T) {
+	admissionWait := fmt.Errorf("admission delayed: %w", &proxyPoolWaitError{
+		ErrorCode:  proxyAdmissionWaitErrorCode,
+		ProxyLabel: "free",
+	})
+	if waitErr, unavailable := unavailableProxyPoolWait(admissionWait); unavailable || waitErr != nil {
+		t.Fatalf("normal admission pacing classified as unavailable: %#v", waitErr)
+	}
+
+	quarantineWait := fmt.Errorf("pool exhausted: %w", &proxyPoolWaitError{
+		ErrorCode:  proxyErrorVintedRateLimited,
+		ProxyLabel: "198.51.100.10:8080",
+	})
+	waitErr, unavailable := unavailableProxyPoolWait(quarantineWait)
+	if !unavailable || waitErr == nil || waitErr.ErrorCode != proxyErrorVintedRateLimited {
+		t.Fatalf("exhausted pool was not classified as unavailable: %#v", waitErr)
 	}
 }
 

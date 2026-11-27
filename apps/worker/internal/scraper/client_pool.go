@@ -34,6 +34,8 @@ type proxyPoolWaitError struct {
 	ProxyLabel string
 }
 
+const proxyAdmissionWaitErrorCode = "proxy_admission_wait"
+
 func (e *proxyPoolWaitError) Error() string {
 	if e == nil {
 		return "all configured proxies are temporarily unavailable"
@@ -42,6 +44,18 @@ func (e *proxyPoolWaitError) Error() string {
 		return "all configured proxies are temporarily unavailable"
 	}
 	return fmt.Sprintf("all configured proxies are temporarily unavailable until %s", e.RetryAt.UTC().Format(time.RFC3339))
+}
+
+// unavailableProxyPoolWait distinguishes an exhausted proxy pool from normal
+// admission pacing. A busy ready pool delays work to enforce its request
+// budget, but it is not unavailable and must not put monitors into the
+// waiting-for-pool runtime state.
+func unavailableProxyPoolWait(err error) (*proxyPoolWaitError, bool) {
+	var waitErr *proxyPoolWaitError
+	if !errors.As(err, &waitErr) || waitErr.ErrorCode == proxyAdmissionWaitErrorCode {
+		return nil, false
+	}
+	return waitErr, true
 }
 
 type ClientPool struct {
@@ -218,7 +232,7 @@ func (p *ClientPool) AcquireWithAdmission(ctx context.Context, excluded map[*Cli
 		}
 		if maxDelay <= 0 || !time.Now().Before(deadline) {
 			return nil, time.Since(started), &proxyPoolWaitError{
-				RetryAt: deadline, ErrorCode: "proxy_admission_wait", ProxyLabel: "free",
+				RetryAt: deadline, ErrorCode: proxyAdmissionWaitErrorCode, ProxyLabel: "free",
 			}
 		}
 		timer := time.NewTimer(min(10*time.Millisecond, time.Until(deadline)))
